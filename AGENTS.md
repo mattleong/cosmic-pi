@@ -25,4 +25,4 @@ Do not commit `node_modules/`, generated `dist/` output, local `.pi/` state, cre
 
 ## Release safety
 
-Do not publish packages, create tags, or push release commits unless the maintainer explicitly requests it.
+All workspace packages use a single synchronized version. Run `pnpm version:check` after version changes. Do not publish packages, create tags, or push release commits unless the maintainer explicitly requests it.

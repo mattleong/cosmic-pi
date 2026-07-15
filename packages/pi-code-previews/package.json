@@ -1,6 +1,6 @@
 {
   "name": "pi-code-previews",
-  "version": "0.1.36",
+  "version": "0.2.0",
   "description": "Syntax-highlighted previews for pi tool calls.",
   "keywords": [
     "code-preview",
@@ -9,14 +9,15 @@
     "pi-package",
     "syntax-highlighting"
   ],
-  "homepage": "https://github.com/mattleong/pi-code-previews#readme",
+  "homepage": "https://github.com/mattleong/cosmic-pi/tree/main/packages/pi-code-previews#readme",
   "bugs": {
-    "url": "https://github.com/mattleong/pi-code-previews/issues"
+    "url": "https://github.com/mattleong/cosmic-pi/issues"
   },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mattleong/pi-code-previews.git"
+    "url": "git+https://github.com/mattleong/cosmic-pi.git",
+    "directory": "packages/pi-code-previews"
   },
   "files": [
     "dist",

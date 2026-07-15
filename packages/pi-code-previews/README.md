@@ -22,11 +22,7 @@ Install from npm:
 pi install npm:pi-code-previews
 ```
 
-Install from GitHub:
-
-```bash
-pi install git:github.com/mattleong/pi-code-previews
-```
+The source is maintained in the [cosmic-pi monorepo](https://github.com/mattleong/cosmic-pi/tree/main/packages/pi-code-previews).
 
 ## Usage
 

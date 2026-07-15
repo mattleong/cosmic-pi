@@ -26,16 +26,6 @@ export const PET_STATES = [
   "review",
 ] as const;
 
-export const DEFAULT_SUPPORTED_MODELS = [
-  "openai/gpt-5.4",
-  "openai/gpt-5.5",
-  "openai-codex/gpt-5.6-sol",
-  "openai-codex/gpt-5.6-terra",
-  "openai-codex/gpt-5.6-luna",
-  "openai-codex/gpt-5.4",
-  "openai-codex/gpt-5.5",
-] as const;
-
 export type FooterMode = (typeof FOOTER_MODES)[number];
 export type ImageSaveMode = (typeof IMAGE_SAVE_MODES)[number];
 export type ImageOutputFormat = (typeof IMAGE_OUTPUT_FORMATS)[number];
@@ -78,16 +68,10 @@ export interface ConfigFile {
   persistState?: boolean;
   active?: boolean;
   desiredActive?: boolean;
-  supportedModels?: string[];
   usage?: UsageConfig;
   footer?: FooterConfig;
   image?: ImageConfig;
   pets?: PetConfig;
-}
-
-export interface SupportedModel {
-  provider: string;
-  id: string;
 }
 
 export interface ResolvedConfig {
@@ -99,7 +83,6 @@ export interface ResolvedConfig {
   persistState: boolean;
   active: boolean;
   desiredActive: boolean;
-  supportedModels: SupportedModel[];
   usage: Required<UsageConfig>;
   footer: Required<FooterConfig>;
   image: Required<ImageConfig>;
@@ -142,7 +125,6 @@ export const DEFAULT_CONFIG: ConfigFile = {
   persistState: true,
   active: false,
   desiredActive: false,
-  supportedModels: [...DEFAULT_SUPPORTED_MODELS],
   usage: DEFAULT_USAGE_CONFIG,
   footer: DEFAULT_FOOTER_CONFIG,
   image: DEFAULT_IMAGE_CONFIG,
@@ -420,33 +402,6 @@ export function configPaths(cwd: string, home = homedir(), env = process.env) {
   };
 }
 
-export function parseModelKey(value: string): SupportedModel | undefined {
-  const key = value.trim();
-  const slash = key.indexOf("/");
-  if (slash <= 0 || slash === key.length - 1) return undefined;
-  const provider = key.slice(0, slash).trim();
-  const id = key.slice(slash + 1).trim();
-  return provider && id ? { provider, id } : undefined;
-}
-
-export function normalizeModelKeys(value: unknown): string[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) return undefined;
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => parseModelKey(entry))
-    .filter((entry): entry is SupportedModel => entry !== undefined)
-    .map((entry) => `${entry.provider}/${entry.id}`);
-}
-
-export function parseModels(value: unknown): SupportedModel[] | undefined {
-  const keys = normalizeModelKeys(value);
-  if (keys === undefined) return undefined;
-  return keys
-    .map((key) => parseModelKey(key))
-    .filter((entry): entry is SupportedModel => entry !== undefined);
-}
-
 export function readRawConfig(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
   try {
@@ -466,8 +421,6 @@ export function readConfig(path: string): ConfigFile | undefined {
   if (typeof parsed.persistState === "boolean") config.persistState = parsed.persistState;
   if (typeof parsed.active === "boolean") config.active = parsed.active;
   if (typeof parsed.desiredActive === "boolean") config.desiredActive = parsed.desiredActive;
-  const supportedModels = normalizeModelKeys(parsed.supportedModels);
-  if (supportedModels !== undefined) config.supportedModels = supportedModels;
   if (isRecord(parsed.usage)) {
     config.usage = {};
     if (typeof parsed.usage.enabled === "boolean") config.usage.enabled = parsed.usage.enabled;
@@ -610,8 +563,6 @@ export function resolveConfig(cwd: string): ResolvedConfig {
     persistState: merged.persistState ?? true,
     active: merged.active ?? desiredActive,
     desiredActive,
-    supportedModels:
-      parseModels(merged.supportedModels) ?? parseModels(DEFAULT_SUPPORTED_MODELS) ?? [],
     usage: {
       ...DEFAULT_USAGE_CONFIG,
       ...globalConfig.usage,

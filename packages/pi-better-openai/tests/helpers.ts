@@ -16,7 +16,6 @@ export function makeResolvedConfig(overrides: Partial<ResolvedConfig> = {}): Res
     persistState: true,
     active: false,
     desiredActive: false,
-    supportedModels: [],
     usage: DEFAULT_USAGE_CONFIG,
     footer: DEFAULT_FOOTER_CONFIG,
     image: DEFAULT_IMAGE_CONFIG,

@@ -1,0 +1,102 @@
+# Releasing cosmic-pi
+
+All packages in this repository use the same version and are published together. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the workspace and publishes each package to npm.
+
+## One-time setup
+
+Before the first release:
+
+1. Create and push the `mattleong/cosmic-pi` GitHub repository.
+2. On npm, configure trusted publishing for both packages:
+   - `pi-better-openai`
+   - `pi-code-previews`
+3. For each npm package, set the trusted publisher to:
+   - **Organization or user:** `mattleong`
+   - **Repository:** `cosmic-pi`
+   - **Workflow:** `release.yml`
+4. Ensure the GitHub workflow is enabled on the default branch.
+
+The workflow uses GitHub OIDC and npm provenance. It does not require an `NPM_TOKEN` secret when trusted publishing is configured.
+
+## Prepare a release
+
+Start from an up-to-date, clean `main` branch:
+
+```bash
+git switch main
+git pull --ff-only
+pnpm install --frozen-lockfile
+pnpm validate
+```
+
+Choose a stable version that is newer than every version already published for either npm package. npm versions are immutable and cannot be overwritten.
+
+Update every workspace package to the new version:
+
+```bash
+pnpm version:set 0.2.1
+pnpm version:check
+pnpm validate
+```
+
+Review the changes. The root and both package manifests should have the same version:
+
+```bash
+git diff -- package.json packages/*/package.json
+git status --short
+```
+
+Commit and push the release version:
+
+```bash
+git add package.json packages/*/package.json
+git commit -m "chore(release): v0.2.1"
+git push origin main
+```
+
+## Tag and publish the GitHub Release
+
+Create a tag that exactly matches the package version with a leading `v`:
+
+```bash
+git tag -a v0.2.1 -m "v0.2.1"
+git push origin v0.2.1
+```
+
+Create and publish the GitHub Release from that tag. With the GitHub CLI:
+
+```bash
+gh release create v0.2.1 \
+  --verify-tag \
+  --generate-notes \
+  --title "v0.2.1"
+```
+
+Publishing the GitHub Release triggers the npm workflow. Creating only a Git tag or a draft GitHub Release does not publish packages.
+
+## Verify publication
+
+Watch the **Publish npm packages** workflow in GitHub Actions. After it succeeds, verify both package versions:
+
+```bash
+npm view pi-better-openai version
+npm view pi-code-previews version
+```
+
+Both commands should report the release version. npm provenance should also appear on each package version page.
+
+## Retry a failed release
+
+The workflow is retry-safe. Before publishing, it checks whether each exact package version already exists on npm and skips packages that were successfully published by an earlier attempt.
+
+You can rerun the failed workflow in GitHub Actions. Alternatively, manually dispatch **Publish npm packages** and provide the existing tag, for example `v0.2.1`.
+
+Do not create a new version solely because one package published before another failed. Retry the workflow with the same tag first.
+
+## Important constraints
+
+- Keep the root and every package version synchronized.
+- Use stable `vMAJOR.MINOR.PATCH` release tags, such as `v0.2.1`.
+- Publish through the GitHub Release workflow rather than running `npm publish` locally.
+- Never reuse or move a tag after npm publication.
+- Never attempt to replace an existing npm version; increment the shared version instead.

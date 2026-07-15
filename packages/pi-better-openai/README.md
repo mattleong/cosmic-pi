@@ -6,17 +6,13 @@ A pi extension for OpenAI subscription workflows: fast mode, usage visibility, f
 
 Requires Node.js 22.19.0 or newer.
 
-Install from GitHub:
-
-```bash
-pi install git:github.com/mattleong/pi-better-openai
-```
-
-Or install from npm:
+Install from npm:
 
 ```bash
 pi install npm:pi-better-openai
 ```
+
+The source is maintained in the [cosmic-pi monorepo](https://github.com/mattleong/cosmic-pi/tree/main/packages/pi-better-openai).
 
 ## Authentication
 
@@ -51,7 +47,7 @@ The extension reads JSON config from two locations:
 
 Project overrides global. Global values fill fields omitted by the project file. Invalid enum values are ignored, and numeric settings are clamped to safe ranges.
 
-Default supported models:
+Fast-mode model support is controlled by the package and cannot be overridden in user configuration. The current allow-list is:
 
 ```json
 [
@@ -71,7 +67,6 @@ Example config:
 {
   "persistState": true,
   "desiredActive": false,
-  "supportedModels": ["openai/gpt-5.5", "openai-codex/gpt-5.5"],
   "usage": {
     "enabled": true,
     "refreshIntervalMs": 60000,

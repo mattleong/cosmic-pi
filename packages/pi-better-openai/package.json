@@ -1,6 +1,6 @@
 {
   "name": "pi-better-openai",
-  "version": "0.1.22",
+  "version": "0.2.0",
   "description": "Personal pi extension that improves OpenAI with fast mode, usage stats, and footer polish.",
   "keywords": [
     "fast",
@@ -13,10 +13,15 @@
     "priority",
     "service-tier"
   ],
+  "homepage": "https://github.com/mattleong/cosmic-pi/tree/main/packages/pi-better-openai#readme",
+  "bugs": {
+    "url": "https://github.com/mattleong/cosmic-pi/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mattleong/pi-better-openai.git"
+    "url": "git+https://github.com/mattleong/cosmic-pi.git",
+    "directory": "packages/pi-better-openai"
   },
   "files": [
     "index.ts",

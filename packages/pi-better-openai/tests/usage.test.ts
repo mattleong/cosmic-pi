@@ -54,7 +54,6 @@ function writeProjectConfig(cwd: string, config: Record<string, unknown>): void 
         persistState: false,
         active: false,
         desiredActive: false,
-        supportedModels: [],
         usage: { enabled: true, refreshIntervalMs: 60000 },
         footer: { mode: "status" },
         image: { enabled: false },

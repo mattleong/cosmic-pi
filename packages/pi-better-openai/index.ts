@@ -2,7 +2,7 @@
  * Better OpenAI for pi.
  *
  * Adds `service_tier: "priority"` to OpenAI provider payloads while fast mode is
- * enabled and the selected model is in the configured allow-list.
+ * enabled and the selected model is in the package-controlled allow-list.
  */
 import {
   getSettingsListTheme,
@@ -22,7 +22,6 @@ import {
   DEFAULT_CONFIG,
   DEFAULT_IMAGE_CONFIG,
   DEFAULT_PET_CONFIG,
-  DEFAULT_SUPPORTED_MODELS,
   PET_STATES,
   FOOTER_SETTING_DESCRIPTORS,
   USAGE_SETTING_DESCRIPTORS,
@@ -34,9 +33,6 @@ import {
   type ResolvedConfig,
   type PetState,
   isRecord,
-  parseModelKey,
-  normalizeModelKeys,
-  parseModels,
   readRawConfig,
   resolveConfig,
   writeConfig,
@@ -60,7 +56,12 @@ import {
   registerOpenAIPets,
   _petsTest,
 } from "./src/pets.ts";
-import { FastController, modelList, supportsFast } from "./src/fast-controller.ts";
+import {
+  FastController,
+  SUPPORTED_FAST_MODELS,
+  modelList,
+  supportsFast,
+} from "./src/fast-controller.ts";
 import { UsageController } from "./src/usage-controller.ts";
 import { PetFooterController } from "./src/pet-footer-controller.ts";
 import {
@@ -219,14 +220,14 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
 
   function setActive(ctx: ExtensionContext, next: boolean): void {
     const nextConfig = refresh(ctx);
-    fastController.setDesired(ctx, nextConfig, next);
+    fastController.setDesired(ctx, next);
     persist(nextConfig);
     updateFooter(ctx);
     if (next && !fastController.active) {
-      ctx.ui.notify(fastController.unsupportedRequestMessage(ctx, nextConfig), "warning");
+      ctx.ui.notify(fastController.unsupportedRequestMessage(ctx), "warning");
       return;
     }
-    ctx.ui.notify(fastController.stateText(ctx, nextConfig), "info");
+    ctx.ui.notify(fastController.stateText(ctx), "info");
   }
 
   function refreshFooterTotals(ctx: ExtensionContext): void {
@@ -285,7 +286,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   function formatDebugStatus(ctx: ExtensionContext): string {
     const cfg = config(ctx);
     return [
-      ...fastController.debugLines(ctx, cfg),
+      ...fastController.debugLines(ctx),
       `Footer mode: ${cfg.footer.mode}`,
       "",
       usageController.formatDebug(ctx),
@@ -516,8 +517,8 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     };
   }
 
-  function fastSettingsSummary(ctx: ExtensionContext, cfg: ResolvedConfig): string {
-    return fastController.settingsSummary(ctx, cfg);
+  function fastSettingsSummary(ctx: ExtensionContext): string {
+    return fastController.settingsSummary(ctx);
   }
 
   function usageSettingsSummary(cfg: ResolvedConfig): string {
@@ -568,7 +569,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
         label: "Fast mode",
         currentValue: String(fastController.desiredActive),
         values: ["true", "false"],
-        description: `Request OpenAI fast mode. Activates for supported models: ${modelList(cfg.supportedModels)}.`,
+        description: `Request OpenAI fast mode. Activates for package-supported models: ${modelList()}.`,
       },
       ...settingsItemsFromDescriptors(FAST_SETTING_DESCRIPTORS, cfg),
     ];
@@ -627,14 +628,14 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       {
         id: "section.fast",
         label: "Fast mode",
-        currentValue: fastSettingsSummary(ctx, cfg),
+        currentValue: fastSettingsSummary(ctx),
         description: "Configure OpenAI fast mode and persistence.",
         submenu: (_value, done) =>
           settingsSubmenu(
             "Fast mode settings",
             () => buildFastSettingsItems(config(ctx)),
             ctx,
-            () => done(fastSettingsSummary(ctx, config(ctx))),
+            () => done(fastSettingsSummary(ctx)),
           ),
       },
       {
@@ -727,7 +728,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     const current = readRawConfig(cfg.configPath);
     const bool = rawValue === "true";
     if (id === "fast.enabled") {
-      fastController.setDesired(ctx, cfg, bool);
+      fastController.setDesired(ctx, bool);
     }
     const petKey = id.startsWith("pets.") ? id.slice("pets.".length) : undefined;
     const nextRawConfig = applySettingToRawConfig(current, id, rawValue, {
@@ -992,8 +993,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
 
           const modelName = ctx.model?.id || "no-model";
           const thinkingLevel = pi.getThinkingLevel();
-          const fastSuffix =
-            fastController.active && supportsFast(ctx, cfg.supportedModels) ? " fast" : "";
+          const fastSuffix = fastController.active && supportsFast(ctx) ? " fast" : "";
           let rightWithoutProvider = modelName;
           if (ctx.model?.reasoning) {
             rightWithoutProvider =
@@ -1112,7 +1112,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
         setStatus(ctx, undefined);
         return;
       }
-      const fast = fastController.statusSegment(ctx, cfg);
+      const fast = fastController.statusSegment(ctx);
       const usage = usageController.statusLine(ctx, cfg);
       setStatus(ctx, [fast, usage].filter(Boolean).join(" | ") || undefined);
       return;
@@ -1134,7 +1134,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       return;
     }
 
-    const fast = fastController.statusSegment(ctx, cfg);
+    const fast = fastController.statusSegment(ctx);
     const usage = usageController.statusLine(ctx, cfg);
     setStatus(ctx, [fast, usage].filter(Boolean).join(" | ") || undefined);
   }
@@ -1150,14 +1150,14 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     )
       persist(nextConfig);
     if (fastController.desiredActive && !fastController.active) {
-      ctx.ui.notify(fastController.unsupportedRequestMessage(ctx, nextConfig), "warning");
+      ctx.ui.notify(fastController.unsupportedRequestMessage(ctx), "warning");
     }
     if (hasTerminalUI(ctx)) petController.installResizeGuard(ctx);
     refreshFooterTotals(ctx);
     updateFooter(ctx);
     if (hasTerminalUI(ctx) && nextConfig.pets.enabled) void petController.refresh(ctx, nextConfig);
     usageController.start(ctx);
-    if (fastController.active) ctx.ui.notify(fastController.stateText(ctx, nextConfig), "info");
+    if (fastController.active) ctx.ui.notify(fastController.stateText(ctx), "info");
   });
 
   pi.on("agent_start", (_event, ctx) => {
@@ -1214,12 +1214,12 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     invalidateContextUsage();
     const cfg = config(ctx);
     const wasActive = fastController.active;
-    fastController.applyDesiredState(ctx, cfg);
+    fastController.applyDesiredState(ctx);
     if (fastController.active !== wasActive) {
       persist(cfg);
       ctx.ui.notify(
         fastController.active
-          ? fastController.stateText(ctx, cfg)
+          ? fastController.stateText(ctx)
           : fastController.inactiveForModelMessage(ctx),
         fastController.active ? "info" : "warning",
       );
@@ -1236,7 +1236,7 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   });
 
   pi.on("before_provider_request", (event, ctx) => {
-    return fastController.injectProviderPayload(event, ctx, config(ctx));
+    return fastController.injectProviderPayload(event, ctx);
   });
 
   pi.on("message_start", invalidateContextUsage);
@@ -1246,16 +1246,13 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
 
 export const _test = {
   CONFIG_BASENAME,
-  DEFAULT_SUPPORTED_MODELS,
+  SUPPORTED_FAST_MODELS,
   DEFAULT_CONFIG,
   DEFAULT_IMAGE_CONFIG,
   DEFAULT_PET_CONFIG,
   SERVICE_TIER,
   configPaths,
   abbreviateHomePath,
-  parseModelKey,
-  normalizeModelKeys,
-  parseModels,
   resolveConfig,
   readRawConfig,
   supportsFast,

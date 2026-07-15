@@ -28,7 +28,7 @@ pnpm check
 
 ## Release and publishing
 
-The release workflow publishes to npm from GitHub releases or manual dispatch after `pnpm install --frozen-lockfile`, `pnpm check`, and `pnpm audit --audit-level=high`. Do not publish, tag, or push release commits unless the maintainer explicitly instructs you to.
+The monorepo release workflow publishes every package together from a GitHub Release or manual dispatch. Keep this package's version synchronized with the workspace root and all other packages. Do not publish, tag, or push release commits unless the maintainer explicitly instructs you to.
 
 ## Security reminders
 

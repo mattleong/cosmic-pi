@@ -1,7 +1,17 @@
 {
   "name": "cosmic-pi",
-  "version": "0.0.0",
+  "version": "0.2.0",
   "private": true,
+  "description": "A pnpm workspace for pi extensions.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mattleong/cosmic-pi.git"
+  },
+  "homepage": "https://github.com/mattleong/cosmic-pi#readme",
+  "bugs": {
+    "url": "https://github.com/mattleong/cosmic-pi/issues"
+  },
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "engines": {
@@ -16,6 +26,8 @@
     "lint:fix": "pnpm -r lint:fix",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "validate": "pnpm check && pnpm test && pnpm build"
+    "validate": "pnpm version:check && pnpm check && pnpm test && pnpm build",
+    "version:check": "node scripts/check-versions.mjs",
+    "version:set": "node scripts/set-version.mjs"
   }
 }

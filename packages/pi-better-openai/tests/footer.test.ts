@@ -40,7 +40,6 @@ function writeProjectConfig(cwd: string, footerMode: "replace" | "status" | "off
         persistState: false,
         active: false,
         desiredActive: false,
-        supportedModels: [],
         usage: { enabled: false },
         footer: { mode: footerMode },
         image: { enabled: false },

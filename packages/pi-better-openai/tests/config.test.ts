@@ -52,7 +52,8 @@ describe("config helpers", () => {
     expect(_test.DEFAULT_PET_CONFIG.failedToolState).toBe("failed");
     expect(_test.DEFAULT_PET_CONFIG.idleEmotes).toBe(true);
     expect(_test.DEFAULT_PET_CONFIG.idleEmoteIntervalMs).toBe(30000);
-    expect(_test.DEFAULT_SUPPORTED_MODELS).toEqual([
+    expect(_test.DEFAULT_CONFIG).not.toHaveProperty("supportedModels");
+    expect(_test.SUPPORTED_FAST_MODELS).toEqual([
       "openai/gpt-5.4",
       "openai/gpt-5.5",
       "openai-codex/gpt-5.6-sol",
@@ -63,13 +64,13 @@ describe("config helpers", () => {
     ]);
   });
 
-  test("parses and normalizes model keys", () => {
-    expect(_test.parseModelKey("openai/gpt-5.5")).toEqual({
-      provider: "openai",
-      id: "gpt-5.5",
+  test("does not expose the fast-mode allow-list through config", () => {
+    withTempDir((tempDir) => {
+      const configPath = join(tempDir, "config.json");
+      writeConfig(configPath, { supportedModels: ["openai/gpt-4.1"] });
+
+      expect(readConfig(configPath)).not.toHaveProperty("supportedModels");
     });
-    expect(_test.parseModelKey("bad")).toBeUndefined();
-    expect(_test.normalizeModelKeys(["openai/gpt-5.5", "bad", 42])).toEqual(["openai/gpt-5.5"]);
   });
 
   test("uses PI_CODING_AGENT_DIR for global config and expands a home-relative path", () => {

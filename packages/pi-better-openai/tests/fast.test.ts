@@ -32,7 +32,6 @@ function writeProjectConfig(cwd: string, overrides: Record<string, unknown> = {}
         persistState: true,
         active: false,
         desiredActive: false,
-        supportedModels: ["openai/gpt-5.5"],
         usage: { enabled: false },
         footer: { mode: "off" },
         image: { enabled: false },
@@ -123,11 +122,7 @@ afterEach(() => {
 describe("fast mode provider injection", () => {
   test("injects priority service tier when persisted fast mode is active for a supported model", async () => {
     const cwd = createTempProject();
-    writeProjectConfig(cwd, {
-      active: true,
-      desiredActive: true,
-      supportedModels: ["openai/gpt-5.5"],
-    });
+    writeProjectConfig(cwd, { active: true, desiredActive: true });
     const harness = createHarness(cwd);
 
     await emit(harness, "session_start");
@@ -140,11 +135,7 @@ describe("fast mode provider injection", () => {
 
   test("does not inject for unsupported models and leaves the payload unchanged", async () => {
     const cwd = createTempProject();
-    writeProjectConfig(cwd, {
-      active: true,
-      desiredActive: true,
-      supportedModels: ["openai/gpt-5.5"],
-    });
+    writeProjectConfig(cwd, { active: true, desiredActive: true });
     const harness = createHarness(cwd, createModel("openai", "gpt-4.1"));
 
     await emit(harness, "session_start");
@@ -154,13 +145,28 @@ describe("fast mode provider injection", () => {
     expect(payload).toEqual({ model: "gpt-4.1" });
   });
 
-  test("does not inject when fast mode is disabled and leaves the payload unchanged", async () => {
+  test("ignores configured model overrides and uses the package allow-list", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, {
-      active: false,
-      desiredActive: false,
-      supportedModels: ["openai/gpt-5.5"],
+      active: true,
+      desiredActive: true,
+      supportedModels: ["openai/gpt-4.1"],
     });
+    const harness = createHarness(cwd);
+
+    await emit(harness, "session_start");
+    await expect(beforeProviderRequest(harness, { model: "gpt-5.5" })).resolves.toMatchObject({
+      service_tier: "priority",
+    });
+
+    harness.ctx.model = createModel("openai", "gpt-4.1");
+    await emit(harness, "model_select", { model: harness.ctx.model });
+    await expect(beforeProviderRequest(harness, { model: "gpt-4.1" })).resolves.toBeUndefined();
+  });
+
+  test("does not inject when fast mode is disabled and leaves the payload unchanged", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, { active: false, desiredActive: false });
     const harness = createHarness(cwd);
 
     await emit(harness, "session_start");
@@ -172,11 +178,7 @@ describe("fast mode provider injection", () => {
 
   test("/fast toggles injection on for the current supported model", async () => {
     const cwd = createTempProject();
-    writeProjectConfig(cwd, {
-      active: false,
-      desiredActive: false,
-      supportedModels: ["openai/gpt-5.5"],
-    });
+    writeProjectConfig(cwd, { active: false, desiredActive: false });
     const harness = createHarness(cwd);
 
     await emit(harness, "session_start");
@@ -189,11 +191,7 @@ describe("fast mode provider injection", () => {
 
   test("model selection deactivates injection for unsupported models and reactivates for supported models", async () => {
     const cwd = createTempProject();
-    writeProjectConfig(cwd, {
-      active: true,
-      desiredActive: true,
-      supportedModels: ["openai/gpt-5.5"],
-    });
+    writeProjectConfig(cwd, { active: true, desiredActive: true });
     const harness = createHarness(cwd);
 
     await emit(harness, "session_start");
