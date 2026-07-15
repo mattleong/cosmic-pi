@@ -1,0 +1,94 @@
+{
+  "name": "pi-code-previews",
+  "version": "0.1.36",
+  "description": "Syntax-highlighted previews for pi tool calls.",
+  "keywords": [
+    "code-preview",
+    "coding-agent",
+    "pi-extension",
+    "pi-package",
+    "syntax-highlighting"
+  ],
+  "homepage": "https://github.com/mattleong/pi-code-previews#readme",
+  "bugs": {
+    "url": "https://github.com/mattleong/pi-code-previews/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mattleong/pi-code-previews.git"
+  },
+  "files": [
+    "dist",
+    "index.ts",
+    "src/**/*.ts",
+    "!src/**/*.spec.ts",
+    "!src/**/fixtures/**",
+    "!src/**/testing.ts",
+    "!src/testing/**",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "validate": "pnpm check && pnpm test && pnpm build",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint . --deny-warnings",
+    "lint:fix": "oxlint . --fix",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "bench:diff": "tsx bench/diff-rendering.ts",
+    "bench:diff-wrap": "tsx bench/diff-wrap.ts",
+    "bench:edit-rendering": "tsx bench/edit-rendering.ts",
+    "bench:write-diff": "tsx bench/write-diff.ts",
+    "bench:word-pathology": "tsx bench/word-pathology.ts",
+    "word:accuracy": "tsx bench/word-accuracy.ts",
+    "word:spans": "tsx bench/word-emphasis-spans.ts",
+    "bench:recommended": "pnpm bench:diff-wrap && pnpm bench:edit-rendering && pnpm bench:write-diff && pnpm bench:word-pathology",
+    "test": "vitest run",
+    "prepack": "pnpm build",
+    "prepublishOnly": "pnpm validate",
+    "pack:dry": "pnpm pack --dry-run"
+  },
+  "dependencies": {
+    "diff": "^8.0.4",
+    "shiki": "^4.0.2"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@earendil-works/pi-tui": "^0.80.6",
+    "@types/node": "^22.19.0",
+    "oxfmt": "^0.47.0",
+    "oxlint": "^1.62.0",
+    "tsdown": "^0.22.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

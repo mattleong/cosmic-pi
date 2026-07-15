@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.pnpm-store/
+package-lock.json
+yarn.lock
+.pi/
+*.tgz
+*.log
+.DS_Store
