@@ -1,6 +1,9 @@
 packages:
   - packages/*
 
+engineStrict: true
+strictPeerDependencies: true
+
 onlyBuiltDependencies:
   - "@google/genai"
   - esbuild

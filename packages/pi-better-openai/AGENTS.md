@@ -14,10 +14,10 @@ Run the narrowest useful test first, then the full gate before committing:
 ```bash
 pnpm install
 pnpm test -- tests/<file>.test.ts
-pnpm check
+pnpm validate
 ```
 
-`pnpm check` runs typecheck, lint, format check, and all tests. Do not skip it for code changes.
+`pnpm check` runs typecheck, lint, and format checks. `pnpm validate` adds the full test suite. Do not skip the validation gate for code changes.
 
 ## Coding conventions
 

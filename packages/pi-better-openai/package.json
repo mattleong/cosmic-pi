@@ -34,13 +34,16 @@
     "access": "public"
   },
   "scripts": {
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
-    "format": "oxfmt .",
-    "format:check": "oxfmt --check .",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "validate": "pnpm check && pnpm test",
+    "typecheck": "tsc --noEmit",
     "lint": "oxlint --deny-warnings .",
     "lint:fix": "oxlint --fix .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "prepublishOnly": "pnpm validate",
+    "pack:dry": "pnpm pack --dry-run"
   },
   "dependencies": {
     "sharp": "^0.34.5"
