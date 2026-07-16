@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 
 export const ADVISOR_CONFIG_BASENAME = "pi-advisor.json";
 
@@ -13,6 +14,7 @@ export interface AdvisorConfig {
   enabled?: boolean;
   provider?: string;
   model?: string;
+  thinkingLevel?: ModelThinkingLevel;
   timeoutMs?: number;
   maxContextChars?: number;
 }
@@ -22,6 +24,7 @@ export interface ResolvedAdvisorConfig {
   enabled: boolean;
   provider?: string;
   model?: string;
+  thinkingLevel: ModelThinkingLevel;
   timeoutMs: number;
   maxContextChars: number;
   configured: boolean;
@@ -31,9 +34,12 @@ export type AdvisorConfigPatch = Partial<AdvisorConfig>;
 
 export const DEFAULT_ADVISOR_CONFIG = {
   enabled: true,
+  thinkingLevel: "medium",
   timeoutMs: 30_000,
   maxContextChars: 48_000,
-} as const satisfies Required<Pick<AdvisorConfig, "enabled" | "timeoutMs" | "maxContextChars">>;
+} as const satisfies Required<
+  Pick<AdvisorConfig, "enabled" | "thinkingLevel" | "timeoutMs" | "maxContextChars">
+>;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -85,6 +91,7 @@ export function normalizeAdvisorConfig(
   const normalized: ResolvedAdvisorConfig = {
     configPath,
     enabled: typeof record.enabled === "boolean" ? record.enabled : DEFAULT_ADVISOR_CONFIG.enabled,
+    thinkingLevel: normalizeThinkingLevel(record.thinkingLevel),
     timeoutMs: clampTimeoutMs(record.timeoutMs),
     maxContextChars: clampContextChars(record.maxContextChars),
     configured: Boolean(provider && model),
@@ -120,6 +127,11 @@ export function patchAdvisorConfig(
   }
   if ("provider" in patch) patchOptionalString(next, "provider", patch.provider);
   if ("model" in patch) patchOptionalString(next, "model", patch.model);
+  if ("thinkingLevel" in patch) {
+    const thinkingLevel = validThinkingLevel(patch.thinkingLevel);
+    if (thinkingLevel) next.thinkingLevel = thinkingLevel;
+    else delete next.thinkingLevel;
+  }
   if ("timeoutMs" in patch) {
     if (patch.timeoutMs === undefined) delete next.timeoutMs;
     else next.timeoutMs = clampTimeoutMs(patch.timeoutMs);
@@ -152,6 +164,25 @@ export function writeAdvisorConfigPatch(
 function clampInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return Math.max(minimum, Math.min(maximum, Math.trunc(value)));
+}
+
+function normalizeThinkingLevel(value: unknown): ModelThinkingLevel {
+  return validThinkingLevel(value) ?? DEFAULT_ADVISOR_CONFIG.thinkingLevel;
+}
+
+function validThinkingLevel(value: unknown): ModelThinkingLevel | undefined {
+  switch (value) {
+    case "off":
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 function nonEmptyString(value: unknown): string | undefined {

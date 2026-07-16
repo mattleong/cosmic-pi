@@ -41,7 +41,7 @@ Open the settings picker and choose an authenticated advisor model:
 /advisor-settings
 ```
 
-The picker also controls whether automatic review is enabled, the timeout, and the context limit. It lists models currently available through pi's model registry, so authenticate the desired provider through pi first.
+The picker also controls whether automatic review is enabled, the advisor reasoning level, the timeout, and the context limit. The model picker supports fuzzy search by provider, model ID, or display name and lists models currently available through pi's model registry, so authenticate the desired provider through pi first.
 
 Inspect the effective setup without exposing credentials:
 
@@ -68,6 +68,7 @@ Example:
   "enabled": true,
   "provider": "openai-codex",
   "model": "gpt-5.5",
+  "thinkingLevel": "high",
   "timeoutMs": 30000,
   "maxContextChars": 48000
 }
@@ -76,7 +77,8 @@ Example:
 Settings:
 
 - `enabled`: automatic review toggle; defaults to `true`.
-- `provider` and `model`: both must be non-empty for review to be configured. Use `/advisor-settings` to select an authenticated model.
+- `provider` and `model`: both must be non-empty for review to be configured. Use `/advisor-settings` to search for and select an authenticated model.
+- `thinkingLevel`: advisor reasoning level; defaults to `medium`. The settings picker only offers levels supported by the selected model, from `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 - `timeoutMs`: advisor request timeout in milliseconds; defaults to `30000` and is clamped to `10000`–`180000`.
 - `maxContextChars`: serialized review-context limit; defaults to `48000` and is clamped to `16000`–`240000`.
 

@@ -1,4 +1,4 @@
-import { complete } from "@earendil-works/pi-ai/compat";
+import { clampThinkingLevel, completeSimple } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedAdvisorConfig } from "./config.ts";
 import {
@@ -17,7 +17,7 @@ export class AdvisorModelError extends Error {
   }
 }
 
-export type CompleteAdvisorRequest = typeof complete;
+export type CompleteAdvisorRequest = typeof completeSimple;
 
 export interface AdvisorClientDependencies {
   completeRequest?: CompleteAdvisorRequest;
@@ -161,7 +161,8 @@ export async function requestAdvisorReview(
     );
     if (!auth.ok) throw new AdvisorModelError(`Advisor authentication failed: ${auth.error}`);
 
-    const runComplete = dependencies.completeRequest ?? complete;
+    const runComplete = dependencies.completeRequest ?? completeSimple;
+    const effectiveThinkingLevel = clampThinkingLevel(model, config.thinkingLevel);
     const response = await awaitWithAbort(
       () =>
         runComplete(
@@ -183,6 +184,7 @@ export async function requestAdvisorReview(
             maxTokens: ADVISOR_MAX_OUTPUT_TOKENS,
             signal: abortScope.signal,
             timeoutMs: abortScope.remainingTimeoutMs(),
+            ...(effectiveThinkingLevel === "off" ? {} : { reasoning: effectiveThinkingLevel }),
           },
         ),
       abortScope,

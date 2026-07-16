@@ -38,6 +38,7 @@ function resolvedConfig(overrides: Partial<ResolvedAdvisorConfig> = {}): Resolve
     enabled: true,
     provider: "review-provider",
     model: "review-model",
+    thinkingLevel: "medium",
     timeoutMs: 30_000,
     maxContextChars: 48_000,
     configured: true,

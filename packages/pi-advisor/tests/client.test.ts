@@ -14,6 +14,7 @@ function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisor
     enabled: true,
     provider: "advisor-provider",
     model: "advisor-model",
+    thinkingLevel: "medium",
     timeoutMs: 30_000,
     maxContextChars: 48_000,
     configured: true,
@@ -45,6 +46,7 @@ function context(options: { model?: unknown; auth?: unknown; signal?: AbortSigna
   const advisorModel = options.model ?? {
     provider: "advisor-provider",
     id: "advisor-model",
+    reasoning: true,
   };
   return {
     signal: options.signal,
@@ -89,9 +91,55 @@ describe("advisor client", () => {
       expect.objectContaining({
         apiKey: "credential",
         maxTokens: _clientTest.ADVISOR_MAX_OUTPUT_TOKENS,
+        reasoning: "medium",
       }),
     );
     expect(_clientTest.ADVISOR_MAX_OUTPUT_TOKENS).toBe(2_048);
+  });
+
+  test("clamps the configured reasoning level to model capabilities", async () => {
+    const ctx = context({
+      model: {
+        provider: "advisor-provider",
+        id: "advisor-model",
+        reasoning: true,
+        thinkingLevelMap: { medium: null, high: "high" },
+      },
+    });
+    const completeRequest = vi.fn(async () =>
+      response(passJson),
+    ) as unknown as CompleteAdvisorRequest;
+
+    await requestAdvisorReview(ctx, config({ thinkingLevel: "medium" }), "transcript", {
+      completeRequest,
+    });
+
+    expect(completeRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ reasoning: "high" }),
+    );
+  });
+
+  test("omits reasoning for non-reasoning models", async () => {
+    const ctx = context({
+      model: {
+        provider: "advisor-provider",
+        id: "advisor-model",
+        reasoning: false,
+      },
+    });
+    const completeRequestMock = vi.fn(
+      async (_model: unknown, _context: unknown, _options?: Record<string, unknown>) =>
+        response(passJson),
+    );
+    const completeRequest = completeRequestMock as unknown as CompleteAdvisorRequest;
+
+    await requestAdvisorReview(ctx, config({ thinkingLevel: "high" }), "transcript", {
+      completeRequest,
+    });
+
+    expect(completeRequestMock.mock.calls[0]?.[2]).not.toHaveProperty("reasoning");
   });
 
   test("rejects missing model and authentication errors without making a provider call", async () => {

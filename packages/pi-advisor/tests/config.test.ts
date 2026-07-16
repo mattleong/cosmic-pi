@@ -32,6 +32,7 @@ describe("advisor config", () => {
   test("uses focused review defaults", () => {
     expect(DEFAULT_ADVISOR_CONFIG).toEqual({
       enabled: true,
+      thinkingLevel: "medium",
       timeoutMs: 30_000,
       maxContextChars: 48_000,
     });
@@ -70,6 +71,7 @@ describe("advisor config", () => {
           enabled: "yes",
           provider: 42,
           model: " ",
+          thinkingLevel: "extreme",
           timeoutMs: Number.NaN,
           maxContextChars: "large",
         },
@@ -85,6 +87,7 @@ describe("advisor config", () => {
           enabled: false,
           provider: " openai ",
           model: " gpt-5.5 ",
+          thinkingLevel: "high",
           timeoutMs: 90_000,
           maxContextChars: 80_000,
         },
@@ -95,6 +98,7 @@ describe("advisor config", () => {
       enabled: false,
       provider: "openai",
       model: "gpt-5.5",
+      thinkingLevel: "high",
       timeoutMs: 90_000,
       maxContextChars: 80_000,
       configured: true,
@@ -141,6 +145,7 @@ describe("advisor config", () => {
         enabled: false,
         provider: " openai ",
         model: " gpt-5.5 ",
+        thinkingLevel: "high",
         timeoutMs: 1,
         maxContextChars: 999_999,
       }),
@@ -148,6 +153,7 @@ describe("advisor config", () => {
       enabled: false,
       provider: "openai",
       model: "gpt-5.5",
+      thinkingLevel: "high",
       timeoutMs: MIN_TIMEOUT_MS,
       maxContextChars: MAX_CONTEXT_CHARS,
       futureSetting: { nested: true },
@@ -162,8 +168,18 @@ describe("advisor config", () => {
   test("an undefined or blank patch clears an optional setting", () => {
     expect(
       patchAdvisorConfig(
-        { provider: "openai", model: "gpt-5.5", timeoutMs: 30_000 },
-        { provider: " ", model: undefined, timeoutMs: undefined },
+        {
+          provider: "openai",
+          model: "gpt-5.5",
+          thinkingLevel: "high",
+          timeoutMs: 30_000,
+        },
+        {
+          provider: " ",
+          model: undefined,
+          thinkingLevel: undefined,
+          timeoutMs: undefined,
+        },
       ),
     ).toEqual({});
   });
@@ -182,7 +198,12 @@ describe("advisor config", () => {
       );
 
       const resolved = writeAdvisorConfigPatch(
-        { enabled: false, model: "gpt-5.5", timeoutMs: 500_000 },
+        {
+          enabled: false,
+          model: "gpt-5.5",
+          thinkingLevel: "xhigh",
+          timeoutMs: 500_000,
+        },
         configPath,
       );
 
@@ -191,6 +212,7 @@ describe("advisor config", () => {
         enabled: false,
         provider: "openai",
         model: "gpt-5.5",
+        thinkingLevel: "xhigh",
         timeoutMs: MAX_TIMEOUT_MS,
         configured: true,
       });
@@ -198,6 +220,7 @@ describe("advisor config", () => {
         enabled: false,
         provider: "openai",
         model: "gpt-5.5",
+        thinkingLevel: "xhigh",
         timeoutMs: MAX_TIMEOUT_MS,
         unknownField: "keep me",
         future: { enabled: true },

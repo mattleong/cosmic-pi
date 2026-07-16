@@ -1,4 +1,11 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+import {
+  DynamicBorder,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
+import { fuzzyFilter, Input, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import {
   type AdvisorConfigPatch,
   type ResolvedAdvisorConfig,
@@ -11,6 +18,15 @@ const CLEAR_MODEL_OPTION = "Clear advisor model";
 
 const TIMEOUT_OPTIONS = [10_000, 30_000, 60_000, 90_000, 120_000, 180_000] as const;
 const CONTEXT_OPTIONS = [16_000, 48_000, 120_000, 240_000] as const;
+const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
 
 export interface AdvisorConfigState {
   get(): ResolvedAdvisorConfig;
@@ -50,12 +66,14 @@ async function openAdvisorSettings(
     const config = state.get();
     const enabledOption = `Automatic review: ${config.enabled ? "on" : "off"}`;
     const modelOption = `Advisor model: ${formatModel(config)}`;
+    const thinkingOption = `Reasoning level: ${config.thinkingLevel}`;
     const timeoutOption = `Review timeout: ${formatDuration(config.timeoutMs)}`;
     const contextOption = `Context cap: ${config.maxContextChars.toLocaleString()} characters`;
     const doneOption = "Done";
     const choice = await ctx.ui.select("Advisor settings", [
       enabledOption,
       modelOption,
+      thinkingOption,
       timeoutOption,
       contextOption,
       doneOption,
@@ -66,6 +84,8 @@ async function openAdvisorSettings(
       savePatch(ctx, state, { enabled: !config.enabled });
     } else if (choice === modelOption) {
       await chooseAdvisorModel(ctx, state);
+    } else if (choice === thinkingOption) {
+      await chooseThinkingLevel(ctx, state);
     } else if (choice === timeoutOption) {
       await chooseNumericSetting(
         ctx,
@@ -110,10 +130,11 @@ async function chooseAdvisorModel(
     return;
   }
 
-  const selection = await ctx.ui.select("Dedicated advisor model", [
-    ...models.map(({ label }) => label),
-    CLEAR_MODEL_OPTION,
-  ]);
+  const selection = await selectAdvisorModel(
+    ctx,
+    models.map(({ model }) => model),
+    state.get(),
+  );
   if (!selection) return;
   if (selection === CLEAR_MODEL_OPTION) {
     savePatch(ctx, state, { provider: undefined, model: undefined });
@@ -122,7 +143,159 @@ async function chooseAdvisorModel(
 
   const selected = models.find(({ label }) => label === selection)?.model;
   if (!selected) return;
-  savePatch(ctx, state, { provider: selected.provider, model: selected.id });
+  savePatch(ctx, state, {
+    provider: selected.provider,
+    model: selected.id,
+    thinkingLevel: clampThinkingLevel(selected, state.get().thinkingLevel),
+  });
+}
+
+async function selectAdvisorModel(
+  ctx: ExtensionCommandContext,
+  models: readonly Model<Api>[],
+  config: Pick<ResolvedAdvisorConfig, "provider" | "model">,
+): Promise<string | undefined> {
+  if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
+    return await ctx.ui.select("Dedicated advisor model", [
+      ...models.map((model) => `${model.provider}/${model.id}`),
+      CLEAR_MODEL_OPTION,
+    ]);
+  }
+
+  const currentValue =
+    config.provider && config.model ? `${config.provider}/${config.model}` : undefined;
+  const choices: Array<{ item: SelectItem; searchText: string }> = models.map((model) => {
+    const value = `${model.provider}/${model.id}`;
+    const levels = getSupportedThinkingLevels(model).join(", ");
+    const name = model.name && model.name !== model.id ? model.name : undefined;
+    return {
+      item: {
+        value,
+        label: value === currentValue ? `${value} (current)` : value,
+        description: `${name ? `${name} · ` : ""}reasoning: ${levels}`,
+      } satisfies SelectItem,
+      searchText: `${value} ${model.name ?? ""}`,
+    };
+  });
+  choices.push({
+    item: { value: CLEAR_MODEL_OPTION, label: CLEAR_MODEL_OPTION },
+    searchText: CLEAR_MODEL_OPTION,
+  });
+
+  return (
+    (await ctx.ui.custom<string | null>((tui, theme, keybindings, done) => {
+      const input = new Input();
+      const topBorder = new DynamicBorder((text: string) => theme.fg("accent", text));
+      const bottomBorder = new DynamicBorder((text: string) => theme.fg("accent", text));
+      let title: Text;
+      let searchLabel: Text;
+      let hint: Text;
+      const rebuildThemedText = () => {
+        title = new Text(theme.fg("accent", theme.bold("Select Advisor Model")), 1, 0);
+        searchLabel = new Text(theme.fg("dim", "Search models:"), 1, 0);
+        hint = new Text(
+          theme.fg("dim", "Type to search · ↑↓ navigate · enter select · esc cancel"),
+          1,
+          0,
+        );
+      };
+      rebuildThemedText();
+      const listTheme = {
+        selectedPrefix: (text: string) => theme.fg("accent", text),
+        selectedText: (text: string) => theme.fg("accent", text),
+        description: (text: string) => theme.fg("muted", text),
+        scrollInfo: (text: string) => theme.fg("dim", text),
+        noMatch: (_text: string) => theme.fg("warning", "  No matching models"),
+      };
+      let query = "";
+      let selectList = buildModelSelectList(choices, query, currentValue, listTheme, done);
+
+      return {
+        get focused() {
+          return input.focused;
+        },
+        set focused(value: boolean) {
+          input.focused = value;
+        },
+        render(width: number) {
+          return [
+            ...topBorder.render(width),
+            ...title.render(width),
+            ...searchLabel.render(width),
+            ...input.render(width),
+            "",
+            ...selectList.render(width),
+            "",
+            ...hint.render(width),
+            ...bottomBorder.render(width),
+          ];
+        },
+        invalidate() {
+          topBorder.invalidate();
+          bottomBorder.invalidate();
+          input.invalidate();
+          selectList.invalidate();
+          rebuildThemedText();
+        },
+        handleInput(data: string) {
+          if (
+            keybindings.matches(data, "tui.select.up") ||
+            keybindings.matches(data, "tui.select.down") ||
+            keybindings.matches(data, "tui.select.confirm") ||
+            keybindings.matches(data, "tui.select.cancel")
+          ) {
+            selectList.handleInput(data);
+          } else {
+            input.handleInput(data);
+            const nextQuery = input.getValue();
+            if (nextQuery !== query) {
+              query = nextQuery;
+              selectList = buildModelSelectList(choices, query, currentValue, listTheme, done);
+            }
+          }
+          tui.requestRender();
+        },
+      };
+    })) ?? undefined
+  );
+}
+
+function buildModelSelectList(
+  choices: Array<{ item: SelectItem; searchText: string }>,
+  query: string,
+  currentValue: string | undefined,
+  theme: ConstructorParameters<typeof SelectList>[2],
+  done: (value: string | null) => void,
+): SelectList {
+  const filtered = fuzzyFilter(choices, query, (choice) => choice.searchText);
+  const selectList = new SelectList(
+    filtered.map((choice) => choice.item),
+    10,
+    theme,
+  );
+  if (!query && currentValue) {
+    const currentIndex = filtered.findIndex((choice) => choice.item.value === currentValue);
+    if (currentIndex >= 0) selectList.setSelectedIndex(currentIndex);
+  }
+  selectList.onSelect = (item) => done(item.value);
+  selectList.onCancel = () => done(null);
+  return selectList;
+}
+
+async function chooseThinkingLevel(
+  ctx: ExtensionCommandContext,
+  state: AdvisorConfigState,
+): Promise<void> {
+  const config = state.get();
+  const model =
+    config.provider && config.model
+      ? ctx.modelRegistry.find(config.provider, config.model)
+      : undefined;
+  const levels = model ? getSupportedThinkingLevels(model) : THINKING_LEVELS;
+  const selection = await ctx.ui.select("Advisor reasoning level", [...levels]);
+  if (selection && THINKING_LEVELS.includes(selection as ModelThinkingLevel)) {
+    savePatch(ctx, state, { thinkingLevel: selection as ModelThinkingLevel });
+  }
 }
 
 async function chooseNumericSetting(
@@ -170,6 +343,8 @@ async function showAdvisorStatus(
     `Advisor model: ${formatModel(config)}`,
     `Model available: ${model ? "yes" : "no"}`,
     `Credentials configured: ${credentials ? "yes" : "no"}`,
+    `Reasoning level: ${config.thinkingLevel}`,
+    `Effective reasoning level: ${model ? clampThinkingLevel(model, config.thinkingLevel) : "unknown"}`,
     `Timeout: ${config.timeoutMs.toLocaleString()} ms`,
     `Context cap: ${config.maxContextChars.toLocaleString()} characters`,
     `Session review attempts: ${metrics.attempted}`,
@@ -190,6 +365,7 @@ function formatModel(config: Pick<ResolvedAdvisorConfig, "provider" | "model">):
 export const _settingsTest = {
   CLEAR_MODEL_OPTION,
   CONTEXT_OPTIONS,
+  THINKING_LEVELS,
   TIMEOUT_OPTIONS,
   formatDuration,
   formatModel,

@@ -19,6 +19,7 @@ function configAt(configPath: string): ResolvedAdvisorConfig {
   return {
     configPath,
     enabled: true,
+    thinkingLevel: "medium",
     timeoutMs: 30_000,
     maxContextChars: 48_000,
     configured: false,
@@ -74,7 +75,14 @@ describe("advisor commands", () => {
         select: vi.fn(async () => selections.shift()),
       },
       modelRegistry: {
-        getAvailable: () => [{ provider: "anthropic", id: "claude-reviewer" }],
+        getAvailable: () => [
+          {
+            provider: "anthropic",
+            id: "claude-reviewer",
+            name: "Claude Reviewer",
+            reasoning: true,
+          },
+        ],
       },
     } as unknown as ExtensionCommandContext;
 
@@ -89,9 +97,117 @@ describe("advisor commands", () => {
       enabled: true,
       provider: "anthropic",
       model: "claude-reviewer",
+      thinkingLevel: "medium",
       futureSetting: { keep: true },
     });
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  test("TUI model picker fuzzy-searches provider, model ID, and display name", async () => {
+    const configPath = tempConfigPath();
+    const harness = createCommands(configAt(configPath));
+    const selections = ["Advisor model: not configured", "Done"];
+    const custom = vi.fn(async (factory: unknown) => {
+      return await new Promise<string | null>((resolve) => {
+        const createComponent = factory as (
+          tui: { requestRender(): void },
+          theme: { bold(text: string): string; fg(color: string, text: string): string },
+          keybindings: { matches(data: string, binding: string): boolean },
+          done: (value: string | null) => void,
+        ) => { handleInput?(data: string): void; render(width: number): string[] };
+        const component = createComponent(
+          { requestRender: vi.fn() },
+          {
+            bold: (text: string) => text,
+            fg: (_color: string, text: string) => text,
+          },
+          {
+            matches: (data: string, binding: string) =>
+              (binding === "tui.select.confirm" && data === "\r") ||
+              (binding === "tui.select.cancel" && data === "\u001b"),
+          },
+          resolve,
+        ) as { handleInput?(data: string): void; render(width: number): string[] };
+        component.handleInput?.("sonnet");
+        expect(component.render(100).join("\n")).toContain("anthropic/claude-reviewer");
+        expect(component.render(100).join("\n")).not.toContain("openai/gpt-reviewer");
+        component.handleInput?.("\r");
+      });
+    });
+    const ctx = {
+      hasUI: true,
+      mode: "tui",
+      ui: {
+        custom,
+        notify: vi.fn(),
+        select: vi.fn(async () => selections.shift()),
+      },
+      modelRegistry: {
+        getAvailable: () => [
+          {
+            provider: "openai",
+            id: "gpt-reviewer",
+            name: "GPT Reviewer",
+            reasoning: true,
+          },
+          {
+            provider: "anthropic",
+            id: "claude-reviewer",
+            name: "Sonnet Review Model",
+            reasoning: true,
+          },
+        ],
+      },
+    } as unknown as ExtensionCommandContext;
+
+    await harness.commands.get("advisor-settings")?.("", ctx);
+
+    expect(custom).toHaveBeenCalledOnce();
+    expect(harness.getConfig()).toMatchObject({
+      provider: "anthropic",
+      model: "claude-reviewer",
+      thinkingLevel: "medium",
+    });
+  });
+
+  test("reasoning picker offers only levels supported by the selected model", async () => {
+    const configPath = tempConfigPath();
+    writeRawAdvisorConfig(
+      { provider: "review-provider", model: "review-model", thinkingLevel: "medium" },
+      configPath,
+    );
+    const harness = createCommands({
+      ...configAt(configPath),
+      provider: "review-provider",
+      model: "review-model",
+      configured: true,
+    });
+    const selections = ["Reasoning level: medium", "max", "Done"];
+    const select = vi.fn(async () => selections.shift());
+    const ctx = {
+      hasUI: true,
+      ui: { notify: vi.fn(), select },
+      modelRegistry: {
+        find: () => ({
+          provider: "review-provider",
+          id: "review-model",
+          reasoning: true,
+          thinkingLevelMap: { xhigh: null, max: "max" },
+        }),
+      },
+    } as unknown as ExtensionCommandContext;
+
+    await harness.commands.get("advisor-settings")?.("", ctx);
+
+    expect(select).toHaveBeenNthCalledWith(2, "Advisor reasoning level", [
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "max",
+    ]);
+    expect(harness.getConfig().thinkingLevel).toBe("max");
   });
 
   test("settings picker updates enablement and bounded preset values", async () => {
