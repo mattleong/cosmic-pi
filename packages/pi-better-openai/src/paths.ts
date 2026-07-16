@@ -7,11 +7,6 @@ export function expandTildePath(path: string, home = homedir()): string {
   return path;
 }
 
-export function piAgentDir(env = process.env, home = homedir()): string {
-  const configuredDir = env.PI_CODING_AGENT_DIR?.trim();
-  return configuredDir ? expandTildePath(configuredDir, home) : join(home, ".pi", "agent");
-}
-
 export function resolveUserPath(path: string, cwd: string, home = homedir()): string {
   return resolve(cwd, expandTildePath(path, home));
 }

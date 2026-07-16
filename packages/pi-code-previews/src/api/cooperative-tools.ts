@@ -12,8 +12,8 @@ import { createCodePreviewToolShell } from "../preview/tool-shell";
 
 export interface CodePreviewShellOptions {
   /**
-   * Shell mode to apply. Defaults to the current code-preview setting.
-   * Load saved settings before registration when another extension should respect user config.
+   * Shell mode to apply. Defaults to the code-preview setting at wrapping time.
+   * The selected mode is captured; later settings reloads do not change the wrapped tool.
    */
   mode?: ToolCallBackgroundMode;
 
@@ -31,6 +31,7 @@ type AnyToolDefinition = ToolDefinition<any, any, any>;
  *
  * This does not discover or wrap already-registered tools. The caller keeps ownership of the
  * underlying tool definition, including execute(), schemas, prompt metadata, and custom renderers.
+ * Load trusted project settings before calling this function because shell mode is captured here.
  */
 export function withCodePreviewShell<TTool extends AnyToolDefinition>(
   tool: TTool,

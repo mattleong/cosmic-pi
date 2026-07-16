@@ -21,7 +21,7 @@ function configAt(configPath: string): ResolvedAdvisorConfig {
     enabled: true,
     fastMode: false,
     thinkingLevel: "medium",
-    revisionCooldownTurns: 3,
+    revisionCooldownTurns: 0,
     timeoutMs: 30_000,
     maxContextChars: 48_000,
     configured: false,
@@ -245,7 +245,7 @@ describe("advisor commands", () => {
     const harness = createCommands(configAt(configPath));
     const selections = [
       "Automatic review: on",
-      "Revision cooldown: 3 turns",
+      "Revision cooldown: 0 turns",
       "5 turns",
       "Review timeout: 30s",
       "90s",
@@ -319,6 +319,7 @@ describe("advisor commands", () => {
       ...configAt(configPath),
       provider: "openai",
       model: "reviewer",
+      revisionCooldownTurns: 3,
       configured: true,
     };
     const harness = createCommands(configured, {

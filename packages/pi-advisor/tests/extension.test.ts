@@ -65,7 +65,7 @@ function resolvedConfig(overrides: Partial<ResolvedAdvisorConfig> = {}): Resolve
     model: "review-model",
     fastMode: false,
     thinkingLevel: "medium",
-    revisionCooldownTurns: 3,
+    revisionCooldownTurns: 0,
     timeoutMs: 30_000,
     maxContextChars: 48_000,
     configured: true,
@@ -121,6 +121,7 @@ function createHarness(
   const hasConfiguredAuth = vi.fn(() => true);
   const sendMessage = vi.fn();
   const registerMessageRenderer = vi.fn();
+  const logFailure = vi.fn(() => "/tmp/logs/pi-advisor.jsonl");
   const requestReview = vi.fn(
     async (
       _ctx: unknown,
@@ -160,6 +161,7 @@ function createHarness(
 
   createAdvisorExtension({
     loadConfig: () => config,
+    logFailure,
     requestReview: requestReview as never,
   })(pi);
 
@@ -175,6 +177,7 @@ function createHarness(
     hasPendingMessages,
     handlers,
     isIdle,
+    logFailure,
     notify,
     registerMessageRenderer,
     requestReview,
@@ -435,7 +438,7 @@ describe("advisor extension lifecycle", () => {
     expect(harness.sendMessage).not.toHaveBeenCalled();
   });
 
-  test("delivers medium findings as non-triggering advice", async () => {
+  test("triggers one revision for medium findings by default", async () => {
     const harness = createHarness(resolvedConfig(), advisoryReview);
 
     await harness.emit("turn_end", assistantEvent("candidate with a caveat"));
@@ -443,15 +446,15 @@ describe("advisor extension lifecycle", () => {
 
     expect(harness.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining("Do not restart completed work"),
-        details: expect.objectContaining({ action: "advice", review: advisoryReview }),
+        content: expect.stringContaining("requested one revision"),
+        details: expect.objectContaining({ action: "revision", review: advisoryReview }),
       }),
-      { deliverAs: "steer" },
+      { deliverAs: "steer", triggerTurn: true },
     );
   });
 
-  test("routes high findings as advice during the default revision cooldown", async () => {
-    const harness = createHarness();
+  test("routes findings as advice during a configured revision cooldown", async () => {
+    const harness = createHarness(resolvedConfig({ revisionCooldownTurns: 3 }));
     harness.requestReview
       .mockReset()
       .mockResolvedValueOnce(revisionReview)
@@ -477,6 +480,7 @@ describe("advisor extension lifecycle", () => {
 
     await harness.emit("turn_end", assistantEvent("first candidate"));
     await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(1));
+    await harness.emit("turn_end", assistantEvent("advisor revision"));
     await harness.emit("message_end", { message: { role: "user", content: "next request" } });
     await harness.emit("turn_end", assistantEvent("second candidate"));
     await vi.waitFor(() =>
@@ -595,6 +599,17 @@ describe("advisor extension lifecycle", () => {
     );
 
     expect(harness.sendMessage).not.toHaveBeenCalled();
+    expect(harness.logFailure).toHaveBeenCalledWith(
+      "/tmp/pi-advisor.json",
+      expect.objectContaining({
+        contextChars: expect.any(Number),
+        durationMs: expect.any(Number),
+        error: expect.objectContaining({ message: "provider leaked details" }),
+        model: "review-model",
+        provider: "review-provider",
+        timeoutMs: 30_000,
+      }),
+    );
     expect(harness.notify).toHaveBeenCalledWith(
       "Advisor review failed; keeping the original response.",
       "warning",

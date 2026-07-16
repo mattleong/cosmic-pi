@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { piAgentDir } from "./paths.ts";
+import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isRecord } from "./utils.ts";
 
-export const AUTH_FILE = join(piAgentDir(), "auth.json");
+export const AUTH_FILE = join(getAgentDir(), "auth.json");
 
 export type CodexCredentials = {
   accessToken: string;
@@ -42,10 +42,6 @@ function decodeBase64Url(value: string): string {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
   return Buffer.from(padded, "base64").toString("utf8");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function extractAccountIdFromJwt(token: string): string | undefined {

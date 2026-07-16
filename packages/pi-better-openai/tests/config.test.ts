@@ -73,12 +73,11 @@ describe("config helpers", () => {
     });
   });
 
-  test("uses PI_CODING_AGENT_DIR for global config and expands a home-relative path", () => {
-    expect(
-      _test.configPaths("/project", "/home/alice", {
-        PI_CODING_AGENT_DIR: "~/custom-agent",
-      }).global,
-    ).toBe("/home/alice/custom-agent/extensions/pi-better-openai.json");
+  test("builds paths from injected SDK-resolved agent and Pi config directories", () => {
+    expect(_test.configPaths("/project", "/home/alice/custom-agent")).toEqual({
+      project: "/project/.pi/extensions/pi-better-openai.json",
+      global: "/home/alice/custom-agent/extensions/pi-better-openai.json",
+    });
   });
 
   test("preserves unknown config fields while writing updates", () => {
@@ -117,7 +116,7 @@ describe("config helpers", () => {
       const cwd = join(tempDir, "project");
       const home = join(tempDir, "home");
       withHome(home, () => {
-        const paths = _test.configPaths(cwd, home);
+        const paths = _test.configPaths(cwd, join(home, ".pi", "agent"));
         writeConfig(paths.global, {
           usage: { enabled: false, refreshIntervalMs: 20000, showResetTimes: false },
           footer: { mode: "replace" },

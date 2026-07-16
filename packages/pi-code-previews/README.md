@@ -145,26 +145,23 @@ When content/result/diff previews are disabled, collapsed successful output or c
 
 ## Extension author integration
 
-Other pi extensions can opt their own tools into the code-preview shell by importing `withCodePreviewShell` and wrapping tool definitions before `pi.registerTool(...)`:
+Other pi extensions can opt their own tools into the code-preview shell by importing `withCodePreviewShell`. The wrapper captures shell mode when it is called, so project-aware consumers must load trusted project settings before wrapping and registering the tool inside `session_start`:
 
 ```ts
 import { withCodePreviewShell, loadCodePreviewSettings } from "pi-code-previews";
 
-export default async function myExtension(pi) {
-  await loadCodePreviewSettings();
-  pi.registerTool(withCodePreviewShell(myToolDefinition));
+export default function myExtension(pi) {
+  pi.on("session_start", async (_event, ctx) => {
+    await loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted());
+    pi.registerTool(withCodePreviewShell(myToolDefinition));
+  });
 }
 ```
 
 This preserves the original tool definition and only decorates rendering. With no arguments,
-`loadCodePreviewSettings()` reads global settings only. To honor project-local settings, reload
-them from `session_start` after Pi has made its trust decision:
-
-```ts
-pi.on("session_start", async (_event, ctx) => {
-  await loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted());
-});
-```
+`loadCodePreviewSettings()` reads global settings only. If a consumer only needs global settings,
+it may load them before initial tool registration. Reloading settings after a tool has been wrapped
+does not change that tool's `renderShell`; wrap/register it only after the desired settings load.
 
 If an extension imports `pi-code-previews`, it should list it in `dependencies` so users do not
 need to install it separately.
@@ -174,7 +171,7 @@ need to install it separately.
 Give this to an agent working on another pi extension:
 
 ```text
-Add pi-code-previews support to this extension. Install it as a runtime dependency with the package manager this project uses, e.g. `npm install pi-code-previews`. Import `withCodePreviewShell` and `loadCodePreviewSettings` from `pi-code-previews`, load global settings once before tool registration, and wrap this extension's own tool definitions with `withCodePreviewShell(...)` before `pi.registerTool(...)`. If project settings are needed, reload them from `session_start` with `loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted())`. Do not wrap tools owned by other extensions. Run checks.
+Add pi-code-previews support to this extension. Install it as a runtime dependency with the package manager this project uses, e.g. `npm install pi-code-previews`. Import `withCodePreviewShell` and `loadCodePreviewSettings` from `pi-code-previews`. For trusted project settings, inside `session_start` first call `loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted())`, then wrap this extension's own tool definitions with `withCodePreviewShell(...)` and register them. The wrapper captures shell mode, so do not claim a later reload changes `renderShell`. Do not wrap tools owned by other extensions. Run checks.
 ```
 
 ## Screenshots

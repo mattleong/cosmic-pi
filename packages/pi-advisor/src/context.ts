@@ -1,3 +1,4 @@
+import { isRecord } from "./utils.ts";
 export const DEFAULT_MAX_CONTEXT_CHARS = 48_000;
 
 export const ADVISOR_CONTEXT_TRUNCATION_MARKER = "[... advisor context truncated ...]";
@@ -331,8 +332,4 @@ function nonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

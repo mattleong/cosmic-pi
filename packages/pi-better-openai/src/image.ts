@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { extname, isAbsolute, join, resolve, sep } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  CONFIG_DIR_NAME,
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
 import sharp from "sharp";
 import type { ResolvedConfig } from "./config.ts";
@@ -13,7 +18,7 @@ import {
   type CodexCredentialsWithSource,
 } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
-import { piAgentDir, resolveUserPath } from "./paths.ts";
+import { resolveUserPath } from "./paths.ts";
 
 const OPENAI_IMAGE_TOOL = "openai_image";
 const OPENAI_IMAGE_COMMAND = "openai-image";
@@ -242,8 +247,8 @@ function resolveSaveDir(
   cwd: string,
 ): string | undefined {
   if (mode === "none") return undefined;
-  if (mode === "project") return join(cwd, ".pi", "generated-images");
-  if (mode === "global") return join(piAgentDir(), "generated-images");
+  if (mode === "project") return join(cwd, CONFIG_DIR_NAME, "generated-images");
+  if (mode === "global") return join(getAgentDir(), "generated-images");
   const dir = params.saveDir?.trim() || process.env.PI_IMAGE_SAVE_DIR?.trim();
   if (!dir) throw new Error("save=custom requires saveDir or PI_IMAGE_SAVE_DIR.");
   return resolveUserPath(dir, cwd);

@@ -1,5 +1,7 @@
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { isRecord } from "./utils.ts";
+export { isRecord } from "./utils.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 
@@ -42,7 +44,7 @@ export const DEFAULT_ADVISOR_CONFIG = {
   enabled: true,
   fastMode: false,
   thinkingLevel: "medium",
-  revisionCooldownTurns: 3,
+  revisionCooldownTurns: 0,
   timeoutMs: 30_000,
   maxContextChars: 48_000,
 } as const satisfies Required<
@@ -57,24 +59,7 @@ export const DEFAULT_ADVISOR_CONFIG = {
   >
 >;
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-export function expandTildePath(path: string, home: string): string {
-  if (path === "~") return home;
-  if (path.startsWith("~/") || path.startsWith("~\\")) return join(home, path.slice(2));
-  return path;
-}
-
-export function getAdvisorConfigPath(
-  home = homedir(),
-  env: Readonly<Record<string, string | undefined>> = process.env,
-): string {
-  const configuredAgentDir = env.PI_CODING_AGENT_DIR?.trim();
-  const agentDir = configuredAgentDir
-    ? expandTildePath(configuredAgentDir, home)
-    : join(home, ".pi", "agent");
+export function getAdvisorConfigPath(agentDir = getAgentDir()): string {
   return join(agentDir, "extensions", ADVISOR_CONFIG_BASENAME);
 }
 

@@ -16,7 +16,7 @@ function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisor
     model: "advisor-model",
     fastMode: false,
     thinkingLevel: "medium",
-    revisionCooldownTurns: 3,
+    revisionCooldownTurns: 0,
     timeoutMs: 30_000,
     maxContextChars: 48_000,
     configured: true,

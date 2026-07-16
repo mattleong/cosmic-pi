@@ -30,6 +30,20 @@ test("root public API exposes only stable package-author helpers", () => {
   assert.equal(typeof withCodePreviewShell, "function");
 });
 
+test("cooperative shell captures mode when the tool is wrapped", () => {
+  const tool = { name: "example", label: "Example" } as unknown as Parameters<
+    typeof withCodePreviewShell
+  >[0];
+  setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallBackground: "on" });
+  const wrappedBeforeReload = withCodePreviewShell(tool);
+
+  setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallBackground: "border" });
+  const wrappedAfterReload = withCodePreviewShell(tool);
+
+  assert.equal(wrappedBeforeReload.renderShell, "default");
+  assert.equal(wrappedAfterReload.renderShell, "self");
+});
+
 afterEach(async () => {
   restoreEnv("PI_CODING_AGENT_DIR", originalPiCodingAgentDir);
   restoreEnv("HOME", originalHome);

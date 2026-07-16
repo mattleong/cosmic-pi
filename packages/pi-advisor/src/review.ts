@@ -1,3 +1,4 @@
+import { isRecord } from "./utils.ts";
 export type AdvisorVerdict = "pass" | "revise";
 export type AdvisorSeverity = "high" | "medium";
 
@@ -177,8 +178,4 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
   return (
     keys.length === expectedKeys.length && expectedKeys.every((key, index) => key === keys[index])
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

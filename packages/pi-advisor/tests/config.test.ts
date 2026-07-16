@@ -37,29 +37,17 @@ describe("advisor config", () => {
       enabled: true,
       fastMode: false,
       thinkingLevel: "medium",
-      revisionCooldownTurns: 3,
+      revisionCooldownTurns: 0,
       timeoutMs: 30_000,
       maxContextChars: 48_000,
     });
   });
 
-  test("resolves the global-only default path", () => {
-    expect(getAdvisorConfigPath("/home/alice", {})).toBe(
+  test("builds the config path from an injected SDK-resolved agent directory", () => {
+    expect(getAdvisorConfigPath("/home/alice/.pi/agent")).toBe(
       "/home/alice/.pi/agent/extensions/pi-advisor.json",
     );
-  });
-
-  test("uses PI_CODING_AGENT_DIR and expands its leading tilde", () => {
-    expect(
-      getAdvisorConfigPath("/home/alice", {
-        PI_CODING_AGENT_DIR: "~/.config/pi-agent",
-      }),
-    ).toBe("/home/alice/.config/pi-agent/extensions/pi-advisor.json");
-    expect(
-      getAdvisorConfigPath("/home/alice", {
-        PI_CODING_AGENT_DIR: "/var/lib/pi",
-      }),
-    ).toBe("/var/lib/pi/extensions/pi-advisor.json");
+    expect(getAdvisorConfigPath("/var/lib/pi")).toBe("/var/lib/pi/extensions/pi-advisor.json");
   });
 
   test("applies defaults when config is absent or invalid", () => {

@@ -26,15 +26,15 @@ pi -e ./packages/pi-advisor
 After the main agent finishes a text-only response, pi-advisor queues a background request to a separately configured model to check correctness, completeness, user intent, and actionable risks. The main turn settles immediately instead of waiting for the advisor. The review includes the latest genuine user request and candidate response plus as much recent conversation and tool-result context as fits the configured limit. Recent messages are selected by recency and presented to the advisor in chronological order.
 
 - A passing review leaves the candidate unchanged without adding another notification.
-- Medium-severity findings appear as non-triggering advice for subsequent work; they do not restart a completed turn.
-- A high-severity finding can trigger one revision only while the reviewed request is still current and pi is idle. After a triggered revision, the default three-turn cooldown routes later high findings as non-triggering advice instead of repeatedly restarting work.
+- Any medium- or high-severity finding triggers one revision while the reviewed request is still current and pi is idle.
+- The default zero-turn cooldown lets each new user request receive an independent correction. If a nonzero cooldown is configured, findings during that many subsequent reviews appear as non-triggering advice instead of restarting work.
 - Starting a newer user request cancels or discards the older review, preventing stale advice from interrupting current work. Background reviews are serialized rather than allowed to overlap.
 - Repeated findings are normalized and suppressed across the session so the advisor does not keep delivering the same critique.
 - The advisor-triggered revision is not reviewed again. A later genuine user message, including a queued follow-up, starts a new one-pass review cycle.
 - Responses that contain tool calls, have no assistant text, or were aborted or errored are not reviewed.
 - The original streamed candidate remains visible before any later critique or revision.
 
-Advisor calls never use tools and never fall back to the active main model. Model lookup, credentials, timeout, abort, provider, empty-output, and malformed-output failures all fail open: the original candidate remains available and a current background review failure produces only a concise warning.
+Advisor calls never use tools and never fall back to the active main model. Model lookup, credentials, timeout, abort, provider, empty-output, and malformed-output failures all fail open: the original candidate remains available and a current background review failure produces only a concise warning. Failure diagnostics are appended to `$PI_CODING_AGENT_DIR/logs/pi-advisor.jsonl` without prompts, transcripts, or credentials; the log rotates at 1 MB.
 
 ## Setup and commands
 
@@ -73,7 +73,7 @@ Example:
   "model": "gpt-5.5",
   "fastMode": true,
   "thinkingLevel": "high",
-  "revisionCooldownTurns": 3,
+  "revisionCooldownTurns": 0,
   "timeoutMs": 30000,
   "maxContextChars": 48000
 }
@@ -85,7 +85,7 @@ Settings:
 - `provider` and `model`: both must be non-empty for review to be configured. Use `/advisor-settings` to search for and select an authenticated model.
 - `fastMode`: sends `service_tier: "priority"` for advisor models in pi-better-openai's shared supported-model list; defaults to `false`. The settings picker only shows this toggle for supported models.
 - `thinkingLevel`: advisor reasoning level; defaults to `medium`. The settings picker only offers levels supported by the selected model, from `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
-- `revisionCooldownTurns`: number of subsequent user-response reviews during which high findings become non-triggering advice after an automatic revision; defaults to `3` and is clamped to `0`–`5`.
+- `revisionCooldownTurns`: number of subsequent user-response reviews during which findings become non-triggering advice after an automatic revision; defaults to `0` and is clamped to `0`–`5`.
 - `timeoutMs`: advisor request timeout in milliseconds; defaults to `30000` and is clamped to `10000`–`180000`.
 - `maxContextChars`: serialized review-context limit; defaults to `48000` and is clamped to `16000`–`240000`.
 

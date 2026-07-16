@@ -1,3 +1,4 @@
+import { isRecord } from "./utils.ts";
 import {
   sessionEntryToContextMessages,
   type ExtensionAPI,
@@ -8,6 +9,7 @@ import { requestAdvisorReview, type AdvisorUsageTelemetry } from "./client.ts";
 import { loadAdvisorConfig, type ResolvedAdvisorConfig } from "./config.ts";
 import { AdvisorFindingDedupe } from "./dedupe.ts";
 import { buildAdvisorContext } from "./context.ts";
+import { logAdvisorFailure } from "./failure-log.ts";
 import { loadAdvisorInstructions, type LoadedAdvisorInstructions } from "./instructions.ts";
 import { ADVISOR_REVIEW_MESSAGE_TYPE, registerAdvisorReviewRenderer } from "./renderer.ts";
 import { buildAdvisorAdvice, buildRevisionSteer, type AdvisorReview } from "./review.ts";
@@ -36,11 +38,13 @@ interface PendingReview {
 
 export interface AdvisorExtensionDependencies {
   loadConfig?: typeof loadAdvisorConfig;
+  logFailure?: typeof logAdvisorFailure;
   requestReview?: typeof requestAdvisorReview;
 }
 
 export function createAdvisorExtension(dependencies: AdvisorExtensionDependencies = {}) {
   const loadConfig = dependencies.loadConfig ?? loadAdvisorConfig;
+  const logFailure = dependencies.logFailure ?? logAdvisorFailure;
   const runReview = dependencies.requestReview ?? requestAdvisorReview;
 
   return function registerAdvisorExtension(pi: ExtensionAPI): void {
@@ -105,8 +109,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       }
 
       const filteredReview = { ...review, findings: filtered.findings };
-      const hasHighFinding = filteredReview.findings.some((finding) => finding.severity === "high");
-      if (hasHighFinding && reviewJob.allowRevision) {
+      if (reviewJob.allowRevision) {
         sendRevisionRequest(pi, reviewJob.config, filteredReview);
         cooldownRemaining = reviewJob.config.revisionCooldownTurns;
         reviewJob.metrics.lastAction = "revision";
@@ -131,6 +134,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           activeController = controller;
           reviewJob.metrics.attempted += 1;
           const startedAt = performance.now();
+          let contextChars = 0;
           refreshReviewStatus();
 
           try {
@@ -139,6 +143,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
               candidate: reviewJob.candidate,
               maxChars: reviewJob.config.maxContextChars,
             });
+            contextChars = reviewContext.transcript.length;
             const review = await runReview(
               reviewJob.ctx,
               reviewJob.config,
@@ -166,10 +171,18 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
               deliverReview(reviewJob, review);
             }
             reviewJob.metrics.revise += 1;
-          } catch {
+          } catch (error) {
             if (reviewIsCurrent(reviewJob)) {
               reviewJob.metrics.failure += 1;
               reviewJob.metrics.lastAction = "failure";
+              logFailure(reviewJob.config.configPath, {
+                contextChars,
+                durationMs: performance.now() - startedAt,
+                error,
+                model: reviewJob.config.model,
+                provider: reviewJob.config.provider,
+                timeoutMs: reviewJob.config.timeoutMs,
+              });
               reviewJob.ctx.ui.notify(
                 "Advisor review failed; keeping the original response.",
                 "warning",
@@ -407,10 +420,6 @@ function assistantText(message: unknown): string | undefined {
     .join("\n")
     .trim();
   return text || undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export const _extensionTest = {
