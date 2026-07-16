@@ -1,0 +1,338 @@
+export const DEFAULT_MAX_CONTEXT_CHARS = 48_000;
+
+export const ADVISOR_CONTEXT_TRUNCATION_MARKER = "[... advisor context truncated ...]";
+
+export interface BuildAdvisorContextOptions {
+  /** Conversation messages only. Do not pass the agent system prompt or loaded context files. */
+  messages: readonly unknown[];
+  candidate: string;
+  maxChars?: number;
+}
+
+export interface AdvisorContextResult {
+  transcript: string;
+  truncated: boolean;
+  includedHistoryMessageCount: number;
+  omittedHistoryMessageCount: number;
+}
+
+interface SerializedMessage {
+  index: number;
+  role: string;
+  text: string;
+}
+
+const TRANSCRIPT_HEADING = "ADVISOR REVIEW TRANSCRIPT";
+const CANDIDATE_HEADING = "Candidate response:";
+const USER_HEADING = "Latest user request:";
+const CONTEXT_HEADING = "Recent context (oldest to newest):";
+const CONTENT_CLIP_MARKER = "\n[... content shortened ...]\n";
+
+/**
+ * Build a bounded, review-only transcript from conversation messages.
+ *
+ * The candidate and latest real user message have dedicated sections. Remaining
+ * reviewable messages are selected newest-first until the character budget is
+ * exhausted, then the selected messages are rendered oldest-to-newest so causal
+ * relationships such as tool calls and their results remain clear. The helper
+ * deliberately has no system-prompt input so callers cannot accidentally forward
+ * pi's system prompt or loaded context files.
+ */
+export function buildAdvisorContext(options: BuildAdvisorContextOptions): AdvisorContextResult {
+  const maxChars = normalizeMaxChars(options.maxChars);
+  const serialized = options.messages.flatMap((message, index) => {
+    const result = serializeMessage(message, index);
+    return result ? [result] : [];
+  });
+  const latestUser = findLatestUser(serialized);
+  const candidateMessageIndex = findCandidateMessageIndex(serialized, options.candidate);
+  const historyNewestFirst = serialized
+    .filter(
+      (message) => message.index !== latestUser?.index && message.index !== candidateMessageIndex,
+    )
+    .reverse();
+  const candidate = options.candidate.trim();
+  const userRequest = latestUser?.text.trim() ?? "[No genuine user request was found.]";
+  const allHistory = historyNewestFirst.map(formatHistoryMessage);
+  const fullTranscript = composeTranscript(candidate, userRequest, allHistory);
+
+  if (fullTranscript.length <= maxChars) {
+    return {
+      transcript: fullTranscript,
+      truncated: false,
+      includedHistoryMessageCount: allHistory.length,
+      omittedHistoryMessageCount: 0,
+    };
+  }
+
+  const requiredWithMarker = composeTranscript(
+    candidate,
+    userRequest,
+    [],
+    ADVISOR_CONTEXT_TRUNCATION_MARKER,
+  );
+  if (requiredWithMarker.length > maxChars) {
+    return buildWithClippedRequiredContent(candidate, userRequest, allHistory.length, maxChars);
+  }
+
+  const included: string[] = [];
+  for (const message of allHistory) {
+    const next = composeTranscript(
+      candidate,
+      userRequest,
+      [...included, message],
+      ADVISOR_CONTEXT_TRUNCATION_MARKER,
+    );
+    if (next.length <= maxChars) {
+      included.push(message);
+      continue;
+    }
+
+    const withoutPartial = composeTranscript(
+      candidate,
+      userRequest,
+      included,
+      ADVISOR_CONTEXT_TRUNCATION_MARKER,
+    );
+    const separatorLength = included.length === 0 ? 0 : 2;
+    const available = maxChars - withoutPartial.length - separatorLength;
+    if (available > CONTENT_CLIP_MARKER.length) {
+      included.push(clipMiddle(message, available));
+    }
+    break;
+  }
+
+  return {
+    transcript: composeTranscript(
+      candidate,
+      userRequest,
+      included,
+      ADVISOR_CONTEXT_TRUNCATION_MARKER,
+    ),
+    truncated: true,
+    includedHistoryMessageCount: included.length,
+    omittedHistoryMessageCount: Math.max(0, allHistory.length - included.length),
+  };
+}
+
+/** Convenience wrapper for callers that only need the serialized transcript. */
+export function buildAdvisorTranscript(options: BuildAdvisorContextOptions): string {
+  return buildAdvisorContext(options).transcript;
+}
+
+function buildWithClippedRequiredContent(
+  candidate: string,
+  userRequest: string,
+  omittedHistoryMessageCount: number,
+  maxChars: number,
+): AdvisorContextResult {
+  const emptyRequired = composeTranscript("", "", [], ADVISOR_CONTEXT_TRUNCATION_MARKER);
+  if (emptyRequired.length >= maxChars) {
+    return {
+      transcript: emptyRequired.slice(0, maxChars),
+      truncated: true,
+      includedHistoryMessageCount: 0,
+      omittedHistoryMessageCount,
+    };
+  }
+
+  const available = maxChars - emptyRequired.length;
+  let candidateBudget = Math.min(candidate.length, Math.ceil(available / 2));
+  let userBudget = Math.min(userRequest.length, available - candidateBudget);
+  let remaining = available - candidateBudget - userBudget;
+
+  const candidateExtra = Math.min(remaining, candidate.length - candidateBudget);
+  candidateBudget += candidateExtra;
+  remaining -= candidateExtra;
+  userBudget += Math.min(remaining, userRequest.length - userBudget);
+
+  const transcript = composeTranscript(
+    clipMiddle(candidate, candidateBudget),
+    clipMiddle(userRequest, userBudget),
+    [],
+    ADVISOR_CONTEXT_TRUNCATION_MARKER,
+  );
+  return {
+    transcript: transcript.slice(0, maxChars),
+    truncated: true,
+    includedHistoryMessageCount: 0,
+    omittedHistoryMessageCount,
+  };
+}
+
+function composeTranscript(
+  candidate: string,
+  userRequest: string,
+  historyNewestFirst: readonly string[],
+  truncationMarker?: string,
+): string {
+  const recentContext =
+    historyNewestFirst.length > 0
+      ? [...historyNewestFirst].reverse().join("\n\n")
+      : "[No additional context.]";
+  return [
+    TRANSCRIPT_HEADING,
+    CANDIDATE_HEADING,
+    candidate,
+    USER_HEADING,
+    userRequest,
+    CONTEXT_HEADING,
+    recentContext,
+    truncationMarker,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join("\n\n");
+}
+
+function serializeMessage(value: unknown, index: number): SerializedMessage | undefined {
+  if (!isRecord(value) || typeof value.role !== "string") return undefined;
+
+  switch (value.role) {
+    case "user":
+      return withText(index, "user", serializeContent(value.content, true));
+    case "assistant":
+      return withText(index, "assistant", serializeAssistantContent(value.content));
+    case "toolResult": {
+      const toolName = nonEmptyString(value.toolName) ?? "unknown tool";
+      const errorSuffix = value.isError === true ? ", error" : "";
+      return withText(
+        index,
+        `tool result: ${toolName}${errorSuffix}`,
+        serializeContent(value.content, true),
+      );
+    }
+    case "custom": {
+      if (value.customType === "advisor-review") return undefined;
+      const customType = nonEmptyString(value.customType) ?? "extension message";
+      return withText(
+        index,
+        `extension context: ${customType}`,
+        serializeContent(value.content, true),
+      );
+    }
+    case "bashExecution": {
+      if (value.excludeFromContext === true) return undefined;
+      const command = nonEmptyString(value.command);
+      const output = typeof value.output === "string" ? value.output : "";
+      const text = [command ? `$ ${command}` : undefined, output].filter(Boolean).join("\n");
+      return withText(index, "shell execution", text);
+    }
+    case "branchSummary":
+      return withText(index, "branch summary", nonEmptyString(value.summary));
+    case "compactionSummary":
+      return withText(index, "conversation summary", nonEmptyString(value.summary));
+    default:
+      return undefined;
+  }
+}
+
+function withText(
+  index: number,
+  role: string,
+  text: string | undefined,
+): SerializedMessage | undefined {
+  const normalized = text?.trim();
+  return normalized ? { index, role, text: normalized } : undefined;
+}
+
+function serializeAssistantContent(content: unknown): string {
+  if (!Array.isArray(content)) return serializeContent(content, false);
+  return content
+    .flatMap((part) => {
+      if (!isRecord(part) || typeof part.type !== "string") return [];
+      if (part.type === "text" && typeof part.text === "string") return [part.text];
+      if (part.type !== "toolCall") return [];
+
+      const name = nonEmptyString(part.name) ?? "unknown";
+      const args = safeJson(part.arguments);
+      return [`[tool call: ${name}${args ? ` ${args}` : ""}]`];
+    })
+    .join("\n");
+}
+
+function serializeContent(content: unknown, includeImages: boolean): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .flatMap((part) => {
+      if (!isRecord(part) || typeof part.type !== "string") return [];
+      if (part.type === "text" && typeof part.text === "string") return [part.text];
+      if (includeImages && part.type === "image") {
+        const mimeType = nonEmptyString(part.mimeType);
+        return [`[image${mimeType ? `: ${mimeType}` : ""} omitted]`];
+      }
+      return [];
+    })
+    .join("\n");
+}
+
+function safeJson(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable arguments]";
+  }
+}
+
+function findLatestUser(messages: readonly SerializedMessage[]): SerializedMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "user") return message;
+  }
+  return undefined;
+}
+
+function findCandidateMessageIndex(
+  messages: readonly SerializedMessage[],
+  candidate: string,
+): number | undefined {
+  const normalizedCandidate = normalizeComparable(candidate);
+  if (!normalizedCandidate) return undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      message?.role === "assistant" &&
+      normalizeComparable(message.text) === normalizedCandidate
+    ) {
+      return message.index;
+    }
+  }
+  return undefined;
+}
+
+function normalizeComparable(value: string): string {
+  return value.replaceAll("\r\n", "\n").trim();
+}
+
+function formatHistoryMessage(message: SerializedMessage): string {
+  return `[${message.role}]\n${message.text}`;
+}
+
+function clipMiddle(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  if (maxChars <= 0) return "";
+  if (maxChars <= CONTENT_CLIP_MARKER.length) return value.slice(0, maxChars);
+
+  const remaining = maxChars - CONTENT_CLIP_MARKER.length;
+  const headChars = Math.ceil(remaining * 0.6);
+  const tailChars = remaining - headChars;
+  return `${value.slice(0, headChars)}${CONTENT_CLIP_MARKER}${value.slice(-tailChars)}`;
+}
+
+function normalizeMaxChars(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_MAX_CONTEXT_CHARS;
+  }
+  return Math.floor(value);
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

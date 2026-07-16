@@ -1,13 +1,13 @@
 # Releasing cosmic-pi
 
-All packages in this repository use the same version and are published together. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the workspace and publishes each package to npm.
+All workspace packages use the same version. The public `pi-better-openai` and `pi-code-previews` packages are published together; private `pi-advisor` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm.
 
 ## One-time setup
 
 Before the first release:
 
 1. Create and push the `mattleong/cosmic-pi` GitHub repository.
-2. On npm, configure trusted publishing for both packages:
+2. On npm, configure trusted publishing for both public packages:
    - `pi-better-openai`
    - `pi-code-previews`
 3. For each npm package, set the trusted publisher to:
@@ -29,7 +29,7 @@ pnpm install --frozen-lockfile
 pnpm validate
 ```
 
-Choose a stable version that is newer than every version already published for either npm package. npm versions are immutable and cannot be overwritten.
+Choose a stable version that is newer than every version already published for either public npm package. npm versions are immutable and cannot be overwritten.
 
 Update every workspace package to the new version:
 
@@ -39,7 +39,7 @@ pnpm version:check
 pnpm validate
 ```
 
-Review the changes. The root and both package manifests should have the same version:
+Review the changes. The root and all package manifests should have the same version:
 
 ```bash
 git diff -- package.json packages/*/package.json
@@ -76,7 +76,7 @@ Publishing the GitHub Release triggers the npm workflow. Creating only a Git tag
 
 ## Verify publication
 
-Watch the **Publish npm packages** workflow in GitHub Actions. After it succeeds, verify both package versions:
+Watch the **Publish npm packages** workflow in GitHub Actions. After it succeeds, verify both public package versions:
 
 ```bash
 npm view pi-better-openai version
@@ -87,7 +87,7 @@ Both commands should report the release version. npm provenance should also appe
 
 ## Retry a failed release
 
-The workflow is retry-safe. Before publishing, it checks whether each exact package version already exists on npm and skips packages that were successfully published by an earlier attempt.
+The workflow is retry-safe. It always skips private packages. Before publishing a public package, it checks whether that exact package version already exists on npm and skips versions that were successfully published by an earlier attempt.
 
 You can rerun the failed workflow in GitHub Actions. Alternatively, manually dispatch **Publish npm packages** and provide the existing tag, for example `v0.2.1`.
 
@@ -96,6 +96,7 @@ Do not create a new version solely because one package published before another 
 ## Important constraints
 
 - Keep the root and every package version synchronized.
+- Keep `pi-advisor` private and local-only; do not publish it to npm.
 - Use stable `vMAJOR.MINOR.PATCH` release tags, such as `v0.2.1`.
 - Publish through the GitHub Release workflow rather than running `npm publish` locally.
 - Never reuse or move a tag after npm publication.

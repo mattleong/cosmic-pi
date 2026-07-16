@@ -2,6 +2,7 @@
 
 ## Repository layout
 
+- `packages/pi-advisor/` contains the automatic advisor and revision extension.
 - `packages/pi-better-openai/` contains the Better OpenAI pi extension.
 - `packages/pi-code-previews/` contains the code-preview pi extension.
 - The repository is a pnpm workspace. Keep shared workspace configuration at the root and package-specific source, tests, and build configuration inside each package.

@@ -58,12 +58,18 @@ jobs:
       - name: Validate workspace
         run: pnpm validate
 
-      - name: Publish unpublished packages
+      - name: Publish unpublished public packages
         run: |
           set -euo pipefail
           for package_dir in packages/*; do
             PACKAGE_NAME="$(node -p "require('./$package_dir/package.json').name")"
             PACKAGE_VERSION="$(node -p "require('./$package_dir/package.json').version")"
+            PACKAGE_PRIVATE="$(node -p "require('./$package_dir/package.json').private === true")"
+
+            if [ "$PACKAGE_PRIVATE" = "true" ]; then
+              echo "Skipping $PACKAGE_NAME@$PACKAGE_VERSION; it is private."
+              continue
+            fi
 
             if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version >/dev/null 2>&1; then
               echo "Skipping $PACKAGE_NAME@$PACKAGE_VERSION; it is already published."

@@ -1,0 +1,212 @@
+import { complete } from "@earendil-works/pi-ai/compat";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ResolvedAdvisorConfig } from "./config.ts";
+import {
+  ADVISOR_SYSTEM_PROMPT,
+  buildAdvisorPrompt,
+  parseAdvisorReview,
+  type AdvisorReview,
+} from "./review.ts";
+
+const ADVISOR_MAX_OUTPUT_TOKENS = 2_048;
+
+export class AdvisorModelError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AdvisorModelError";
+  }
+}
+
+export type CompleteAdvisorRequest = typeof complete;
+
+export interface AdvisorClientDependencies {
+  completeRequest?: CompleteAdvisorRequest;
+}
+
+interface ReviewAbortScope {
+  signal: AbortSignal;
+  remainingTimeoutMs(): number;
+  dispose(): void;
+}
+
+function createReviewAbortScope(
+  contextSignal: AbortSignal | undefined,
+  timeoutMs: number,
+): ReviewAbortScope {
+  const controller = new AbortController();
+  const deadline = performance.now() + timeoutMs;
+  const abortFromContext = () => {
+    controller.abort(new AdvisorModelError("Advisor review was aborted."));
+  };
+  const abortFromTimeout = () => {
+    controller.abort(new AdvisorModelError("Advisor review timed out."));
+  };
+
+  if (contextSignal?.aborted) abortFromContext();
+  else contextSignal?.addEventListener("abort", abortFromContext, { once: true });
+
+  const timeout = controller.signal.aborted ? undefined : setTimeout(abortFromTimeout, timeoutMs);
+
+  return {
+    signal: controller.signal,
+    remainingTimeoutMs() {
+      if (controller.signal.aborted) throw abortError(controller.signal);
+
+      const remainingMs = deadline - performance.now();
+      if (remainingMs <= 0) {
+        abortFromTimeout();
+        throw abortError(controller.signal);
+      }
+
+      return Math.max(1, Math.ceil(remainingMs));
+    },
+    dispose() {
+      if (timeout !== undefined) clearTimeout(timeout);
+      contextSignal?.removeEventListener("abort", abortFromContext);
+    },
+  };
+}
+
+function abortError(signal: AbortSignal): AdvisorModelError {
+  return signal.reason instanceof AdvisorModelError
+    ? signal.reason
+    : new AdvisorModelError("Advisor review was aborted.");
+}
+
+/**
+ * Lazily start and bound an operation. The checkpoints catch synchronous work
+ * that blocks past the timer deadline, while both handlers observe a late
+ * rejection after an abort wins the race.
+ */
+function awaitWithAbort<T>(
+  startOperation: () => Promise<T>,
+  abortScope: ReviewAbortScope,
+): Promise<T> {
+  const { signal } = abortScope;
+  try {
+    abortScope.remainingTimeoutMs();
+  } catch (error) {
+    return Promise.reject(error);
+  }
+
+  let operation: Promise<T>;
+  try {
+    operation = Promise.resolve(startOperation());
+  } catch (error) {
+    try {
+      abortScope.remainingTimeoutMs();
+    } catch (abortReason) {
+      return Promise.reject(abortReason);
+    }
+    return Promise.reject(error);
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = () => finish(() => reject(abortError(signal)));
+    const finishOperation = (callback: () => void) => {
+      finish(() => {
+        try {
+          abortScope.remainingTimeoutMs();
+          callback();
+        } catch (error) {
+          reject(error);
+        }
+      });
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => finishOperation(() => resolve(value)),
+      (error: unknown) => finishOperation(() => reject(error)),
+    );
+
+    try {
+      abortScope.remainingTimeoutMs();
+    } catch (error) {
+      finish(() => reject(error));
+    }
+  });
+}
+
+/** Run one isolated advisor request using a separately configured pi model. */
+export async function requestAdvisorReview(
+  ctx: ExtensionContext,
+  config: ResolvedAdvisorConfig,
+  transcript: string,
+  dependencies: AdvisorClientDependencies = {},
+): Promise<AdvisorReview> {
+  if (!config.provider || !config.model) {
+    throw new AdvisorModelError("Advisor model is not configured.");
+  }
+
+  const model = ctx.modelRegistry.find(config.provider, config.model);
+  if (!model) {
+    throw new AdvisorModelError(
+      `Configured advisor model ${config.provider}/${config.model} is unavailable.`,
+    );
+  }
+
+  const abortScope = createReviewAbortScope(ctx.signal, config.timeoutMs);
+  try {
+    const auth = await awaitWithAbort(
+      () => ctx.modelRegistry.getApiKeyAndHeaders(model),
+      abortScope,
+    );
+    if (!auth.ok) throw new AdvisorModelError(`Advisor authentication failed: ${auth.error}`);
+
+    const runComplete = dependencies.completeRequest ?? complete;
+    const response = await awaitWithAbort(
+      () =>
+        runComplete(
+          model,
+          {
+            systemPrompt: ADVISOR_SYSTEM_PROMPT,
+            messages: [
+              {
+                role: "user",
+                content: [{ type: "text", text: buildAdvisorPrompt(transcript) }],
+                timestamp: Date.now(),
+              },
+            ],
+          },
+          {
+            apiKey: auth.apiKey,
+            headers: auth.headers,
+            env: auth.env,
+            maxTokens: ADVISOR_MAX_OUTPUT_TOKENS,
+            signal: abortScope.signal,
+            timeoutMs: abortScope.remainingTimeoutMs(),
+          },
+        ),
+      abortScope,
+    );
+
+    if (response.stopReason === "aborted") {
+      throw new AdvisorModelError("Advisor review was aborted.");
+    }
+    if (response.stopReason === "error") {
+      throw new AdvisorModelError(response.errorMessage || "Advisor review failed.");
+    }
+
+    const raw = response.content
+      .filter((part): part is { type: "text"; text: string } => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    const review = parseAdvisorReview(raw);
+    abortScope.remainingTimeoutMs();
+    return review;
+  } finally {
+    abortScope.dispose();
+  }
+}
+
+export const _clientTest = {
+  ADVISOR_MAX_OUTPUT_TOKENS,
+};
