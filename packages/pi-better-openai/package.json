@@ -30,6 +30,10 @@
     "LICENSE"
   ],
   "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./fast-models": "./src/fast-models.ts"
+  },
   "publishConfig": {
     "access": "public"
   },

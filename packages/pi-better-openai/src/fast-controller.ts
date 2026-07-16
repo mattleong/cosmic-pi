@@ -1,25 +1,16 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedConfig } from "./config.ts";
 import { isRecord } from "./config.ts";
+import { fastModelKey, SUPPORTED_FAST_MODELS, supportsFastModel } from "./fast-models.ts";
 
-export const SUPPORTED_FAST_MODELS = [
-  "openai/gpt-5.4",
-  "openai/gpt-5.5",
-  "openai-codex/gpt-5.6-sol",
-  "openai-codex/gpt-5.6-terra",
-  "openai-codex/gpt-5.6-luna",
-  "openai-codex/gpt-5.4",
-  "openai-codex/gpt-5.5",
-] as const;
-
-const SUPPORTED_FAST_MODEL_SET = new Set<string>(SUPPORTED_FAST_MODELS);
+export { SUPPORTED_FAST_MODELS } from "./fast-models.ts";
 
 export function currentModelKey(ctx: ExtensionContext): string {
-  return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none";
+  return ctx.model ? fastModelKey(ctx.model.provider, ctx.model.id) : "none";
 }
 
 export function supportsFast(ctx: ExtensionContext): boolean {
-  return SUPPORTED_FAST_MODEL_SET.has(currentModelKey(ctx));
+  return supportsFastModel(ctx.model?.provider, ctx.model?.id);
 }
 
 export function modelList(): string {

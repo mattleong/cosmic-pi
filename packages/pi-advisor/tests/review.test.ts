@@ -3,6 +3,7 @@ import {
   ADVISOR_SYSTEM_PROMPT,
   MAX_ADVISOR_FINDINGS,
   AdvisorReviewParseError,
+  buildAdvisorAdvice,
   buildAdvisorPrompt,
   buildRevisionSteer,
   formatAdvisorReview,
@@ -152,11 +153,14 @@ describe("advisor prompts and formatting", () => {
 
   test("formats every finding and embeds the full critique in the revision steer", () => {
     const formatted = formatAdvisorReview(revision);
+    const advice = buildAdvisorAdvice(revision);
     const steer = buildRevisionSteer(revision);
 
     expect(formatted).toContain("Verdict: REVISE");
     expect(formatted).toContain("1. [HIGH] The answer claims tests passed without evidence.");
     expect(formatted).toContain("2. [MEDIUM] The handoff omits the changed interface.");
+    expect(advice).toContain(formatted);
+    expect(advice).toContain("Do not restart completed work");
     expect(steer).toContain(formatted);
     expect(steer).toContain("follow all higher-priority instructions");
     expect(steer).toContain("Return the improved response only");

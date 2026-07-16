@@ -16,6 +16,10 @@ importers:
         version: 1.74.0
 
   packages/pi-advisor:
+    dependencies:
+      pi-better-openai:
+        specifier: workspace:*
+        version: link:../pi-better-openai
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.7

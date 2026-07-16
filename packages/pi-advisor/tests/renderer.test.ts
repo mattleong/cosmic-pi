@@ -16,6 +16,7 @@ describe("advisor review renderer", () => {
     registerAdvisorReviewRenderer(pi);
 
     const details: AdvisorReviewMessageDetails = {
+      action: "advice",
       provider: "anthropic",
       model: "reviewer",
       review: {
@@ -39,7 +40,7 @@ describe("advisor review renderer", () => {
     };
     const output = component.render(100).join("\n");
 
-    expect(output).toContain("Advisor requested a revision anthropic/reviewer");
+    expect(output).toContain("Advisor noted a concern anthropic/reviewer");
     expect(output).toContain("One material issue remains.");
     expect(output).toContain("The validation claim is unsupported.");
     expect(output).toContain("Report the actual command result.");

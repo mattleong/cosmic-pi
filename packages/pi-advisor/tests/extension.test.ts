@@ -1,12 +1,13 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
   ResolvedCommand,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import type { AdvisorClientDependencies } from "../src/client.ts";
 import { type ResolvedAdvisorConfig, writeRawAdvisorConfig } from "../src/config.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
 import type { AdvisorReview } from "../src/review.ts";
@@ -32,13 +33,39 @@ const revisionReview: AdvisorReview = {
   ],
 };
 
+const secondRevisionReview: AdvisorReview = {
+  verdict: "revise",
+  summary: "A different blocking problem remains.",
+  findings: [
+    {
+      severity: "high",
+      issue: "The answer deletes required data.",
+      recommendation: "Preserve the required data.",
+    },
+  ],
+};
+
+const advisoryReview: AdvisorReview = {
+  verdict: "revise",
+  summary: "The response has a material but non-blocking omission.",
+  findings: [
+    {
+      severity: "medium",
+      issue: "The answer omits a relevant caveat.",
+      recommendation: "Account for the caveat in subsequent work.",
+    },
+  ],
+};
+
 function resolvedConfig(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisorConfig {
   return {
     configPath: "/tmp/pi-advisor.json",
     enabled: true,
     provider: "review-provider",
     model: "review-model",
+    fastMode: false,
     thinkingLevel: "medium",
+    revisionCooldownTurns: 3,
     timeoutMs: 30_000,
     maxContextChars: 48_000,
     configured: true,
@@ -88,15 +115,23 @@ function createHarness(
   const setStatus = vi.fn();
   const select = vi.fn();
   const hasPendingMessages = vi.fn(() => false);
+  const isIdle = vi.fn(() => true);
   const getAvailableModels = vi.fn((): Array<{ provider: string; id: string }> => []);
   const findModel = vi.fn(() => ({ provider: "review-provider", id: "review-model" }));
   const hasConfiguredAuth = vi.fn(() => true);
   const sendMessage = vi.fn();
   const registerMessageRenderer = vi.fn();
-  const requestReview = vi.fn(async () => {
-    if (review instanceof Error) throw review;
-    return await review;
-  });
+  const requestReview = vi.fn(
+    async (
+      _ctx: unknown,
+      _config: unknown,
+      _transcript: unknown,
+      _dependencies?: AdvisorClientDependencies,
+    ) => {
+      if (review instanceof Error) throw review;
+      return await review;
+    },
+  );
   const pi = {
     on: (event: string, handler: EventHandler) => {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
@@ -112,6 +147,8 @@ function createHarness(
     mode: "tui",
     signal: undefined,
     hasPendingMessages,
+    isIdle,
+    isProjectTrusted: vi.fn(() => true),
     ui: { notify, select, setStatus },
     sessionManager: { buildContextEntries: vi.fn(() => []) },
     modelRegistry: {
@@ -137,6 +174,7 @@ function createHarness(
     getAvailableModels,
     hasPendingMessages,
     handlers,
+    isIdle,
     notify,
     registerMessageRenderer,
     requestReview,
@@ -225,6 +263,39 @@ describe("advisor extension lifecycle", () => {
     expect(harness.requestReview).toHaveBeenCalledTimes(1);
   });
 
+  test("returns from turn end while the advisor continues in the background", async () => {
+    const pendingReview = deferred<AdvisorReview>();
+    const harness = createHarness(resolvedConfig(), pendingReview.promise);
+
+    await harness.emit("turn_end", assistantEvent("candidate"));
+
+    expect(harness.requestReview).toHaveBeenCalledTimes(1);
+    expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", "advisor: reviewing…");
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+
+    pendingReview.resolve(passingReview);
+    await vi.waitFor(() =>
+      expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
+    );
+  });
+
+  test("aborts an in-flight background review when newer user work starts", async () => {
+    const pendingReview = deferred<AdvisorReview>();
+    const harness = createHarness(resolvedConfig(), pendingReview.promise);
+
+    await harness.emit("turn_end", assistantEvent("candidate"));
+    const signal = harness.requestReview.mock.calls[0]?.[3]?.signal;
+    expect(signal?.aborted).toBe(false);
+
+    await harness.emit("message_end", { message: { role: "user", content: "new work" } });
+    expect(signal?.aborted).toBe(true);
+
+    pendingReview.resolve(passingReview);
+    await vi.waitFor(() =>
+      expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
+    );
+  });
+
   test("counts a started review invalidated by queued input as attempted and discarded", async () => {
     const pendingReview = deferred<AdvisorReview>();
     const harness = createHarness(resolvedConfig(), pendingReview.promise);
@@ -234,6 +305,9 @@ describe("advisor extension lifecycle", () => {
     harness.hasPendingMessages.mockReturnValue(true);
     pendingReview.resolve(revisionReview);
     await reviewRun;
+    await vi.waitFor(() =>
+      expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
+    );
 
     expect(harness.sendMessage).not.toHaveBeenCalled();
     expect(harness.notify).not.toHaveBeenCalled();
@@ -290,6 +364,9 @@ describe("advisor extension lifecycle", () => {
     await harness.commands.get("advisor-settings")?.handler("", harness.ctx as never);
     pendingReview.resolve(revisionReview);
     await reviewRun;
+    await vi.waitFor(() =>
+      expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
+    );
 
     expect(harness.sendMessage).not.toHaveBeenCalled();
     expect(harness.notify).not.toHaveBeenCalledWith(
@@ -303,6 +380,7 @@ describe("advisor extension lifecycle", () => {
     const harness = createHarness(resolvedConfig(), revisionReview);
 
     await harness.emit("turn_end", assistantEvent("candidate needing revision"));
+    await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(1));
 
     expect(harness.sendMessage).toHaveBeenCalledTimes(1);
     expect(harness.sendMessage).toHaveBeenCalledWith(
@@ -310,9 +388,9 @@ describe("advisor extension lifecycle", () => {
         customType: "advisor-review",
         display: true,
         content: expect.stringContaining("Preserve the existing behavior"),
-        details: expect.objectContaining({ review: revisionReview }),
+        details: expect.objectContaining({ action: "revision", review: revisionReview }),
       }),
-      { deliverAs: "steer" },
+      { deliverAs: "steer", triggerTurn: true },
     );
 
     await harness.emit("message_end", {
@@ -321,6 +399,132 @@ describe("advisor extension lifecycle", () => {
     await harness.emit("turn_end", assistantEvent("revised candidate"));
     expect(harness.requestReview).toHaveBeenCalledTimes(1);
     expect(harness.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test("defers a high-severity revision until the primary agent settles", async () => {
+    const harness = createHarness(resolvedConfig(), revisionReview);
+    harness.isIdle.mockReturnValue(false);
+
+    await harness.emit("turn_end", assistantEvent("candidate needing revision"));
+    await vi.waitFor(() =>
+      expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
+    );
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+
+    harness.isIdle.mockReturnValue(true);
+    await harness.emit("agent_settled", { type: "agent_settled" });
+
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ details: expect.objectContaining({ action: "revision" }) }),
+      { deliverAs: "steer", triggerTurn: true },
+    );
+  });
+
+  test("drops a deferred revision when newer user work starts", async () => {
+    const harness = createHarness(resolvedConfig(), revisionReview);
+    harness.isIdle.mockReturnValue(false);
+
+    await harness.emit("turn_end", assistantEvent("candidate needing revision"));
+    await vi.waitFor(() =>
+      expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
+    );
+    await harness.emit("message_end", { message: { role: "user", content: "new work" } });
+    harness.isIdle.mockReturnValue(true);
+    await harness.emit("agent_settled", { type: "agent_settled" });
+
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+  });
+
+  test("delivers medium findings as non-triggering advice", async () => {
+    const harness = createHarness(resolvedConfig(), advisoryReview);
+
+    await harness.emit("turn_end", assistantEvent("candidate with a caveat"));
+    await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(1));
+
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining("Do not restart completed work"),
+        details: expect.objectContaining({ action: "advice", review: advisoryReview }),
+      }),
+      { deliverAs: "steer" },
+    );
+  });
+
+  test("routes high findings as advice during the default revision cooldown", async () => {
+    const harness = createHarness();
+    harness.requestReview
+      .mockReset()
+      .mockResolvedValueOnce(revisionReview)
+      .mockResolvedValueOnce(secondRevisionReview);
+
+    await harness.emit("turn_end", assistantEvent("first blocking candidate"));
+    await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(1));
+    await harness.emit("turn_end", assistantEvent("advisor revision"));
+    await harness.emit("message_end", { message: { role: "user", content: "next request" } });
+    await harness.emit("turn_end", assistantEvent("second blocking candidate"));
+    await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(2));
+
+    expect(harness.sendMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        details: expect.objectContaining({ action: "advice", review: secondRevisionReview }),
+      }),
+      { deliverAs: "steer" },
+    );
+  });
+
+  test("suppresses duplicate findings across user requests", async () => {
+    const harness = createHarness(resolvedConfig(), advisoryReview);
+
+    await harness.emit("turn_end", assistantEvent("first candidate"));
+    await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(1));
+    await harness.emit("message_end", { message: { role: "user", content: "next request" } });
+    await harness.emit("turn_end", assistantEvent("second candidate"));
+    await vi.waitFor(() =>
+      expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
+    );
+
+    expect(harness.sendMessage).toHaveBeenCalledTimes(1);
+    harness.notify.mockClear();
+    await harness.commands.get("advisor-status")?.handler("", harness.ctx as never);
+    expect(String(harness.notify.mock.lastCall?.[0])).toContain("Suppressed duplicate findings: 1");
+  });
+
+  test("passes advisor guidance and records usage telemetry", async () => {
+    const configPath = tempConfigPath();
+    const agentDir = dirname(dirname(configPath));
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "ADVISOR.md"), "Watch durable queue invariants.", "utf8");
+    const harness = createHarness(resolvedConfig({ configPath }));
+    harness.requestReview.mockImplementation(async (_ctx, _config, _transcript, dependencies) => {
+      dependencies?.onUsage?.({
+        cacheReadTokens: 3,
+        cacheWriteTokens: 4,
+        cost: 0.125,
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 22,
+      });
+      return passingReview;
+    });
+
+    await harness.emit("session_start", { type: "session_start", reason: "startup" });
+    await harness.emit("turn_end", assistantEvent("candidate"));
+    await vi.waitFor(() =>
+      expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
+    );
+
+    expect(harness.requestReview.mock.calls[0]?.[3]?.instructions).toContain(
+      "Watch durable queue invariants.",
+    );
+    harness.notify.mockClear();
+    await harness.commands.get("advisor-status")?.handler("", harness.ctx as never);
+    const status = String(harness.notify.mock.lastCall?.[0]);
+    expect(status).toContain(`Advisor guidance: ${join(agentDir, "ADVISOR.md")}`);
+    expect(status).toContain(
+      "Advisor tokens: input 10, output 5, cache read 3, cache write 4, total 22",
+    );
+    expect(status).toContain("Advisor cost: $0.125000");
+    expect(status).toMatch(/Latest review duration: [\d,]+ ms/);
   });
 
   test("tracks review outcomes for the current session and resets them on session start", async () => {
@@ -332,10 +536,21 @@ describe("advisor extension lifecycle", () => {
       .mockRejectedValueOnce(new Error("provider failure"));
 
     await harness.emit("turn_end", assistantEvent("passing candidate"));
+    await vi.waitFor(() =>
+      expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
+    );
     await harness.emit("message_end", { message: { role: "user", content: "next" } });
     await harness.emit("turn_end", assistantEvent("revision candidate"));
+    await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(1));
+    await harness.emit("turn_end", assistantEvent("revised candidate"));
     await harness.emit("message_end", { message: { role: "user", content: "next" } });
     await harness.emit("turn_end", assistantEvent("failing candidate"));
+    await vi.waitFor(() =>
+      expect(harness.notify).toHaveBeenCalledWith(
+        "Advisor review failed; keeping the original response.",
+        "warning",
+      ),
+    );
 
     harness.notify.mockClear();
     await harness.commands.get("advisor-status")?.handler("", harness.ctx as never);
@@ -372,6 +587,12 @@ describe("advisor extension lifecycle", () => {
     const harness = createHarness(resolvedConfig(), new Error("provider leaked details"));
 
     await harness.emit("turn_end", assistantEvent("original candidate"));
+    await vi.waitFor(() =>
+      expect(harness.notify).toHaveBeenCalledWith(
+        "Advisor review failed; keeping the original response.",
+        "warning",
+      ),
+    );
 
     expect(harness.sendMessage).not.toHaveBeenCalled();
     expect(harness.notify).toHaveBeenCalledWith(

@@ -5,10 +5,13 @@ import { describe, expect, test } from "vitest";
 import {
   DEFAULT_ADVISOR_CONFIG,
   MAX_CONTEXT_CHARS,
+  MAX_REVISION_COOLDOWN_TURNS,
   MAX_TIMEOUT_MS,
   MIN_CONTEXT_CHARS,
+  MIN_REVISION_COOLDOWN_TURNS,
   MIN_TIMEOUT_MS,
   clampContextChars,
+  clampRevisionCooldownTurns,
   clampTimeoutMs,
   getAdvisorConfigPath,
   loadAdvisorConfig,
@@ -32,7 +35,9 @@ describe("advisor config", () => {
   test("uses focused review defaults", () => {
     expect(DEFAULT_ADVISOR_CONFIG).toEqual({
       enabled: true,
+      fastMode: false,
       thinkingLevel: "medium",
+      revisionCooldownTurns: 3,
       timeoutMs: 30_000,
       maxContextChars: 48_000,
     });
@@ -71,7 +76,9 @@ describe("advisor config", () => {
           enabled: "yes",
           provider: 42,
           model: " ",
+          fastMode: "yes",
           thinkingLevel: "extreme",
+          revisionCooldownTurns: "many",
           timeoutMs: Number.NaN,
           maxContextChars: "large",
         },
@@ -87,7 +94,9 @@ describe("advisor config", () => {
           enabled: false,
           provider: " openai ",
           model: " gpt-5.5 ",
+          fastMode: true,
           thinkingLevel: "high",
+          revisionCooldownTurns: 5,
           timeoutMs: 90_000,
           maxContextChars: 80_000,
         },
@@ -98,7 +107,9 @@ describe("advisor config", () => {
       enabled: false,
       provider: "openai",
       model: "gpt-5.5",
+      fastMode: true,
       thinkingLevel: "high",
+      revisionCooldownTurns: 5,
       timeoutMs: 90_000,
       maxContextChars: 80_000,
       configured: true,
@@ -107,6 +118,8 @@ describe("advisor config", () => {
 
   test("clamps numeric settings to documented bounds", () => {
     expect(clampTimeoutMs(1)).toBe(MIN_TIMEOUT_MS);
+    expect(clampRevisionCooldownTurns(-1)).toBe(MIN_REVISION_COOLDOWN_TURNS);
+    expect(clampRevisionCooldownTurns(99)).toBe(MAX_REVISION_COOLDOWN_TURNS);
     expect(clampTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMEOUT_MS);
     expect(clampContextChars(1)).toBe(MIN_CONTEXT_CHARS);
     expect(clampContextChars(Number.MAX_SAFE_INTEGER)).toBe(MAX_CONTEXT_CHARS);
@@ -145,7 +158,9 @@ describe("advisor config", () => {
         enabled: false,
         provider: " openai ",
         model: " gpt-5.5 ",
+        fastMode: true,
         thinkingLevel: "high",
+        revisionCooldownTurns: 99,
         timeoutMs: 1,
         maxContextChars: 999_999,
       }),
@@ -153,7 +168,9 @@ describe("advisor config", () => {
       enabled: false,
       provider: "openai",
       model: "gpt-5.5",
+      fastMode: true,
       thinkingLevel: "high",
+      revisionCooldownTurns: MAX_REVISION_COOLDOWN_TURNS,
       timeoutMs: MIN_TIMEOUT_MS,
       maxContextChars: MAX_CONTEXT_CHARS,
       futureSetting: { nested: true },
@@ -171,13 +188,17 @@ describe("advisor config", () => {
         {
           provider: "openai",
           model: "gpt-5.5",
+          fastMode: true,
           thinkingLevel: "high",
+          revisionCooldownTurns: 3,
           timeoutMs: 30_000,
         },
         {
           provider: " ",
           model: undefined,
+          fastMode: undefined,
           thinkingLevel: undefined,
+          revisionCooldownTurns: undefined,
           timeoutMs: undefined,
         },
       ),
@@ -201,7 +222,9 @@ describe("advisor config", () => {
         {
           enabled: false,
           model: "gpt-5.5",
+          fastMode: true,
           thinkingLevel: "xhigh",
+          revisionCooldownTurns: 1,
           timeoutMs: 500_000,
         },
         configPath,
@@ -212,7 +235,9 @@ describe("advisor config", () => {
         enabled: false,
         provider: "openai",
         model: "gpt-5.5",
+        fastMode: true,
         thinkingLevel: "xhigh",
+        revisionCooldownTurns: 1,
         timeoutMs: MAX_TIMEOUT_MS,
         configured: true,
       });
@@ -220,7 +245,9 @@ describe("advisor config", () => {
         enabled: false,
         provider: "openai",
         model: "gpt-5.5",
+        fastMode: true,
         thinkingLevel: "xhigh",
+        revisionCooldownTurns: 1,
         timeoutMs: MAX_TIMEOUT_MS,
         unknownField: "keep me",
         future: { enabled: true },

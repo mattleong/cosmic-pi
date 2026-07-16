@@ -19,7 +19,9 @@ function configAt(configPath: string): ResolvedAdvisorConfig {
   return {
     configPath,
     enabled: true,
+    fastMode: false,
     thinkingLevel: "medium",
+    revisionCooldownTurns: 3,
     timeoutMs: 30_000,
     maxContextChars: 48_000,
     configured: false,
@@ -170,6 +172,34 @@ describe("advisor commands", () => {
     });
   });
 
+  test("settings toggles fast mode for supported OpenAI advisor models", async () => {
+    const configPath = tempConfigPath();
+    writeRawAdvisorConfig(
+      { provider: "openai-codex", model: "gpt-5.6-sol", fastMode: false },
+      configPath,
+    );
+    const harness = createCommands({
+      ...configAt(configPath),
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      configured: true,
+    });
+    const selections = ["OpenAI fast mode: off", "Done"];
+    const ctx = {
+      hasUI: true,
+      ui: {
+        notify: vi.fn(),
+        select: vi.fn(async () => selections.shift()),
+      },
+      modelRegistry: {},
+    } as unknown as ExtensionCommandContext;
+
+    await harness.commands.get("advisor-settings")?.("", ctx);
+
+    expect(harness.getConfig().fastMode).toBe(true);
+    expect(JSON.parse(readFileSync(configPath, "utf8"))).toMatchObject({ fastMode: true });
+  });
+
   test("reasoning picker offers only levels supported by the selected model", async () => {
     const configPath = tempConfigPath();
     writeRawAdvisorConfig(
@@ -215,6 +245,8 @@ describe("advisor commands", () => {
     const harness = createCommands(configAt(configPath));
     const selections = [
       "Automatic review: on",
+      "Revision cooldown: 3 turns",
+      "5 turns",
       "Review timeout: 30s",
       "90s",
       "Context cap: 48,000 characters",
@@ -234,6 +266,7 @@ describe("advisor commands", () => {
 
     expect(harness.getConfig()).toMatchObject({
       enabled: false,
+      revisionCooldownTurns: 5,
       timeoutMs: 90_000,
       maxContextChars: 240_000,
     });
@@ -294,6 +327,19 @@ describe("advisor commands", () => {
       revise: 1,
       failure: 1,
       discarded: 1,
+      backgroundState: "reviewing",
+      cacheReadTokens: 30,
+      cacheWriteTokens: 10,
+      cooldownRemaining: 2,
+      cost: 0.012345,
+      guidancePaths: ["/tmp/ADVISOR.md"],
+      inputTokens: 100,
+      lastAction: "revision",
+      latestDurationMs: 1234,
+      outputTokens: 50,
+      queuedReviews: 1,
+      suppressedFindings: 2,
+      totalTokens: 190,
     });
     const notify = vi.fn();
     const model = { provider: "openai", id: "reviewer" };
@@ -310,11 +356,20 @@ describe("advisor commands", () => {
     const output = String(notify.mock.calls[0]?.[0]);
     expect(output).toContain("Advisor model: openai/reviewer");
     expect(output).toContain("Credentials configured: yes");
+    expect(output).toContain("OpenAI fast mode: disabled");
+    expect(output).toContain("Background state: reviewing (1 queued)");
+    expect(output).toContain("Advisor guidance: /tmp/ADVISOR.md");
+    expect(output).toContain("Latest review duration: 1,234 ms");
+    expect(output).toContain("Advisor tokens: input 100, output 50");
+    expect(output).toContain("Advisor cost: $0.012345");
+    expect(output).toContain("Last advisor action: revision");
+    expect(output).toContain("Suppressed duplicate findings: 2");
+    expect(output).toContain("Revision cooldown: 3 turns configured, 2 remaining");
     expect(output).toContain("Session review attempts: 5");
     expect(output).toContain(
       "Session review outcomes: pass 1, revise 1, failure 1, discarded 1, in progress 1",
     );
     expect(output).toContain(configPath);
-    expect(output).not.toMatch(/api[_-]?key|token|secret/i);
+    expect(output).not.toMatch(/api[_-]?key|secret/i);
   });
 });

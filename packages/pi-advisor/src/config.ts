@@ -9,12 +9,16 @@ export const MIN_TIMEOUT_MS = 10_000;
 export const MAX_TIMEOUT_MS = 180_000;
 export const MIN_CONTEXT_CHARS = 16_000;
 export const MAX_CONTEXT_CHARS = 240_000;
+export const MIN_REVISION_COOLDOWN_TURNS = 0;
+export const MAX_REVISION_COOLDOWN_TURNS = 5;
 
 export interface AdvisorConfig {
   enabled?: boolean;
   provider?: string;
   model?: string;
+  fastMode?: boolean;
   thinkingLevel?: ModelThinkingLevel;
+  revisionCooldownTurns?: number;
   timeoutMs?: number;
   maxContextChars?: number;
 }
@@ -24,7 +28,9 @@ export interface ResolvedAdvisorConfig {
   enabled: boolean;
   provider?: string;
   model?: string;
+  fastMode: boolean;
   thinkingLevel: ModelThinkingLevel;
+  revisionCooldownTurns: number;
   timeoutMs: number;
   maxContextChars: number;
   configured: boolean;
@@ -34,11 +40,21 @@ export type AdvisorConfigPatch = Partial<AdvisorConfig>;
 
 export const DEFAULT_ADVISOR_CONFIG = {
   enabled: true,
+  fastMode: false,
   thinkingLevel: "medium",
+  revisionCooldownTurns: 3,
   timeoutMs: 30_000,
   maxContextChars: 48_000,
 } as const satisfies Required<
-  Pick<AdvisorConfig, "enabled" | "thinkingLevel" | "timeoutMs" | "maxContextChars">
+  Pick<
+    AdvisorConfig,
+    | "enabled"
+    | "fastMode"
+    | "thinkingLevel"
+    | "revisionCooldownTurns"
+    | "timeoutMs"
+    | "maxContextChars"
+  >
 >;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -66,6 +82,15 @@ export function clampTimeoutMs(value: unknown): number {
   return clampInteger(value, DEFAULT_ADVISOR_CONFIG.timeoutMs, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
 }
 
+export function clampRevisionCooldownTurns(value: unknown): number {
+  return clampInteger(
+    value,
+    DEFAULT_ADVISOR_CONFIG.revisionCooldownTurns,
+    MIN_REVISION_COOLDOWN_TURNS,
+    MAX_REVISION_COOLDOWN_TURNS,
+  );
+}
+
 export function clampContextChars(value: unknown): number {
   return clampInteger(
     value,
@@ -91,7 +116,10 @@ export function normalizeAdvisorConfig(
   const normalized: ResolvedAdvisorConfig = {
     configPath,
     enabled: typeof record.enabled === "boolean" ? record.enabled : DEFAULT_ADVISOR_CONFIG.enabled,
+    fastMode:
+      typeof record.fastMode === "boolean" ? record.fastMode : DEFAULT_ADVISOR_CONFIG.fastMode,
     thinkingLevel: normalizeThinkingLevel(record.thinkingLevel),
+    revisionCooldownTurns: clampRevisionCooldownTurns(record.revisionCooldownTurns),
     timeoutMs: clampTimeoutMs(record.timeoutMs),
     maxContextChars: clampContextChars(record.maxContextChars),
     configured: Boolean(provider && model),
@@ -127,10 +155,18 @@ export function patchAdvisorConfig(
   }
   if ("provider" in patch) patchOptionalString(next, "provider", patch.provider);
   if ("model" in patch) patchOptionalString(next, "model", patch.model);
+  if ("fastMode" in patch) {
+    if (typeof patch.fastMode === "boolean") next.fastMode = patch.fastMode;
+    else delete next.fastMode;
+  }
   if ("thinkingLevel" in patch) {
     const thinkingLevel = validThinkingLevel(patch.thinkingLevel);
     if (thinkingLevel) next.thinkingLevel = thinkingLevel;
     else delete next.thinkingLevel;
+  }
+  if ("revisionCooldownTurns" in patch) {
+    if (patch.revisionCooldownTurns === undefined) delete next.revisionCooldownTurns;
+    else next.revisionCooldownTurns = clampRevisionCooldownTurns(patch.revisionCooldownTurns);
   }
   if ("timeoutMs" in patch) {
     if (patch.timeoutMs === undefined) delete next.timeoutMs;

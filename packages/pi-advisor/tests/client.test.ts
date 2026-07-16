@@ -14,7 +14,9 @@ function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisor
     enabled: true,
     provider: "advisor-provider",
     model: "advisor-model",
+    fastMode: false,
     thinkingLevel: "medium",
+    revisionCooldownTurns: 3,
     timeoutMs: 30_000,
     maxContextChars: 48_000,
     configured: true,
@@ -66,16 +68,23 @@ describe("advisor client", () => {
     const completeRequest = vi.fn(async () =>
       response(passJson),
     ) as unknown as CompleteAdvisorRequest;
+    const onUsage = vi.fn();
 
     await expect(
-      requestAdvisorReview(ctx, config(), "review transcript", { completeRequest }),
+      requestAdvisorReview(ctx, config(), "review transcript", {
+        completeRequest,
+        instructions: "Watch durable queue invariants.",
+        onUsage,
+      }),
     ).resolves.toEqual({ verdict: "pass", summary: "Looks good.", findings: [] });
 
     expect(ctx.modelRegistry.find).toHaveBeenCalledWith("advisor-provider", "advisor-model");
     expect(completeRequest).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "advisor-provider", id: "advisor-model" }),
       expect.objectContaining({
-        systemPrompt: expect.stringContaining("independent response advisor"),
+        systemPrompt: expect.stringMatching(
+          /independent response advisor[\s\S]*Watch durable queue invariants/,
+        ),
         messages: [
           expect.objectContaining({
             role: "user",
@@ -94,7 +103,56 @@ describe("advisor client", () => {
         reasoning: "medium",
       }),
     );
+    expect(onUsage).toHaveBeenCalledWith({
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cost: 0,
+      inputTokens: 1,
+      outputTokens: 1,
+      totalTokens: 2,
+    });
     expect(_clientTest.ADVISOR_MAX_OUTPUT_TOKENS).toBe(2_048);
+  });
+
+  test("injects priority service tier only for supported fast-mode models", async () => {
+    const supportedModel = {
+      provider: "openai-codex",
+      id: "gpt-5.6-sol",
+      reasoning: true,
+    };
+    const completeRequestMock = vi.fn(
+      async (
+        _model: unknown,
+        _requestContext: unknown,
+        _options?: {
+          onPayload?: (payload: unknown, model: unknown) => unknown | Promise<unknown>;
+        },
+      ) => response(passJson),
+    );
+    const completeRequest = completeRequestMock as unknown as CompleteAdvisorRequest;
+
+    await requestAdvisorReview(
+      context({ model: supportedModel }),
+      config({
+        provider: supportedModel.provider,
+        model: supportedModel.id,
+        fastMode: true,
+      }),
+      "transcript",
+      { completeRequest },
+    );
+
+    const supportedOptions = completeRequestMock.mock.calls[0]?.[2];
+    expect(supportedOptions?.onPayload?.({ model: supportedModel.id }, supportedModel)).toEqual({
+      model: supportedModel.id,
+      service_tier: "priority",
+    });
+
+    completeRequestMock.mockClear();
+    await requestAdvisorReview(context(), config({ fastMode: true }), "transcript", {
+      completeRequest,
+    });
+    expect(completeRequestMock.mock.calls[0]?.[2]).not.toHaveProperty("onPayload");
   });
 
   test("clamps the configured reasoning level to model capabilities", async () => {
@@ -190,6 +248,24 @@ describe("advisor client", () => {
 
     await expect(
       requestAdvisorReview(ctx, config(), "transcript", { completeRequest }),
+    ).rejects.toThrow("Advisor review was aborted.");
+
+    expect(getAuth).not.toHaveBeenCalled();
+    expect(completeRequest).not.toHaveBeenCalled();
+  });
+
+  test("allows a background caller to override the context abort signal", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const ctx = context();
+    const getAuth = ctx.modelRegistry.getApiKeyAndHeaders as ReturnType<typeof vi.fn>;
+    const completeRequest = vi.fn() as unknown as CompleteAdvisorRequest;
+
+    await expect(
+      requestAdvisorReview(ctx, config(), "transcript", {
+        completeRequest,
+        signal: controller.signal,
+      }),
     ).rejects.toThrow("Advisor review was aborted.");
 
     expect(getAuth).not.toHaveBeenCalled();

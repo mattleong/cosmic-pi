@@ -6,6 +6,7 @@ import {
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter, Input, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
+import { supportsFastModel } from "pi-better-openai/fast-models";
 import {
   type AdvisorConfigPatch,
   type ResolvedAdvisorConfig,
@@ -18,6 +19,7 @@ const CLEAR_MODEL_OPTION = "Clear advisor model";
 
 const TIMEOUT_OPTIONS = [10_000, 30_000, 60_000, 90_000, 120_000, 180_000] as const;
 const CONTEXT_OPTIONS = [16_000, 48_000, 120_000, 240_000] as const;
+const COOLDOWN_OPTIONS = [0, 1, 2, 3, 4, 5] as const;
 const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
   "off",
   "minimal",
@@ -40,6 +42,19 @@ export interface AdvisorSessionMetrics {
   revise: number;
   failure: number;
   discarded: number;
+  backgroundState?: "idle" | "queued" | "reviewing";
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  cooldownRemaining?: number;
+  cost?: number;
+  guidancePaths?: readonly string[];
+  inputTokens?: number;
+  lastAction?: "advice" | "discarded" | "failure" | "pass" | "revision" | "suppressed";
+  latestDurationMs?: number;
+  outputTokens?: number;
+  queuedReviews?: number;
+  suppressedFindings?: number;
+  totalTokens?: number;
 }
 
 export function registerAdvisorCommands(pi: ExtensionAPI, state: AdvisorConfigState): void {
@@ -66,26 +81,44 @@ async function openAdvisorSettings(
     const config = state.get();
     const enabledOption = `Automatic review: ${config.enabled ? "on" : "off"}`;
     const modelOption = `Advisor model: ${formatModel(config)}`;
+    const fastModeOption = supportsFastModel(config.provider, config.model)
+      ? `OpenAI fast mode: ${config.fastMode ? "on" : "off"}`
+      : undefined;
     const thinkingOption = `Reasoning level: ${config.thinkingLevel}`;
+    const cooldownOption = `Revision cooldown: ${formatTurnCount(config.revisionCooldownTurns)}`;
     const timeoutOption = `Review timeout: ${formatDuration(config.timeoutMs)}`;
     const contextOption = `Context cap: ${config.maxContextChars.toLocaleString()} characters`;
     const doneOption = "Done";
-    const choice = await ctx.ui.select("Advisor settings", [
-      enabledOption,
-      modelOption,
-      thinkingOption,
-      timeoutOption,
-      contextOption,
-      doneOption,
-    ]);
+    const choice = await ctx.ui.select(
+      "Advisor settings",
+      [
+        enabledOption,
+        modelOption,
+        fastModeOption,
+        thinkingOption,
+        cooldownOption,
+        timeoutOption,
+        contextOption,
+        doneOption,
+      ].filter((option): option is string => option !== undefined),
+    );
 
     if (!choice || choice === doneOption) return;
     if (choice === enabledOption) {
       savePatch(ctx, state, { enabled: !config.enabled });
     } else if (choice === modelOption) {
       await chooseAdvisorModel(ctx, state);
+    } else if (fastModeOption && choice === fastModeOption) {
+      savePatch(ctx, state, { fastMode: !config.fastMode });
     } else if (choice === thinkingOption) {
       await chooseThinkingLevel(ctx, state);
+    } else if (choice === cooldownOption) {
+      await chooseNumericSetting(
+        ctx,
+        "Advisor revision cooldown",
+        COOLDOWN_OPTIONS.map((value) => ({ label: formatTurnCount(value), value })),
+        (revisionCooldownTurns) => savePatch(ctx, state, { revisionCooldownTurns }),
+      );
     } else if (choice === timeoutOption) {
       await chooseNumericSetting(
         ctx,
@@ -172,7 +205,7 @@ async function selectAdvisorModel(
       item: {
         value,
         label: value === currentValue ? `${value} (current)` : value,
-        description: `${name ? `${name} · ` : ""}reasoning: ${levels}`,
+        description: `${name ? `${name} · ` : ""}reasoning: ${levels}${supportsFastModel(model.provider, model.id) ? " · fast mode available" : ""}`,
       } satisfies SelectItem,
       searchText: `${value} ${model.name ?? ""}`,
     };
@@ -345,6 +378,15 @@ async function showAdvisorStatus(
     `Credentials configured: ${credentials ? "yes" : "no"}`,
     `Reasoning level: ${config.thinkingLevel}`,
     `Effective reasoning level: ${model ? clampThinkingLevel(model, config.thinkingLevel) : "unknown"}`,
+    `OpenAI fast mode: ${formatFastMode(config)}`,
+    `Revision cooldown: ${formatTurnCount(config.revisionCooldownTurns)} configured, ${metrics.cooldownRemaining ?? 0} remaining`,
+    `Background state: ${metrics.backgroundState ?? "idle"} (${metrics.queuedReviews ?? 0} queued)`,
+    `Advisor guidance: ${formatGuidancePaths(metrics.guidancePaths)}`,
+    `Latest review duration: ${metrics.latestDurationMs === undefined ? "not available" : `${Math.round(metrics.latestDurationMs).toLocaleString()} ms`}`,
+    `Advisor tokens: input ${(metrics.inputTokens ?? 0).toLocaleString()}, output ${(metrics.outputTokens ?? 0).toLocaleString()}, cache read ${(metrics.cacheReadTokens ?? 0).toLocaleString()}, cache write ${(metrics.cacheWriteTokens ?? 0).toLocaleString()}, total ${(metrics.totalTokens ?? 0).toLocaleString()}`,
+    `Advisor cost: $${(metrics.cost ?? 0).toFixed(6)}`,
+    `Last advisor action: ${metrics.lastAction ?? "none"}`,
+    `Suppressed duplicate findings: ${metrics.suppressedFindings ?? 0}`,
     `Timeout: ${config.timeoutMs.toLocaleString()} ms`,
     `Context cap: ${config.maxContextChars.toLocaleString()} characters`,
     `Session review attempts: ${metrics.attempted}`,
@@ -358,15 +400,34 @@ function formatDuration(milliseconds: number): string {
   return `${milliseconds / 1_000}s`;
 }
 
+function formatTurnCount(turns: number): string {
+  return `${turns} ${turns === 1 ? "turn" : "turns"}`;
+}
+
+function formatGuidancePaths(paths: readonly string[] | undefined): string {
+  return paths && paths.length > 0 ? paths.join(", ") : "none";
+}
+
 function formatModel(config: Pick<ResolvedAdvisorConfig, "provider" | "model">): string {
   return config.provider && config.model ? `${config.provider}/${config.model}` : "not configured";
+}
+
+function formatFastMode(
+  config: Pick<ResolvedAdvisorConfig, "fastMode" | "provider" | "model">,
+): string {
+  if (!config.fastMode) return "disabled";
+  return supportsFastModel(config.provider, config.model)
+    ? "enabled (active)"
+    : "enabled (inactive for unsupported model)";
 }
 
 export const _settingsTest = {
   CLEAR_MODEL_OPTION,
   CONTEXT_OPTIONS,
+  COOLDOWN_OPTIONS,
   THINKING_LEVELS,
   TIMEOUT_OPTIONS,
   formatDuration,
+  formatFastMode,
   formatModel,
 };

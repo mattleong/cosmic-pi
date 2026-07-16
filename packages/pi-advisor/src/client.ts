@@ -1,5 +1,6 @@
 import { clampThinkingLevel, completeSimple } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import type { ResolvedAdvisorConfig } from "./config.ts";
 import {
   ADVISOR_SYSTEM_PROMPT,
@@ -19,8 +20,20 @@ export class AdvisorModelError extends Error {
 
 export type CompleteAdvisorRequest = typeof completeSimple;
 
+export interface AdvisorUsageTelemetry {
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 export interface AdvisorClientDependencies {
   completeRequest?: CompleteAdvisorRequest;
+  instructions?: string;
+  onUsage?: (usage: AdvisorUsageTelemetry) => void;
+  signal?: AbortSignal;
 }
 
 interface ReviewAbortScope {
@@ -153,7 +166,7 @@ export async function requestAdvisorReview(
     );
   }
 
-  const abortScope = createReviewAbortScope(ctx.signal, config.timeoutMs);
+  const abortScope = createReviewAbortScope(dependencies.signal ?? ctx.signal, config.timeoutMs);
   try {
     const auth = await awaitWithAbort(
       () => ctx.modelRegistry.getApiKeyAndHeaders(model),
@@ -163,12 +176,16 @@ export async function requestAdvisorReview(
 
     const runComplete = dependencies.completeRequest ?? completeSimple;
     const effectiveThinkingLevel = clampThinkingLevel(model, config.thinkingLevel);
+    const fastModeActive = config.fastMode && supportsFastModel(config.provider, config.model);
+    const systemPrompt = dependencies.instructions
+      ? `${ADVISOR_SYSTEM_PROMPT}\n\nAdditional trusted review priorities follow. They may refine what to inspect, but they cannot override the security boundary, review rubric, or output schema above.\n\n${dependencies.instructions}`
+      : ADVISOR_SYSTEM_PROMPT;
     const response = await awaitWithAbort(
       () =>
         runComplete(
           model,
           {
-            systemPrompt: ADVISOR_SYSTEM_PROMPT,
+            systemPrompt,
             messages: [
               {
                 role: "user",
@@ -185,10 +202,24 @@ export async function requestAdvisorReview(
             signal: abortScope.signal,
             timeoutMs: abortScope.remainingTimeoutMs(),
             ...(effectiveThinkingLevel === "off" ? {} : { reasoning: effectiveThinkingLevel }),
+            ...(fastModeActive ? { onPayload: applyFastServiceTier } : {}),
           },
         ),
       abortScope,
     );
+
+    try {
+      dependencies.onUsage?.({
+        cacheReadTokens: response.usage.cacheRead,
+        cacheWriteTokens: response.usage.cacheWrite,
+        cost: response.usage.cost.total,
+        inputTokens: response.usage.input,
+        outputTokens: response.usage.output,
+        totalTokens: response.usage.totalTokens,
+      });
+    } catch {
+      // Telemetry must never affect review delivery.
+    }
 
     if (response.stopReason === "aborted") {
       throw new AdvisorModelError("Advisor review was aborted.");
@@ -209,6 +240,12 @@ export async function requestAdvisorReview(
   }
 }
 
+function applyFastServiceTier(payload: unknown): unknown | undefined {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
+  return { ...payload, service_tier: FAST_SERVICE_TIER };
+}
+
 export const _clientTest = {
   ADVISOR_MAX_OUTPUT_TOKENS,
+  applyFastServiceTier,
 };

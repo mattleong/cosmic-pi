@@ -23,15 +23,18 @@ pi -e ./packages/pi-advisor
 
 ## How it works
 
-After the main agent finishes a text-only response, pi-advisor automatically asks a separately configured model to check correctness, completeness, user intent, and actionable risks. The review includes the latest genuine user request and candidate response plus as much recent conversation and tool-result context as fits the configured limit. Recent messages are selected by recency and presented to the advisor in chronological order.
+After the main agent finishes a text-only response, pi-advisor queues a background request to a separately configured model to check correctness, completeness, user intent, and actionable risks. The main turn settles immediately instead of waiting for the advisor. The review includes the latest genuine user request and candidate response plus as much recent conversation and tool-result context as fits the configured limit. Recent messages are selected by recency and presented to the advisor in chronological order.
 
 - A passing review leaves the candidate unchanged without adding another notification.
-- A review with up to five high- or medium-severity findings displays the full critique and steers the main agent to produce one revised response in the same run. Low-impact style preferences and optional polish do not trigger revision.
-- The revised response is not reviewed again. A later genuine user message, including a queued follow-up, starts a new one-pass review cycle.
+- Medium-severity findings appear as non-triggering advice for subsequent work; they do not restart a completed turn.
+- A high-severity finding can trigger one revision only while the reviewed request is still current and pi is idle. After a triggered revision, the default three-turn cooldown routes later high findings as non-triggering advice instead of repeatedly restarting work.
+- Starting a newer user request cancels or discards the older review, preventing stale advice from interrupting current work. Background reviews are serialized rather than allowed to overlap.
+- Repeated findings are normalized and suppressed across the session so the advisor does not keep delivering the same critique.
+- The advisor-triggered revision is not reviewed again. A later genuine user message, including a queued follow-up, starts a new one-pass review cycle.
 - Responses that contain tool calls, have no assistant text, or were aborted or errored are not reviewed.
-- The original streamed candidate remains visible before any critique and revision.
+- The original streamed candidate remains visible before any later critique or revision.
 
-Advisor calls never use tools and never fall back to the active main model. Model lookup, credentials, timeout, abort, provider, empty-output, and malformed-output failures all fail open: the original candidate remains available and pi shows a concise warning.
+Advisor calls never use tools and never fall back to the active main model. Model lookup, credentials, timeout, abort, provider, empty-output, and malformed-output failures all fail open: the original candidate remains available and a current background review failure produces only a concise warning.
 
 ## Setup and commands
 
@@ -41,7 +44,7 @@ Open the settings picker and choose an authenticated advisor model:
 /advisor-settings
 ```
 
-The picker also controls whether automatic review is enabled, the advisor reasoning level, the timeout, and the context limit. The model picker supports fuzzy search by provider, model ID, or display name and lists models currently available through pi's model registry, so authenticate the desired provider through pi first.
+The picker also controls whether automatic review is enabled, OpenAI fast mode for supported models, the advisor reasoning level, the timeout, and the context limit. The model picker supports fuzzy search by provider, model ID, or display name and lists models currently available through pi's model registry, so authenticate the desired provider through pi first.
 
 Inspect the effective setup without exposing credentials:
 
@@ -49,7 +52,7 @@ Inspect the effective setup without exposing credentials:
 /advisor-status
 ```
 
-Status reports whether review is enabled and configured, the selected provider/model, credential availability, effective limits, session review counters, and the global configuration path. If review is enabled but no model is configured, the extension skips reviews and points to `/advisor-settings` once per session.
+Status reports whether review is enabled and configured, the selected provider/model, credential availability, effective limits, background/queue state, cooldown state, loaded guidance paths, latest review duration, advisor tokens and cost, the last advisor action, duplicate suppression, session review counters, and the global configuration path. If review is enabled but no model is configured, the extension skips reviews and points to `/advisor-settings` once per session.
 
 ## Configuration
 
@@ -68,7 +71,9 @@ Example:
   "enabled": true,
   "provider": "openai-codex",
   "model": "gpt-5.5",
+  "fastMode": true,
   "thinkingLevel": "high",
+  "revisionCooldownTurns": 3,
   "timeoutMs": 30000,
   "maxContextChars": 48000
 }
@@ -78,11 +83,24 @@ Settings:
 
 - `enabled`: automatic review toggle; defaults to `true`.
 - `provider` and `model`: both must be non-empty for review to be configured. Use `/advisor-settings` to search for and select an authenticated model.
+- `fastMode`: sends `service_tier: "priority"` for advisor models in pi-better-openai's shared supported-model list; defaults to `false`. The settings picker only shows this toggle for supported models.
 - `thinkingLevel`: advisor reasoning level; defaults to `medium`. The settings picker only offers levels supported by the selected model, from `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+- `revisionCooldownTurns`: number of subsequent user-response reviews during which high findings become non-triggering advice after an automatic revision; defaults to `3` and is clamped to `0`–`5`.
 - `timeoutMs`: advisor request timeout in milliseconds; defaults to `30000` and is clamped to `10000`–`180000`.
 - `maxContextChars`: serialized review-context limit; defaults to `48000` and is clamped to `16000`–`240000`.
 
 Settings updates preserve unknown root JSON fields. When context must be shortened, the latest user request and candidate response are always retained, the newest context is selected first and then rendered chronologically, prior advisor-review messages are excluded, and omitted context is marked explicitly. Advisor output is capped at 2,048 tokens.
+
+## Advisor guidance
+
+Advisor-only review priorities can be placed in:
+
+```text
+$PI_CODING_AGENT_DIR/ADVISOR.md
+<project>/.pi/ADVISOR.md
+```
+
+The global file loads first. The project file loads afterward only when the project is trusted, so narrower project guidance can refine global priorities. Guidance may focus the review on project risks and architectural constraints, but cannot replace the advisor security boundary, rubric, or JSON output schema. Each file is capped at 32,000 characters. Guidance is loaded at session start; use `/reload` or start a new session after editing it.
 
 ## Local development
 

@@ -8,6 +8,7 @@ export interface AdvisorReviewMessageDetails {
   review: AdvisorReview;
   provider: string;
   model: string;
+  action?: "advice" | "revision";
 }
 
 export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
@@ -23,7 +24,9 @@ export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
         return undefined;
       }
       try {
-        const heading = theme.bold(theme.fg("warning", "Advisor requested a revision"));
+        const label =
+          details.action === "advice" ? "Advisor noted a concern" : "Advisor requested a revision";
+        const heading = theme.bold(theme.fg("warning", label));
         const model = theme.fg("muted", `${details.provider}/${details.model}`);
         return new Text(`${heading} ${model}\n${formatAdvisorReview(details.review)}`, 1, 0);
       } catch {

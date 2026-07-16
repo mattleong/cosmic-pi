@@ -56,12 +56,8 @@ import {
   registerOpenAIPets,
   _petsTest,
 } from "./src/pets.ts";
-import {
-  FastController,
-  SUPPORTED_FAST_MODELS,
-  modelList,
-  supportsFast,
-} from "./src/fast-controller.ts";
+import { FastController, modelList, supportsFast } from "./src/fast-controller.ts";
+import { FAST_SERVICE_TIER, SUPPORTED_FAST_MODELS } from "./src/fast-models.ts";
 import { UsageController } from "./src/usage-controller.ts";
 import { PetFooterController } from "./src/pet-footer-controller.ts";
 import {
@@ -77,7 +73,7 @@ const OPENAI_STATUS_COMMAND = "openai-usage";
 const OPENAI_SETTINGS_COMMAND = "openai-settings";
 const FLAG = "fast";
 const PET_EMPTY_VALUE = "not selected";
-const SERVICE_TIER = "priority";
+const SERVICE_TIER = FAST_SERVICE_TIER;
 type SettingsPickerItem = {
   id: string;
   label: string;
