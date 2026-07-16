@@ -3,25 +3,40 @@ import { AdvisorFindingDedupe, normalizeAdvisorFinding } from "../src/dedupe.ts"
 import type { AdvisorFinding } from "../src/review.ts";
 
 function finding(issue: string, recommendation = "Fix it."): AdvisorFinding {
-  return { severity: "medium", issue, recommendation };
+  return {
+    category: "correctness",
+    severity: "medium",
+    issue,
+    evidence: "The transcript demonstrates the issue.",
+    recommendation,
+  };
 }
 
 describe("advisor finding dedupe", () => {
   test("normalizes case, punctuation, and whitespace", () => {
-    expect(normalizeAdvisorFinding(finding(" Missing await! "))).toBe("missing await fix it");
+    expect(normalizeAdvisorFinding(finding(" Missing await! "))).toBe(
+      "correctness missing await fix it",
+    );
     expect(normalizeAdvisorFinding(finding("missing AWAIT"))).toBe(
       normalizeAdvisorFinding(finding("Missing await!")),
     );
   });
 
-  test("suppresses repeated findings across reviews", () => {
+  test("suppresses repeated findings within one request scope", () => {
     const dedupe = new AdvisorFindingDedupe();
     const first = finding("Missing await!");
     const duplicate = finding(" missing AWAIT ");
     const fresh = finding("No timeout");
 
-    expect(dedupe.filter([first])).toEqual({ findings: [first], suppressed: 0 });
-    expect(dedupe.filter([duplicate, fresh])).toEqual({ findings: [fresh], suppressed: 1 });
+    expect(dedupe.filter([first], "request-1")).toEqual({ findings: [first], suppressed: 0 });
+    expect(dedupe.filter([duplicate, fresh], "request-1")).toEqual({
+      findings: [fresh],
+      suppressed: 1,
+    });
+    expect(dedupe.filter([duplicate], "request-2")).toEqual({
+      findings: [duplicate],
+      suppressed: 0,
+    });
   });
 
   test("evicts old findings at the bounded capacity and resets", () => {

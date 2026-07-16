@@ -16,13 +16,17 @@ const revision: AdvisorReview = {
   summary: "The response misses a material requirement.",
   findings: [
     {
+      category: "evidence",
       severity: "high",
       issue: "The answer claims tests passed without evidence.",
+      evidence: "No test command result appears in the transcript.",
       recommendation: "Report the actual validation result or remove the claim.",
     },
     {
+      category: "completeness",
       severity: "medium",
       issue: "The handoff omits the changed interface.",
+      evidence: "The changed interface appears in context but not the handoff.",
       recommendation: "Name the new exported function.",
     },
   ],
@@ -57,8 +61,10 @@ describe("parseAdvisorReview", () => {
       summary: "Minor polish only.",
       findings: [
         {
+          category: "completeness",
           severity: "low",
           issue: "The wording could be tighter.",
+          evidence: "One sentence is verbose.",
           recommendation: "Rewrite one sentence.",
         },
       ],
@@ -71,8 +77,10 @@ describe("parseAdvisorReview", () => {
 
   test("keeps the first five ordered findings after validating the full response", () => {
     const findings = Array.from({ length: MAX_ADVISOR_FINDINGS + 1 }, (_, index) => ({
+      category: "correctness",
       severity: index === 0 ? "high" : "medium",
       issue: `Issue ${index + 1}`,
+      evidence: `Evidence ${index + 1}`,
       recommendation: `Fix ${index + 1}`,
     }));
 
@@ -83,8 +91,10 @@ describe("parseAdvisorReview", () => {
     ).toEqual(findings.slice(0, MAX_ADVISOR_FINDINGS));
 
     findings[MAX_ADVISOR_FINDINGS] = {
+      category: "correctness",
       severity: "low",
       issue: "Invalid issue",
+      evidence: "Invalid evidence",
       recommendation: "Invalid fix",
     };
     expect(() =>
@@ -118,7 +128,16 @@ describe("parseAdvisorReview", () => {
       JSON.stringify({
         verdict: "revise",
         summary: "Needs work",
-        findings: [{ severity: "high", issue: "Bad", recommendation: "Fix", confidence: 1 }],
+        findings: [
+          {
+            category: "correctness",
+            severity: "high",
+            issue: "Bad",
+            evidence: "Evidence",
+            recommendation: "Fix",
+            confidence: 1,
+          },
+        ],
       }),
     ],
     [
@@ -157,8 +176,13 @@ describe("advisor prompts and formatting", () => {
     const steer = buildRevisionSteer(revision);
 
     expect(formatted).toContain("Verdict: REVISE");
-    expect(formatted).toContain("1. [HIGH] The answer claims tests passed without evidence.");
-    expect(formatted).toContain("2. [MEDIUM] The handoff omits the changed interface.");
+    expect(formatted).toContain(
+      "1. [HIGH] [EVIDENCE] The answer claims tests passed without evidence.",
+    );
+    expect(formatted).toContain(
+      "2. [MEDIUM] [COMPLETENESS] The handoff omits the changed interface.",
+    );
+    expect(formatted).toContain("Evidence: No test command result appears in the transcript.");
     expect(advice).toContain(formatted);
     expect(advice).toContain("Do not restart completed work");
     expect(steer).toContain(formatted);

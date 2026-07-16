@@ -14,12 +14,15 @@ export const MAX_CONTEXT_CHARS = 240_000;
 export const MIN_REVISION_COOLDOWN_TURNS = 0;
 export const MAX_REVISION_COOLDOWN_TURNS = 5;
 
+export type AdvisorReviewPolicy = "guardrail" | "strict" | "advice" | "manual";
+
 export interface AdvisorConfig {
   enabled?: boolean;
   provider?: string;
   model?: string;
   fastMode?: boolean;
   thinkingLevel?: ModelThinkingLevel;
+  reviewPolicy?: AdvisorReviewPolicy;
   revisionCooldownTurns?: number;
   timeoutMs?: number;
   maxContextChars?: number;
@@ -32,6 +35,7 @@ export interface ResolvedAdvisorConfig {
   model?: string;
   fastMode: boolean;
   thinkingLevel: ModelThinkingLevel;
+  reviewPolicy: AdvisorReviewPolicy;
   revisionCooldownTurns: number;
   timeoutMs: number;
   maxContextChars: number;
@@ -44,6 +48,7 @@ export const DEFAULT_ADVISOR_CONFIG = {
   enabled: true,
   fastMode: false,
   thinkingLevel: "medium",
+  reviewPolicy: "guardrail",
   revisionCooldownTurns: 0,
   timeoutMs: 30_000,
   maxContextChars: 48_000,
@@ -53,6 +58,7 @@ export const DEFAULT_ADVISOR_CONFIG = {
     | "enabled"
     | "fastMode"
     | "thinkingLevel"
+    | "reviewPolicy"
     | "revisionCooldownTurns"
     | "timeoutMs"
     | "maxContextChars"
@@ -104,6 +110,7 @@ export function normalizeAdvisorConfig(
     fastMode:
       typeof record.fastMode === "boolean" ? record.fastMode : DEFAULT_ADVISOR_CONFIG.fastMode,
     thinkingLevel: normalizeThinkingLevel(record.thinkingLevel),
+    reviewPolicy: normalizeReviewPolicy(record.reviewPolicy),
     revisionCooldownTurns: clampRevisionCooldownTurns(record.revisionCooldownTurns),
     timeoutMs: clampTimeoutMs(record.timeoutMs),
     maxContextChars: clampContextChars(record.maxContextChars),
@@ -149,6 +156,11 @@ export function patchAdvisorConfig(
     if (thinkingLevel) next.thinkingLevel = thinkingLevel;
     else delete next.thinkingLevel;
   }
+  if ("reviewPolicy" in patch) {
+    const reviewPolicy = validReviewPolicy(patch.reviewPolicy);
+    if (reviewPolicy) next.reviewPolicy = reviewPolicy;
+    else delete next.reviewPolicy;
+  }
   if ("revisionCooldownTurns" in patch) {
     if (patch.revisionCooldownTurns === undefined) delete next.revisionCooldownTurns;
     else next.revisionCooldownTurns = clampRevisionCooldownTurns(patch.revisionCooldownTurns);
@@ -189,6 +201,22 @@ function clampInteger(value: unknown, fallback: number, minimum: number, maximum
 
 function normalizeThinkingLevel(value: unknown): ModelThinkingLevel {
   return validThinkingLevel(value) ?? DEFAULT_ADVISOR_CONFIG.thinkingLevel;
+}
+
+function normalizeReviewPolicy(value: unknown): AdvisorReviewPolicy {
+  return validReviewPolicy(value) ?? DEFAULT_ADVISOR_CONFIG.reviewPolicy;
+}
+
+function validReviewPolicy(value: unknown): AdvisorReviewPolicy | undefined {
+  switch (value) {
+    case "guardrail":
+    case "strict":
+    case "advice":
+    case "manual":
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 function validThinkingLevel(value: unknown): ModelThinkingLevel | undefined {

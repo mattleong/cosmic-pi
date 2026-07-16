@@ -16,6 +16,7 @@ function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisor
     model: "advisor-model",
     fastMode: false,
     thinkingLevel: "medium",
+    reviewPolicy: "guardrail",
     revisionCooldownTurns: 0,
     timeoutMs: 30_000,
     maxContextChars: 48_000,
@@ -112,6 +113,24 @@ describe("advisor client", () => {
       totalTokens: 2,
     });
     expect(_clientTest.ADVISOR_MAX_OUTPUT_TOKENS).toBe(2_048);
+  });
+
+  test("supports an evidence-focused manual verification prompt", async () => {
+    const completeRequestMock = vi.fn(async (_model: unknown, _request: unknown) =>
+      response(passJson),
+    );
+
+    await requestAdvisorReview(context(), config(), "review transcript", {
+      completeRequest: completeRequestMock as unknown as CompleteAdvisorRequest,
+      focus: "verification",
+    });
+
+    const requestContext = completeRequestMock.mock.calls[0]?.[1] as {
+      messages?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    expect(requestContext.messages?.[0]?.content?.[0]?.text).toContain(
+      "evidence-focused verification review",
+    );
   });
 
   test("injects priority service tier only for supported fast-mode models", async () => {

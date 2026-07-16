@@ -21,6 +21,7 @@ function configAt(configPath: string): ResolvedAdvisorConfig {
     enabled: true,
     fastMode: false,
     thinkingLevel: "medium",
+    reviewPolicy: "guardrail",
     revisionCooldownTurns: 0,
     timeoutMs: 30_000,
     maxContextChars: 48_000,
@@ -68,7 +69,11 @@ describe("advisor commands", () => {
     const configPath = tempConfigPath();
     writeRawAdvisorConfig({ enabled: true, futureSetting: { keep: true } }, configPath);
     const harness = createCommands(configAt(configPath));
-    const selections = ["Advisor model: not configured", "anthropic/claude-reviewer", "Done"];
+    const selections = [
+      "Advisor model: not configured",
+      "anthropic/claude-reviewer",
+      "Apply changes",
+    ];
     const notify = vi.fn();
     const ctx = {
       hasUI: true,
@@ -99,16 +104,21 @@ describe("advisor commands", () => {
       enabled: true,
       provider: "anthropic",
       model: "claude-reviewer",
+      fastMode: false,
       thinkingLevel: "medium",
+      reviewPolicy: "guardrail",
+      revisionCooldownTurns: 0,
+      timeoutMs: 30_000,
+      maxContextChars: 48_000,
       futureSetting: { keep: true },
     });
-    expect(notify).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith("Advisor settings applied · Guardrail · Balanced", "info");
   });
 
   test("TUI model picker fuzzy-searches provider, model ID, and display name", async () => {
     const configPath = tempConfigPath();
     const harness = createCommands(configAt(configPath));
-    const selections = ["Advisor model: not configured", "Done"];
+    const selections = ["Advisor model: not configured", "Apply changes"];
     const custom = vi.fn(async (factory: unknown) => {
       return await new Promise<string | null>((resolve) => {
         const createComponent = factory as (
@@ -184,7 +194,7 @@ describe("advisor commands", () => {
       model: "gpt-5.6-sol",
       configured: true,
     });
-    const selections = ["OpenAI fast mode: off", "Done"];
+    const selections = ["Advanced settings", "OpenAI fast mode: off", "Back", "Apply changes"];
     const ctx = {
       hasUI: true,
       ui: {
@@ -212,7 +222,13 @@ describe("advisor commands", () => {
       model: "review-model",
       configured: true,
     });
-    const selections = ["Reasoning level: medium", "max", "Done"];
+    const selections = [
+      "Advanced settings",
+      "Reasoning level: medium",
+      "max",
+      "Back",
+      "Apply changes",
+    ];
     const select = vi.fn(async () => selections.shift());
     const ctx = {
       hasUI: true,
@@ -229,7 +245,7 @@ describe("advisor commands", () => {
 
     await harness.commands.get("advisor-settings")?.("", ctx);
 
-    expect(select).toHaveBeenNthCalledWith(2, "Advisor reasoning level", [
+    expect(select).toHaveBeenNthCalledWith(3, "Advisor reasoning level", [
       "off",
       "minimal",
       "low",
@@ -245,13 +261,15 @@ describe("advisor commands", () => {
     const harness = createCommands(configAt(configPath));
     const selections = [
       "Automatic review: on",
-      "Revision cooldown: 0 turns",
-      "5 turns",
+      "Advanced settings",
+      "After a revision, advice-only for 0 requests",
+      "5 requests",
       "Review timeout: 30s",
       "90s",
       "Context cap: 48,000 characters",
       "240,000 characters",
-      "Done",
+      "Back",
+      "Apply changes",
     ];
     const ctx = {
       hasUI: true,
@@ -274,7 +292,7 @@ describe("advisor commands", () => {
 
   test("settings reports when no authenticated models are available", async () => {
     const harness = createCommands(configAt(tempConfigPath()));
-    const selections = ["Advisor model: not configured", "Done"];
+    const selections = ["Advisor model: not configured", "Cancel"];
     const notify = vi.fn();
     const ctx = {
       hasUI: true,
@@ -299,7 +317,7 @@ describe("advisor commands", () => {
       model: "removed",
       configured: true,
     });
-    const selections = ["Advisor model: stale/removed", "Clear advisor model", "Done"];
+    const selections = ["Advisor model: stale/removed", "Clear advisor model", "Apply changes"];
     const ctx = {
       hasUI: true,
       ui: { notify: vi.fn(), select: vi.fn(async () => selections.shift()) },
@@ -311,6 +329,47 @@ describe("advisor commands", () => {
     expect(harness.getConfig()).toMatchObject({ configured: false });
     expect(harness.getConfig().provider).toBeUndefined();
     expect(harness.getConfig().model).toBeUndefined();
+  });
+
+  test("settings stages changes until Apply and discards them on Cancel", async () => {
+    const configPath = tempConfigPath();
+    const harness = createCommands(configAt(configPath));
+    const selections = ["Automatic review: on", "Cancel"];
+    const ctx = {
+      hasUI: true,
+      ui: { notify: vi.fn(), select: vi.fn(async () => selections.shift()) },
+      modelRegistry: { getAvailable: () => [] },
+    } as unknown as ExtensionCommandContext;
+
+    await harness.commands.get("advisor-settings")?.("", ctx);
+
+    expect(harness.getConfig().enabled).toBe(true);
+  });
+
+  test("settings applies behavior and speed presets together", async () => {
+    const configPath = tempConfigPath();
+    const harness = createCommands(configAt(configPath));
+    const selections = [
+      "Behavior: Guardrail",
+      "Strict",
+      "Speed: Balanced",
+      "Thorough",
+      "Apply changes",
+    ];
+    const ctx = {
+      hasUI: true,
+      ui: { notify: vi.fn(), select: vi.fn(async () => selections.shift()) },
+      modelRegistry: { getAvailable: () => [], find: () => undefined },
+    } as unknown as ExtensionCommandContext;
+
+    await harness.commands.get("advisor-settings")?.("", ctx);
+
+    expect(harness.getConfig()).toMatchObject({
+      reviewPolicy: "strict",
+      thinkingLevel: "high",
+      timeoutMs: 90_000,
+      maxContextChars: 120_000,
+    });
   });
 
   test("status reports availability without exposing credential values", async () => {
@@ -353,10 +412,17 @@ describe("advisor commands", () => {
     } as unknown as ExtensionCommandContext;
 
     await harness.commands.get("advisor-status")?.("", ctx);
+    const concise = String(notify.mock.calls[0]?.[0]);
+    expect(concise).toContain("Advisor: on · Guardrail · openai/reviewer");
+    expect(concise).toContain("Session: reviewing");
+    expect(concise).not.toContain("Advisor tokens:");
+
+    notify.mockClear();
+    await harness.commands.get("advisor-status")?.("--verbose", ctx);
 
     const output = String(notify.mock.calls[0]?.[0]);
-    expect(output).toContain("Advisor model: openai/reviewer");
-    expect(output).toContain("Credentials configured: yes");
+    expect(output).toContain("Advisor: on · Guardrail · openai/reviewer");
+    expect(output).toContain("Model access: ready");
     expect(output).toContain("OpenAI fast mode: disabled");
     expect(output).toContain("Background state: reviewing (1 queued)");
     expect(output).toContain("Advisor guidance: /tmp/ADVISOR.md");
@@ -365,7 +431,7 @@ describe("advisor commands", () => {
     expect(output).toContain("Advisor cost: $0.012345");
     expect(output).toContain("Last advisor action: revision");
     expect(output).toContain("Suppressed duplicate findings: 2");
-    expect(output).toContain("Revision cooldown: 3 turns configured, 2 remaining");
+    expect(output).toContain("After-revision advice window: 3 requests configured, 2 remaining");
     expect(output).toContain("Session review attempts: 5");
     expect(output).toContain(
       "Session review outcomes: pass 1, revise 1, failure 1, discarded 1, in progress 1",

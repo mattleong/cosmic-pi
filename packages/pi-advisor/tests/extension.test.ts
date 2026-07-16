@@ -26,8 +26,10 @@ const revisionReview: AdvisorReview = {
   summary: "The response misses an important constraint.",
   findings: [
     {
+      category: "intent",
       severity: "high",
       issue: "The answer changes behavior despite the user's constraint.",
+      evidence: "The user required existing behavior to remain unchanged.",
       recommendation: "Preserve the existing behavior and revise the implementation advice.",
     },
   ],
@@ -38,8 +40,10 @@ const secondRevisionReview: AdvisorReview = {
   summary: "A different blocking problem remains.",
   findings: [
     {
+      category: "correctness",
       severity: "high",
       issue: "The answer deletes required data.",
+      evidence: "The request identifies the data as required.",
       recommendation: "Preserve the required data.",
     },
   ],
@@ -50,8 +54,10 @@ const advisoryReview: AdvisorReview = {
   summary: "The response has a material but non-blocking omission.",
   findings: [
     {
+      category: "completeness",
       severity: "medium",
       issue: "The answer omits a relevant caveat.",
+      evidence: "The caveat appears in the supplied context but not the answer.",
       recommendation: "Account for the caveat in subsequent work.",
     },
   ],
@@ -65,6 +71,7 @@ function resolvedConfig(overrides: Partial<ResolvedAdvisorConfig> = {}): Resolve
     model: "review-model",
     fastMode: false,
     thinkingLevel: "medium",
+    reviewPolicy: "guardrail",
     revisionCooldownTurns: 0,
     timeoutMs: 30_000,
     maxContextChars: 48_000,
@@ -316,7 +323,7 @@ describe("advisor extension lifecycle", () => {
     expect(harness.notify).not.toHaveBeenCalled();
     expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined);
 
-    await harness.commands.get("advisor-status")?.handler("", harness.ctx as never);
+    await harness.commands.get("advisor-status")?.handler("--verbose", harness.ctx as never);
     const status = String(harness.notify.mock.lastCall?.[0]);
     expect(status).toContain("Session review attempts: 1");
     expect(status).toContain(
@@ -327,22 +334,30 @@ describe("advisor extension lifecycle", () => {
   test.each([
     {
       name: "automatic review is disabled",
-      selections: ["Automatic review: on", "Done"],
+      selections: ["Automatic review: on", "Apply changes"],
       models: [],
     },
     {
       name: "the advisor model is cleared",
-      selections: ["Advisor model: review-provider/review-model", "Clear advisor model", "Done"],
+      selections: [
+        "Advisor model: review-provider/review-model",
+        "Clear advisor model",
+        "Apply changes",
+      ],
       models: [],
     },
     {
       name: "the advisor model is switched",
-      selections: ["Advisor model: review-provider/review-model", "new-provider/new-model", "Done"],
+      selections: [
+        "Advisor model: review-provider/review-model",
+        "new-provider/new-model",
+        "Apply changes",
+      ],
       models: [{ provider: "new-provider", id: "new-model" }],
     },
     {
       name: "another review setting changes",
-      selections: ["Review timeout: 30s", "90s", "Done"],
+      selections: ["Advanced settings", "Review timeout: 30s", "90s", "Back", "Apply changes"],
       models: [],
     },
   ])("discards an in-flight review when $name", async ({ selections, models }) => {
@@ -373,7 +388,7 @@ describe("advisor extension lifecycle", () => {
 
     expect(harness.sendMessage).not.toHaveBeenCalled();
     expect(harness.notify).not.toHaveBeenCalledWith(
-      "Advisor review failed; keeping the original response.",
+      expect.stringContaining("Advisor provider failure"),
       "warning",
     );
     expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined);
@@ -410,7 +425,10 @@ describe("advisor extension lifecycle", () => {
 
     await harness.emit("turn_end", assistantEvent("candidate needing revision"));
     await vi.waitFor(() =>
-      expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
+      expect(harness.setStatus).toHaveBeenLastCalledWith(
+        "pi-advisor",
+        "advisor: revision pending…",
+      ),
     );
     expect(harness.sendMessage).not.toHaveBeenCalled();
 
@@ -429,7 +447,10 @@ describe("advisor extension lifecycle", () => {
 
     await harness.emit("turn_end", assistantEvent("candidate needing revision"));
     await vi.waitFor(() =>
-      expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
+      expect(harness.setStatus).toHaveBeenLastCalledWith(
+        "pi-advisor",
+        "advisor: revision pending…",
+      ),
     );
     await harness.emit("message_end", { message: { role: "user", content: "new work" } });
     harness.isIdle.mockReturnValue(true);
@@ -438,7 +459,7 @@ describe("advisor extension lifecycle", () => {
     expect(harness.sendMessage).not.toHaveBeenCalled();
   });
 
-  test("triggers one revision for medium findings by default", async () => {
+  test("routes medium-only findings as advice in guardrail mode", async () => {
     const harness = createHarness(resolvedConfig(), advisoryReview);
 
     await harness.emit("turn_end", assistantEvent("candidate with a caveat"));
@@ -446,11 +467,80 @@ describe("advisor extension lifecycle", () => {
 
     expect(harness.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining("requested one revision"),
-        details: expect.objectContaining({ action: "revision", review: advisoryReview }),
+        content: expect.stringContaining("found issues"),
+        details: expect.objectContaining({ action: "advice", review: advisoryReview }),
       }),
+      { deliverAs: "steer" },
+    );
+  });
+
+  test("strict mode revises medium findings while advice mode never revises", async () => {
+    const strict = createHarness(resolvedConfig({ reviewPolicy: "strict" }), advisoryReview);
+    await strict.emit("turn_end", assistantEvent("strict candidate"));
+    await vi.waitFor(() => expect(strict.sendMessage).toHaveBeenCalledTimes(1));
+    expect(strict.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ details: expect.objectContaining({ action: "revision" }) }),
       { deliverAs: "steer", triggerTurn: true },
     );
+
+    const advice = createHarness(resolvedConfig({ reviewPolicy: "advice" }), revisionReview);
+    await advice.emit("turn_end", assistantEvent("advice candidate"));
+    await vi.waitFor(() => expect(advice.sendMessage).toHaveBeenCalledTimes(1));
+    expect(advice.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ details: expect.objectContaining({ action: "advice" }) }),
+      { deliverAs: "steer" },
+    );
+  });
+
+  test("manual mode skips automatic work but /advisor once reviews the next response", async () => {
+    const harness = createHarness(resolvedConfig({ reviewPolicy: "manual" }), passingReview);
+
+    await harness.emit("turn_end", assistantEvent("automatic candidate"));
+    expect(harness.requestReview).not.toHaveBeenCalled();
+
+    await harness.commands.get("advisor")?.handler("once", harness.ctx as never);
+    await harness.emit("message_end", { message: { role: "user", content: "next request" } });
+    await harness.emit("turn_end", assistantEvent("explicit candidate"));
+    await vi.waitFor(() => expect(harness.requestReview).toHaveBeenCalledTimes(1));
+
+    harness.notify.mockClear();
+    await harness.commands.get("advisor-status")?.handler("--verbose", harness.ctx as never);
+    expect(String(harness.notify.mock.lastCall?.[0])).toContain("manual-policy 1");
+  });
+
+  test("/advisor cancel also clears a requested one-shot review", async () => {
+    const harness = createHarness(resolvedConfig({ reviewPolicy: "manual" }), passingReview);
+
+    await harness.commands.get("advisor")?.handler("once", harness.ctx as never);
+    await harness.commands.get("advisor")?.handler("cancel", harness.ctx as never);
+    await harness.emit("message_end", { message: { role: "user", content: "next request" } });
+    await harness.emit("turn_end", assistantEvent("candidate"));
+
+    expect(harness.requestReview).not.toHaveBeenCalled();
+  });
+
+  test("review-last and verify-last run on demand with the requested focus", async () => {
+    const harness = createHarness(resolvedConfig({ reviewPolicy: "manual" }), passingReview);
+
+    await harness.emit("turn_end", assistantEvent("candidate to inspect"));
+    await harness.commands.get("advisor")?.handler("review-last", harness.ctx as never);
+    await vi.waitFor(() => expect(harness.requestReview).toHaveBeenCalledTimes(1));
+    expect(harness.requestReview.mock.calls[0]?.[3]?.focus).toBe("standard");
+
+    await harness.commands.get("advisor")?.handler("verify-last", harness.ctx as never);
+    await vi.waitFor(() => expect(harness.requestReview).toHaveBeenCalledTimes(2));
+    expect(harness.requestReview.mock.calls[1]?.[3]?.focus).toBe("verification");
+  });
+
+  test("a newer user request does not inherit advisor-revision suppression", async () => {
+    const harness = createHarness(resolvedConfig(), revisionReview);
+
+    await harness.emit("turn_end", assistantEvent("candidate needing revision"));
+    await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(1));
+    await harness.emit("message_end", { message: { role: "user", content: "new request" } });
+    await harness.emit("turn_end", assistantEvent("answer to new request"));
+
+    await vi.waitFor(() => expect(harness.requestReview).toHaveBeenCalledTimes(2));
   });
 
   test("routes findings as advice during a configured revision cooldown", async () => {
@@ -475,7 +565,7 @@ describe("advisor extension lifecycle", () => {
     );
   });
 
-  test("suppresses duplicate findings across user requests", async () => {
+  test("does not suppress recurring findings across independent user requests", async () => {
     const harness = createHarness(resolvedConfig(), advisoryReview);
 
     await harness.emit("turn_end", assistantEvent("first candidate"));
@@ -487,9 +577,23 @@ describe("advisor extension lifecycle", () => {
       expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
     );
 
+    expect(harness.sendMessage).toHaveBeenCalledTimes(2);
+    harness.notify.mockClear();
+    await harness.commands.get("advisor-status")?.handler("--verbose", harness.ctx as never);
+    expect(String(harness.notify.mock.lastCall?.[0])).toContain("Suppressed duplicate findings: 0");
+  });
+
+  test("deduplicates repeated findings across review commands for the same request", async () => {
+    const harness = createHarness(resolvedConfig(), advisoryReview);
+
+    await harness.emit("turn_end", assistantEvent("candidate"));
+    await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(1));
+    await harness.commands.get("advisor")?.handler("review-last", harness.ctx as never);
+    await vi.waitFor(() => expect(harness.requestReview).toHaveBeenCalledTimes(2));
+
     expect(harness.sendMessage).toHaveBeenCalledTimes(1);
     harness.notify.mockClear();
-    await harness.commands.get("advisor-status")?.handler("", harness.ctx as never);
+    await harness.commands.get("advisor-status")?.handler("--verbose", harness.ctx as never);
     expect(String(harness.notify.mock.lastCall?.[0])).toContain("Suppressed duplicate findings: 1");
   });
 
@@ -521,7 +625,7 @@ describe("advisor extension lifecycle", () => {
       "Watch durable queue invariants.",
     );
     harness.notify.mockClear();
-    await harness.commands.get("advisor-status")?.handler("", harness.ctx as never);
+    await harness.commands.get("advisor-status")?.handler("--verbose", harness.ctx as never);
     const status = String(harness.notify.mock.lastCall?.[0]);
     expect(status).toContain(`Advisor guidance: ${join(agentDir, "ADVISOR.md")}`);
     expect(status).toContain(
@@ -551,13 +655,13 @@ describe("advisor extension lifecycle", () => {
     await harness.emit("turn_end", assistantEvent("failing candidate"));
     await vi.waitFor(() =>
       expect(harness.notify).toHaveBeenCalledWith(
-        "Advisor review failed; keeping the original response.",
+        expect.stringContaining("Advisor provider failure"),
         "warning",
       ),
     );
 
     harness.notify.mockClear();
-    await harness.commands.get("advisor-status")?.handler("", harness.ctx as never);
+    await harness.commands.get("advisor-status")?.handler("--verbose", harness.ctx as never);
     const populatedStatus = String(harness.notify.mock.lastCall?.[0]);
     expect(populatedStatus).toContain("Session review attempts: 3");
     expect(populatedStatus).toContain(
@@ -566,7 +670,7 @@ describe("advisor extension lifecycle", () => {
 
     await harness.emit("session_start", { type: "session_start", reason: "new" });
     harness.notify.mockClear();
-    await harness.commands.get("advisor-status")?.handler("", harness.ctx as never);
+    await harness.commands.get("advisor-status")?.handler("--verbose", harness.ctx as never);
     const resetStatus = String(harness.notify.mock.lastCall?.[0]);
     expect(resetStatus).toContain("Session review attempts: 0");
     expect(resetStatus).toContain(
@@ -577,7 +681,6 @@ describe("advisor extension lifecycle", () => {
   test.each([
     ["textless", assistantEvent("")],
     ["tool-calling", assistantEvent("working", { toolCall: true })],
-    ["tool-result", assistantEvent("working", { toolResults: [{}] })],
     ["length-truncated", assistantEvent("incomplete", { stopReason: "length" })],
     ["errored", assistantEvent("failed", { stopReason: "error" })],
     ["aborted", assistantEvent("cancelled", { stopReason: "aborted" })],
@@ -587,13 +690,21 @@ describe("advisor extension lifecycle", () => {
     expect(harness.requestReview).not.toHaveBeenCalled();
   });
 
+  test("reviews a completed final response even when the turn reports tool results", async () => {
+    const harness = createHarness();
+
+    await harness.emit("turn_end", assistantEvent("completed", { toolResults: [{}] }));
+
+    expect(harness.requestReview).toHaveBeenCalledTimes(1);
+  });
+
   test("fails open when advisor review throws", async () => {
     const harness = createHarness(resolvedConfig(), new Error("provider leaked details"));
 
     await harness.emit("turn_end", assistantEvent("original candidate"));
     await vi.waitFor(() =>
       expect(harness.notify).toHaveBeenCalledWith(
-        "Advisor review failed; keeping the original response.",
+        expect.stringContaining("Advisor provider failure"),
         "warning",
       ),
     );
@@ -611,10 +722,26 @@ describe("advisor extension lifecycle", () => {
       }),
     );
     expect(harness.notify).toHaveBeenCalledWith(
-      "Advisor review failed; keeping the original response.",
+      expect.stringContaining("Advisor provider failure"),
       "warning",
     );
     expect(harness.notify.mock.calls.flat().join(" ")).not.toContain("provider leaked details");
+  });
+
+  test("rate-limits repeated failure warnings by failure class", async () => {
+    const harness = createHarness(resolvedConfig(), new Error("provider outage"));
+
+    await harness.emit("turn_end", assistantEvent("first candidate"));
+    await vi.waitFor(() => expect(harness.requestReview).toHaveBeenCalledTimes(1));
+    await harness.emit("message_end", { message: { role: "user", content: "next request" } });
+    await harness.emit("turn_end", assistantEvent("second candidate"));
+    await vi.waitFor(() => expect(harness.requestReview).toHaveBeenCalledTimes(2));
+
+    expect(
+      harness.notify.mock.calls.filter(([message]) =>
+        String(message).includes("Advisor provider failure"),
+      ),
+    ).toHaveLength(1);
   });
 
   test("disabled review remains silent", async () => {

@@ -7,6 +7,7 @@ import {
   buildAdvisorPrompt,
   parseAdvisorReview,
   type AdvisorReview,
+  type AdvisorReviewFocus,
 } from "./review.ts";
 
 const ADVISOR_MAX_OUTPUT_TOKENS = 2_048;
@@ -31,6 +32,7 @@ export interface AdvisorUsageTelemetry {
 
 export interface AdvisorClientDependencies {
   completeRequest?: CompleteAdvisorRequest;
+  focus?: AdvisorReviewFocus;
   instructions?: string;
   onUsage?: (usage: AdvisorUsageTelemetry) => void;
   signal?: AbortSignal;
@@ -189,7 +191,9 @@ export async function requestAdvisorReview(
             messages: [
               {
                 role: "user",
-                content: [{ type: "text", text: buildAdvisorPrompt(transcript) }],
+                content: [
+                  { type: "text", text: buildAdvisorPrompt(transcript, dependencies.focus) },
+                ],
                 timestamp: Date.now(),
               },
             ],

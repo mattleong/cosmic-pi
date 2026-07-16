@@ -24,8 +24,10 @@ describe("advisor review renderer", () => {
         summary: "One material issue remains.",
         findings: [
           {
+            category: "evidence",
             severity: "medium",
             issue: "The validation claim is unsupported.",
+            evidence: "No validation command result appears in the transcript.",
             recommendation: "Report the actual command result.",
           },
         ],
@@ -35,7 +37,7 @@ describe("advisor review renderer", () => {
       bold: (text: string) => text,
       fg: (_color: string, text: string) => text,
     };
-    const component = renderer?.({ details }, { expanded: false }, theme) as {
+    const component = renderer?.({ details }, { expanded: true }, theme) as {
       render(width: number): string[];
     };
     const output = component.render(100).join("\n");
@@ -44,6 +46,52 @@ describe("advisor review renderer", () => {
     expect(output).toContain("One material issue remains.");
     expect(output).toContain("The validation claim is unsupported.");
     expect(output).toContain("Report the actual command result.");
+
+    const collapsed = renderer?.({ details }, { expanded: false }, theme) as {
+      render(width: number): string[];
+    };
+    const collapsedOutput = collapsed.render(100).join("\n");
+    expect(collapsedOutput).toContain("1 medium · One material issue remains.");
+    expect(collapsedOutput).not.toContain("The validation claim is unsupported.");
+  });
+
+  test("expands historical findings that predate category and evidence fields", () => {
+    let renderer: ((message: unknown, options: unknown, theme: unknown) => unknown) | undefined;
+    registerAdvisorReviewRenderer({
+      registerMessageRenderer: (_type: string, nextRenderer: typeof renderer) => {
+        renderer = nextRenderer;
+      },
+    } as unknown as ExtensionAPI);
+
+    const component = renderer?.(
+      {
+        details: {
+          action: "revision",
+          provider: "legacy",
+          model: "reviewer",
+          review: {
+            verdict: "revise",
+            summary: "A historical review.",
+            findings: [
+              {
+                severity: "high",
+                issue: "A legacy issue.",
+                recommendation: "Fix the legacy issue.",
+              },
+            ],
+          },
+        },
+      },
+      { expanded: true },
+      {
+        bold: (text: string) => text,
+        fg: (_color: string, text: string) => text,
+      },
+    ) as { render(width: number): string[] };
+    const output = component.render(100).join("\n");
+
+    expect(output).toContain("[CORRECTNESS] A legacy issue.");
+    expect(output).toContain("Not recorded by this earlier advisor review.");
   });
 
   test("falls back to the default custom-message display for invalid details", () => {
