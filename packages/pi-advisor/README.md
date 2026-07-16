@@ -25,7 +25,7 @@ pi -e ./packages/pi-advisor
 
 After the main agent finishes a text-only response, pi-advisor automatically asks a separately configured model to check correctness, completeness, user intent, and actionable risks. The review includes the latest genuine user request and candidate response plus as much recent conversation and tool-result context as fits the configured limit. Recent messages are selected by recency and presented to the advisor in chronological order.
 
-- A passing review leaves the candidate unchanged and shows a brief success notice.
+- A passing review leaves the candidate unchanged without adding another notification.
 - A review with up to five high- or medium-severity findings displays the full critique and steers the main agent to produce one revised response in the same run. Low-impact style preferences and optional polish do not trigger revision.
 - The revised response is not reviewed again. A later genuine user message, including a queued follow-up, starts a new one-pass review cycle.
 - Responses that contain tool calls, have no assistant text, or were aborted or errored are not reviewed.

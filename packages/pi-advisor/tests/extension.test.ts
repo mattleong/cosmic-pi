@@ -193,7 +193,7 @@ describe("advisor extension lifecycle", () => {
     await harness.emit("turn_end", assistantEvent("unprompted second candidate"));
 
     expect(harness.requestReview).toHaveBeenCalledTimes(1);
-    expect(harness.notify).toHaveBeenCalledWith("Advisor approved this response.", "info");
+    expect(harness.notify).not.toHaveBeenCalled();
     expect(harness.sendMessage).not.toHaveBeenCalled();
     expect(harness.setStatus).toHaveBeenNthCalledWith(1, "pi-advisor", "advisor: reviewing…");
     expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined);
@@ -292,7 +292,6 @@ describe("advisor extension lifecycle", () => {
     await reviewRun;
 
     expect(harness.sendMessage).not.toHaveBeenCalled();
-    expect(harness.notify).not.toHaveBeenCalledWith("Advisor approved this response.", "info");
     expect(harness.notify).not.toHaveBeenCalledWith(
       "Advisor review failed; keeping the original response.",
       "warning",

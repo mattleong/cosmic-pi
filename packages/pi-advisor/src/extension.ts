@@ -112,7 +112,6 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           return;
         }
         if (review.verdict === "pass") {
-          ctx.ui.notify("Advisor approved this response.", "info");
           attemptMetrics.pass += 1;
           return;
         }
