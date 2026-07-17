@@ -5,6 +5,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { renderDisplayPath } from "../paths/display";
 import { codePreviewSettings } from "../settings/index";
 import { escapeControlChars } from "../shared/terminal-text";
+import { renderCodePreviewToolTitle } from "../tools/presentation";
 import { registerPathListTool } from "./shared/path-list-tool";
 
 export function registerFind(pi: ExtensionAPI, cwd: string) {
@@ -14,7 +15,7 @@ export function registerFind(pi: ExtensionAPI, cwd: string) {
       const pattern = typeof args.pattern === "string" ? args.pattern : "";
       const path = typeof args.path === "string" && args.path ? args.path : ".";
       return new Text(
-        `${theme.fg("toolTitle", theme.bold("find"))} ${theme.fg("accent", escapeControlChars(pattern || "*"))} ${theme.fg("muted", "in")} ${renderDisplayPath(path, renderCwd, theme)}`,
+        `${renderCodePreviewToolTitle("find", theme)} ${theme.fg("accent", escapeControlChars(pattern || "*"))} ${theme.fg("muted", "in")} ${renderDisplayPath(path, renderCwd, theme)}`,
         0,
         0,
       );

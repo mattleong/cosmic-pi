@@ -10,6 +10,7 @@ import { escapeControlChars } from "../shared/terminal-text";
 import { getFirstShellCommandName } from "../shell/command";
 import { renderHighlightedText } from "../syntax/shiki";
 import { getTextContent, isTruncated } from "../tool-data/results";
+import { renderCodePreviewToolTitle } from "../tools/presentation";
 import { shouldHideShellResultByCommand } from "../tools/shell-result-policy";
 import { getBashWarnings } from "../warnings/bash";
 import { renderSelectedOutputLines } from "./shared/preview-text";
@@ -49,7 +50,7 @@ export function registerBash(pi: ExtensionAPI, cwd: string, options?: BashToolOp
           ? `${theme.fg("warning", `⚠ Preview ${countLabel(warnings.length, "warning")}: ${warnings.join(", ")}`)}\n`
           : "";
         return new Text(
-          `${warningText}${theme.fg("toolTitle", theme.bold("$"))} ${highlighted}${timeout}`,
+          `${warningText}${renderCodePreviewToolTitle("bash", theme)} ${highlighted}${timeout}`,
           0,
           0,
         );

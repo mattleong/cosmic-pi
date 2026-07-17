@@ -6,7 +6,7 @@ Syntax-highlighted previews for pi's built-in tool calls.
 
 ## Features
 
-- Syntax-highlighted previews for commands, files, diffs, and search results.
+- Distinct emoji labels and syntax-highlighted previews for commands, files, diffs, and search results.
 - Clearer `edit` and `write` diffs, including pending edit previews.
 - Readable `grep` results grouped by file.
 - Compact `find` and `ls` path lists with optional icons.

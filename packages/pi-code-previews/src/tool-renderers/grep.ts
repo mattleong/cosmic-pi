@@ -14,6 +14,7 @@ import { codePreviewSettings } from "../settings/index";
 import { escapeControlChars } from "../shared/terminal-text";
 import { shouldSkipHighlight } from "../syntax/shiki";
 import { getTextContent } from "../tool-data/results";
+import { renderCodePreviewToolTitle } from "../tools/presentation";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderHiddenPreviewPrelude, renderResultPrelude } from "./shared/result-prelude";
 
@@ -31,7 +32,7 @@ export function registerGrep(pi: ExtensionAPI, cwd: string) {
         const path = typeof args.path === "string" && args.path ? args.path : ".";
         const glob = typeof args.glob === "string" && args.glob ? args.glob : undefined;
         const limit = typeof args.limit === "number" ? args.limit : undefined;
-        let text = `${theme.fg("toolTitle", theme.bold("grep"))} ${theme.fg("accent", `/${escapeControlChars(pattern)}/`)} ${theme.fg("muted", "in")} ${renderDisplayPath(path, cwd, theme)}`;
+        let text = `${renderCodePreviewToolTitle("grep", theme)} ${theme.fg("accent", `/${escapeControlChars(pattern)}/`)} ${theme.fg("muted", "in")} ${renderDisplayPath(path, cwd, theme)}`;
         text += metadata(theme, [
           glob ? escapeControlChars(glob) : undefined,
           limit ? `limit ${limit}` : undefined,

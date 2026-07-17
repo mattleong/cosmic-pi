@@ -20,6 +20,7 @@ import { resolvePreviewLanguage } from "../syntax/language";
 import { normalizeShikiLanguage } from "../syntax/shiki";
 import { getPathArg } from "../tool-data/args";
 import { getTextContent } from "../tool-data/results";
+import { renderCodePreviewToolTitle } from "../tools/presentation";
 import {
   getWriteDiffSkipReason,
   readExistingFileForPreview,
@@ -235,7 +236,7 @@ function formatWriteCallHeader(
   lang: string | undefined,
   lineCount: number,
 ): string {
-  let text = `${theme.fg("toolTitle", theme.bold("write"))} ${renderDisplayPath(path, cwd, theme)}`;
+  let text = `${renderCodePreviewToolTitle("write", theme)} ${renderDisplayPath(path, cwd, theme)}`;
   text += metadata(theme, [
     formatBytes(Buffer.byteLength(content, "utf8")),
     countLabel(lineCount, "line"),

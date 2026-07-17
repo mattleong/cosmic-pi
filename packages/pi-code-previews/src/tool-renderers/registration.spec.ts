@@ -257,7 +257,7 @@ test("border mode wraps tool call and result in a status-colored border-only she
     assert.match(rendered, /^<success>╭─+╮<\/success>/);
     const plain = rendered.replace(/<\/?[a-zA-Z]+>/g, "");
     assert.match(plain, /^╭─+╮/);
-    assert.match(plain, /│ \$ echo hi\s+│/);
+    assert.match(plain, /│ 🔧 bash echo hi\s+│/);
     assert.match(plain, /│ ok\s+│/);
     assert.match(plain, /╰─+╯$/);
 

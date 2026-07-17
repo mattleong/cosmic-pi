@@ -4,6 +4,7 @@ import { Text } from "@earendil-works/pi-tui";
 
 import { renderDisplayPath } from "../paths/display";
 import { codePreviewSettings } from "../settings/index";
+import { renderCodePreviewToolTitle } from "../tools/presentation";
 import { registerPathListTool } from "./shared/path-list-tool";
 
 export function registerLs(pi: ExtensionAPI, cwd: string) {
@@ -12,7 +13,7 @@ export function registerLs(pi: ExtensionAPI, cwd: string) {
     renderCall(args, theme, renderCwd) {
       const path = typeof args.path === "string" && args.path ? args.path : ".";
       return new Text(
-        `${theme.fg("toolTitle", theme.bold("ls"))} ${renderDisplayPath(path, renderCwd, theme)}`,
+        `${renderCodePreviewToolTitle("ls", theme)} ${renderDisplayPath(path, renderCwd, theme)}`,
         0,
         0,
       );

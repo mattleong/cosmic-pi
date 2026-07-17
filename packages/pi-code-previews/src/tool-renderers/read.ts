@@ -10,6 +10,7 @@ import { resolvePreviewLanguage } from "../syntax/language";
 import { normalizeShikiLanguage } from "../syntax/shiki";
 import { getPathArg, getReadStartLine } from "../tool-data/args";
 import { getTextContent, isTruncated, splitReadContinuationNotice } from "../tool-data/results";
+import { renderCodePreviewToolTitle } from "../tools/presentation";
 import { renderContentPreview } from "./shared/content-preview";
 import { renderHiddenPreviewPrelude, renderResultPrelude } from "./shared/result-prelude";
 
@@ -25,7 +26,7 @@ export function registerRead(pi: ExtensionAPI, cwd: string, options?: ReadToolOp
       return previewShell.renderCall(context, theme, () => {
         const path = getPathArg(args);
         const lang = resolvePreviewLanguage({ path, piLanguage: getLanguageFromPath(path) });
-        let text = `${theme.fg("toolTitle", theme.bold("read"))} ${renderDisplayPath(path, cwd, theme)}`;
+        let text = `${renderCodePreviewToolTitle("read", theme)} ${renderDisplayPath(path, cwd, theme)}`;
         if (typeof args.offset === "number" || typeof args.limit === "number") {
           const start = typeof args.offset === "number" ? args.offset : 1;
           const end = typeof args.limit === "number" ? start + args.limit - 1 : undefined;

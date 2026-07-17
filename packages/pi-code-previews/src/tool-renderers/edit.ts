@@ -17,6 +17,7 @@ import { escapeControlChars } from "../shared/terminal-text";
 import { resolvePreviewLanguage } from "../syntax/language";
 import { getEditPreviewOperations, getPathArg } from "../tool-data/args";
 import { getEditDiff, getTextContent } from "../tool-data/results";
+import { renderCodePreviewToolTitle } from "../tools/presentation";
 import { cachedAsyncPreview } from "./shared/cache";
 import { diffPreviewCacheKey, previewArgsKey } from "./shared/preview-cache-key";
 import {
@@ -261,7 +262,7 @@ function renderEditCallPreview(
 }
 
 function formatEditHeader(path: string, cwd: string, theme: Theme, summaryText: unknown): string {
-  const base = `${theme.fg("toolTitle", theme.bold("edit"))} ${renderDisplayPath(path, cwd, theme)}`;
+  const base = `${renderCodePreviewToolTitle("edit", theme)} ${renderDisplayPath(path, cwd, theme)}`;
   return typeof summaryText === "string" && summaryText
     ? `${base}${diffSummarySeparator(theme)}${summaryText}`
     : base;
