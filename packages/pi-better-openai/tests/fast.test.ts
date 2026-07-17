@@ -35,7 +35,6 @@ function writeProjectConfig(cwd: string, overrides: Record<string, unknown> = {}
         usage: { enabled: false },
         footer: { mode: "off" },
         image: { enabled: false },
-        pets: { enabled: false },
         ...overrides,
       },
       null,

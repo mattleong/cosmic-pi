@@ -1,7 +1,6 @@
 import { getSettingsListTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "../format.ts";
-import { isTerminalImageLine } from "../footer-layout.ts";
 import type { SettingsPickerItem } from "./items.ts";
 
 export function textPanel(title: string, lines: string[], done: () => void) {
@@ -23,16 +22,10 @@ export function createSettingsSubmenu(
   ctx: ExtensionContext,
   done: () => void,
   writeSetting: (ctx: ExtensionContext, id: string, value: string) => void,
-  options?: {
-    onSelection?: (item: SettingsPickerItem | undefined) => void;
-    onClose?: () => void;
-    renderExtra?: (width: number) => string[];
-  },
 ) {
   const theme = getSettingsListTheme();
   let selectedIndex = 0;
   let searchQuery = "";
-  let closed = false;
   let submenuComponent: ReturnType<NonNullable<SettingsPickerItem["submenu"]>> | undefined;
   let submenuItemIndex: number | undefined;
 
@@ -49,15 +42,12 @@ export function createSettingsSubmenu(
     return currentItems()[selectedIndex];
   }
   function close(): void {
-    closed = true;
-    options?.onClose?.();
     done();
   }
   function closeNestedSubmenu(): void {
     submenuComponent = undefined;
     if (submenuItemIndex !== undefined) selectedIndex = submenuItemIndex;
     submenuItemIndex = undefined;
-    options?.onSelection?.(selectedItem());
   }
   function cycleSelected(direction: 1 | -1 = 1): void {
     const item = selectedItem();
@@ -68,7 +58,6 @@ export function createSettingsSubmenu(
       item.values[(startIndex + direction + item.values.length) % item.values.length] ??
       item.currentValue;
     writeSetting(ctx, item.id, newValue);
-    options?.onSelection?.(selectedItem());
   }
   function activateSelected(): void {
     const item = selectedItem();
@@ -89,7 +78,6 @@ export function createSettingsSubmenu(
       if (submenuComponent) return submenuComponent.render(width);
       const current = currentItems();
       const selected = selectedItem();
-      if (!closed) options?.onSelection?.(selected);
       const lines = [title, "", `> ${searchQuery}`, ""];
       const maxVisible = 8;
       const startIndex = Math.max(
@@ -127,13 +115,6 @@ export function createSettingsSubmenu(
       }
       if (selected?.description) {
         lines.push("", theme.description(`  ${truncateToWidth(selected.description, width - 4)}`));
-      }
-      const extraLines = options?.renderExtra?.(width) ?? [];
-      if (extraLines.length > 0) {
-        lines.push("");
-        for (const line of extraLines) {
-          lines.push(isTerminalImageLine(line) ? line : truncateToWidth(line, width, "..."));
-        }
       }
       lines.push(
         "",
@@ -176,7 +157,6 @@ export function createSettingsSubmenu(
         searchQuery += data;
         selectedIndex = 0;
       }
-      if (!closed) options?.onSelection?.(selectedItem());
     },
   };
 }

@@ -1,30 +1,10 @@
 export const FOOTER_MODES = ["replace", "status", "off"] as const;
 export const IMAGE_SAVE_MODES = ["none", "project", "global", "custom"] as const;
 export const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
-export const PET_PLACEMENTS = [
-  "stacked",
-  "inline-left",
-  "inline-right",
-  "badge",
-  "habitat",
-] as const;
-export const PET_STATES = [
-  "idle",
-  "running-right",
-  "running-left",
-  "waving",
-  "jumping",
-  "failed",
-  "waiting",
-  "running",
-  "review",
-] as const;
 
 export type FooterMode = (typeof FOOTER_MODES)[number];
 export type ImageSaveMode = (typeof IMAGE_SAVE_MODES)[number];
 export type ImageOutputFormat = (typeof IMAGE_OUTPUT_FORMATS)[number];
-export type PetPlacement = (typeof PET_PLACEMENTS)[number];
-export type PetState = (typeof PET_STATES)[number];
 
 export type UsageConfig = {
   enabled?: boolean;
@@ -45,19 +25,6 @@ export type ImageConfig = {
   timeoutMs?: number;
 };
 
-export type PetConfig = {
-  enabled?: boolean;
-  slug?: string;
-  placement?: PetPlacement;
-  state?: PetState;
-  thinkingState?: PetState;
-  toolState?: PetState;
-  failedToolState?: PetState;
-  idleEmotes?: boolean;
-  idleEmoteIntervalMs?: number;
-  sizeCells?: number;
-};
-
 export interface ConfigFile {
   persistState?: boolean;
   active?: boolean;
@@ -65,7 +32,6 @@ export interface ConfigFile {
   usage?: UsageConfig;
   footer?: FooterConfig;
   image?: ImageConfig;
-  pets?: PetConfig;
 }
 
 export interface ResolvedConfig {
@@ -80,7 +46,6 @@ export interface ResolvedConfig {
   usage: Required<UsageConfig>;
   footer: Required<FooterConfig>;
   image: Required<ImageConfig>;
-  pets: Required<PetConfig>;
 }
 
 export const DEFAULT_USAGE_CONFIG: Required<UsageConfig> = {
@@ -102,19 +67,6 @@ export const DEFAULT_IMAGE_CONFIG: Required<ImageConfig> = {
   timeoutMs: 180_000,
 };
 
-export const DEFAULT_PET_CONFIG: Required<PetConfig> = {
-  enabled: false,
-  slug: "",
-  placement: "inline-right",
-  state: "idle",
-  thinkingState: "review",
-  toolState: "running",
-  failedToolState: "failed",
-  idleEmotes: true,
-  idleEmoteIntervalMs: 30_000,
-  sizeCells: 10,
-};
-
 export const DEFAULT_CONFIG: ConfigFile = {
   persistState: true,
   active: false,
@@ -122,5 +74,4 @@ export const DEFAULT_CONFIG: ConfigFile = {
   usage: DEFAULT_USAGE_CONFIG,
   footer: DEFAULT_FOOTER_CONFIG,
   image: DEFAULT_IMAGE_CONFIG,
-  pets: DEFAULT_PET_CONFIG,
 };

@@ -57,7 +57,6 @@ function writeProjectConfig(cwd: string, config: Record<string, unknown>): void 
         usage: { enabled: true, refreshIntervalMs: 60000 },
         footer: { mode: "status" },
         image: { enabled: false },
-        pets: { enabled: false },
         ...config,
       },
       null,

@@ -7,19 +7,14 @@ import {
   DEFAULT_CONFIG,
   DEFAULT_FOOTER_CONFIG,
   DEFAULT_IMAGE_CONFIG,
-  DEFAULT_PET_CONFIG,
   DEFAULT_USAGE_CONFIG,
   FOOTER_MODES,
   IMAGE_OUTPUT_FORMATS,
   IMAGE_SAVE_MODES,
-  PET_PLACEMENTS,
-  PET_STATES,
   type ConfigFile,
   type FooterMode,
   type ImageOutputFormat,
   type ImageSaveMode,
-  type PetPlacement,
-  type PetState,
   type ResolvedConfig,
 } from "./schema.ts";
 
@@ -82,41 +77,6 @@ export function readConfig(path: string): ConfigFile | undefined {
     )
       config.image.outputFormat = parsed.image.outputFormat as ImageOutputFormat;
     if (typeof parsed.image.timeoutMs === "number") config.image.timeoutMs = parsed.image.timeoutMs;
-  }
-  if (isRecord(parsed.pets)) {
-    config.pets = {};
-    if (typeof parsed.pets.enabled === "boolean") config.pets.enabled = parsed.pets.enabled;
-    if (typeof parsed.pets.slug === "string") config.pets.slug = parsed.pets.slug.trim();
-    if (
-      typeof parsed.pets.placement === "string" &&
-      (PET_PLACEMENTS as readonly string[]).includes(parsed.pets.placement)
-    )
-      config.pets.placement = parsed.pets.placement as PetPlacement;
-    if (
-      typeof parsed.pets.state === "string" &&
-      (PET_STATES as readonly string[]).includes(parsed.pets.state)
-    )
-      config.pets.state = parsed.pets.state as PetState;
-    if (
-      typeof parsed.pets.thinkingState === "string" &&
-      (PET_STATES as readonly string[]).includes(parsed.pets.thinkingState)
-    )
-      config.pets.thinkingState = parsed.pets.thinkingState as PetState;
-    if (
-      typeof parsed.pets.toolState === "string" &&
-      (PET_STATES as readonly string[]).includes(parsed.pets.toolState)
-    )
-      config.pets.toolState = parsed.pets.toolState as PetState;
-    if (
-      typeof parsed.pets.failedToolState === "string" &&
-      (PET_STATES as readonly string[]).includes(parsed.pets.failedToolState)
-    )
-      config.pets.failedToolState = parsed.pets.failedToolState as PetState;
-    if (typeof parsed.pets.idleEmotes === "boolean")
-      config.pets.idleEmotes = parsed.pets.idleEmotes;
-    if (typeof parsed.pets.idleEmoteIntervalMs === "number")
-      config.pets.idleEmoteIntervalMs = parsed.pets.idleEmoteIntervalMs;
-    if (typeof parsed.pets.sizeCells === "number") config.pets.sizeCells = parsed.pets.sizeCells;
   }
   return config;
 }
@@ -187,29 +147,6 @@ export function resolveConfig(cwd: string): ResolvedConfig {
           projectConfig.image?.timeoutMs ??
             globalConfig.image?.timeoutMs ??
             DEFAULT_IMAGE_CONFIG.timeoutMs,
-        ),
-      ),
-    },
-    pets: {
-      ...DEFAULT_PET_CONFIG,
-      ...globalConfig.pets,
-      ...projectConfig.pets,
-      idleEmoteIntervalMs: Math.max(
-        5_000,
-        Math.min(
-          5 * 60_000,
-          projectConfig.pets?.idleEmoteIntervalMs ??
-            globalConfig.pets?.idleEmoteIntervalMs ??
-            DEFAULT_PET_CONFIG.idleEmoteIntervalMs,
-        ),
-      ),
-      sizeCells: Math.max(
-        4,
-        Math.min(
-          16,
-          projectConfig.pets?.sizeCells ??
-            globalConfig.pets?.sizeCells ??
-            DEFAULT_PET_CONFIG.sizeCells,
         ),
       ),
     },

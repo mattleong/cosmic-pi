@@ -2,8 +2,8 @@
 
 ## Project layout
 
-- `index.ts` registers the pi extension commands, events, settings UI, footer/status rendering, usage polling, and pet lifecycle.
-- `src/` contains focused helpers for config, formatting, Codex auth/usage, image generation, and pets.
+- `index.ts` registers the pi extension commands, events, settings UI, footer/status rendering, and usage polling.
+- `src/` contains focused helpers for config, formatting, Codex auth/usage, and image generation.
 - `tests/` contains Vitest coverage. Prefer adding targeted tests near the changed behavior.
 - `.pi/` is local runtime/config/generated output and is ignored by git.
 

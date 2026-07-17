@@ -20,6 +20,7 @@ type Harness = {
   getSessionName: ReturnType<typeof vi.fn>;
   setFooter: ReturnType<typeof vi.fn>;
   setStatus: ReturnType<typeof vi.fn>;
+  cosmicEvents: Array<{ channel: string; data: unknown }>;
 };
 
 const tempDirs: string[] = [];
@@ -30,20 +31,23 @@ function createTempProject() {
   return cwd;
 }
 
-function writeProjectConfig(cwd: string, footerMode: "replace" | "status" | "off") {
+function writeProjectConfig(
+  cwd: string,
+  footerMode: "replace" | "status" | "off",
+  options: { fastEnabled?: boolean } = {},
+) {
   const configDir = join(cwd, ".pi", "extensions");
   mkdirSync(configDir, { recursive: true });
   writeFileSync(
     join(configDir, "pi-better-openai.json"),
     `${JSON.stringify(
       {
-        persistState: false,
-        active: false,
-        desiredActive: false,
+        persistState: options.fastEnabled ?? false,
+        active: options.fastEnabled ?? false,
+        desiredActive: options.fastEnabled ?? false,
         usage: { enabled: false },
         footer: { mode: footerMode },
         image: { enabled: false },
-        pets: { enabled: false },
       },
       null,
       2,
@@ -52,8 +56,10 @@ function writeProjectConfig(cwd: string, footerMode: "replace" | "status" | "off
   );
 }
 
-function createHarness(cwd: string): Harness {
+function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Harness {
   const handlers = new Map<string, EventHandler[]>();
+  const eventHandlers = new Map<string, Set<(data: unknown) => void>>();
+  const cosmicEvents: Array<{ channel: string; data: unknown }> = [];
   const commands = new Map<string, CommandHandler>();
   const custom = vi.fn();
   const notify = vi.fn();
@@ -63,6 +69,18 @@ function createHarness(cwd: string): Harness {
   const getSessionName = vi.fn(() => undefined);
   const setFooter = vi.fn();
   const setStatus = vi.fn();
+
+  if (options.cosmicHost) {
+    eventHandlers.set(
+      "cosmic-ui:v1:host:query",
+      new Set([
+        (data: unknown) => {
+          const query = data as { respond?: () => void };
+          query.respond?.();
+        },
+      ]),
+    );
+  }
 
   const pi = {
     on(event: string, handler: EventHandler) {
@@ -79,6 +97,18 @@ function createHarness(cwd: string): Harness {
     sendMessage: vi.fn(),
     getFlag: vi.fn(() => false),
     getThinkingLevel: vi.fn(() => "off"),
+    events: {
+      emit(channel: string, data: unknown) {
+        cosmicEvents.push({ channel, data });
+        for (const handler of eventHandlers.get(channel) ?? []) handler(data);
+      },
+      on(channel: string, handler: (data: unknown) => void) {
+        const channelHandlers = eventHandlers.get(channel) ?? new Set();
+        channelHandlers.add(handler);
+        eventHandlers.set(channel, channelHandlers);
+        return () => channelHandlers.delete(handler);
+      },
+    },
   } as unknown as ExtensionAPI;
 
   const ctx = {
@@ -119,6 +149,7 @@ function createHarness(cwd: string): Harness {
     getSessionName,
     setFooter,
     setStatus,
+    cosmicEvents,
   };
 }
 
@@ -158,26 +189,6 @@ describe("diagnostic text panel", () => {
 
     panel.handleInput("\x1b");
     expect(done).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("footer pet layout", () => {
-  test("keeps terminal-image pets on the left for inline-left placement", () => {
-    const imageLine = "\x1b[1A\x1b_Ga=p,i=1\x1b\\\x1b[1B";
-
-    const lines = _test.combineInlinePetFooter(
-      ["", imageLine],
-      ["path", "stats"],
-      20,
-      "inline-left",
-      4,
-    );
-
-    expect(lines[0]).toBe("      path");
-    expect(lines[1]).toMatch(/^ {6}stats/);
-    expect(lines[1]).toContain("\x1b[0m\r\x1b[1A\x1b_Ga=p,i=1\x1b\\\x1b[1B");
-    expect(lines[1]).not.toContain("\x1b[1A\x1b[1A");
-    expect(lines[1]).not.toContain("\x1b[1B\x1b[1B");
   });
 });
 
@@ -240,6 +251,36 @@ describe("footer mode ownership", () => {
     );
     expect(footer.render(100).join("\n")).toContain("↑1.2k ↓300 R400 W50 $0.250");
     footer.dispose();
+  });
+
+  test("publishes primitives instead of installing its footer when Cosmic UI is present", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "replace", { fastEnabled: true });
+    const harness = createHarness(cwd, { cosmicHost: true });
+    Object.assign(harness.ctx, {
+      model: {
+        provider: "openai",
+        id: "gpt-5.5",
+        reasoning: true,
+        contextWindow: 200_000,
+      },
+    });
+
+    await emit(harness, "session_start");
+
+    expect(harness.setFooter).not.toHaveBeenCalled();
+    expect(harness.cosmicEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ channel: "cosmic-ui:v1:host:query" }),
+        expect.objectContaining({
+          channel: "cosmic-ui:v1:footer:upsert",
+          data: expect.objectContaining({
+            owner: "pi-better-openai",
+            contribution: expect.objectContaining({ kind: "text", id: "openai.fast" }),
+          }),
+        }),
+      ]),
+    );
   });
 
   test("does not install terminal-only UI in RPC mode", async () => {

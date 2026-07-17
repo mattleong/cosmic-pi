@@ -8,29 +8,16 @@ import {
   FAST_SETTING_DESCRIPTORS,
   FOOTER_SETTING_DESCRIPTORS,
   IMAGE_SETTING_DESCRIPTORS,
-  PET_SETTING_DESCRIPTORS,
-  PET_STATES,
   USAGE_SETTING_DESCRIPTORS,
   applySettingToRawConfig,
   readRawConfig,
-  type PetState,
   type ResolvedConfig,
   writeConfig,
 } from "../config.ts";
-import type { FastController } from "../fast-controller.ts";
-import { modelList } from "../fast-controller.ts";
+import { modelList, type FastController } from "../fast-controller.ts";
 import { redactDiagnosticValue } from "../format.ts";
-import type { PetFooterController } from "../pet-footer-controller.ts";
-import { listCodexPets } from "../pets.ts";
 import type { UsageController } from "../usage-controller.ts";
-import {
-  PET_EMPTY_VALUE,
-  petConfigPickerValue,
-  petPickerDescription,
-  readyPetPickerValues,
-  settingsItemsFromDescriptors,
-  type SettingsPickerItem,
-} from "./items.ts";
+import { settingsItemsFromDescriptors, type SettingsPickerItem } from "./items.ts";
 import { createSettingsSubmenu, textPanel } from "./picker.ts";
 
 const OPENAI_SETTINGS_COMMAND = "openai-settings";
@@ -43,7 +30,6 @@ export interface SettingsControllerDependencies {
   formatDebugStatus(ctx: ExtensionContext): string;
   fastController: FastController;
   usageController: UsageController;
-  petController: PetFooterController;
 }
 
 export function registerSettingsController(
@@ -58,39 +44,15 @@ export function registerSettingsController(
     formatDebugStatus,
     fastController,
     usageController,
-    petController,
   } = dependencies;
-
-  function buildPetSettingsItems(cfg: ResolvedConfig): SettingsPickerItem[] {
-    return settingsItemsFromDescriptors(PET_SETTING_DESCRIPTORS, cfg, {
-      "pets.slug": {
-        currentValue: petConfigPickerValue(cfg),
-        values: readyPetPickerValues(petController.settingsPets),
-        description: petPickerDescription(cfg, petController.settingsPets),
-      },
-    });
-  }
-
-  function petPreviewFromItem(item: SettingsPickerItem | undefined): PetState | undefined {
-    if (
-      item?.id !== "pets.state" &&
-      item?.id !== "pets.thinkingState" &&
-      item?.id !== "pets.toolState" &&
-      item?.id !== "pets.failedToolState"
-    )
-      return undefined;
-    const value = item.currentValue;
-    return (PET_STATES as readonly string[]).includes(value) ? (value as PetState) : undefined;
-  }
 
   function settingsSubmenu(
     title: string,
     items: () => SettingsPickerItem[],
     ctx: ExtensionContext,
     done: () => void,
-    options?: Parameters<typeof createSettingsSubmenu>[5],
   ) {
-    return createSettingsSubmenu(title, items, ctx, done, writeSetting, options);
+    return createSettingsSubmenu(title, items, ctx, done, writeSetting);
   }
 
   function usageSettingsSummary(cfg: ResolvedConfig): string {
@@ -103,12 +65,6 @@ export function registerSettingsController(
     return cfg.image.enabled
       ? `enabled · ${cfg.image.defaultModel} · ${cfg.image.defaultSave}/${cfg.image.outputFormat}`
       : "disabled";
-  }
-
-  function petSettingsSummary(cfg: ResolvedConfig): string {
-    const selected = cfg.pets.slug || (cfg.pets.enabled ? "first ready" : PET_EMPTY_VALUE);
-    const status = cfg.pets.enabled ? "enabled" : "disabled";
-    return `${status} · ${selected} · ${cfg.pets.placement}`;
   }
 
   function buildFastSettingsItems(cfg: ResolvedConfig): SettingsPickerItem[] {
@@ -215,36 +171,6 @@ export function registerSettingsController(
           ),
       },
       {
-        id: "section.pets",
-        label: "Footer pet",
-        currentValue: petSettingsSummary(cfg),
-        description: "Configure footer pet visibility, animation-state mapping, and size.",
-        submenu: (_value, done) => {
-          petController.setSettingsPreviewActive(ctx, true);
-          return settingsSubmenu(
-            "Footer pet settings",
-            () => buildPetSettingsItems(config(ctx)),
-            ctx,
-            () => done(petSettingsSummary(config(ctx))),
-            {
-              onSelection: (item) => {
-                const previewState = petPreviewFromItem(item);
-                if (previewState !== petController.previewState) {
-                  petController.setPreviewState(previewState);
-                  updateFooter(ctx);
-                }
-              },
-              onClose: () => {
-                petController.setPreviewState(undefined);
-                petController.setSettingsPreviewActive(ctx, false);
-                updateFooter(ctx);
-              },
-              renderExtra: (width) => petController.renderSettingsPreview(ctx, width),
-            },
-          );
-        },
-      },
-      {
         id: "section.diagnostics",
         label: "Diagnostics",
         currentValue: "debug / config",
@@ -263,27 +189,14 @@ export function registerSettingsController(
   function writeSetting(ctx: ExtensionContext, id: string, rawValue: string): void {
     const cfg = refresh(ctx);
     const current = readRawConfig(cfg.configPath);
-    const bool = rawValue === "true";
-    if (id === "fast.enabled") fastController.setDesired(ctx, bool);
-    const petKey = id.startsWith("pets.") ? id.slice("pets.".length) : undefined;
+    if (id === "fast.enabled") fastController.setDesired(ctx, rawValue === "true");
     const nextRawConfig = applySettingToRawConfig(current, id, rawValue, {
       persistState: cfg.persistState,
       active: fastController.active,
       desiredActive: fastController.desiredActive,
-      petEmptyValue: PET_EMPTY_VALUE,
     });
-    if (petKey) {
-      if (petKey === "enabled" || petKey === "sizeCells" || petKey === "slug")
-        petController.invalidateLoadKey();
-      if (petKey === "placement" || petKey === "sizeCells" || petKey === "slug")
-        petController.resetRenderCache();
-      if (petKey === "idleEmotes" || petKey === "idleEmoteIntervalMs")
-        petController.stopIdleEmotes();
-    }
     writeConfig(cfg.configPath, nextRawConfig);
     const next = refresh(ctx);
-    if (id === "pets.enabled" || id === "pets.sizeCells" || id === "pets.slug")
-      void petController.refresh(ctx, next);
     if (id.startsWith("usage.")) usageController.restartAfterSettingsChange(ctx, next);
     updateFooter(ctx);
   }
@@ -293,64 +206,51 @@ export function registerSettingsController(
       ctx.ui.notify("Better OpenAI settings require interactive TUI mode.", "warning");
       return;
     }
-    try {
-      petController.settingsPets = await listCodexPets();
-    } catch {
-      petController.settingsPets = [];
-    }
-    try {
-      await ctx.ui.custom((tui, theme, _kb, done) => {
-        petController.setSettingsRenderRequest(() => tui.requestRender());
-        const container = new Container();
-        container.addChild(
-          new (class {
-            render(_width: number) {
-              const cfg = config(ctx);
-              return [
-                theme.fg("accent", theme.bold("Better OpenAI Settings")),
-                theme.fg("dim", cfg.configPath),
-                "",
-              ];
-            }
-            invalidate() {}
-          })(),
-        );
-        const settingsList = new SettingsList(
-          buildSettingsSections(ctx, refresh(ctx)),
-          8,
-          getSettingsListTheme(),
-          (id, newValue) => {
-            if (!id.startsWith("section.")) writeSetting(ctx, id, newValue);
-            settingsList.updateValue(
-              id,
-              buildSettingsSections(ctx, config(ctx)).find((item) => item.id === id)
-                ?.currentValue ?? newValue,
-            );
-            tui.requestRender();
-          },
-          () => done(undefined),
-          { enableSearch: true },
-        );
-        container.addChild(settingsList);
-        return {
-          render(width: number) {
-            return container.render(width);
-          },
-          invalidate() {
-            container.invalidate();
-          },
-          handleInput(data: string) {
-            settingsList.handleInput(data);
-            tui.requestRender();
-          },
-        };
-      });
-    } finally {
-      petController.setSettingsRenderRequest(undefined);
-      petController.setPreviewState(undefined);
-      petController.setSettingsPreviewActive(ctx, false);
-      updateFooter(ctx);
-    }
+    await ctx.ui.custom((tui, theme, _kb, done) => {
+      const container = new Container();
+      container.addChild(
+        new (class {
+          render(_width: number) {
+            const cfg = config(ctx);
+            return [
+              theme.fg("accent", theme.bold("Better OpenAI Settings")),
+              theme.fg("dim", cfg.configPath),
+              "",
+            ];
+          }
+          invalidate() {}
+        })(),
+      );
+      const settingsList = new SettingsList(
+        buildSettingsSections(ctx, refresh(ctx)),
+        8,
+        getSettingsListTheme(),
+        (id, newValue) => {
+          if (!id.startsWith("section.")) writeSetting(ctx, id, newValue);
+          settingsList.updateValue(
+            id,
+            buildSettingsSections(ctx, config(ctx)).find((item) => item.id === id)?.currentValue ??
+              newValue,
+          );
+          tui.requestRender();
+        },
+        () => done(undefined),
+        { enableSearch: true },
+      );
+      container.addChild(settingsList);
+      return {
+        render(width: number) {
+          return container.render(width);
+        },
+        invalidate() {
+          container.invalidate();
+        },
+        handleInput(data: string) {
+          settingsList.handleInput(data);
+          tui.requestRender();
+        },
+      };
+    });
   }
 
   pi.registerCommand(OPENAI_SETTINGS_COMMAND, {

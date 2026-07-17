@@ -1,16 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { STATUS_KEY } from "../identity.ts";
-import { formatTokens, sanitizeStatusText, truncateToWidth, visibleWidth } from "../format.ts";
-import {
-  abbreviateHomePath,
-  combineInlinePetFooter,
-  isInlinePetPlacement,
-  petSizeCellsForPlacement,
-} from "../footer-layout.ts";
-import { supportsFast, type FastController } from "../fast-controller.ts";
 import type { ResolvedConfig } from "../config.ts";
+import { supportsFast, type FastController } from "../fast-controller.ts";
+import { abbreviateHomePath } from "../footer-layout.ts";
+import { formatTokens, sanitizeStatusText, truncateToWidth, visibleWidth } from "../format.ts";
+import { STATUS_KEY } from "../identity.ts";
 import type { UsageController } from "../usage-controller.ts";
-import type { PetFooterController } from "../pet-footer-controller.ts";
 
 export interface FooterController {
   readonly installed: boolean;
@@ -32,12 +26,12 @@ export function createFooterController(deps: {
   config(ctx: ExtensionContext): ResolvedConfig;
   fastController: FastController;
   usageController: UsageController;
-  petController: PetFooterController;
   hasTerminalUI(ctx: ExtensionContext): boolean;
 }): FooterController {
-  const { pi, config, fastController, usageController, petController, hasTerminalUI } = deps;
+  const { pi, config, fastController, usageController, hasTerminalUI } = deps;
   let footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   let footerInstalled = false;
+  let requestFooterRender: (() => void) | undefined;
   let statusInstalled = false;
   let contextUsageCached = false;
   let cachedContextUsage: ReturnType<ExtensionContext["getContextUsage"]>;
@@ -93,62 +87,33 @@ export function createFooterController(deps: {
     cachedSessionNameLeafId = undefined;
     cachedSessionName = undefined;
   }
+
   function installFooter(ctx: ExtensionContext): void {
     if (footerInstalled) {
-      petController.requestFooterRenderNow();
+      requestFooterRender?.();
       return;
     }
     footerInstalled = true;
     ctx.ui.setFooter((tui, theme, footerData) => {
-      petController.setFooterRenderRequest(() => tui.requestRender());
-      const unsubscribe = footerData.onBranchChange?.(() => tui.requestRender());
-      let lastFooterSizeKey: string | undefined;
+      requestFooterRender = () => tui.requestRender();
+      const unsubscribe = footerData.onBranchChange?.(requestFooterRender);
       return {
         dispose: () => {
           unsubscribe?.();
-          petController.stopIdleEmotes();
-          petController.stopAnimation();
-          petController.stopPendingRenderRequest();
-          petController.disposeKittyNow();
           footerInstalled = false;
-          petController.setFooterRenderRequest(undefined);
+          requestFooterRender = undefined;
         },
-        invalidate() {
-          petController.queueKittyCleanup();
-          petController.resetRenderCache();
-        },
+        invalidate() {},
         render(width: number): string[] {
-          const now = Date.now();
-          const footerSizeKey = `${width}:${process.stdout.rows ?? 0}`;
-          if (lastFooterSizeKey !== undefined && lastFooterSizeKey !== footerSizeKey) {
-            petController.freezeForResize(ctx, now);
-          }
-          lastFooterSizeKey = footerSizeKey;
-          const freezePetFrame = petController.isResizeFrozen(now);
-
-          const totalInput = footerTotals.input;
-          const totalOutput = footerTotals.output;
-          const totalCacheRead = footerTotals.cacheRead;
-          const totalCacheWrite = footerTotals.cacheWrite;
-          const totalCost = footerTotals.cost;
-
-          let pwd = abbreviateHomePath(ctx.sessionManager.getCwd());
-
-          const branch = footerData.getGitBranch?.();
-          if (branch) pwd = `${pwd} (${branch})`;
-
-          const currentSessionName = sessionName(ctx);
-          if (currentSessionName) pwd = `${pwd} • ${currentSessionName}`;
-
           const parts: string[] = [];
-          if (totalInput) parts.push(`↑${formatTokens(totalInput)}`);
-          if (totalOutput) parts.push(`↓${formatTokens(totalOutput)}`);
-          if (totalCacheRead) parts.push(`R${formatTokens(totalCacheRead)}`);
-          if (totalCacheWrite) parts.push(`W${formatTokens(totalCacheWrite)}`);
+          if (footerTotals.input) parts.push(`↑${formatTokens(footerTotals.input)}`);
+          if (footerTotals.output) parts.push(`↓${formatTokens(footerTotals.output)}`);
+          if (footerTotals.cacheRead) parts.push(`R${formatTokens(footerTotals.cacheRead)}`);
+          if (footerTotals.cacheWrite) parts.push(`W${formatTokens(footerTotals.cacheWrite)}`);
 
           const usingSubscription = ctx.model ? ctx.modelRegistry.isUsingOAuth(ctx.model) : false;
-          if (totalCost || usingSubscription)
-            parts.push(`$${totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
+          if (footerTotals.cost || usingSubscription)
+            parts.push(`$${footerTotals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
 
           const currentContextUsage = contextUsage(ctx);
           const contextWindow = currentContextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
@@ -167,30 +132,10 @@ export function createFooterController(deps: {
                 : contextDisplay;
           parts.push(contextText);
 
-          const cfg = config(ctx);
-          const shouldRenderPet = petController.shouldRenderInFooter(cfg);
-          const requestedPetPlacement = cfg.pets.placement;
-          const requestedPetSizeCells = petSizeCellsForPlacement(
-            requestedPetPlacement,
-            cfg.pets.sizeCells,
-          );
-          const inlinePet = Boolean(
-            shouldRenderPet &&
-            petController.loadedPet &&
-            isInlinePetPlacement(requestedPetPlacement) &&
-            width >= requestedPetSizeCells + 32,
-          );
-          const petRenderSizeCells = inlinePet ? requestedPetSizeCells : cfg.pets.sizeCells;
-          const petColumnWidth = Math.min(petRenderSizeCells, Math.max(1, width - 1));
-          const footerTextWidth = inlinePet ? Math.max(1, width - petColumnWidth - 2) : width;
-
-          const usageStatusLine = usageController.statusLine(ctx, cfg, usingSubscription);
-          const usageLine = usageStatusLine ? theme.fg("dim", usageStatusLine) : undefined;
-
           let statsLeft = parts.join(" ");
           let statsLeftWidth = visibleWidth(statsLeft);
-          if (statsLeftWidth > footerTextWidth) {
-            statsLeft = truncateToWidth(statsLeft, footerTextWidth, "...");
+          if (statsLeftWidth > width) {
+            statsLeft = truncateToWidth(statsLeft, width, "...");
             statsLeftWidth = visibleWidth(statsLeft);
           }
 
@@ -210,39 +155,41 @@ export function createFooterController(deps: {
           let rightSide = rightWithoutProvider;
           if ((footerData.getAvailableProviderCount?.() ?? 0) > 1 && ctx.model) {
             const withProvider = `(${ctx.model.provider}) ${rightWithoutProvider}`;
-            if (statsLeftWidth + 2 + visibleWidth(withProvider) <= footerTextWidth)
-              rightSide = withProvider;
+            if (statsLeftWidth + 2 + visibleWidth(withProvider) <= width) rightSide = withProvider;
           }
 
           const rightWidth = visibleWidth(rightSide);
-          const totalNeeded = statsLeftWidth + 2 + rightWidth;
           let statsLine: string;
-          if (totalNeeded <= footerTextWidth) {
-            statsLine =
-              statsLeft + " ".repeat(footerTextWidth - statsLeftWidth - rightWidth) + rightSide;
+          if (statsLeftWidth + 2 + rightWidth <= width) {
+            statsLine = statsLeft + " ".repeat(width - statsLeftWidth - rightWidth) + rightSide;
           } else {
-            const availableForRight = footerTextWidth - statsLeftWidth - 2;
+            const availableForRight = width - statsLeftWidth - 2;
             if (availableForRight > 0) {
               const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
               statsLine =
                 statsLeft +
-                " ".repeat(
-                  Math.max(0, footerTextWidth - statsLeftWidth - visibleWidth(truncatedRight)),
-                ) +
+                " ".repeat(Math.max(0, width - statsLeftWidth - visibleWidth(truncatedRight))) +
                 truncatedRight;
-            } else {
-              statsLine = statsLeft;
-            }
+            } else statsLine = statsLeft;
           }
 
+          let pwd = abbreviateHomePath(ctx.sessionManager.getCwd());
+          const branch = footerData.getGitBranch?.();
+          if (branch) pwd = `${pwd} (${branch})`;
+          const currentSessionName = sessionName(ctx);
+          if (currentSessionName) pwd = `${pwd} • ${currentSessionName}`;
+
           const textLines: string[] = [
-            truncateToWidth(theme.fg("dim", pwd), footerTextWidth, theme.fg("dim", "...")),
+            truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "...")),
             theme.fg("dim", statsLeft) + theme.fg("dim", statsLine.slice(statsLeft.length)),
           ];
 
-          if (usageLine) {
-            textLines.push(truncateToWidth(usageLine, footerTextWidth, theme.fg("dim", "...")));
-          }
+          const cfg = config(ctx);
+          const usageStatusLine = usageController.statusLine(ctx, cfg, usingSubscription);
+          if (usageStatusLine)
+            textLines.push(
+              truncateToWidth(theme.fg("dim", usageStatusLine), width, theme.fg("dim", "...")),
+            );
 
           const extensionStatuses = footerData.getExtensionStatuses?.();
           if (extensionStatuses?.size) {
@@ -250,44 +197,9 @@ export function createFooterController(deps: {
               .sort(([a], [b]) => String(a).localeCompare(String(b)))
               .map(([, text]) => sanitizeStatusText(String(text)))
               .join(" ");
-            textLines.push(truncateToWidth(statusLine, footerTextWidth, theme.fg("dim", "...")));
+            textLines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
           }
-
-          const petLines = petController.renderPetLines(ctx, cfg, {
-            shouldRenderPet,
-            freezePetFrame,
-            requestedPetPlacement,
-            petColumnWidth,
-            petRenderSizeCells,
-            width,
-            theme,
-          });
-
-          if (!shouldRenderPet || petLines.length === 0)
-            return petController.withPendingKittyCleanup(textLines);
-
-          if (inlinePet) {
-            return petController.withPendingKittyCleanup(
-              combineInlinePetFooter(
-                petLines,
-                textLines,
-                width,
-                requestedPetPlacement,
-                petColumnWidth,
-              ),
-            );
-          }
-
-          if (requestedPetPlacement === "habitat" && petController.loadedPet) {
-            const label = ` ${petController.loadedPet.pet.name} `;
-            const divider = theme.fg(
-              "dim",
-              truncateToWidth(`─${label}${"─".repeat(width)}`, width, ""),
-            );
-            return petController.withPendingKittyCleanup([divider, ...petLines, ...textLines]);
-          }
-
-          return petController.withPendingKittyCleanup([...petLines, ...textLines]);
+          return textLines;
         },
       };
     });
@@ -295,10 +207,9 @@ export function createFooterController(deps: {
 
   function clearFooter(ctx: ExtensionContext): void {
     if (!footerInstalled) return;
-    petController.disposeKittyNow();
     ctx.ui.setFooter(undefined);
     footerInstalled = false;
-    petController.setFooterRenderRequest(undefined);
+    requestFooterRender = undefined;
   }
 
   function setStatus(ctx: ExtensionContext, text: string | undefined): void {
@@ -309,7 +220,6 @@ export function createFooterController(deps: {
 
   function updateFooter(ctx: ExtensionContext): void {
     const cfg = config(ctx);
-
     if (!hasTerminalUI(ctx)) {
       if (cfg.footer.mode === "off") {
         setStatus(ctx, undefined);
@@ -321,17 +231,13 @@ export function createFooterController(deps: {
       return;
     }
 
-    petController.updateActivity(ctx, cfg);
-    const shouldRenderPet = petController.shouldRenderInFooter(cfg);
-
-    if (cfg.footer.mode === "replace" || shouldRenderPet) {
+    if (cfg.footer.mode === "replace") {
       setStatus(ctx, undefined);
       installFooter(ctx);
       return;
     }
 
     clearFooter(ctx);
-
     if (cfg.footer.mode === "off") {
       setStatus(ctx, undefined);
       return;
@@ -341,6 +247,7 @@ export function createFooterController(deps: {
     const usage = usageController.statusLine(ctx, cfg);
     setStatus(ctx, [fast, usage].filter(Boolean).join(" | ") || undefined);
   }
+
   function addAssistantUsage(usage: {
     input: number;
     output: number;

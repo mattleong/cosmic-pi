@@ -5,43 +5,26 @@
  * enabled and the selected model is in the package-controlled allow-list.
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_BASENAME } from "./identity.ts";
 import {
   DEFAULT_CONFIG,
   DEFAULT_IMAGE_CONFIG,
-  DEFAULT_PET_CONFIG,
   configPaths,
   type ResolvedConfig,
-  isRecord,
   readRawConfig,
   resolveConfig,
   writeConfig,
 } from "./config.ts";
-import { formatPercent, formatUsageSnapshot, parseUsageSnapshot, readCodexAuth } from "./usage.ts";
-import { registerOpenAIImage, _imageTest } from "./image.ts";
-import {
-  describeCodexPetSelectionIssue,
-  findReadyCodexPet,
-  listCodexPets,
-  registerOpenAIPets,
-  _petsTest,
-} from "./pets.ts";
 import { FastController, supportsFast } from "./fast-controller.ts";
 import { FAST_SERVICE_TIER, SUPPORTED_FAST_MODELS } from "./fast-models.ts";
-import { UsageController } from "./usage-controller.ts";
-import { PetFooterController } from "./pet-footer-controller.ts";
-import {
-  PET_EMPTY_VALUE,
-  formatPetSelectPrompt,
-  petConfigPickerValue,
-  petPickerDescription,
-  petSlugFromPickerValue,
-  readyPetPickerValues,
-} from "./settings/items.ts";
+import { createFooterController, type FooterController } from "./footer/controller.ts";
+import { abbreviateHomePath } from "./footer-layout.ts";
+import { registerOpenAIImage, _imageTest } from "./image.ts";
+import { CONFIG_BASENAME } from "./identity.ts";
 import { registerSettingsController } from "./settings/controller.ts";
 import { textPanel } from "./settings/picker.ts";
-import { combineInlinePetFooter, abbreviateHomePath } from "./footer-layout.ts";
-import { createFooterController, type FooterController } from "./footer/controller.ts";
+import { createCosmicUiAdapter, type CosmicUiAdapter } from "./ui/cosmic-adapter.ts";
+import { UsageController } from "./usage-controller.ts";
+import { formatPercent, formatUsageSnapshot, parseUsageSnapshot, readCodexAuth } from "./usage.ts";
 
 const COMMAND = "fast";
 const OPENAI_STATUS_COMMAND = "openai-usage";
@@ -56,23 +39,22 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   const fastController = new FastController(SERVICE_TIER);
   let cachedConfig: ResolvedConfig | undefined;
   let footerController: FooterController;
+  let cosmicUiAdapter: CosmicUiAdapter;
+
   function updateFooter(ctx: ExtensionContext): void {
-    footerController.update(ctx);
+    if (cosmicUiAdapter?.active) cosmicUiAdapter.update(ctx, config(ctx));
+    else footerController.update(ctx);
   }
+
   const usageController = new UsageController(config, updateFooter);
-  const petController = new PetFooterController(
-    config,
-    updateFooter,
-    () => footerController?.installed ?? false,
-  );
   footerController = createFooterController({
     pi,
     config,
     fastController,
     usageController,
-    petController,
     hasTerminalUI,
   });
+  cosmicUiAdapter = createCosmicUiAdapter({ pi, fastController, usageController });
   const {
     invalidateContextUsage,
     invalidateSessionName,
@@ -100,15 +82,6 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       active: fastController.active,
       desiredActive: fastController.desiredActive,
     });
-  }
-
-  function writePetConfig(ctx: ExtensionContext, patch: Record<string, unknown>): ResolvedConfig {
-    const cfg = refresh(ctx);
-    const current = readRawConfig(cfg.configPath);
-    const pets = isRecord(current.pets) ? current.pets : {};
-    writeConfig(cfg.configPath, { ...current, pets: { ...pets, ...patch } });
-    petController.invalidateLoadKey();
-    return refresh(ctx);
   }
 
   function setActive(ctx: ExtensionContext, next: boolean): void {
@@ -139,13 +112,6 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
       "",
       `Image enabled: ${cfg.image.enabled}`,
       `Image default save: ${cfg.image.defaultSave}`,
-      `Pet enabled: ${cfg.pets.enabled}`,
-      `Pet slug: ${cfg.pets.slug || PET_EMPTY_VALUE}`,
-      `Pet placement: ${cfg.pets.placement}`,
-      `Pet failed tool state: ${cfg.pets.failedToolState}`,
-      `Pet idle emotes: ${cfg.pets.idleEmotes} (${cfg.pets.idleEmoteIntervalMs}ms)`,
-      `Pet loaded: ${petController.loadedPet?.pet.name ?? "none"}`,
-      `Pet error: ${petController.error ?? "none"}`,
       `Config: ${cfg.configPath}`,
     ].join("\n");
   }
@@ -174,71 +140,9 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     formatDebugStatus,
     fastController,
     usageController,
-    petController,
   });
 
   registerOpenAIImage(pi, config);
-  registerOpenAIPets(pi, {
-    wake: async (ctx, slug) => {
-      const pets = await listCodexPets();
-      const requestedSlug = (slug ?? config(ctx).pets.slug) || undefined;
-      const selectedPet = findReadyCodexPet(pets, requestedSlug);
-      if (!selectedPet) {
-        const issue = describeCodexPetSelectionIssue(pets, requestedSlug);
-        ctx.ui.notify(issue.message, "warning");
-        return;
-      }
-
-      const next = writePetConfig(ctx, {
-        enabled: true,
-        slug: selectedPet.slug,
-      });
-      updateFooter(ctx);
-      if (hasTerminalUI(ctx)) await petController.refresh(ctx, next, true);
-      else
-        ctx.ui.notify(
-          `Enabled ${selectedPet.name} (${selectedPet.slug}); footer pets render in interactive TUI mode.`,
-          "info",
-        );
-    },
-    tuck: (ctx) => {
-      writePetConfig(ctx, { enabled: false });
-      petController.tuck();
-      updateFooter(ctx);
-      ctx.ui.notify("Footer pet tucked away.", "info");
-    },
-    select: async (ctx, slug) => {
-      const pets = await listCodexPets();
-      if (!slug) {
-        const prompt = formatPetSelectPrompt(pets);
-        ctx.ui.notify(prompt.message, prompt.level);
-        return;
-      }
-
-      const selectedPet = findReadyCodexPet(pets, slug);
-      if (!selectedPet) {
-        const issue = describeCodexPetSelectionIssue(pets, slug);
-        ctx.ui.notify(issue.message, "warning");
-        return;
-      }
-
-      const next = writePetConfig(ctx, { slug: selectedPet.slug });
-      updateFooter(ctx);
-      if (petController.shouldLoadForConfig(next)) {
-        if (hasTerminalUI(ctx)) await petController.refresh(ctx, next, true);
-        else
-          ctx.ui.notify(
-            `Selected ${selectedPet.name} (${selectedPet.slug}); footer pets render in interactive TUI mode.`,
-            "info",
-          );
-      } else {
-        ctx.ui.notify(
-          `Selected ${selectedPet.name} (${selectedPet.slug}) for the footer pet. Use /pets wake to show it.`,
-          "info",
-        );
-      }
-    },
-  });
 
   pi.on("session_start", (_event, ctx) => {
     invalidateContextUsage();
@@ -253,32 +157,16 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     if (fastController.desiredActive && !fastController.active) {
       ctx.ui.notify(fastController.unsupportedRequestMessage(ctx), "warning");
     }
-    if (hasTerminalUI(ctx)) petController.installResizeGuard(ctx);
+    if (hasTerminalUI(ctx)) cosmicUiAdapter.detectHost();
+    else cosmicUiAdapter.shutdown();
     refreshFooterTotals(ctx);
     updateFooter(ctx);
-    if (hasTerminalUI(ctx) && nextConfig.pets.enabled) void petController.refresh(ctx, nextConfig);
     usageController.start(ctx);
     if (fastController.active) ctx.ui.notify(fastController.stateText(ctx), "info");
   });
 
   pi.on("agent_start", (_event, ctx) => {
     invalidateContextUsage();
-    petController.agentStart(ctx);
-    updateFooter(ctx);
-  });
-
-  pi.on("tool_execution_start", (event, ctx) => {
-    petController.toolStart(ctx, event.toolCallId);
-    updateFooter(ctx);
-  });
-
-  pi.on("tool_execution_end", (event, ctx) => {
-    petController.toolEnd(ctx, event.toolCallId, event.isError);
-    if (!event.isError) updateFooter(ctx);
-  });
-
-  pi.on("agent_end", (_event, ctx) => {
-    petController.agentEnd();
     updateFooter(ctx);
   });
 
@@ -294,16 +182,12 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   pi.on("session_compact", (_event, ctx) => {
     invalidateContextUsage();
     refreshFooterTotals(ctx);
-    petController.queueKittyCleanup();
-    petController.resetRenderCache();
     updateFooter(ctx);
   });
 
   pi.on("session_tree", (_event, ctx) => {
     invalidateContextUsage();
     refreshFooterTotals(ctx);
-    petController.queueKittyCleanup();
-    petController.resetRenderCache();
     updateFooter(ctx);
   });
 
@@ -328,8 +212,8 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
   pi.on("session_shutdown", () => {
     invalidateContextUsage();
     invalidateSessionName();
+    cosmicUiAdapter.shutdown();
     usageController.shutdown();
-    petController.shutdown();
   });
 
   pi.on("before_provider_request", (event, ctx) => {
@@ -346,25 +230,16 @@ export const _test = {
   SUPPORTED_FAST_MODELS,
   DEFAULT_CONFIG,
   DEFAULT_IMAGE_CONFIG,
-  DEFAULT_PET_CONFIG,
   SERVICE_TIER,
   configPaths,
   abbreviateHomePath,
   resolveConfig,
   readRawConfig,
   supportsFast,
-  combineInlinePetFooter,
-  PET_EMPTY_VALUE,
-  readyPetPickerValues,
-  petConfigPickerValue,
-  petSlugFromPickerValue,
-  petPickerDescription,
-  formatPetSelectPrompt,
   parseUsageSnapshot,
   formatPercent,
   formatUsageSnapshot,
   readCodexAuth,
   textPanel,
   imageTest: _imageTest,
-  petsTest: _petsTest,
 };

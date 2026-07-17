@@ -1,15 +1,19 @@
 # pi-better-openai
 
-A pi extension for OpenAI subscription workflows: fast mode, usage visibility, footer polish, custom Codex pets, and image generation through `openai-codex` auth.
+A pi extension for OpenAI subscription workflows: fast mode, usage visibility, reusable UI primitives, footer polish, and image generation through `openai-codex` auth.
 
 ## Install
 
 Requires Node.js 22.19.0 or newer.
 
-Install from npm:
-
 ```bash
 pi install npm:pi-better-openai
+```
+
+Install `pi-cosmic-ui` as well to compose Better OpenAI's fast-mode and usage primitives into the shared responsive footer. Without Cosmic UI, Better OpenAI retains its standalone footer behavior.
+
+```bash
+pi install npm:pi-cosmic-ui
 ```
 
 The source is maintained in the [cosmic-pi monorepo](https://github.com/mattleong/cosmic-pi/tree/main/packages/pi-better-openai).
@@ -28,15 +32,21 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
 - Fast mode for supported OpenAI models, toggled with `/fast` or in `/openai-settings`.
 - OpenAI subscription usage display via `/openai-usage` and the footer.
 - Interactive settings picker via `/openai-settings`.
-- Footer customization for model, thinking, fast mode, usage, and token/cost context.
+- Standalone footer customization for model, thinking, fast mode, usage, and token/cost context.
+- Public fast-mode and subscription-usage UI primitives from `pi-better-openai/ui`.
+- Automatic contribution of those primitives when `pi-cosmic-ui` is installed.
 - OpenAI image generation/editing through the `openai_image` tool and `/openai-image` command.
-- Animated Codex custom pets rendered in the Better OpenAI footer.
 - Commands:
   - `/fast` toggles fast mode.
   - `/openai-image <prompt>` generates an image directly.
-  - `/pets [help|list|wake [slug]|tuck|select <slug>]` renders or manages custom pets from `${CODEX_HOME:-~/.codex}/pets`.
   - `/openai-usage` shows current OpenAI subscription usage.
   - `/openai-settings` opens settings, diagnostics, and config details.
+
+## UI primitives
+
+The `pi-better-openai/ui` export provides data-oriented fast-mode and usage primitives. The Better OpenAI extension automatically publishes them over the versioned Cosmic UI event protocol when a host is present. Provider behavior remains independent of `pi-cosmic-ui`; there is no runtime dependency between the packages.
+
+When Cosmic UI is active, it owns footer layout, visibility, and density. Better OpenAI's `footer.mode` continues to control only the standalone fallback. The `usage.enabled` setting remains effective in both modes.
 
 ## Configuration
 
@@ -82,18 +92,6 @@ Example config:
     "defaultSave": "project",
     "outputFormat": "png",
     "timeoutMs": 180000
-  },
-  "pets": {
-    "enabled": false,
-    "slug": "",
-    "placement": "inline-right",
-    "state": "idle",
-    "thinkingState": "review",
-    "toolState": "running",
-    "failedToolState": "failed",
-    "idleEmotes": true,
-    "idleEmoteIntervalMs": 30000,
-    "sizeCells": 10
   }
 }
 ```
@@ -124,38 +122,3 @@ Save modes:
 - `none` returns the image without saving it.
 
 The repository ignores `.pi/`, so generated images and local config should not be committed.
-
-## Codex pets
-
-Codex pets are an OpenAI Codex app feature, so the floating overlay and pet picker are still controlled by Codex (`Settings → Appearance → Pets` or `/pet`). This extension can also render compatible custom pet spritesheets directly in pi's Better OpenAI footer.
-
-```bash
-/pets wake          # render the selected pet, or pick one if none is selected
-/pets wake <slug>   # render a specific ready pet
-/pets select <slug> # select a ready pet without changing visibility
-/pets tuck          # hide it
-/pets list          # list local custom pets and readiness diagnostics
-```
-
-You can also enable **Footer pet** in `/openai-settings`, cycle installed pets with the **Pet** row, preview the selected pet in the footer, and tune placement (`inline-right` by default), idle, thinking/streaming, tool-execution, and any failed-tool animation states, plus random idle emotes and size.
-
-To create a custom pet for the Codex app:
-
-```bash
-$skill-installer hatch-pet
-```
-
-Then reload Codex skills (`Cmd/Ctrl+K → Force Reload Skills`) and ask:
-
-```text
-$hatch-pet create a new pet inspired by pi-better-openai
-```
-
-Custom pets should end up in `${CODEX_HOME:-~/.codex}/pets/<pet-name>/` with `pet.json` and `spritesheet.webp`. Version 1 spritesheets are 1536×1872 atlases arranged as 8 columns by 9 animation rows. Version 2 spritesheets add two look-direction rows for a 1536×2288 atlas and must set `"spriteVersionNumber": 2` in `pet.json`. The pi footer supports both versions and renders their shared lifecycle animation rows; Codex owns pointer-driven look-direction behavior in its floating overlay. Animated footer rendering also requires a terminal image protocol supported by pi. Refresh custom pets in Codex settings and toggle the overlay with `/pet`.
-
-## Screenshots
-
-<!-- Add screenshots here. -->
-
-<img width="983" height="851" alt="Screenshot 2026-04-29 at 11 53 23 PM" src="https://github.com/user-attachments/assets/07a2fb87-ef48-4396-8b12-124825c8d360" />
-<img width="1327" height="102" alt="Screenshot 2026-04-29 at 11 34 49 PM" src="https://github.com/user-attachments/assets/22042782-c94e-491d-b5af-095f7f0810f9" />

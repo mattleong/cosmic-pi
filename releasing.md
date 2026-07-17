@@ -1,15 +1,16 @@
 # Releasing cosmic-pi
 
-All workspace packages use the same version. The public `pi-better-openai` and `pi-code-previews` packages are published together; private `pi-advisor` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm.
+All workspace packages use the same version. The public `pi-better-openai`, `pi-code-previews`, and `pi-cosmic-ui` packages are published together; private `pi-advisor` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm.
 
 ## One-time setup
 
 Before the first release:
 
 1. Create and push the `mattleong/cosmic-pi` GitHub repository.
-2. On npm, configure trusted publishing for both public packages:
+2. On npm, configure trusted publishing for every public package:
    - `pi-better-openai`
    - `pi-code-previews`
+   - `pi-cosmic-ui`
 3. For each npm package, set the trusted publisher to:
    - **Organization or user:** `mattleong`
    - **Repository:** `cosmic-pi`
@@ -76,14 +77,15 @@ Publishing the GitHub Release triggers the npm workflow. Creating only a Git tag
 
 ## Verify publication
 
-Watch the **Publish npm packages** workflow in GitHub Actions. After it succeeds, verify both public package versions:
+Watch the **Publish npm packages** workflow in GitHub Actions. After it succeeds, verify every public package version:
 
 ```bash
 npm view pi-better-openai version
 npm view pi-code-previews version
+npm view pi-cosmic-ui version
 ```
 
-Both commands should report the release version. npm provenance should also appear on each package version page.
+All three commands should report the release version. npm provenance should also appear on each package version page.
 
 ## Retry a failed release
 

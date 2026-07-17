@@ -45,13 +45,6 @@ describe("config helpers", () => {
     expect(_test.CONFIG_BASENAME).toBe("pi-better-openai.json");
     expect(_test.DEFAULT_CONFIG.desiredActive).toBe(false);
     expect(_test.DEFAULT_IMAGE_CONFIG.defaultSave).toBe("project");
-    expect(_test.DEFAULT_PET_CONFIG.placement).toBe("inline-right");
-    expect(_test.DEFAULT_PET_CONFIG.state).toBe("idle");
-    expect(_test.DEFAULT_PET_CONFIG.thinkingState).toBe("review");
-    expect(_test.DEFAULT_PET_CONFIG.toolState).toBe("running");
-    expect(_test.DEFAULT_PET_CONFIG.failedToolState).toBe("failed");
-    expect(_test.DEFAULT_PET_CONFIG.idleEmotes).toBe(true);
-    expect(_test.DEFAULT_PET_CONFIG.idleEmoteIntervalMs).toBe(30000);
     expect(_test.DEFAULT_CONFIG).not.toHaveProperty("supportedModels");
     expect(_test.SUPPORTED_FAST_MODELS).toEqual([
       "openai/gpt-5.4",
@@ -121,18 +114,11 @@ describe("config helpers", () => {
           usage: { enabled: false, refreshIntervalMs: 20000, showResetTimes: false },
           footer: { mode: "replace" },
           image: { defaultSave: "global", outputFormat: "jpeg", timeoutMs: 40000 },
-          pets: {
-            placement: "badge",
-            idleEmotes: false,
-            idleEmoteIntervalMs: 10000,
-            sizeCells: 14,
-          },
         });
         writeConfig(paths.project, {
           usage: { enabled: true },
           footer: { mode: "status" },
           image: { outputFormat: "webp" },
-          pets: { sizeCells: 6 },
         });
 
         const resolved = _test.resolveConfig(cwd);
@@ -148,12 +134,6 @@ describe("config helpers", () => {
           outputFormat: "webp",
           timeoutMs: 40000,
         });
-        expect(resolved.pets).toMatchObject({
-          placement: "badge",
-          idleEmotes: false,
-          idleEmoteIntervalMs: 10000,
-          sizeCells: 6,
-        });
       });
     });
   });
@@ -164,32 +144,27 @@ describe("config helpers", () => {
       writeConfig(configPath, {
         footer: { mode: "float" },
         image: { enabled: true, defaultSave: "desktop", outputFormat: "gif" },
-        pets: { enabled: true, placement: "ceiling", state: "sleeping", thinkingState: "ponder" },
       });
 
       const parsed = readConfig(configPath);
 
       expect(parsed?.footer).toBeUndefined();
       expect(parsed?.image).toEqual({ enabled: true });
-      expect(parsed?.pets).toEqual({ enabled: true });
     });
   });
 
-  test("clamps numeric usage, image, and pet settings", () => {
+  test("clamps numeric usage and image settings", () => {
     withTempDir((tempDir) => {
       const projectConfigPath = _test.configPaths(tempDir).project;
       writeConfig(projectConfigPath, {
         usage: { refreshIntervalMs: 1 },
         image: { timeoutMs: 1 },
-        pets: { idleEmoteIntervalMs: 1, sizeCells: 99 },
       });
 
       const resolved = _test.resolveConfig(tempDir);
 
       expect(resolved.usage.refreshIntervalMs).toBe(15000);
       expect(resolved.image.timeoutMs).toBe(30000);
-      expect(resolved.pets.idleEmoteIntervalMs).toBe(5000);
-      expect(resolved.pets.sizeCells).toBe(16);
     });
   });
 
@@ -201,10 +176,6 @@ describe("config helpers", () => {
     expect(descriptors.get("usage.enabled")?.parse("true")).toBe(true);
     expect(descriptors.get("usage.refreshIntervalMs")?.parse("15000")).toBe(15000);
     expect(descriptors.get("footer.mode")?.parse("status")).toBe("status");
-    expect(
-      descriptors.get("pets.slug")?.parse("not selected", { petEmptyValue: "not selected" }),
-    ).toBe("");
-    expect(descriptors.get("pets.sizeCells")?.parse("12")).toBe(12);
     expect(descriptors.get("image.timeoutMs")?.parse("45000")).toBe(45000);
   });
 
@@ -212,7 +183,6 @@ describe("config helpers", () => {
     const raw = {
       unknown: "preserved",
       usage: { unknownUsage: true },
-      pets: { unknownPet: "yes" },
     };
 
     expect(
@@ -236,13 +206,6 @@ describe("config helpers", () => {
     });
     expect(applySettingToRawConfig(raw, "footer.mode", "status").footer).toEqual({
       mode: "status",
-    });
-    expect(
-      applySettingToRawConfig(raw, "pets.slug", "not selected", { petEmptyValue: "not selected" })
-        .pets,
-    ).toEqual({ unknownPet: "yes", slug: "" });
-    expect(applySettingToRawConfig(raw, "pets.sizeCells", "12").pets).toMatchObject({
-      sizeCells: 12,
     });
     expect(applySettingToRawConfig(raw, "image.timeoutMs", "45000").image).toEqual({
       timeoutMs: 45000,

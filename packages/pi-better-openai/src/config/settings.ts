@@ -1,18 +1,8 @@
-import type { ResolvedConfig } from "./schema.ts";
-import {
-  FOOTER_MODES,
-  IMAGE_OUTPUT_FORMATS,
-  IMAGE_SAVE_MODES,
-  PET_PLACEMENTS,
-  PET_STATES,
-} from "./schema.ts";
 import { isRecord } from "../utils.ts";
+import type { ResolvedConfig } from "./schema.ts";
+import { FOOTER_MODES, IMAGE_OUTPUT_FORMATS, IMAGE_SAVE_MODES } from "./schema.ts";
 
-export type SettingsOptionSection = "root" | "usage" | "footer" | "image" | "pets";
-
-export type SettingsValueContext = {
-  petEmptyValue?: string;
-};
+export type SettingsOptionSection = "root" | "usage" | "footer" | "image";
 
 export type SettingsOptionDescriptor = {
   id: string;
@@ -21,7 +11,7 @@ export type SettingsOptionDescriptor = {
   label: string;
   description: string;
   values?: readonly string[];
-  parse(rawValue: string, context?: SettingsValueContext): boolean | number | string;
+  parse(rawValue: string): boolean | number | string;
   currentValue(cfg: ResolvedConfig): string;
 };
 
@@ -51,7 +41,7 @@ export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => cfg.footer.mode,
     values: FOOTER_MODES,
     description:
-      "replace = custom footer, status = pi footer plus status line, off = no Better OpenAI footer/status unless Footer pet is enabled.",
+      "replace = custom footer, status = pi footer plus status line, off = no Better OpenAI footer/status.",
     parse: stringSetting,
   },
 ];
@@ -152,123 +142,18 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   },
 ];
 
-export const PET_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
-  {
-    id: "pets.enabled",
-    section: "pets",
-    key: "enabled",
-    label: "Enabled",
-    currentValue: (cfg) => String(cfg.pets.enabled),
-    values: ["true", "false"],
-    description:
-      "Render a custom Codex pet from ${CODEX_HOME:-~/.codex}/pets in the Better OpenAI footer.",
-    parse: booleanSetting,
-  },
-  {
-    id: "pets.slug",
-    section: "pets",
-    key: "slug",
-    label: "Pet",
-    currentValue: (cfg) => cfg.pets.slug,
-    description: "Selected custom pet slug.",
-    parse: (rawValue, context) =>
-      rawValue === (context?.petEmptyValue ?? "not selected") ? "" : rawValue,
-  },
-  {
-    id: "pets.placement",
-    section: "pets",
-    key: "placement",
-    label: "Placement",
-    currentValue: (cfg) => cfg.pets.placement,
-    values: PET_PLACEMENTS,
-    description: "Footer layout: stacked, inline-left, inline-right, badge, or habitat divider.",
-    parse: stringSetting,
-  },
-  {
-    id: "pets.state",
-    section: "pets",
-    key: "state",
-    label: "Idle state",
-    currentValue: (cfg) => cfg.pets.state,
-    values: PET_STATES,
-    description: "Animation row to show when pi is idle.",
-    parse: stringSetting,
-  },
-  {
-    id: "pets.thinkingState",
-    section: "pets",
-    key: "thinkingState",
-    label: "Thinking state",
-    currentValue: (cfg) => cfg.pets.thinkingState,
-    values: PET_STATES,
-    description: "Animation row to show while the model is thinking or streaming.",
-    parse: stringSetting,
-  },
-  {
-    id: "pets.toolState",
-    section: "pets",
-    key: "toolState",
-    label: "Tool state",
-    currentValue: (cfg) => cfg.pets.toolState,
-    values: PET_STATES,
-    description: "Animation row to show during tool execution.",
-    parse: stringSetting,
-  },
-  {
-    id: "pets.failedToolState",
-    section: "pets",
-    key: "failedToolState",
-    label: "Failed tool state",
-    currentValue: (cfg) => cfg.pets.failedToolState,
-    values: PET_STATES,
-    description: "Animation row to flash after any tool call returns an error.",
-    parse: stringSetting,
-  },
-  {
-    id: "pets.idleEmotes",
-    section: "pets",
-    key: "idleEmotes",
-    label: "Random idle emotes",
-    currentValue: (cfg) => String(cfg.pets.idleEmotes),
-    values: ["true", "false"],
-    description: "Occasionally flash a wave or jump while pi is idle.",
-    parse: booleanSetting,
-  },
-  {
-    id: "pets.idleEmoteIntervalMs",
-    section: "pets",
-    key: "idleEmoteIntervalMs",
-    label: "Idle emote interval",
-    currentValue: (cfg) => String(cfg.pets.idleEmoteIntervalMs),
-    values: ["5000", "15000", "30000", "60000", "120000", "300000"],
-    description: "Average delay between random idle pet emotes in milliseconds.",
-    parse: numberSetting,
-  },
-  {
-    id: "pets.sizeCells",
-    section: "pets",
-    key: "sizeCells",
-    label: "Size",
-    currentValue: (cfg) => String(cfg.pets.sizeCells),
-    values: ["4", "6", "8", "10", "12", "16"],
-    description: "Pet image width in terminal cells.",
-    parse: numberSetting,
-  },
-];
-
 export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   ...FAST_SETTING_DESCRIPTORS,
   ...FOOTER_SETTING_DESCRIPTORS,
   ...USAGE_SETTING_DESCRIPTORS,
   ...IMAGE_SETTING_DESCRIPTORS,
-  ...PET_SETTING_DESCRIPTORS,
 ];
 
 const SETTINGS_OPTION_BY_ID = new Map(
   SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
 );
 
-export type SettingPatchContext = SettingsValueContext & {
+export type SettingPatchContext = {
   persistState?: boolean;
   active?: boolean;
   desiredActive?: boolean;
@@ -290,7 +175,7 @@ export function applySettingToRawConfig(
   } else {
     const descriptor = SETTINGS_OPTION_BY_ID.get(id);
     if (!descriptor) return next;
-    const parsedValue = descriptor.parse(rawValue, context);
+    const parsedValue = descriptor.parse(rawValue);
     if (descriptor.section === "root") next[descriptor.key] = parsedValue;
     else {
       const currentSection = next[descriptor.section];

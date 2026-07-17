@@ -1,19 +1,16 @@
 {
-  "name": "pi-better-openai",
+  "name": "pi-cosmic-ui",
   "version": "0.2.0",
-  "description": "Personal pi extension that improves OpenAI with fast mode, usage stats, and footer polish.",
+  "description": "Composable, responsive UI elements for pi.",
   "keywords": [
-    "fast",
-    "gpt",
-    "image",
-    "openai",
+    "cosmic-ui",
+    "footer",
     "pi",
     "pi-extension",
     "pi-package",
-    "priority",
-    "service-tier"
+    "terminal-ui"
   ],
-  "homepage": "https://github.com/mattleong/cosmic-pi/tree/main/packages/pi-better-openai#readme",
+  "homepage": "https://github.com/mattleong/cosmic-pi/tree/main/packages/pi-cosmic-ui#readme",
   "bugs": {
     "url": "https://github.com/mattleong/cosmic-pi/issues"
   },
@@ -21,7 +18,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mattleong/cosmic-pi.git",
-    "directory": "packages/pi-better-openai"
+    "directory": "packages/pi-cosmic-ui"
   },
   "files": [
     "index.ts",
@@ -32,8 +29,7 @@
   "type": "module",
   "exports": {
     ".": "./index.ts",
-    "./fast-models": "./src/fast-models.ts",
-    "./ui": "./src/ui/index.ts"
+    "./protocol": "./src/protocol.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -49,9 +45,6 @@
     "test": "vitest run",
     "prepublishOnly": "pnpm validate",
     "pack:dry": "pnpm pack --dry-run"
-  },
-  "dependencies": {
-    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.80.8",
