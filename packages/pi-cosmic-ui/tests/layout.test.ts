@@ -64,7 +64,7 @@ describe("responsive footer layout", () => {
     expect(usage).toContain("█");
   });
 
-  test("color-codes context and OpenAI percentages by remaining-capacity thresholds", () => {
+  test("reverses context consumption colors relative to remaining usage", () => {
     const fg = vi.fn((_color: string, text: string) => text);
     const thresholdTheme = { fg };
 
@@ -78,9 +78,9 @@ describe("responsive footer layout", () => {
       );
     renderOpenAIUsageLine("Usage: 5h: 75% | 7d: 25%", 80, thresholdTheme, false);
 
-    expect(fg.mock.calls).toContainEqual(["success", " 75% · 75k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["error", " 75% · 75k/100k"]);
     expect(fg.mock.calls).toContainEqual(["warning", " 50% · 50k/100k"]);
-    expect(fg.mock.calls).toContainEqual(["error", " 24% · 24k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["success", " 24% · 24k/100k"]);
     expect(fg.mock.calls).toContainEqual(["success", "5h "]);
     expect(fg.mock.calls).toContainEqual(["success", " 75%"]);
     expect(fg.mock.calls).toContainEqual(["warning", "7d "]);
@@ -93,7 +93,12 @@ describe("responsive footer layout", () => {
 
     renderContributionLine(
       [
-        { kind: "text", id: "model", region: "identity", text: "gpt-5.6" },
+        {
+          kind: "text",
+          id: "model",
+          region: "identity",
+          text: "openai-codex / gpt-5.6",
+        },
         { kind: "text", id: "effort", region: "identity", text: "medium" },
         { kind: "text", id: "location", region: "identity", text: "~/dev/cosmic-pi" },
         { kind: "text", id: "branch", region: "identity", text: "main" },
@@ -127,8 +132,10 @@ describe("responsive footer layout", () => {
       ]),
     );
     expect(new Set(colors).size).toBeGreaterThanOrEqual(7);
+    expect(fg.mock.calls).toContainEqual(["syntaxType", "openai-codex"]);
+    expect(fg.mock.calls).toContainEqual(["syntaxPunctuation", " / "]);
     expect(fg.mock.calls).toContainEqual(["mdLink", "gpt-5.6"]);
-    expect(fg.mock.calls).toContainEqual(["mdLink", "Ctx "]);
+    expect(fg.mock.calls).toContainEqual(["mdLink", "Ctx     "]);
     expect(fg.mock.calls).toContainEqual(["mdLink", "OpenAI  "]);
     expect(fg.mock.calls).toContainEqual(["syntaxOperator", "medium"]);
     expect(fg.mock.calls).toContainEqual(["success", "+8L"]);

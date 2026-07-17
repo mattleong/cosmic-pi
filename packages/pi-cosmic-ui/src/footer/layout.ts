@@ -16,16 +16,35 @@ function clampPercent(percent: number): number {
   return Math.max(0, Math.min(100, percent));
 }
 
-function progressTone(percent: number): "success" | "warning" | "error" {
+type ProgressTone = "success" | "warning" | "error";
+
+function remainingCapacityTone(percent: number): ProgressTone {
   if (percent >= 75) return "success";
   if (percent >= 25) return "warning";
   return "error";
 }
 
-function progressBar(percent: number, cells: number, theme: CosmicFooterTheme): string {
+function contextConsumptionTone(percent: number): ProgressTone {
+  if (percent >= 75) return "error";
+  if (percent >= 25) return "warning";
+  return "success";
+}
+
+function progressBar(
+  percent: number,
+  cells: number,
+  theme: CosmicFooterTheme,
+  tone: ProgressTone,
+): string {
   const value = clampPercent(percent);
   const filled = Math.round((value / 100) * cells);
-  return theme.fg(progressTone(value), `${"█".repeat(filled)}${"░".repeat(cells - filled)}`);
+  return theme.fg(tone, `${"█".repeat(filled)}${"░".repeat(cells - filled)}`);
+}
+
+const FOOTER_LABEL_WIDTH = 8;
+
+function footerLabel(label: string, theme: CosmicFooterTheme): string {
+  return theme.fg("mdLink", label.padEnd(FOOTER_LABEL_WIDTH));
 }
 
 function alignSides(left: string, right: string, width: number): string {
@@ -52,16 +71,16 @@ export function renderContextLine(
   const percent = usage?.percent;
   let left: string;
   if (percent === null || percent === undefined) {
-    left =
-      theme.fg("mdLink", "Ctx ") + theme.fg("syntaxNumber", `?/${formatTokens(contextWindow)}`);
+    left = footerLabel("Ctx", theme) + theme.fg("syntaxNumber", `?/${formatTokens(contextWindow)}`);
   } else {
     const cells = compact ? (width < 48 ? 6 : 8) : 12;
     const tokens = usage?.tokens ?? Math.round((percent / 100) * contextWindow);
+    const color = contextConsumptionTone(percent);
     left = [
-      theme.fg("mdLink", "Ctx "),
-      progressBar(percent, cells, theme),
+      footerLabel("Ctx", theme),
+      progressBar(percent, cells, theme, color),
       theme.fg(
-        progressTone(percent),
+        color,
         ` ${Math.round(percent)}% · ${formatTokens(tokens)}/${formatTokens(contextWindow)}`,
       ),
     ].join("");
@@ -82,7 +101,7 @@ export function renderOpenAIUsageLine(
   const body = text.replace(/^Usage:\s*/i, "");
   const pattern = /(5h|7d):\s*(\d+(?:\.\d+)?)%/gi;
   const cells = compact ? 6 : 10;
-  const pieces = [theme.fg("mdLink", "OpenAI  ")];
+  const pieces = [footerLabel("OpenAI", theme)];
   let cursor = 0;
   let matched = false;
   for (const match of body.matchAll(pattern)) {
@@ -90,10 +109,10 @@ export function renderOpenAIUsageLine(
     const index = match.index ?? 0;
     if (index > cursor) pieces.push(theme.fg("syntaxOperator", body.slice(cursor, index)));
     const percent = Number(match[2]);
-    const color = progressTone(percent);
+    const color = remainingCapacityTone(percent);
     const labelColor = color;
     pieces.push(theme.fg(labelColor, `${match[1]?.toLowerCase()} `));
-    pieces.push(progressBar(percent, cells, theme));
+    pieces.push(progressBar(percent, cells, theme, color));
     pieces.push(theme.fg(color, ` ${Math.round(percent)}%`));
     cursor = index + match[0].length;
   }
@@ -143,6 +162,16 @@ function tone(
   contribution: CosmicFooterTextContribution,
   text: string,
 ): string {
+  if (contribution.id === "model") {
+    const separator = " / ";
+    const separatorIndex = text.indexOf(separator);
+    if (separatorIndex !== -1)
+      return [
+        theme.fg("syntaxType", text.slice(0, separatorIndex)),
+        theme.fg("syntaxPunctuation", separator),
+        theme.fg("mdLink", text.slice(separatorIndex + separator.length)),
+      ].join("");
+  }
   if (contribution.id === "git.lines") {
     return text
       .split(" ")
@@ -210,6 +239,27 @@ function styledContributionLine(
     .filter((entry) => Boolean(contributionText(entry, compact)))
     .map((entry) => tone(theme, entry, contributionText(entry, compact)))
     .join(theme.fg("syntaxPunctuation", " • "));
+}
+
+export function renderLabeledContributionLine(
+  label: string,
+  contributions: CosmicFooterTextContribution[],
+  width: number,
+  theme: CosmicFooterTheme,
+  compact: boolean,
+): string {
+  if (width <= 0) return "";
+  if (width <= FOOTER_LABEL_WIDTH) return truncateToWidth(theme.fg("mdLink", label), width, "");
+  return truncateToWidth(
+    `${footerLabel(label, theme)}${renderContributionLine(
+      contributions,
+      width - FOOTER_LABEL_WIDTH,
+      theme,
+      compact,
+    )}`,
+    width,
+    "",
+  );
 }
 
 export function renderContributionLine(

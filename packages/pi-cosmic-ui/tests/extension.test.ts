@@ -110,7 +110,10 @@ describe("Cosmic UI extension", () => {
       expect(footer.render(width).every((line: string) => visibleWidth(line) <= width)).toBe(true);
     const renderedLines = footer.render(100);
     const rendered = renderedLines.join("\n");
+    expect(renderedLines[0]).toContain("Model");
+    expect(renderedLines[0]).toContain("provider");
     expect(renderedLines[0]).toContain("model-long-name");
+    expect(renderedLines[1]).toContain("Repo");
     expect(renderedLines[1]).toContain("/tmp/project");
     expect(rendered).toContain("Ctx");
     expect(rendered).toContain("OpenAI");
@@ -159,8 +162,8 @@ describe("Cosmic UI extension", () => {
       },
     );
     const rendered = footer.render(100);
-    expect(rendered[0]).toBe("second-model • high");
-    expect(rendered[1]).toContain("/tmp/second-project");
+    expect(rendered[0]).toBe("Model   second-model • high");
+    expect(rendered[1]).toContain("Repo    /tmp/second-project");
     expect(rendered.join("\n")).toContain("second-session");
   });
 

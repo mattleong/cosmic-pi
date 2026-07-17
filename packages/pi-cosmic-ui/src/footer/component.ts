@@ -18,6 +18,7 @@ import {
   isTerminalImageLine,
   renderContextLine,
   renderContributionLine,
+  renderLabeledContributionLine,
   renderOpenAIUsageLine,
 } from "./layout.ts";
 import type { FooterContributionRegistry } from "./registry.ts";
@@ -69,7 +70,7 @@ function builtinContributions(
   let modelText = model?.id ?? "no-model";
   const thinking = pi.getThinkingLevel();
   if ((footerData.getAvailableProviderCount?.() ?? 0) > 1 && model)
-    modelText = `(${model.provider}) ${modelText}`;
+    modelText = `${model.provider} / ${modelText}`;
 
   const result: CosmicFooterTextContribution[] = [
     {
@@ -315,9 +316,11 @@ export function createFooterComponent(options: {
       const otherDetails = details.filter((entry) => entry.id !== "openai.usage");
       let lines: string[] = [];
       if (modelIdentity.length)
-        lines.push(renderContributionLine(modelIdentity, width, theme, compact));
+        lines.push(renderLabeledContributionLine("Model", modelIdentity, width, theme, compact));
       if (repositoryIdentity.length)
-        lines.push(renderContributionLine(repositoryIdentity, width, theme, compact));
+        lines.push(
+          renderLabeledContributionLine("Repo", repositoryIdentity, width, theme, compact),
+        );
       if (contextVisible || sessionInfo.length)
         lines.push(
           contextVisible
