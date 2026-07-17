@@ -115,6 +115,8 @@ function contributionColor(contribution: CosmicFooterTextContribution): string {
       return "syntaxFunction";
     case "branch":
       return "syntaxType";
+    case "pullRequest":
+      return "mdLink";
     case "git":
       return "syntaxOperator";
     case "session":

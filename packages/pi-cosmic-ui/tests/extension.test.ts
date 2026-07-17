@@ -14,11 +14,13 @@ function harness(mode: "tui" | "rpc" = "tui") {
   const handlers = new Map<string, Handler[]>();
   const bus = new Map<string, Set<(data: unknown) => void>>();
   const setFooter = vi.fn();
-  const exec = vi.fn(async (_command: string, args: string[]) => ({
+  const exec = vi.fn(async (command: string, args: string[]) => ({
     stdout:
-      args[0] === "diff"
-        ? "10\t4\tchanged.ts\n"
-        : "## main...origin/main\n M changed.ts\n?? new.ts\n",
+      command === "gh"
+        ? "42\n"
+        : args[0] === "diff"
+          ? "10\t4\tchanged.ts\n"
+          : "## main...origin/main\n M changed.ts\n?? new.ts\n",
     stderr: "",
     code: 0,
     killed: false,
@@ -106,10 +108,16 @@ describe("Cosmic UI extension", () => {
     );
     for (const width of [32, 64, 100])
       expect(footer.render(width).every((line: string) => visibleWidth(line) <= width)).toBe(true);
-    const rendered = footer.render(100).join("\n");
+    const renderedLines = footer.render(100);
+    const rendered = renderedLines.join("\n");
+    expect(renderedLines[0]).toContain("model-long-name");
+    expect(renderedLines[1]).toContain("/tmp/project");
     expect(rendered).toContain("Ctx");
     expect(rendered).toContain("OpenAI");
     expect(rendered).toContain("main");
+    expect(rendered).toContain("PR #42");
+    expect(renderedLines[1]).toContain("main");
+    expect(renderedLines[1]).toContain("PR #42");
     expect(rendered).toContain("~1 ?1");
     expect(rendered).toContain("+6L");
     expect(rendered).toContain("~4L");
@@ -150,8 +158,10 @@ describe("Cosmic UI extension", () => {
         onBranchChange: () => vi.fn(),
       },
     );
-    expect(footer.render(100).join("\n")).toContain("second-model • high • /tmp/second-project");
-    expect(footer.render(100).join("\n")).toContain("second-session");
+    const rendered = footer.render(100);
+    expect(rendered[0]).toBe("second-model • high");
+    expect(rendered[1]).toContain("/tmp/second-project");
+    expect(rendered.join("\n")).toContain("second-session");
   });
 
   test("polls git status so external commits and edits refresh automatically", async () => {
@@ -159,7 +169,7 @@ describe("Cosmic UI extension", () => {
     try {
       const h = harness();
       await emit(h, "session_start");
-      expect(h.exec).toHaveBeenCalledTimes(2);
+      expect(h.exec).toHaveBeenCalledTimes(3);
       const factory = h.setFooter.mock.calls[0]?.[0];
       const footer = factory(
         { requestRender: vi.fn() },
@@ -179,12 +189,12 @@ describe("Cosmic UI extension", () => {
       });
 
       await vi.advanceTimersByTimeAsync(2_000);
-      expect(h.exec).toHaveBeenCalledTimes(3);
+      expect(h.exec).toHaveBeenCalledTimes(4);
       expect(footer.render(100).join("\n")).toContain("clean");
 
       await emit(h, "session_shutdown");
       await vi.advanceTimersByTimeAsync(2_000);
-      expect(h.exec).toHaveBeenCalledTimes(3);
+      expect(h.exec).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }

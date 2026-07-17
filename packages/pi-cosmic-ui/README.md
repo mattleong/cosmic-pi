@@ -30,6 +30,7 @@ Run `/cosmic-ui` to configure footer visibility, density, and media placement. C
       "location",
       "openai.fast",
       "branch",
+      "pullRequest",
       "git",
       "context",
       "session",

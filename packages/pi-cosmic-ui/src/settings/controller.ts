@@ -14,6 +14,7 @@ const VISIBILITY_IDS = [
   "location",
   "openai.fast",
   "branch",
+  "pullRequest",
   "git",
   "context",
   "session",

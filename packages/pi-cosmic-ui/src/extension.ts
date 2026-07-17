@@ -17,6 +17,7 @@ import {
 import { registerSettingsCommand } from "./settings/controller.ts";
 
 const GIT_REFRESH_INTERVAL_MS = 2_000;
+const PULL_REQUEST_REFRESH_INTERVAL_MS = 30_000;
 
 const EMPTY_TOTALS = (): FooterTotals => ({
   input: 0,
@@ -38,6 +39,8 @@ export default function cosmicUi(pi: ExtensionAPI): void {
   let installedContext: ExtensionContext | undefined;
   let footerComponent: ReturnType<typeof createFooterComponent> | undefined;
   let gitStatus: FooterGitStatus | undefined;
+  let pullRequestNumber: number | undefined;
+  let pullRequestCheckedAt = 0;
   let gitRefreshTimer: ReturnType<typeof setInterval> | undefined;
 
   const refreshTotals = (ctx: ExtensionContext) => {
@@ -50,6 +53,29 @@ export default function cosmicUi(pi: ExtensionAPI): void {
       totals.cacheWrite += entry.message.usage.cacheWrite;
       totals.cost += entry.message.usage.cost.total;
     }
+  };
+
+  const refreshPullRequest = async (ctx: ExtensionContext, force = false) => {
+    if (!terminalUi(ctx) || installedContext !== ctx) return;
+    const now = Date.now();
+    if (!force && now - pullRequestCheckedAt < PULL_REQUEST_REFRESH_INTERVAL_MS) return;
+    pullRequestCheckedAt = now;
+    let nextNumber: number | undefined;
+    try {
+      const result = await pi.exec("gh", ["pr", "view", "--json", "number", "--jq", ".number"], {
+        cwd: ctx.sessionManager.getCwd(),
+        timeout: 3_000,
+      });
+      if (installedContext !== ctx) return;
+      const parsed = Number(result.stdout.trim());
+      if (result.code === 0 && Number.isInteger(parsed) && parsed > 0) nextNumber = parsed;
+    } catch {
+      if (installedContext !== ctx) return;
+      nextNumber = undefined;
+    }
+    if (pullRequestNumber === nextNumber) return;
+    pullRequestNumber = nextNumber;
+    registry.requestRenderNow();
   };
 
   const refreshGitStatus = async (ctx: ExtensionContext) => {
@@ -92,7 +118,10 @@ export default function cosmicUi(pi: ExtensionAPI): void {
 
   const startGitPolling = (ctx: ExtensionContext) => {
     stopGitPolling();
-    gitRefreshTimer = setInterval(() => void refreshGitStatus(ctx), GIT_REFRESH_INTERVAL_MS);
+    gitRefreshTimer = setInterval(() => {
+      void refreshGitStatus(ctx);
+      void refreshPullRequest(ctx);
+    }, GIT_REFRESH_INTERVAL_MS);
     gitRefreshTimer.unref();
   };
 
@@ -125,8 +154,11 @@ export default function cosmicUi(pi: ExtensionAPI): void {
     ctx.ui.setFooter((tui, theme, footerData) => {
       registry.setRenderRequest(() => tui.requestRender());
       const unsubscribeBranch = footerData.onBranchChange(() => {
+        pullRequestNumber = undefined;
+        pullRequestCheckedAt = 0;
         tui.requestRender();
         void refreshGitStatus(ctx);
+        void refreshPullRequest(ctx, true);
       });
       const component = createFooterComponent({
         pi,
@@ -137,6 +169,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
         config: () => config ?? resolveConfig(ctx.cwd),
         totals: () => totals,
         gitStatus: () => gitStatus,
+        pullRequestNumber: () => pullRequestNumber,
       });
       footerComponent = component;
       return {
@@ -180,9 +213,11 @@ export default function cosmicUi(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     config = resolveConfig(ctx.cwd);
     gitStatus = undefined;
+    pullRequestNumber = undefined;
+    pullRequestCheckedAt = 0;
     refreshTotals(ctx);
     update(ctx);
-    await refreshGitStatus(ctx);
+    await Promise.all([refreshGitStatus(ctx), refreshPullRequest(ctx, true)]);
   });
   pi.on("turn_end", async (event, ctx) => {
     if (event.message?.role === "assistant") {
@@ -241,6 +276,8 @@ export default function cosmicUi(pi: ExtensionAPI): void {
     config = undefined;
     totals = EMPTY_TOTALS();
     gitStatus = undefined;
+    pullRequestNumber = undefined;
+    pullRequestCheckedAt = 0;
     for (const unsubscribe of unsubscribers) unsubscribe();
   });
 }

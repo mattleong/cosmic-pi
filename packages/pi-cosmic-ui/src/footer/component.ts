@@ -51,6 +51,7 @@ function builtinContributions(
   totals: FooterTotals,
   contextUsage: ReturnType<ExtensionContext["getContextUsage"]>,
   gitStatus: FooterGitStatus | undefined,
+  pullRequestNumber: number | undefined,
 ): CosmicFooterTextContribution[] {
   const location = abbreviateHomePath(ctx.sessionManager.getCwd());
   const branch = footerData.getGitBranch();
@@ -122,6 +123,15 @@ function builtinContributions(
       tone: "accent",
       priority: 90,
       order: 200,
+    });
+  if (branch && pullRequestNumber)
+    result.push({
+      kind: "text",
+      id: "pullRequest",
+      region: "identity",
+      text: `PR #${pullRequestNumber}`,
+      priority: 85,
+      order: 250,
     });
   if (gitStatus) {
     const dirty =
@@ -230,6 +240,7 @@ export function createFooterComponent(options: {
   config(): ResolvedCosmicUiConfig;
   totals(): FooterTotals;
   gitStatus(): FooterGitStatus | undefined;
+  pullRequestNumber(): number | undefined;
 }) {
   const { pi, ctx, footerData, theme, registry } = options;
   let contextUsageCached = false;
@@ -273,6 +284,7 @@ export function createFooterComponent(options: {
           options.totals(),
           currentContextUsage,
           options.gitStatus(),
+          options.pullRequestNumber(),
         ),
         ...registry.list(),
       ];
@@ -285,6 +297,14 @@ export function createFooterComponent(options: {
       const compact =
         config.footer.density === "compact" || (config.footer.density === "auto" && width < 72);
       const identity = text.filter((entry) => entry.region === "identity");
+      const repositoryIdentity = identity.filter(
+        (entry) =>
+          entry.id === "location" ||
+          entry.id === "branch" ||
+          entry.id === "pullRequest" ||
+          entry.id.startsWith("git"),
+      );
+      const modelIdentity = identity.filter((entry) => !repositoryIdentity.includes(entry));
       const metrics = text.filter((entry) => entry.region === "metrics");
       const contextVisible = metrics.some((entry) => entry.id === "context");
       const sessionInfo = metrics.filter((entry) => entry.id !== "context");
@@ -292,18 +312,10 @@ export function createFooterComponent(options: {
       const openAIUsage = details.find((entry) => entry.id === "openai.usage");
       const otherDetails = details.filter((entry) => entry.id !== "openai.usage");
       let lines: string[] = [];
-      if (width < 48) {
-        const essentials = identity.filter(
-          (entry) =>
-            entry.id === "model" ||
-            entry.id === "effort" ||
-            entry.id === "branch" ||
-            entry.id === "git",
-        );
-        if (essentials.length) lines.push(renderContributionLine(essentials, width, theme, true));
-      } else if (identity.length) {
-        lines.push(renderContributionLine(identity, width, theme, compact));
-      }
+      if (modelIdentity.length)
+        lines.push(renderContributionLine(modelIdentity, width, theme, compact));
+      if (repositoryIdentity.length)
+        lines.push(renderContributionLine(repositoryIdentity, width, theme, compact));
       if (contextVisible || sessionInfo.length)
         lines.push(
           contextVisible
