@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { resolveConfig } from "./config/store.ts";
 import type { ResolvedCosmicUiConfig } from "./config/schema.ts";
 import { createFooterComponent, type FooterTotals } from "./footer/component.ts";
-import { parseGitStatus, type FooterGitStatus } from "./footer/git.ts";
+import { applyGitNumstat, parseGitStatus, type FooterGitStatus } from "./footer/git.ts";
 import { FooterContributionRegistry } from "./footer/registry.ts";
 import {
   COSMIC_UI_FOOTER_INVALIDATE,
@@ -15,6 +15,8 @@ import {
   isCosmicUiHostQuery,
 } from "./protocol.ts";
 import { registerSettingsCommand } from "./settings/controller.ts";
+
+const GIT_REFRESH_INTERVAL_MS = 2_000;
 
 const EMPTY_TOTALS = (): FooterTotals => ({
   input: 0,
@@ -36,6 +38,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
   let installedContext: ExtensionContext | undefined;
   let footerComponent: ReturnType<typeof createFooterComponent> | undefined;
   let gitStatus: FooterGitStatus | undefined;
+  let gitRefreshTimer: ReturnType<typeof setInterval> | undefined;
 
   const refreshTotals = (ctx: ExtensionContext) => {
     totals = EMPTY_TOTALS();
@@ -52,6 +55,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
   const refreshGitStatus = async (ctx: ExtensionContext) => {
     if (!terminalUi(ctx) || installedContext !== ctx) return;
     const cwd = ctx.sessionManager.getCwd();
+    let nextStatus: FooterGitStatus | undefined;
     try {
       const result = await pi.exec(
         "git",
@@ -59,18 +63,44 @@ export default function cosmicUi(pi: ExtensionAPI): void {
         { cwd, timeout: 2_000 },
       );
       if (installedContext !== ctx) return;
-      gitStatus = result.code === 0 ? parseGitStatus(result.stdout) : undefined;
+      nextStatus = result.code === 0 ? parseGitStatus(result.stdout) : undefined;
     } catch {
       if (installedContext !== ctx) return;
-      gitStatus = undefined;
+      nextStatus = undefined;
     }
+    if (nextStatus && nextStatus.staged + nextStatus.modified + nextStatus.conflicts > 0) {
+      try {
+        const diff = await pi.exec("git", ["diff", "--numstat", "HEAD", "--"], {
+          cwd,
+          timeout: 2_000,
+        });
+        if (installedContext !== ctx) return;
+        if (diff.code === 0) nextStatus = applyGitNumstat(nextStatus, diff.stdout);
+      } catch {
+        // Keep file-level status when line statistics are unavailable.
+      }
+    }
+    if (JSON.stringify(gitStatus) === JSON.stringify(nextStatus)) return;
+    gitStatus = nextStatus;
     registry.requestRenderNow();
+  };
+
+  const stopGitPolling = () => {
+    if (gitRefreshTimer) clearInterval(gitRefreshTimer);
+    gitRefreshTimer = undefined;
+  };
+
+  const startGitPolling = (ctx: ExtensionContext) => {
+    stopGitPolling();
+    gitRefreshTimer = setInterval(() => void refreshGitStatus(ctx), GIT_REFRESH_INTERVAL_MS);
+    gitRefreshTimer.unref();
   };
 
   const update = (ctx: ExtensionContext) => {
     const current = config ?? (config = resolveConfig(ctx.cwd));
     if (!terminalUi(ctx)) return;
     if (installed && installedContext !== ctx) {
+      stopGitPolling();
       ctx.ui.setFooter(undefined);
       installed = false;
       installedContext = undefined;
@@ -78,6 +108,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
       registry.setRenderRequest(undefined);
     }
     if (!current.footer.enabled) {
+      stopGitPolling();
       if (installed) ctx.ui.setFooter(undefined);
       installed = false;
       installedContext = undefined;
@@ -111,6 +142,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
       return {
         ...component,
         dispose() {
+          stopGitPolling();
           unsubscribeBranch();
           registry.setRenderRequest(undefined);
           installed = false;
@@ -119,6 +151,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
         },
       };
     });
+    startGitPolling(ctx);
   };
 
   const unsubscribers = [
@@ -199,6 +232,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
     registry.requestRenderNow();
   });
   pi.on("session_shutdown", (_event, ctx) => {
+    stopGitPolling();
     if (installed && terminalUi(ctx)) ctx.ui.setFooter(undefined);
     installed = false;
     installedContext = undefined;

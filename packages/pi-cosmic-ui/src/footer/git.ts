@@ -5,6 +5,9 @@ export interface FooterGitStatus {
   conflicts: number;
   ahead: number;
   behind: number;
+  linesAdded: number;
+  linesRemoved: number;
+  linesChanged: number;
 }
 
 const CONFLICT_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
@@ -20,6 +23,9 @@ export function parseGitStatus(output: string): FooterGitStatus | undefined {
     conflicts: 0,
     ahead: 0,
     behind: 0,
+    linesAdded: 0,
+    linesRemoved: 0,
+    linesChanged: 0,
   };
 
   const header = lines.find((line) => line.startsWith("## ")) ?? "";
@@ -43,6 +49,25 @@ export function parseGitStatus(output: string): FooterGitStatus | undefined {
   }
 
   return status;
+}
+
+export function applyGitNumstat(status: FooterGitStatus, output: string): FooterGitStatus {
+  let linesAdded = 0;
+  let linesRemoved = 0;
+  let linesChanged = 0;
+  for (const line of output.split(/\r?\n/)) {
+    if (!line) continue;
+    const [rawAdded, rawRemoved] = line.split("\t", 3);
+    if (!rawAdded || !rawRemoved || rawAdded === "-" || rawRemoved === "-") continue;
+    const added = Number(rawAdded);
+    const removed = Number(rawRemoved);
+    if (!Number.isFinite(added) || !Number.isFinite(removed)) continue;
+    const changed = Math.min(added, removed);
+    linesChanged += changed;
+    linesAdded += added - changed;
+    linesRemoved += removed - changed;
+  }
+  return { ...status, linesAdded, linesRemoved, linesChanged };
 }
 
 export function formatGitStatus(status: FooterGitStatus): string {

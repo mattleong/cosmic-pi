@@ -158,6 +158,20 @@ function tone(
   contribution: CosmicFooterTextContribution,
   text: string,
 ): string {
+  if (contribution.id === "git.lines") {
+    return text
+      .split(" ")
+      .filter(Boolean)
+      .map((value) => {
+        const color = value.startsWith("+")
+          ? "success"
+          : value.startsWith("-")
+            ? "error"
+            : "syntaxNumber";
+        return theme.fg(color, value);
+      })
+      .join(" ");
+  }
   return theme.fg(contributionColor(contribution), text);
 }
 

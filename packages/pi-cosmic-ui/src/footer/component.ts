@@ -135,6 +135,19 @@ function builtinContributions(
       priority: 80,
       order: 300,
     });
+    const lineStats: string[] = [];
+    if (gitStatus.linesAdded) lineStats.push(`+${gitStatus.linesAdded}L`);
+    if (gitStatus.linesRemoved) lineStats.push(`-${gitStatus.linesRemoved}L`);
+    if (gitStatus.linesChanged) lineStats.push(`~${gitStatus.linesChanged}L`);
+    if (lineStats.length)
+      result.push({
+        kind: "text",
+        id: "git.lines",
+        region: "identity",
+        text: lineStats.join(" "),
+        priority: 75,
+        order: 310,
+      });
   }
   if (sessionName)
     result.push({
@@ -202,7 +215,8 @@ function ordered(
     .filter(
       (value) =>
         !config.footer.hidden.includes(value.id) &&
-        !(value.id.startsWith("metrics.") && config.footer.hidden.includes("metrics")),
+        !(value.id.startsWith("metrics.") && config.footer.hidden.includes("metrics")) &&
+        !(value.id.startsWith("git.") && config.footer.hidden.includes("git")),
     )
     .sort((a, b) => (order.get(a.id) ?? a.order ?? 500) - (order.get(b.id) ?? b.order ?? 500));
 }

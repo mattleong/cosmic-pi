@@ -64,7 +64,7 @@ describe("responsive footer layout", () => {
     expect(usage).toContain("█");
   });
 
-  test("uses a varied named theme palette without dim, white, or green footer colors", () => {
+  test("uses a varied named theme palette without dim or white footer colors", () => {
     const fg = vi.fn((_color: string, text: string) => text);
     const fullColorTheme = { fg };
 
@@ -76,6 +76,7 @@ describe("responsive footer layout", () => {
         { kind: "text", id: "branch", region: "identity", text: "main" },
         { kind: "text", id: "metrics.input", region: "metrics", text: "↑10k" },
         { kind: "text", id: "metrics.cost", region: "metrics", text: "$1.00" },
+        { kind: "text", id: "git.lines", region: "identity", text: "+8L -3L ~2L" },
         { kind: "text", id: "legacy-dim", region: "details", text: "legacy", tone: "dim" },
       ],
       200,
@@ -104,11 +105,24 @@ describe("responsive footer layout", () => {
     );
     expect(new Set(colors).size).toBeGreaterThanOrEqual(7);
     expect(fg.mock.calls).toContainEqual(["syntaxOperator", "medium"]);
+    expect(fg.mock.calls).toContainEqual(["success", "+8L"]);
+    expect(fg.mock.calls).toContainEqual(["error", "-3L"]);
+    expect(fg.mock.calls).toContainEqual(["syntaxNumber", "~2L"]);
     expect(fg.mock.calls).toContainEqual(["accent", "5h "]);
     expect(fg.mock.calls).toContainEqual(["accent", "7d "]);
     expect(colors).not.toContain("dim");
     expect(colors).not.toContain("text");
-    expect(colors).not.toContain("success");
+  });
+
+  test("keeps Git line statistics in one block without bullet separators", () => {
+    const line = renderContributionLine(
+      [{ kind: "text", id: "git.lines", region: "identity", text: "+8L -3L ~2L" }],
+      80,
+      { fg: (_color: string, text: string) => text },
+      false,
+    );
+
+    expect(line).toBe("+8L -3L ~2L");
   });
 
   test("combines inline media without overflowing text rows", () => {

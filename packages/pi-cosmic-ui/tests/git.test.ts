@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatGitStatus, parseGitStatus } from "../src/footer/git.ts";
+import { applyGitNumstat, formatGitStatus, parseGitStatus } from "../src/footer/git.ts";
 
 describe("git footer status", () => {
   test("summarizes staged, modified, untracked, conflicted, and diverged files", () => {
@@ -20,8 +20,21 @@ describe("git footer status", () => {
       conflicts: 1,
       ahead: 2,
       behind: 1,
+      linesAdded: 0,
+      linesRemoved: 0,
+      linesChanged: 0,
     });
     expect(formatGitStatus(status!)).toBe("!1 +1 ~1 ?1 ↑2 ↓1");
+  });
+
+  test("classifies numstat replacements separately from pure additions and removals", () => {
+    const status = parseGitStatus("## main\n M first.ts\n M second.ts\n")!;
+    const withLines = applyGitNumstat(
+      status,
+      ["10\t4\tfirst.ts", "2\t7\tsecond.ts", "-\t-\timage.png"].join("\n"),
+    );
+
+    expect(withLines).toMatchObject({ linesAdded: 6, linesRemoved: 5, linesChanged: 6 });
   });
 
   test("reports a clean repository and ignores non-repository output", () => {
