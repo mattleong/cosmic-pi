@@ -37,8 +37,8 @@ describe("git footer status", () => {
     expect(withLines).toMatchObject({ linesAdded: 6, linesRemoved: 5, linesChanged: 6 });
   });
 
-  test("reports a clean repository and ignores non-repository output", () => {
-    expect(formatGitStatus(parseGitStatus("## main...origin/main\n")!)).toBe("clean");
+  test("hides clean repository status and ignores non-repository output", () => {
+    expect(formatGitStatus(parseGitStatus("## main...origin/main\n")!)).toBe("");
     expect(parseGitStatus("fatal: not a git repository")).toBeUndefined();
   });
 });

@@ -190,7 +190,9 @@ describe("Cosmic UI extension", () => {
 
       await vi.advanceTimersByTimeAsync(2_000);
       expect(h.exec).toHaveBeenCalledTimes(4);
-      expect(footer.render(100).join("\n")).toContain("clean");
+      const cleanFooter = footer.render(100).join("\n");
+      expect(cleanFooter).not.toContain("clean");
+      expect(cleanFooter).not.toContain("~1 ?1");
 
       await emit(h, "session_shutdown");
       await vi.advanceTimersByTimeAsync(2_000);

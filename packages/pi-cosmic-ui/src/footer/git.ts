@@ -78,5 +78,5 @@ export function formatGitStatus(status: FooterGitStatus): string {
   if (status.untracked) parts.push(`?${status.untracked}`);
   if (status.ahead) parts.push(`↑${status.ahead}`);
   if (status.behind) parts.push(`↓${status.behind}`);
-  return parts.length ? parts.join(" ") : "clean";
+  return parts.join(" ");
 }

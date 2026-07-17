@@ -136,15 +136,17 @@ function builtinContributions(
   if (gitStatus) {
     const dirty =
       gitStatus.staged + gitStatus.modified + gitStatus.untracked + gitStatus.conflicts > 0;
-    result.push({
-      kind: "text",
-      id: "git",
-      region: "identity",
-      text: formatGitStatus(gitStatus),
-      tone: gitStatus.conflicts ? "error" : dirty ? "warning" : "success",
-      priority: 80,
-      order: 300,
-    });
+    const gitText = formatGitStatus(gitStatus);
+    if (gitText)
+      result.push({
+        kind: "text",
+        id: "git",
+        region: "identity",
+        text: gitText,
+        tone: gitStatus.conflicts ? "error" : dirty ? "warning" : "success",
+        priority: 80,
+        order: 300,
+      });
     const lineStats: string[] = [];
     if (gitStatus.linesAdded) lineStats.push(`+${gitStatus.linesAdded}L`);
     if (gitStatus.linesRemoved) lineStats.push(`-${gitStatus.linesRemoved}L`);
