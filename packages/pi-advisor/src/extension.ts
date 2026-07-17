@@ -5,6 +5,7 @@ import {
   type ExtensionContext,
   type TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
+import { supportsFastModel } from "pi-better-openai/fast-models";
 import { requestAdvisorReview, type AdvisorUsageTelemetry } from "./client.ts";
 import {
   loadAdvisorConfig,
@@ -30,6 +31,8 @@ import {
 } from "./settings.ts";
 
 const STATUS_KEY = "pi-advisor";
+const STATUS_SPINNER_INTERVAL_MS = 80;
+const STATUS_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 type ReviewCycleState = "eligible" | "reviewed";
 type RevisionThreshold = "none" | "high" | "medium";
@@ -111,6 +114,59 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     let sessionPaused = false;
     let reviewNext = false;
     let lastCandidate: LastCandidate | undefined;
+    let statusSpinnerContext: ExtensionContext | undefined;
+    let statusSpinnerEffort: string | undefined;
+    let statusSpinnerFast = false;
+    let statusSpinnerFrame = 0;
+    let statusSpinnerModel: string | undefined;
+    let statusSpinnerTimer: ReturnType<typeof setInterval> | undefined;
+
+    const stopStatusSpinner = (): void => {
+      if (statusSpinnerTimer) clearInterval(statusSpinnerTimer);
+      statusSpinnerContext = undefined;
+      statusSpinnerEffort = undefined;
+      statusSpinnerFast = false;
+      statusSpinnerModel = undefined;
+      statusSpinnerTimer = undefined;
+      statusSpinnerFrame = 0;
+    };
+
+    const renderAdvisingStatus = (): void => {
+      if (!statusSpinnerContext || !statusSpinnerModel || !statusSpinnerEffort) return;
+      const frame = STATUS_SPINNER_FRAMES[statusSpinnerFrame] ?? STATUS_SPINNER_FRAMES[0];
+      statusSpinnerContext.ui.setStatus(
+        STATUS_KEY,
+        `${frame} ${statusSpinnerModel}:${statusSpinnerEffort}${statusSpinnerFast ? " ⚡advising…" : " advising…"}`,
+      );
+    };
+
+    const startStatusSpinner = (
+      ctx: ExtensionContext,
+      model: string,
+      effort: string,
+      fast: boolean,
+    ): void => {
+      if (
+        statusSpinnerTimer &&
+        statusSpinnerContext === ctx &&
+        statusSpinnerModel === model &&
+        statusSpinnerEffort === effort &&
+        statusSpinnerFast === fast
+      )
+        return;
+      stopStatusSpinner();
+      statusSpinnerContext = ctx;
+      statusSpinnerEffort = effort;
+      statusSpinnerFast = fast;
+      statusSpinnerModel = model;
+      renderAdvisingStatus();
+      if (ctx.mode !== "tui") return;
+      statusSpinnerTimer = setInterval(() => {
+        statusSpinnerFrame = (statusSpinnerFrame + 1) % STATUS_SPINNER_FRAMES.length;
+        renderAdvisingStatus();
+      }, STATUS_SPINNER_INTERVAL_MS);
+      statusSpinnerTimer.unref();
+    };
 
     const recordUsage = (target: AdvisorSessionMetrics, usage: AdvisorUsageTelemetry): void => {
       target.cacheReadTokens = (target.cacheReadTokens ?? 0) + usage.cacheReadTokens;
@@ -132,6 +188,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       pendingReview = undefined;
       pendingIntervention = undefined;
       activeController?.abort();
+      stopStatusSpinner();
       (ctx ?? statusContext)?.ui.setStatus(STATUS_KEY, undefined);
       return cleared;
     };
@@ -148,19 +205,38 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       !review.ctx.hasPendingMessages();
 
     const refreshReviewStatus = (): void => {
-      if (!statusContext) return;
+      if (!statusContext) {
+        stopStatusSpinner();
+        return;
+      }
       if (sessionPaused) {
+        stopStatusSpinner();
         statusContext.ui.setStatus(STATUS_KEY, "advisor: paused");
         return;
       }
       if (pendingIntervention !== undefined && reviewIsCurrent(pendingIntervention.reviewJob)) {
+        stopStatusSpinner();
         statusContext.ui.setStatus(STATUS_KEY, "advisor: revision pending…");
         return;
       }
-      const hasCurrentReview =
-        (activeReview !== undefined && reviewIsCurrent(activeReview)) ||
-        (pendingReview !== undefined && reviewIsCurrent(pendingReview));
-      statusContext.ui.setStatus(STATUS_KEY, hasCurrentReview ? "advisor: reviewing…" : undefined);
+      const currentReview =
+        activeReview !== undefined && reviewIsCurrent(activeReview)
+          ? activeReview
+          : pendingReview !== undefined && reviewIsCurrent(pendingReview)
+            ? pendingReview
+            : undefined;
+      if (currentReview) {
+        startStatusSpinner(
+          statusContext,
+          currentReview.config.model ?? "advisor",
+          currentReview.config.thinkingLevel,
+          currentReview.config.fastMode &&
+            supportsFastModel(currentReview.config.provider, currentReview.config.model),
+        );
+        return;
+      }
+      stopStatusSpinner();
+      statusContext.ui.setStatus(STATUS_KEY, undefined);
     };
 
     const deliverReview = (reviewJob: PendingReview, review: AdvisorReview): void => {

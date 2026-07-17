@@ -222,6 +222,31 @@ describe("footer mode ownership", () => {
     footer.dispose();
   });
 
+  test("prefixes the effort level with lightning when fast mode is active", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "replace", { fastEnabled: true });
+    const harness = createHarness(cwd);
+    Object.assign(harness.ctx, {
+      model: {
+        provider: "openai",
+        id: "gpt-5.5",
+        reasoning: true,
+        contextWindow: 200_000,
+      },
+    });
+
+    await emit(harness, "session_start");
+    const footerFactory = harness.setFooter.mock.calls[0]?.[0];
+    const footer = footerFactory(
+      { requestRender: vi.fn() },
+      { fg: (_color: string, value: string) => value },
+      {},
+    );
+
+    expect(footer.render(100).join("\n")).toContain("gpt-5.5 • ⚡thinking off");
+    footer.dispose();
+  });
+
   test("adds completed-turn usage without rescanning the full session", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, "replace");

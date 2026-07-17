@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
@@ -93,6 +94,16 @@ describe("Cosmic UI extension", () => {
         text: "Usage: 5h: 90% | 7d: 51%",
       },
     });
+    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      owner: "pi-better-openai",
+      contribution: {
+        kind: "text",
+        id: "openai.fast",
+        region: "identity",
+        text: "fast",
+      },
+    });
     await emit(h, "session_start");
     expect(h.setFooter).toHaveBeenCalledOnce();
     const factory = h.setFooter.mock.calls[0]?.[0];
@@ -101,7 +112,11 @@ describe("Cosmic UI extension", () => {
       { fg: (_color: string, text: string) => `\x1b[2m${text}\x1b[0m` },
       {
         getGitBranch: () => "main",
-        getExtensionStatuses: () => new Map(),
+        getExtensionStatuses: () =>
+          new Map([
+            ["pi-advisor", "⠋ review-model:medium advising…"],
+            ["other-extension", "other ready"],
+          ]),
         getAvailableProviderCount: () => 2,
         onBranchChange: () => vi.fn(),
       },
@@ -113,6 +128,10 @@ describe("Cosmic UI extension", () => {
     expect(renderedLines[0]).toContain("Model");
     expect(renderedLines[0]).toContain("provider");
     expect(renderedLines[0]).toContain("model-long-name");
+    expect(renderedLines[0]).toContain("⚡high");
+    expect(renderedLines[0]).not.toContain(" fast");
+    expect(renderedLines[0]).toContain("⠋ review-model:medium advising…");
+    expect(renderedLines.slice(1).join("\n")).not.toContain("review-model:medium advising");
     expect(renderedLines[1]).toContain("Repo");
     expect(renderedLines[1]).toContain("/tmp/project");
     expect(rendered).toContain("Ctx");
@@ -121,9 +140,12 @@ describe("Cosmic UI extension", () => {
     expect(rendered).toContain("PR #42");
     expect(renderedLines[1]).toContain("main");
     expect(renderedLines[1]).toContain("PR #42");
+    const plainRepositoryLine = stripVTControlCharacters(renderedLines[1] ?? "");
+    expect(plainRepositoryLine).toMatch(/PR #42\s{2,}~1 \?1 • \+6L ~4L$/);
     expect(rendered).toContain("~1 ?1");
     expect(rendered).toContain("+6L");
     expect(rendered).toContain("~4L");
+    expect(rendered).toContain("other ready");
     expect(rendered.indexOf("model-long-name")).toBeLessThan(rendered.indexOf("high"));
     expect(rendered.indexOf("high")).toBeLessThan(rendered.indexOf("/tmp/project"));
     expect(h.ctx.getContextUsage).toHaveBeenCalledTimes(1);

@@ -243,7 +243,11 @@ describe("advisor extension lifecycle", () => {
     expect(harness.requestReview).toHaveBeenCalledTimes(1);
     expect(harness.notify).not.toHaveBeenCalled();
     expect(harness.sendMessage).not.toHaveBeenCalled();
-    expect(harness.setStatus).toHaveBeenNthCalledWith(1, "pi-advisor", "advisor: reviewing…");
+    expect(harness.setStatus).toHaveBeenNthCalledWith(
+      1,
+      "pi-advisor",
+      "⠋ review-model:medium advising…",
+    );
     expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined);
 
     await harness.emit("message_end", { message: { role: "custom", customType: "other" } });
@@ -280,13 +284,46 @@ describe("advisor extension lifecycle", () => {
     await harness.emit("turn_end", assistantEvent("candidate"));
 
     expect(harness.requestReview).toHaveBeenCalledTimes(1);
-    expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", "advisor: reviewing…");
+    expect(harness.setStatus).toHaveBeenLastCalledWith(
+      "pi-advisor",
+      expect.stringMatching(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] review-model:medium advising…$/),
+    );
     expect(harness.sendMessage).not.toHaveBeenCalled();
 
     pendingReview.resolve(passingReview);
     await vi.waitFor(() =>
       expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
     );
+  });
+
+  test("animates model, effort, and active fast mode while a review is running", async () => {
+    vi.useFakeTimers();
+    const pendingReview = deferred<AdvisorReview>();
+    const harness = createHarness(
+      resolvedConfig({ provider: "openai-codex", model: "gpt-5.6-sol", fastMode: true }),
+      pendingReview.promise,
+    );
+
+    try {
+      await harness.emit("turn_end", assistantEvent("candidate"));
+      expect(harness.setStatus).toHaveBeenLastCalledWith(
+        "pi-advisor",
+        "⠋ gpt-5.6-sol:medium ⚡advising…",
+      );
+
+      await vi.advanceTimersByTimeAsync(80);
+      expect(harness.setStatus).toHaveBeenLastCalledWith(
+        "pi-advisor",
+        "⠙ gpt-5.6-sol:medium ⚡advising…",
+      );
+
+      await harness.emit("message_end", { message: { role: "user", content: "new work" } });
+      expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined);
+    } finally {
+      pendingReview.resolve(passingReview);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+    }
   });
 
   test("aborts an in-flight background review when newer user work starts", async () => {

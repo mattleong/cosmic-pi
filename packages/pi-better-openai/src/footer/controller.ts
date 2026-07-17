@@ -141,15 +141,13 @@ export function createFooterController(deps: {
 
           const modelName = ctx.model?.id || "no-model";
           const thinkingLevel = pi.getThinkingLevel();
-          const fastSuffix = fastController.active && supportsFast(ctx) ? " fast" : "";
+          const fastActive = fastController.active && supportsFast(ctx);
           let rightWithoutProvider = modelName;
           if (ctx.model?.reasoning) {
-            rightWithoutProvider =
-              thinkingLevel === "off"
-                ? `${modelName}${fastSuffix} • thinking off`
-                : `${modelName}${fastSuffix} • ${thinkingLevel}`;
-          } else if (fastSuffix) {
-            rightWithoutProvider = `${modelName}${fastSuffix}`;
+            const effort = thinkingLevel === "off" ? "thinking off" : thinkingLevel;
+            rightWithoutProvider = `${modelName} • ${fastActive ? "⚡" : ""}${effort}`;
+          } else if (fastActive) {
+            rightWithoutProvider = `${modelName} • ⚡`;
           }
 
           let rightSide = rightWithoutProvider;

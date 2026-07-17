@@ -145,6 +145,7 @@ function builtinContributions(
         region: "identity",
         text: gitText,
         tone: gitStatus.conflicts ? "error" : dirty ? "warning" : "success",
+        align: "right",
         priority: 80,
         order: 300,
       });
@@ -158,6 +159,7 @@ function builtinContributions(
         id: "git.lines",
         region: "identity",
         text: lineStats.join(" "),
+        align: "right",
         priority: 75,
         order: 310,
       });
@@ -202,17 +204,31 @@ function builtinContributions(
       priority: 90,
       order: metric.order,
     });
-  const statuses = [...footerData.getExtensionStatuses().entries()]
+  const extensionStatuses = [...footerData.getExtensionStatuses().entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([, text]) => sanitizeStatus(text))
-    .filter(Boolean)
+    .map(([id, text]) => ({ id, text: sanitizeStatus(text) }))
+    .filter(({ text }) => Boolean(text));
+  const advisorStatus = extensionStatuses.find(({ id }) => id === "pi-advisor")?.text;
+  if (advisorStatus)
+    result.push({
+      kind: "text",
+      id: "advisor.status",
+      region: "identity",
+      text: advisorStatus,
+      align: "right",
+      priority: 100,
+      order: 1000,
+    });
+  const remainingStatuses = extensionStatuses
+    .filter(({ id }) => id !== "pi-advisor")
+    .map(({ text }) => text)
     .join(" ");
-  if (statuses)
+  if (remainingStatuses)
     result.push({
       kind: "text",
       id: "extensions",
       region: "details",
-      text: statuses,
+      text: remainingStatuses,
       priority: 20,
       order: 1000,
     });
@@ -229,7 +245,8 @@ function ordered(
       (value) =>
         !config.footer.hidden.includes(value.id) &&
         !(value.id.startsWith("metrics.") && config.footer.hidden.includes("metrics")) &&
-        !(value.id.startsWith("git.") && config.footer.hidden.includes("git")),
+        !(value.id.startsWith("git.") && config.footer.hidden.includes("git")) &&
+        !(value.id === "advisor.status" && config.footer.hidden.includes("extensions")),
     )
     .sort((a, b) => (order.get(a.id) ?? a.order ?? 500) - (order.get(b.id) ?? b.order ?? 500));
 }
@@ -307,7 +324,22 @@ export function createFooterComponent(options: {
           entry.id === "pullRequest" ||
           entry.id.startsWith("git"),
       );
-      const modelIdentity = identity.filter((entry) => !repositoryIdentity.includes(entry));
+      const rawModelIdentity = identity.filter((entry) => !repositoryIdentity.includes(entry));
+      const fastMode = rawModelIdentity.find((entry) => entry.id === "openai.fast");
+      const hasEffort = rawModelIdentity.some((entry) => entry.id === "effort");
+      const modelIdentity = rawModelIdentity
+        .filter((entry) => entry.id !== "openai.fast")
+        .map((entry) =>
+          fastMode && entry.id === "effort"
+            ? {
+                ...entry,
+                text: `⚡${entry.text}`,
+                compactText: entry.compactText ? `⚡${entry.compactText}` : undefined,
+              }
+            : entry,
+        );
+      if (fastMode && !hasEffort)
+        modelIdentity.push({ ...fastMode, text: "⚡", compactText: "⚡" });
       const metrics = text.filter((entry) => entry.region === "metrics");
       const contextVisible = metrics.some((entry) => entry.id === "context");
       const sessionInfo = metrics.filter((entry) => entry.id !== "context");
