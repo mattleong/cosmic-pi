@@ -12,34 +12,20 @@ export function formatTokens(count: number): string {
   return `${(count / 1_000_000).toFixed(count < 10_000_000 ? 1 : 0)}M`;
 }
 
-const USAGE_WINDOW_COLOR = "accent";
-
 function clampPercent(percent: number): number {
   return Math.max(0, Math.min(100, percent));
 }
 
-function progressTone(percent: number, remaining: boolean, healthyColor: string): string {
-  if (remaining) {
-    if (percent <= 10) return "error";
-    if (percent <= 30) return "warning";
-    return healthyColor;
-  }
-  if (percent >= 90) return "error";
-  if (percent >= 70) return "warning";
-  return healthyColor;
+function progressTone(percent: number): "success" | "warning" | "error" {
+  if (percent >= 75) return "success";
+  if (percent >= 25) return "warning";
+  return "error";
 }
 
-function progressBar(
-  percent: number,
-  cells: number,
-  theme: CosmicFooterTheme,
-  remaining = false,
-  healthyColor = "accent",
-): string {
+function progressBar(percent: number, cells: number, theme: CosmicFooterTheme): string {
   const value = clampPercent(percent);
   const filled = Math.round((value / 100) * cells);
-  const color = progressTone(value, remaining, healthyColor);
-  return theme.fg(color, `${"█".repeat(filled)}${"░".repeat(cells - filled)}`);
+  return theme.fg(progressTone(value), `${"█".repeat(filled)}${"░".repeat(cells - filled)}`);
 }
 
 function alignSides(left: string, right: string, width: number): string {
@@ -67,16 +53,15 @@ export function renderContextLine(
   let left: string;
   if (percent === null || percent === undefined) {
     left =
-      theme.fg("mdHeading", compact ? "Ctx " : "Context ") +
-      theme.fg("syntaxNumber", `?/${formatTokens(contextWindow)}`);
+      theme.fg("mdLink", "Ctx ") + theme.fg("syntaxNumber", `?/${formatTokens(contextWindow)}`);
   } else {
     const cells = compact ? (width < 48 ? 6 : 8) : 12;
     const tokens = usage?.tokens ?? Math.round((percent / 100) * contextWindow);
     left = [
-      theme.fg("mdHeading", compact ? "Ctx " : "Context "),
-      progressBar(percent, cells, theme, false, "accent"),
+      theme.fg("mdLink", "Ctx "),
+      progressBar(percent, cells, theme),
       theme.fg(
-        progressTone(percent, false, "syntaxNumber"),
+        progressTone(percent),
         ` ${Math.round(percent)}% · ${formatTokens(tokens)}/${formatTokens(contextWindow)}`,
       ),
     ].join("");
@@ -97,7 +82,7 @@ export function renderOpenAIUsageLine(
   const body = text.replace(/^Usage:\s*/i, "");
   const pattern = /(5h|7d):\s*(\d+(?:\.\d+)?)%/gi;
   const cells = compact ? 6 : 10;
-  const pieces = [theme.fg("mdHeading", "OpenAI  ")];
+  const pieces = [theme.fg("mdLink", "OpenAI  ")];
   let cursor = 0;
   let matched = false;
   for (const match of body.matchAll(pattern)) {
@@ -105,12 +90,10 @@ export function renderOpenAIUsageLine(
     const index = match.index ?? 0;
     if (index > cursor) pieces.push(theme.fg("syntaxOperator", body.slice(cursor, index)));
     const percent = Number(match[2]);
-    const fiveHour = match[1]?.toLowerCase() === "5h";
-    const labelColor = USAGE_WINDOW_COLOR;
-    const barColor = fiveHour ? "accent" : "mdLink";
-    const color = progressTone(percent, true, barColor);
+    const color = progressTone(percent);
+    const labelColor = color;
     pieces.push(theme.fg(labelColor, `${match[1]?.toLowerCase()} `));
-    pieces.push(progressBar(percent, cells, theme, true, barColor));
+    pieces.push(progressBar(percent, cells, theme));
     pieces.push(theme.fg(color, ` ${Math.round(percent)}%`));
     cursor = index + match[0].length;
   }

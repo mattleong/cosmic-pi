@@ -107,7 +107,7 @@ describe("Cosmic UI extension", () => {
     for (const width of [32, 64, 100])
       expect(footer.render(width).every((line: string) => visibleWidth(line) <= width)).toBe(true);
     const rendered = footer.render(100).join("\n");
-    expect(rendered).toContain("Context");
+    expect(rendered).toContain("Ctx");
     expect(rendered).toContain("OpenAI");
     expect(rendered).toContain("main");
     expect(rendered).toContain("~1 ?1");

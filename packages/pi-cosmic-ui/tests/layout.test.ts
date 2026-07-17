@@ -55,13 +55,36 @@ describe("responsive footer layout", () => {
     const usage = renderOpenAIUsageLine("Usage: 5h: 90% | 7d: 51%", 80, theme, false);
 
     expect(visibleWidth(context)).toBeLessThanOrEqual(80);
-    expect(context).toContain("Context");
+    expect(context).toContain("Ctx");
     expect(context).toContain("72%");
     expect(context).toContain("footer-redesign");
     expect(visibleWidth(usage)).toBeLessThanOrEqual(80);
     expect(usage).toContain("OpenAI");
     expect(usage).toContain("5h");
     expect(usage).toContain("█");
+  });
+
+  test("color-codes context and OpenAI percentages by remaining-capacity thresholds", () => {
+    const fg = vi.fn((_color: string, text: string) => text);
+    const thresholdTheme = { fg };
+
+    for (const percent of [75, 50, 24])
+      renderContextLine(
+        { contextWindow: 100_000, tokens: percent * 1_000, percent },
+        [],
+        80,
+        thresholdTheme,
+        false,
+      );
+    renderOpenAIUsageLine("Usage: 5h: 75% | 7d: 25%", 80, thresholdTheme, false);
+
+    expect(fg.mock.calls).toContainEqual(["success", " 75% · 75k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["warning", " 50% · 50k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["error", " 24% · 24k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["success", "5h "]);
+    expect(fg.mock.calls).toContainEqual(["success", " 75%"]);
+    expect(fg.mock.calls).toContainEqual(["warning", "7d "]);
+    expect(fg.mock.calls).toContainEqual(["warning", " 25%"]);
   });
 
   test("uses a varied named theme palette without dim or white footer colors", () => {
@@ -104,12 +127,15 @@ describe("responsive footer layout", () => {
       ]),
     );
     expect(new Set(colors).size).toBeGreaterThanOrEqual(7);
+    expect(fg.mock.calls).toContainEqual(["mdLink", "gpt-5.6"]);
+    expect(fg.mock.calls).toContainEqual(["mdLink", "Ctx "]);
+    expect(fg.mock.calls).toContainEqual(["mdLink", "OpenAI  "]);
     expect(fg.mock.calls).toContainEqual(["syntaxOperator", "medium"]);
     expect(fg.mock.calls).toContainEqual(["success", "+8L"]);
     expect(fg.mock.calls).toContainEqual(["error", "-3L"]);
     expect(fg.mock.calls).toContainEqual(["syntaxNumber", "~2L"]);
-    expect(fg.mock.calls).toContainEqual(["accent", "5h "]);
-    expect(fg.mock.calls).toContainEqual(["accent", "7d "]);
+    expect(fg.mock.calls).toContainEqual(["success", "5h "]);
+    expect(fg.mock.calls).toContainEqual(["warning", "7d "]);
     expect(colors).not.toContain("dim");
     expect(colors).not.toContain("text");
   });
