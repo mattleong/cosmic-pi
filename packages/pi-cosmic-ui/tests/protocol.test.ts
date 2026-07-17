@@ -22,6 +22,11 @@ describe("Cosmic UI protocol validation", () => {
     ).toBe(true);
     expect(
       isCosmicFooterUpsertEvent(
+        event({ kind: "text", id: "status", region: "details", text: "ready", tone: "accent" }),
+      ),
+    ).toBe(true);
+    expect(
+      isCosmicFooterUpsertEvent(
         event({ kind: "text", id: "status", region: "details", text: "ready", tone: "purple" }),
       ),
     ).toBe(false);

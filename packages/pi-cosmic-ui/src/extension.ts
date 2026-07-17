@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { resolveConfig } from "./config/store.ts";
 import type { ResolvedCosmicUiConfig } from "./config/schema.ts";
 import { createFooterComponent, type FooterTotals } from "./footer/component.ts";
+import { parseGitStatus, type FooterGitStatus } from "./footer/git.ts";
 import { FooterContributionRegistry } from "./footer/registry.ts";
 import {
   COSMIC_UI_FOOTER_INVALIDATE,
@@ -34,6 +35,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
   let installed = false;
   let installedContext: ExtensionContext | undefined;
   let footerComponent: ReturnType<typeof createFooterComponent> | undefined;
+  let gitStatus: FooterGitStatus | undefined;
 
   const refreshTotals = (ctx: ExtensionContext) => {
     totals = EMPTY_TOTALS();
@@ -45,6 +47,24 @@ export default function cosmicUi(pi: ExtensionAPI): void {
       totals.cacheWrite += entry.message.usage.cacheWrite;
       totals.cost += entry.message.usage.cost.total;
     }
+  };
+
+  const refreshGitStatus = async (ctx: ExtensionContext) => {
+    if (!terminalUi(ctx) || installedContext !== ctx) return;
+    const cwd = ctx.sessionManager.getCwd();
+    try {
+      const result = await pi.exec(
+        "git",
+        ["status", "--short", "--branch", "--untracked-files=normal"],
+        { cwd, timeout: 2_000 },
+      );
+      if (installedContext !== ctx) return;
+      gitStatus = result.code === 0 ? parseGitStatus(result.stdout) : undefined;
+    } catch {
+      if (installedContext !== ctx) return;
+      gitStatus = undefined;
+    }
+    registry.requestRenderNow();
   };
 
   const update = (ctx: ExtensionContext) => {
@@ -73,7 +93,10 @@ export default function cosmicUi(pi: ExtensionAPI): void {
     installedContext = ctx;
     ctx.ui.setFooter((tui, theme, footerData) => {
       registry.setRenderRequest(() => tui.requestRender());
-      const unsubscribeBranch = footerData.onBranchChange(() => tui.requestRender());
+      const unsubscribeBranch = footerData.onBranchChange(() => {
+        tui.requestRender();
+        void refreshGitStatus(ctx);
+      });
       const component = createFooterComponent({
         pi,
         ctx,
@@ -82,6 +105,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
         registry,
         config: () => config ?? resolveConfig(ctx.cwd),
         totals: () => totals,
+        gitStatus: () => gitStatus,
       });
       footerComponent = component;
       return {
@@ -120,12 +144,14 @@ export default function cosmicUi(pi: ExtensionAPI): void {
     update,
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
     config = resolveConfig(ctx.cwd);
+    gitStatus = undefined;
     refreshTotals(ctx);
     update(ctx);
+    await refreshGitStatus(ctx);
   });
-  pi.on("turn_end", (event, ctx) => {
+  pi.on("turn_end", async (event, ctx) => {
     if (event.message?.role === "assistant") {
       totals.input += event.message.usage.input;
       totals.output += event.message.usage.output;
@@ -135,6 +161,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
     } else refreshTotals(ctx);
     footerComponent?.invalidateContextUsage();
     registry.requestRenderNow();
+    await refreshGitStatus(ctx);
   });
   pi.on("session_compact", (_event, ctx) => {
     refreshTotals(ctx);
@@ -149,6 +176,9 @@ export default function cosmicUi(pi: ExtensionAPI): void {
   pi.on("model_select", () => {
     footerComponent?.invalidateContextUsage();
     registry.requestRenderNow();
+  });
+  pi.on("tool_execution_end", async (event, ctx) => {
+    if (["bash", "edit", "write"].includes(event.toolName)) await refreshGitStatus(ctx);
   });
   pi.on("thinking_level_select", () => registry.requestRenderNow());
   pi.on("session_info_changed", () => registry.requestRenderNow());
@@ -176,6 +206,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
     registry.clear();
     config = undefined;
     totals = EMPTY_TOTALS();
+    gitStatus = undefined;
     for (const unsubscribe of unsubscribers) unsubscribe();
   });
 }

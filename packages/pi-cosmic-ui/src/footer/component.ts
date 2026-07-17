@@ -1,4 +1,4 @@
-import { sep } from "node:path";
+import { basename, sep } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -11,11 +11,14 @@ import type {
   CosmicFooterTextContribution,
   CosmicFooterTheme,
 } from "../protocol.ts";
+import { formatGitStatus, type FooterGitStatus } from "./git.ts";
 import {
   combineSurface,
   formatTokens,
   isTerminalImageLine,
+  renderContextLine,
   renderContributionLine,
+  renderOpenAIUsageLine,
 } from "./layout.ts";
 import type { FooterContributionRegistry } from "./registry.ts";
 
@@ -47,58 +50,132 @@ function builtinContributions(
   footerData: ReadonlyFooterDataProvider,
   totals: FooterTotals,
   contextUsage: ReturnType<ExtensionContext["getContextUsage"]>,
+  gitStatus: FooterGitStatus | undefined,
 ): CosmicFooterTextContribution[] {
-  let location = abbreviateHomePath(ctx.sessionManager.getCwd());
+  const location = abbreviateHomePath(ctx.sessionManager.getCwd());
   const branch = footerData.getGitBranch();
-  if (branch) location += ` (${branch})`;
   const sessionName = ctx.sessionManager.getSessionName();
-  if (sessionName) location += ` • ${sessionName}`;
 
-  const metrics: string[] = [];
-  if (totals.input) metrics.push(`↑${formatTokens(totals.input)}`);
-  if (totals.output) metrics.push(`↓${formatTokens(totals.output)}`);
-  if (totals.cacheRead) metrics.push(`R${formatTokens(totals.cacheRead)}`);
-  if (totals.cacheWrite) metrics.push(`W${formatTokens(totals.cacheWrite)}`);
   const subscription = ctx.model ? ctx.modelRegistry.isUsingOAuth(ctx.model) : false;
-  if (totals.cost || subscription)
-    metrics.push(`$${totals.cost.toFixed(3)}${subscription ? " (sub)" : ""}`);
   const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
   const percent = contextUsage?.percent;
   const contextText =
     percent === null || percent === undefined
       ? `?/${formatTokens(contextWindow)}`
       : `${percent.toFixed(1)}%/${formatTokens(contextWindow)}`;
-  metrics.push(`${contextText} (auto)`);
 
   const model = ctx.model;
   let modelText = model?.id ?? "no-model";
   const thinking = pi.getThinkingLevel();
-  if (model?.reasoning) modelText += thinking === "off" ? " • thinking off" : ` • ${thinking}`;
   if ((footerData.getAvailableProviderCount?.() ?? 0) > 1 && model)
     modelText = `(${model.provider}) ${modelText}`;
 
   const result: CosmicFooterTextContribution[] = [
-    { kind: "text", id: "location", region: "identity", text: location, priority: 100, order: 0 },
     {
       kind: "text",
       id: "model",
       region: "identity",
       text: modelText,
       compactText: model?.id ?? "no-model",
-      align: "right",
+      tone: "normal",
       priority: 100,
-      order: 100,
+      order: 0,
+    },
+    ...(model?.reasoning
+      ? [
+          {
+            kind: "text" as const,
+            id: "effort",
+            region: "identity" as const,
+            text: thinking === "off" ? "thinking off" : thinking,
+            tone: "accent" as const,
+            priority: 95,
+            order: 100,
+          },
+        ]
+      : []),
+    {
+      kind: "text",
+      id: "location",
+      region: "identity",
+      text: location,
+      compactText: basename(location),
+      tone: "accent",
+      priority: 100,
+      order: 200,
     },
     {
       kind: "text",
-      id: "metrics",
+      id: "context",
       region: "metrics",
-      text: metrics.join(" "),
-      compactText: contextText,
+      text: contextText,
       priority: 100,
       order: 0,
     },
   ];
+  if (branch)
+    result.push({
+      kind: "text",
+      id: "branch",
+      region: "identity",
+      text: branch,
+      tone: "accent",
+      priority: 90,
+      order: 200,
+    });
+  if (gitStatus) {
+    const dirty =
+      gitStatus.staged + gitStatus.modified + gitStatus.untracked + gitStatus.conflicts > 0;
+    result.push({
+      kind: "text",
+      id: "git",
+      region: "identity",
+      text: formatGitStatus(gitStatus),
+      tone: gitStatus.conflicts ? "error" : dirty ? "warning" : "success",
+      priority: 80,
+      order: 300,
+    });
+  }
+  if (sessionName)
+    result.push({
+      kind: "text",
+      id: "session",
+      region: "metrics",
+      text: sessionName,
+      tone: "accent",
+      priority: 80,
+      order: 100,
+    });
+  const metricValues = [
+    totals.input
+      ? { id: "metrics.input", text: `↑${formatTokens(totals.input)}`, order: 200 }
+      : undefined,
+    totals.output
+      ? { id: "metrics.output", text: `↓${formatTokens(totals.output)}`, order: 210 }
+      : undefined,
+    totals.cacheRead
+      ? { id: "metrics.cacheRead", text: `R${formatTokens(totals.cacheRead)}`, order: 220 }
+      : undefined,
+    totals.cacheWrite
+      ? { id: "metrics.cacheWrite", text: `W${formatTokens(totals.cacheWrite)}`, order: 230 }
+      : undefined,
+    totals.cost || subscription
+      ? {
+          id: "metrics.cost",
+          text: `$${totals.cost.toFixed(3)}${subscription ? " (sub)" : ""}`,
+          order: 240,
+        }
+      : undefined,
+  ].filter((value): value is { id: string; text: string; order: number } => Boolean(value));
+  for (const metric of metricValues)
+    result.push({
+      kind: "text",
+      id: metric.id,
+      region: "metrics",
+      text: metric.text,
+      priority: 90,
+      order: metric.order,
+    });
   const statuses = [...footerData.getExtensionStatuses().entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([, text]) => sanitizeStatus(text))
@@ -122,7 +199,11 @@ function ordered(
 ): CosmicFooterTextContribution[] {
   const order = new Map(config.footer.order.map((id, index) => [id, index]));
   return values
-    .filter((value) => !config.footer.hidden.includes(value.id))
+    .filter(
+      (value) =>
+        !config.footer.hidden.includes(value.id) &&
+        !(value.id.startsWith("metrics.") && config.footer.hidden.includes("metrics")),
+    )
     .sort((a, b) => (order.get(a.id) ?? a.order ?? 500) - (order.get(b.id) ?? b.order ?? 500));
 }
 
@@ -134,6 +215,7 @@ export function createFooterComponent(options: {
   registry: FooterContributionRegistry;
   config(): ResolvedCosmicUiConfig;
   totals(): FooterTotals;
+  gitStatus(): FooterGitStatus | undefined;
 }) {
   const { pi, ctx, footerData, theme, registry } = options;
   let contextUsageCached = false;
@@ -168,8 +250,16 @@ export function createFooterComponent(options: {
     render(width: number): string[] {
       if (width <= 0) return [];
       const config = options.config();
+      const currentContextUsage = contextUsage();
       const contributions: CosmicFooterContribution[] = [
-        ...builtinContributions(pi, ctx, footerData, options.totals(), contextUsage()),
+        ...builtinContributions(
+          pi,
+          ctx,
+          footerData,
+          options.totals(),
+          currentContextUsage,
+          options.gitStatus(),
+        ),
         ...registry.list(),
       ];
       const text = ordered(
@@ -182,20 +272,44 @@ export function createFooterComponent(options: {
         config.footer.density === "compact" || (config.footer.density === "auto" && width < 72);
       const identity = text.filter((entry) => entry.region === "identity");
       const metrics = text.filter((entry) => entry.region === "metrics");
+      const contextVisible = metrics.some((entry) => entry.id === "context");
+      const sessionInfo = metrics.filter((entry) => entry.id !== "context");
       const details = text.filter((entry) => entry.region === "details");
+      const openAIUsage = details.find((entry) => entry.id === "openai.usage");
+      const otherDetails = details.filter((entry) => entry.id !== "openai.usage");
       let lines: string[] = [];
       if (width < 48) {
-        const essentials = [...identity.filter((entry) => entry.id === "model"), ...metrics];
-        if (essentials.length > 0) lines = [renderContributionLine(essentials, width, theme, true)];
-      } else {
-        if (identity.length) lines.push(renderContributionLine(identity, width, theme, compact));
-        if (metrics.length) lines.push(renderContributionLine(metrics, width, theme, compact));
-        if (!compact) {
-          for (const detail of details)
-            lines.push(renderContributionLine([detail], width, theme, false));
-        } else if (details.length && width >= 64) {
-          lines.push(renderContributionLine(details, width, theme, true));
-        }
+        const essentials = identity.filter(
+          (entry) =>
+            entry.id === "model" ||
+            entry.id === "effort" ||
+            entry.id === "branch" ||
+            entry.id === "git",
+        );
+        if (essentials.length) lines.push(renderContributionLine(essentials, width, theme, true));
+      } else if (identity.length) {
+        lines.push(renderContributionLine(identity, width, theme, compact));
+      }
+      if (contextVisible || sessionInfo.length)
+        lines.push(
+          contextVisible
+            ? renderContextLine(currentContextUsage, sessionInfo, width, theme, compact)
+            : renderContributionLine(sessionInfo, width, theme, compact),
+        );
+      if (openAIUsage)
+        lines.push(
+          renderOpenAIUsageLine(
+            compact && openAIUsage.compactText ? openAIUsage.compactText : openAIUsage.text,
+            width,
+            theme,
+            compact,
+          ),
+        );
+      if (!compact) {
+        for (const detail of otherDetails)
+          lines.push(renderContributionLine([detail], width, theme, false));
+      } else if (otherDetails.length && width >= 64) {
+        lines.push(renderContributionLine(otherDetails, width, theme, true));
       }
       const surface = registry.surfaces().find((entry) => !config.footer.hidden.includes(entry.id));
       if (surface) {

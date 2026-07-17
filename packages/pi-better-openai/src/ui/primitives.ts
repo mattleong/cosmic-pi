@@ -35,7 +35,6 @@ export function fastModeFooterPrimitive(state: FastModeUiState): FooterTextPrimi
     kind: "text",
     id: "openai.fast",
     region: "identity",
-    align: "right",
     text: "fast",
     tone: "success",
     priority: 80,

@@ -24,7 +24,19 @@ Run `/cosmic-ui` to configure footer visibility, density, and media placement. C
   "footer": {
     "enabled": true,
     "density": "auto",
-    "order": ["location", "model", "openai.fast", "metrics", "openai.usage", "extensions"],
+    "order": [
+      "model",
+      "effort",
+      "location",
+      "openai.fast",
+      "branch",
+      "git",
+      "context",
+      "session",
+      "metrics",
+      "openai.usage",
+      "extensions"
+    ],
     "hidden": [],
     "mediaPlacement": "inline-right"
   }

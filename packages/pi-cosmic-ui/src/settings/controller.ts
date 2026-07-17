@@ -9,9 +9,14 @@ import { FOOTER_DENSITIES, MEDIA_PLACEMENTS } from "../config/schema.ts";
 import { updateFooterConfig } from "../config/store.ts";
 
 const VISIBILITY_IDS = [
-  "location",
   "model",
+  "effort",
+  "location",
   "openai.fast",
+  "branch",
+  "git",
+  "context",
+  "session",
   "metrics",
   "openai.usage",
   "extensions",

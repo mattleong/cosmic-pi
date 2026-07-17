@@ -34,9 +34,14 @@ export interface ResolvedCosmicUiConfig {
 }
 
 export const DEFAULT_FOOTER_ORDER = [
-  "location",
   "model",
+  "effort",
+  "location",
   "openai.fast",
+  "branch",
+  "git",
+  "context",
+  "session",
   "metrics",
   "openai.usage",
   "extensions",

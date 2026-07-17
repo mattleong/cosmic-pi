@@ -20,6 +20,12 @@ function harness(mode: "tui" | "rpc" = "tui") {
     },
     registerCommand: vi.fn(),
     getThinkingLevel: vi.fn(() => "high"),
+    exec: vi.fn(async () => ({
+      stdout: "## main...origin/main\n M changed.ts\n?? new.ts\n",
+      stderr: "",
+      code: 0,
+      killed: false,
+    })),
     events: {
       emit(name: string, data: unknown) {
         for (const handler of bus.get(name) ?? []) handler(data);
@@ -38,7 +44,7 @@ function harness(mode: "tui" | "rpc" = "tui") {
     hasUI: true,
     model: { id: "model-long-name", provider: "provider", reasoning: true, contextWindow: 100_000 },
     modelRegistry: { isUsingOAuth: vi.fn(() => false) },
-    getContextUsage: vi.fn(() => ({ contextWindow: 100_000, percent: 12.5 })),
+    getContextUsage: vi.fn(() => ({ contextWindow: 100_000, tokens: 12_500, percent: 12.5 })),
     sessionManager: {
       getEntries: vi.fn(() => []),
       getCwd: vi.fn(() => "/tmp/project"),
@@ -78,7 +84,7 @@ describe("Cosmic UI extension", () => {
         kind: "text",
         id: "openai.usage",
         region: "details",
-        text: "Usage: 90%",
+        text: "Usage: 5h: 90% | 7d: 51%",
       },
     });
     await emit(h, "session_start");
@@ -96,7 +102,13 @@ describe("Cosmic UI extension", () => {
     );
     for (const width of [32, 64, 100])
       expect(footer.render(width).every((line: string) => visibleWidth(line) <= width)).toBe(true);
-    expect(footer.render(100).join("\n")).toContain("Usage: 90%");
+    const rendered = footer.render(100).join("\n");
+    expect(rendered).toContain("Context");
+    expect(rendered).toContain("OpenAI");
+    expect(rendered).toContain("main");
+    expect(rendered).toContain("~1 ?1");
+    expect(rendered.indexOf("model-long-name")).toBeLessThan(rendered.indexOf("high"));
+    expect(rendered.indexOf("high")).toBeLessThan(rendered.indexOf("/tmp/project"));
     expect(h.ctx.getContextUsage).toHaveBeenCalledTimes(1);
     await emit(h, "message_update");
     footer.render(100);
@@ -132,8 +144,8 @@ describe("Cosmic UI extension", () => {
         onBranchChange: () => vi.fn(),
       },
     );
-    expect(footer.render(100).join("\n")).toContain("/tmp/second-project • second-session");
-    expect(footer.render(100).join("\n")).toContain("second-model");
+    expect(footer.render(100).join("\n")).toContain("second-model • high • /tmp/second-project");
+    expect(footer.render(100).join("\n")).toContain("second-session");
   });
 
   test("does not install terminal footer UI in RPC mode", async () => {

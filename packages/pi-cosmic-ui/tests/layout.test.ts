@@ -1,6 +1,11 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
-import { combineSurface, renderContributionLine } from "../src/footer/layout.ts";
+import {
+  combineSurface,
+  renderContextLine,
+  renderContributionLine,
+  renderOpenAIUsageLine,
+} from "../src/footer/layout.ts";
 import { FooterContributionRegistry } from "../src/footer/registry.ts";
 
 const theme = { fg: (_color: string, text: string) => `\x1b[2m${text}\x1b[0m` };
@@ -30,6 +35,80 @@ describe("responsive footer layout", () => {
         visibleWidth(renderContributionLine(entries, width, theme, width < 48)),
       ).toBeLessThanOrEqual(width);
     }
+  });
+
+  test("renders responsive context and OpenAI usage progress bars", () => {
+    const context = renderContextLine(
+      { contextWindow: 100_000, tokens: 72_000, percent: 72 },
+      [
+        {
+          kind: "text",
+          id: "session",
+          region: "metrics",
+          text: "footer-redesign",
+        },
+      ],
+      80,
+      theme,
+      false,
+    );
+    const usage = renderOpenAIUsageLine("Usage: 5h: 90% | 7d: 51%", 80, theme, false);
+
+    expect(visibleWidth(context)).toBeLessThanOrEqual(80);
+    expect(context).toContain("Context");
+    expect(context).toContain("72%");
+    expect(context).toContain("footer-redesign");
+    expect(visibleWidth(usage)).toBeLessThanOrEqual(80);
+    expect(usage).toContain("OpenAI");
+    expect(usage).toContain("5h");
+    expect(usage).toContain("█");
+  });
+
+  test("uses a varied named theme palette without dim, white, or green footer colors", () => {
+    const fg = vi.fn((_color: string, text: string) => text);
+    const fullColorTheme = { fg };
+
+    renderContributionLine(
+      [
+        { kind: "text", id: "model", region: "identity", text: "gpt-5.6" },
+        { kind: "text", id: "effort", region: "identity", text: "medium" },
+        { kind: "text", id: "location", region: "identity", text: "~/dev/cosmic-pi" },
+        { kind: "text", id: "branch", region: "identity", text: "main" },
+        { kind: "text", id: "metrics.input", region: "metrics", text: "↑10k" },
+        { kind: "text", id: "metrics.cost", region: "metrics", text: "$1.00" },
+        { kind: "text", id: "legacy-dim", region: "details", text: "legacy", tone: "dim" },
+      ],
+      200,
+      fullColorTheme,
+      false,
+    );
+    renderContextLine(
+      { contextWindow: 100_000, tokens: 20_000, percent: 20 },
+      [],
+      80,
+      fullColorTheme,
+      false,
+    );
+    renderOpenAIUsageLine("Usage: 5h: 90% | 7d: 51%", 80, fullColorTheme, false);
+
+    const colors = fg.mock.calls.map(([color]) => color);
+    expect(colors).toEqual(
+      expect.arrayContaining([
+        "accent",
+        "mdLink",
+        "syntaxType",
+        "syntaxVariable",
+        "syntaxNumber",
+        "syntaxPunctuation",
+      ]),
+    );
+    expect(new Set(colors).size).toBeGreaterThanOrEqual(7);
+    expect(fg.mock.calls).toContainEqual(["syntaxOperator", "medium"]);
+    expect(fg.mock.calls).toContainEqual(["accent", "5h "]);
+    expect(fg.mock.calls).toContainEqual(["accent", "7d "]);
+    expect(colors).not.toContain("dim");
+    expect(colors).not.toContain("text");
+    expect(colors).not.toContain("success");
   });
 
   test("combines inline media without overflowing text rows", () => {

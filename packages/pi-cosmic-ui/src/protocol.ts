@@ -4,7 +4,7 @@ export const COSMIC_UI_FOOTER_UPSERT = "cosmic-ui:v1:footer:upsert";
 export const COSMIC_UI_FOOTER_REMOVE = "cosmic-ui:v1:footer:remove";
 export const COSMIC_UI_FOOTER_INVALIDATE = "cosmic-ui:v1:footer:invalidate";
 
-export type CosmicFooterTone = "normal" | "dim" | "success" | "warning" | "error";
+export type CosmicFooterTone = "normal" | "accent" | "dim" | "success" | "warning" | "error";
 export type CosmicFooterRegion = "identity" | "metrics" | "details" | "media";
 export type CosmicFooterPlacement =
   | "stacked"
@@ -118,6 +118,7 @@ export function isCosmicFooterUpsertEvent(value: unknown): value is CosmicFooter
         contribution.align === "right") &&
       (contribution.tone === undefined ||
         contribution.tone === "normal" ||
+        contribution.tone === "accent" ||
         contribution.tone === "dim" ||
         contribution.tone === "success" ||
         contribution.tone === "warning" ||
