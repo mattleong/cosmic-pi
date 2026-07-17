@@ -212,13 +212,19 @@ export function parseUsageSnapshot(
     scope === "spark"
       ? (findSparkRateLimitBucket(data) ?? normalizeRateLimitBucket(data.rate_limit))
       : normalizeRateLimitBucket(data.rate_limit);
+  const primaryWindow = bucket?.primary_window ?? null;
+  const secondaryWindow = bucket?.secondary_window ?? null;
+  // The legacy response used primary for 5h and secondary for 7d. OpenAI's
+  // current weekly-only response keeps the weekly limit in primary instead.
+  const fiveHourWindow = secondaryWindow ? primaryWindow : null;
+  const sevenDayWindow = secondaryWindow ?? primaryWindow;
   return {
     capturedAt: now,
     scope,
-    fiveHourLeftPercent: usedToLeftPercent(bucket?.primary_window?.used_percent),
-    sevenDayLeftPercent: usedToLeftPercent(bucket?.secondary_window?.used_percent),
-    fiveHourResetInSeconds: getResetSeconds(bucket?.primary_window, now),
-    sevenDayResetInSeconds: getResetSeconds(bucket?.secondary_window, now),
+    fiveHourLeftPercent: usedToLeftPercent(fiveHourWindow?.used_percent),
+    sevenDayLeftPercent: usedToLeftPercent(sevenDayWindow?.used_percent),
+    fiveHourResetInSeconds: getResetSeconds(fiveHourWindow, now),
+    sevenDayResetInSeconds: getResetSeconds(sevenDayWindow, now),
     isLimited: bucket?.limit_reached === true || bucket?.allowed === false,
   };
 }
@@ -234,25 +240,35 @@ export function formatUsageSnapshot(
   options: { showResetTimes: boolean },
   now = Date.now(),
 ): string {
-  const fiveHour = formatPercent(snapshot.fiveHourLeftPercent);
-  const sevenDay = formatPercent(snapshot.sevenDayLeftPercent);
+  const hasFiveHourWindow =
+    snapshot.fiveHourLeftPercent !== null || snapshot.fiveHourResetInSeconds !== null;
+  const hasSevenDayWindow =
+    snapshot.sevenDayLeftPercent !== null || snapshot.sevenDayResetInSeconds !== null;
+  const windows = [
+    hasFiveHourWindow ? `5h: ${formatPercent(snapshot.fiveHourLeftPercent)}` : null,
+    hasSevenDayWindow ? `7d: ${formatPercent(snapshot.sevenDayLeftPercent)}` : null,
+  ].filter((value): value is string => value !== null);
   const resets = options.showResetTimes
     ? [
-        formatCompactReset(
-          "5h",
-          remainingResetSeconds(snapshot.fiveHourResetInSeconds, snapshot.capturedAt, now),
-          undefined,
-          now,
-        ),
-        formatCompactReset(
-          "7d",
-          remainingResetSeconds(snapshot.sevenDayResetInSeconds, snapshot.capturedAt, now),
-          { includeDate: true },
-          now,
-        ),
+        hasFiveHourWindow
+          ? formatCompactReset(
+              "5h",
+              remainingResetSeconds(snapshot.fiveHourResetInSeconds, snapshot.capturedAt, now),
+              undefined,
+              now,
+            )
+          : null,
+        hasSevenDayWindow
+          ? formatCompactReset(
+              "7d",
+              remainingResetSeconds(snapshot.sevenDayResetInSeconds, snapshot.capturedAt, now),
+              { includeDate: true },
+              now,
+            )
+          : null,
       ].filter((value): value is string => value !== null)
     : [];
-  return `Usage: 5h: ${fiveHour} | 7d: ${sevenDay}${resets.length ? ` | ${resets.join(" | ")}` : ""}`;
+  return `Usage: ${windows.length ? windows.join(" | ") : "--"}${resets.length ? ` | ${resets.join(" | ")}` : ""}`;
 }
 
 function remainingResetSeconds(

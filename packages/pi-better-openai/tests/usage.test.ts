@@ -216,6 +216,29 @@ describe("usage helpers", () => {
     );
   });
 
+  test("treats a lone primary window as the current weekly-only limit", () => {
+    const capturedAt = new Date("2026-07-16T12:00:00Z").getTime();
+    const usage = _test.parseUsageSnapshot(
+      {
+        rate_limit: {
+          primary_window: { used_percent: 30, reset_after_seconds: 6 * 86_400 },
+          secondary_window: null,
+        },
+      },
+      "gpt-5.5",
+      capturedAt,
+    );
+
+    expect(usage.fiveHourLeftPercent).toBeNull();
+    expect(usage.sevenDayLeftPercent).toBe(70);
+    expect(_test.formatUsageSnapshot(usage, { showResetTimes: false }, capturedAt)).toBe(
+      "Usage: 7d: 70%",
+    );
+    expect(_test.formatUsageSnapshot(usage, { showResetTimes: true }, capturedAt)).toContain(
+      "7d ↺ 6d0h",
+    );
+  });
+
   test("decrements reset countdowns without moving the reset clock", () => {
     const capturedAt = new Date("2026-07-09T12:00:00Z").getTime();
     const usage = _test.parseUsageSnapshot(
@@ -240,10 +263,10 @@ describe("usage helpers", () => {
       capturedAt + 90 * 60_000,
     );
 
-    expect(initial).toContain("5h ↺ 1h0m");
-    expect(later).toContain("5h ↺ 30m");
+    expect(initial).toContain("7d ↺ 1h0m");
+    expect(later).toContain("7d ↺ 30m");
     expect(initial.split(" - ")[1]).toBe(later.split(" - ")[1]);
-    expect(expired).toContain("5h ↺ 0s");
+    expect(expired).toContain("7d ↺ 0s");
     expect(initial.split(" - ")[1]).toBe(expired.split(" - ")[1]);
   });
 
