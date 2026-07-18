@@ -64,11 +64,11 @@ describe("responsive footer layout", () => {
     expect(usage).toContain("█");
   });
 
-  test("reverses context consumption colors relative to remaining usage", () => {
+  test("colors context consumption green through 50% and orange through 75%", () => {
     const fg = vi.fn((_color: string, text: string) => text);
     const thresholdTheme = { fg };
 
-    for (const percent of [75, 50, 24])
+    for (const percent of [76, 75, 51, 50])
       renderContextLine(
         { contextWindow: 100_000, tokens: percent * 1_000, percent },
         [],
@@ -78,9 +78,10 @@ describe("responsive footer layout", () => {
       );
     renderOpenAIUsageLine("Usage: 5h: 75% | 7d: 25%", 80, thresholdTheme, false);
 
-    expect(fg.mock.calls).toContainEqual(["error", " 75% · 75k/100k"]);
-    expect(fg.mock.calls).toContainEqual(["warning", " 50% · 50k/100k"]);
-    expect(fg.mock.calls).toContainEqual(["success", " 24% · 24k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["error", " 76% · 76k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["warning", " 75% · 75k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["warning", " 51% · 51k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["success", " 50% · 50k/100k"]);
     expect(fg.mock.calls).toContainEqual(["success", "5h "]);
     expect(fg.mock.calls).toContainEqual(["success", " 75%"]);
     expect(fg.mock.calls).toContainEqual(["warning", "7d "]);
