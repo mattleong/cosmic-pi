@@ -709,8 +709,8 @@ describe("persistent extension cutover", () => {
 
   test.each([
     ["guardrail", "concern", "advice", false],
-    ["strict", "concern", "revision", true],
-    ["advice", "blocker", "advice", false],
+    ["corrective", "concern", "revision", true],
+    ["advisory", "blocker", "advice", false],
   ] as const)(
     "routes %s policy findings through baseline behavior",
     async (policy, severity, action, trigger) => {
@@ -726,8 +726,8 @@ describe("persistent extension cutover", () => {
     },
   );
 
-  test("strict concerns are preserved for exactly three completed turns", async () => {
-    const value = harness({ reviewPolicy: "strict" });
+  test("corrective concerns are preserved for exactly three completed turns", async () => {
+    const value = harness({ reviewPolicy: "corrective" });
     await value.emit("session_start", { type: "session_start" });
     const complete = async (index: number) => {
       await value.emit("turn_end", finalTurn(`candidate-${index}`));
@@ -907,20 +907,74 @@ describe("persistent extension cutover", () => {
     expect(value.sendMessage.mock.lastCall?.[1]).toEqual({ deliverAs: "nextTurn" });
   });
 
-  test("manual policy skips automatic checkpoints but once reviews the next final turn", async () => {
-    const value = harness({ reviewPolicy: "manual" });
+  test("disabled supervision skips automatic checkpoints but once reviews the next final turn", async () => {
+    const value = harness({ enabled: false });
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("automatic"));
     await tick();
-    expect(value.runtimes[0]?.requests).toHaveLength(0);
+    expect(value.runtimes).toHaveLength(0);
     await value.commands.get("advisor")!.handler("once", value.ctx as never);
     await value.emit("turn_end", finalTurn("requested"));
     await tick();
     expect(value.runtimes[0]?.requests).toHaveLength(1);
   });
 
+  test("disabled explicit reviews survive cursor invalidation", async () => {
+    const value = harness({ enabled: false });
+    const command = value.commands.get("advisor")!;
+    await value.emit("session_start", { type: "session_start" });
+    await command.handler("once", value.ctx as never);
+    await value.emit("turn_end", finalTurn("first explicit review"));
+    await tick();
+    const first = value.runtimes[0]!;
+    first.pending[0]!.resolve(pass(first.requests[0]!));
+    await tick();
+
+    (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
+      {
+        id: "replacement",
+        type: "message",
+        parentId: null,
+        timestamp: "now",
+        message: { role: "user", content: "replacement" },
+      },
+    ]);
+    await command.handler("once", value.ctx as never);
+    await value.emit("turn_end", finalTurn("explicit review after replacement"));
+    await tick();
+
+    expect(value.runtimes).toHaveLength(2);
+    expect(first.driver.dispose).toHaveBeenCalled();
+    expect(value.runtimes[1]?.requests).toHaveLength(1);
+    value.runtimes[1]!.pending[0]!.resolve(pass(value.runtimes[1]!.requests[0]!));
+    await tick();
+    expect(value.appended).toHaveLength(2);
+  });
+
+  test.each([
+    ["advisory", "blocker"],
+    ["guardrail", "concern"],
+  ] as const)(
+    "/advisor once preserves %s policy delivery for %s findings",
+    async (reviewPolicy, severity) => {
+      const value = harness({ enabled: false, reviewPolicy });
+      await value.emit("session_start", { type: "session_start" });
+      await value.commands.get("advisor")!.handler("once", value.ctx as never);
+      await value.emit("turn_end", finalTurn("requested"));
+      await tick();
+      const current = value.runtimes[0]!;
+      current.pending[0]!.resolve(revise(current.requests[0]!, severity));
+      await tick();
+
+      expect(value.sendMessage).toHaveBeenCalledOnce();
+      expect(value.sendMessage.mock.calls[0]?.[0]?.details?.action).toBe("advice");
+      expect(value.sendMessage.mock.calls[0]?.[1]).toEqual({ deliverAs: "nextTurn" });
+      expect(value.ctx.abort).not.toHaveBeenCalled();
+    },
+  );
+
   test("manual review-last and verify-last never trigger corrections for blockers", async () => {
-    const value = harness({ reviewPolicy: "strict" });
+    const value = harness({ reviewPolicy: "corrective" });
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("candidate"));
     await tick();
@@ -946,7 +1000,7 @@ describe("persistent extension cutover", () => {
   });
 
   test("review-last and verify-last preserve their requested focus", async () => {
-    const value = harness({ reviewPolicy: "manual" });
+    const value = harness({ enabled: false });
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("candidate"));
     const command = value.commands.get("advisor")!;
@@ -1040,7 +1094,7 @@ describe("persistent extension cutover", () => {
   });
 
   test("cancel after a persisted ledger preserves the live cancellation latch across restart", async () => {
-    const value = harness({ reviewPolicy: "strict" });
+    const value = harness({ reviewPolicy: "corrective" });
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("persisted candidate"));
     await tick();
@@ -1075,6 +1129,47 @@ describe("persistent extension cutover", () => {
       routing: { cancellationLatched: true },
     });
   });
+
+  test.each(["command", "dashboard", "settings"] as const)(
+    "%s enablement toggle shares lifecycle ownership and clears the session pause",
+    async (entryPoint) => {
+      const directory = mkdtempSync(join(tmpdir(), `pi-advisor-${entryPoint}-toggle-`));
+      try {
+        const configPath = join(directory, "extensions", "pi-advisor.json");
+        const value = harness({ configPath });
+        await value.emit("session_start", { type: "session_start" });
+        const command = value.commands.get("advisor")!;
+        await command.handler("pause", value.ctx as never);
+
+        const select = value.ctx.ui.select as ReturnType<typeof vi.fn>;
+        if (entryPoint === "command") {
+          await command.handler("off", value.ctx as never);
+        } else if (entryPoint === "dashboard") {
+          select.mockResolvedValueOnce("Turn automatic review off");
+          await command.handler("", value.ctx as never);
+        } else {
+          select.mockResolvedValueOnce("Advisor supervision: on").mockResolvedValueOnce("Done");
+          await command.handler("settings", value.ctx as never);
+        }
+        await tick();
+
+        const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
+        notify.mockClear();
+        await command.handler("status", value.ctx as never);
+        expect(notify).toHaveBeenLastCalledWith(
+          expect.stringMatching(/Advisor: off[\s\S]*Session: idle/),
+          "info",
+        );
+        expect(value.appended).toHaveLength(2);
+        expect(value.appended.at(-1)).toMatchObject({
+          routing: { cancellationLatched: true },
+        });
+        expect(value.runtimes).toHaveLength(1);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("off persists the cancellation latch before stopping automatic review", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pi-advisor-off-"));
@@ -1217,7 +1312,7 @@ describe("persistent extension cutover", () => {
   });
 
   test("restores a persisted cancellation across shutdown and a new extension session", async () => {
-    const first = harness({ reviewPolicy: "strict" });
+    const first = harness({ reviewPolicy: "corrective" });
     await first.emit("session_start", { type: "session_start" });
     await first.commands.get("advisor")!.handler("cancel", first.ctx as never);
     expect(first.appended.at(-1)).toMatchObject({
@@ -1225,7 +1320,7 @@ describe("persistent extension cutover", () => {
     });
     await first.emit("session_shutdown", { type: "session_shutdown" });
 
-    const second = harness({ reviewPolicy: "strict" }, { branch: first.branch });
+    const second = harness({ reviewPolicy: "corrective" }, { branch: first.branch });
     await second.emit("session_start", { type: "session_start" });
     await second.emit("turn_end", finalTurn("before genuine prompt"));
     await tick();

@@ -34,7 +34,7 @@ describe("advisor config", () => {
       enabled: true,
       fastMode: true,
       thinkingLevel: "high",
-      reviewPolicy: "strict",
+      reviewPolicy: "corrective",
       timeoutMs: 90_000,
       maxContextChars: 240_000,
     });
@@ -81,7 +81,7 @@ describe("advisor config", () => {
           model: " gpt-5.5 ",
           fastMode: true,
           thinkingLevel: "high",
-          reviewPolicy: "advice",
+          reviewPolicy: "advisory",
           timeoutMs: 90_000,
           maxContextChars: 80_000,
         },
@@ -94,10 +94,45 @@ describe("advisor config", () => {
       model: "gpt-5.5",
       fastMode: true,
       thinkingLevel: "high",
-      reviewPolicy: "advice",
+      reviewPolicy: "advisory",
       timeoutMs: 90_000,
       maxContextChars: 80_000,
       configured: true,
+    });
+  });
+
+  test.each([
+    ["strict", "corrective", true],
+    ["advice", "advisory", true],
+    ["manual", "advisory", false],
+  ] as const)(
+    "migrates legacy %s behavior consistently during normalization and persistence",
+    (legacyPolicy, reviewPolicy, enabled) => {
+      expect(
+        normalizeAdvisorConfig({ enabled: true, reviewPolicy: legacyPolicy }, "/config.json"),
+      ).toMatchObject({ enabled, reviewPolicy });
+
+      withTempDir((tempDir) => {
+        const path = join(tempDir, "advisor.json");
+        writeRawAdvisorConfig({ enabled: true, reviewPolicy: legacyPolicy }, path);
+        expect(writeAdvisorConfigPatch({}, path)).toMatchObject({ enabled, reviewPolicy });
+        expect(readRawAdvisorConfig(path)).toMatchObject({ enabled, reviewPolicy });
+      });
+    },
+  );
+
+  test("an explicit patch can re-enable a migrated legacy Manual config", () => {
+    withTempDir((tempDir) => {
+      const path = join(tempDir, "advisor.json");
+      writeRawAdvisorConfig({ enabled: true, reviewPolicy: "manual" }, path);
+      expect(writeAdvisorConfigPatch({ enabled: true }, path)).toMatchObject({
+        enabled: true,
+        reviewPolicy: "advisory",
+      });
+      expect(readRawAdvisorConfig(path)).toMatchObject({
+        enabled: true,
+        reviewPolicy: "advisory",
+      });
     });
   });
 
@@ -143,7 +178,7 @@ describe("advisor config", () => {
         model: " gpt-5.5 ",
         fastMode: true,
         thinkingLevel: "high",
-        reviewPolicy: "strict",
+        reviewPolicy: "corrective",
         timeoutMs: 1,
         maxContextChars: 999_999,
       }),
@@ -153,7 +188,7 @@ describe("advisor config", () => {
       model: "gpt-5.5",
       fastMode: true,
       thinkingLevel: "high",
-      reviewPolicy: "strict",
+      reviewPolicy: "corrective",
       timeoutMs: MIN_TIMEOUT_MS,
       maxContextChars: MAX_CONTEXT_CHARS,
       futureSetting: { nested: true },

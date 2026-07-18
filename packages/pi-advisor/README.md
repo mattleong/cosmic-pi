@@ -40,10 +40,10 @@ The catch-up wait has a hard **30,000 ms per-turn cap**. Provider failure, Advis
 Advisor findings use three severities:
 
 - **nit**: recorded only; never triggers a primary turn.
-- **concern**: preserved for `nextTurn` under Guardrail; Strict may interrupt when immunity permits.
-- **blocker**: Guardrail and Strict may interrupt; blockers may bypass immunity.
+- **concern**: preserved for `nextTurn` under Guardrail; Corrective may interrupt when immunity permits.
+- **blocker**: Guardrail and Corrective may interrupt; blockers may bypass immunity.
 
-Advice and Manual reviews do not automatically trigger work. Non-interrupting findings use Pi's `nextTurn` delivery so they remain available without waking an idle or cancelled agent. Live corrections use steering; an eligible idle terminal correction may trigger a turn only when cancellation is not latched.
+Advisory findings never automatically trigger work. Non-interrupting findings use Pi's `nextTurn` delivery so they remain available without waking an idle or cancelled agent. Live corrections use steering; an eligible idle terminal correction may trigger a turn only when cancellation is not latched. Turning supervision off disables automatic review while keeping explicit review commands available.
 
 After an interrupting correction is actually delivered, concerns have fixed immunity for the next **three subsequently completed primary turns**. Reviews, passes, failures, user-request boundaries, and suppressed findings do not consume the window. A blocker may bypass and re-arm it. This fixed policy is not configurable.
 
@@ -84,7 +84,7 @@ Read-only does not mean data-free: files under the project root that the Advisor
 /advisor status --verbose
 ```
 
-`verify-last` requests an evidence-focused review and may use the same project-confined read-only tools. `/advisor-settings` is a compatibility shortcut for the settings dashboard. Changes are staged until **Apply changes**.
+`verify-last` requests an evidence-focused review and may use the same project-confined read-only tools. `/advisor-settings` is a compatibility shortcut for the settings dashboard. The dashboard shows every setting in one flat list and persists each change immediately; there is no Apply step or nested Advanced section.
 
 Verbose status reports persistent/in-memory behavior, fixed immunity, active safe tool names, observation backlog, processed/ingested sequence, pending checkpoints, catch-up waits/timeouts/failures/cancellations, child resets/re-primes, guidance, usage totals, and bounded failure classes. It never displays transcript text, thinking, tool evidence, auth values, or credentials.
 
@@ -105,7 +105,7 @@ When `PI_CODING_AGENT_DIR` is unset, the path defaults to `~/.pi/agent/extension
   "model": "gpt-5.5",
   "fastMode": true,
   "thinkingLevel": "high",
-  "reviewPolicy": "strict",
+  "reviewPolicy": "corrective",
   "timeoutMs": 90000,
   "maxContextChars": 240000
 }
@@ -115,13 +115,13 @@ When `PI_CODING_AGENT_DIR` is unset, the path defaults to `~/.pi/agent/extension
 - `provider` and `model`: dedicated Advisor model identity; both must be non-empty.
 - `fastMode`: requests the shared supported OpenAI priority tier; defaults to `true`. It is active only for supported models.
 - `thinkingLevel`: Advisor reasoning level; defaults to `high` and is clamped to model support.
-- `reviewPolicy`: `guardrail`, `strict`, `advice`, or `manual`; defaults to `strict`. Three-turn concern immunity limits repeated interruptions.
+- `reviewPolicy`: `corrective`, `guardrail`, or `advisory`; defaults to `corrective`. Corrective can act on concerns and blockers, Guardrail acts only on blockers, and Advisory never interrupts or triggers corrections. Three-turn concern immunity limits repeated interruptions.
 - `timeoutMs`: Advisor operation timeout, clamped to 10,000–180,000 ms and defaulting to 90,000 ms. It does not alter the hard 30,000 ms completed-turn barrier; work finishing later can still improve the persistent Advisor context but cannot deliver a stale intervention for that turn.
-- `maxContextChars`: bounded serialized seed limit, clamped to 16,000–240,000 characters and defaulting to 240,000. Fast and Balanced presets reduce it when lower latency or cost is preferred.
+- `maxContextChars`: bounded serialized seed limit, clamped to 16,000–240,000 characters and defaulting to 240,000. Users can lower it directly when lower latency or cost is preferred.
 
 ### Migration and unknown fields
 
-`revisionCooldownTurns` is retired. If an existing file contains it, pi-advisor preserves the raw root field during settings round-trips but ignores it completely. Fixed three-completed-turn concern immunity with blocker bypass replaces it.
+Legacy behavior values migrate automatically: `strict` becomes `corrective`, `advice` becomes `advisory`, and `manual` becomes disabled supervision plus `advisory`. `revisionCooldownTurns` is retired. If an existing file contains it, pi-advisor preserves the raw root field during settings round-trips but ignores it completely. Fixed three-completed-turn concern immunity with blocker bypass replaces it.
 
 Unknown root JSON is preserved for forward-compatible round-trips. This includes legacy or adversarial `tools`, mutating-tool options, `all`, provider/custom tool definitions, and command settings. Preserved does not mean active: unknown fields are excluded from resolved runtime config, runtime fingerprints, resource loading, and child tool construction. No configuration can grant Advisor tools.
 

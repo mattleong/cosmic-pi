@@ -17,7 +17,7 @@ export interface AdvisorRoutingInput {
   parentState: AdvisorParentState;
   immunityActive: boolean;
   cancellationLatched: boolean;
-  /** True only for an explicitly requested action such as /advisor once. */
+  /** Explicit scheduling such as /advisor once; it never changes delivery policy. */
   manualAction?: boolean;
   /** Strong local evidence produced during this exact, still-current parent turn. */
   sameTurnStrongSignal?: boolean;
@@ -29,11 +29,8 @@ export interface AdvisorRoutingInput {
 export function routeAdvisorFinding(input: AdvisorRoutingInput): AdvisorRoute {
   if (input.severity === "nit") return "silent";
 
-  const explicitlyInterrupting = input.manualAction === true;
-  if (!explicitlyInterrupting && (input.policy === "advice" || input.policy === "manual")) {
-    return "preserve-next-turn";
-  }
-  if (input.severity === "concern" && input.policy === "guardrail" && !explicitlyInterrupting) {
+  if (input.policy === "advisory") return "preserve-next-turn";
+  if (input.severity === "concern" && input.policy === "guardrail") {
     return "preserve-next-turn";
   }
 

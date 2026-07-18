@@ -29,30 +29,9 @@ const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
 ];
 
 const POLICY_OPTIONS: Array<{ label: string; value: AdvisorReviewPolicy }> = [
-  { label: "Strict (recommended)", value: "strict" },
+  { label: "Corrective (recommended)", value: "corrective" },
   { label: "Guardrail", value: "guardrail" },
-  { label: "Advice only", value: "advice" },
-  { label: "Manual", value: "manual" },
-];
-
-interface SpeedPreset {
-  label: string;
-  patch: Pick<ResolvedAdvisorConfig, "thinkingLevel" | "timeoutMs" | "maxContextChars">;
-}
-
-const SPEED_PRESETS: readonly SpeedPreset[] = [
-  {
-    label: "Fast",
-    patch: { thinkingLevel: "low", timeoutMs: 30_000, maxContextChars: 16_000 },
-  },
-  {
-    label: "Balanced",
-    patch: { thinkingLevel: "medium", timeoutMs: 30_000, maxContextChars: 48_000 },
-  },
-  {
-    label: "Thorough",
-    patch: { thinkingLevel: "high", timeoutMs: 90_000, maxContextChars: 240_000 },
-  },
+  { label: "Advisory", value: "advisory" },
 ];
 
 export interface AdvisorConfigState {
@@ -65,9 +44,8 @@ export interface AdvisorCommandActions {
   cancel(ctx: ExtensionCommandContext): boolean;
   pause(ctx: ExtensionCommandContext): void;
   resume(ctx: ExtensionCommandContext): void;
-  reviewLast(ctx: ExtensionCommandContext, focus: AdvisorReviewFocus): boolean;
+  reviewLast(ctx: ExtensionCommandContext, focus: AdvisorReviewFocus): boolean | Promise<boolean>;
   reviewNext(ctx: ExtensionCommandContext): void;
-  setEnabled(ctx: ExtensionCommandContext, enabled: boolean): void;
 }
 
 export interface AdvisorSessionMetrics {
@@ -171,7 +149,7 @@ async function handleAdvisorCommand(
   }
   if (command === "review-last" || command === "verify-last") {
     const focus = command === "verify-last" ? "verification" : "standard";
-    if (!actions.reviewLast(ctx, focus)) {
+    if (!(await actions.reviewLast(ctx, focus))) {
       ctx.ui.notify("No completed response is available to review.", "warning");
     } else {
       ctx.ui.notify(
@@ -205,7 +183,6 @@ async function handleAdvisorCommand(
   if (command === "on" || command === "off") {
     const enabled = command === "on";
     if (updateConfig(ctx, state, { enabled })) {
-      actions.setEnabled(ctx, enabled);
       ctx.ui.notify(`Automatic advisor review ${enabled ? "enabled" : "disabled"}.`, "info");
     }
     return;
@@ -258,7 +235,7 @@ async function openAdvisorDashboard(
     ctx.ui.notify("Advisor will review the next completed response.", "info");
   } else if (choice === "Review last response" || choice === "Verify last response") {
     const focus = choice === "Verify last response" ? "verification" : "standard";
-    if (actions.reviewLast(ctx, focus)) {
+    if (await actions.reviewLast(ctx, focus)) {
       ctx.ui.notify(
         focus === "verification"
           ? "Started an evidence-focused transcript review."
@@ -270,8 +247,7 @@ async function openAdvisorDashboard(
     if (metrics.paused) actions.resume(ctx);
     else actions.pause(ctx);
   } else if (choice === enableOption) {
-    const enabled = !config.enabled;
-    if (updateConfig(ctx, state, { enabled })) actions.setEnabled(ctx, enabled);
+    updateConfig(ctx, state, { enabled: !config.enabled });
   } else if (choice === "Settings") {
     await openAdvisorSettings(ctx, state);
   } else if (choice === "Status") {
@@ -288,52 +264,73 @@ async function openAdvisorSettings(
     return;
   }
 
-  let draft = { ...state.get() };
   while (true) {
-    const enabledOption = `Advisor supervision: ${draft.enabled ? "on" : "off"}`;
-    const policyOption = `Behavior: ${formatPolicy(draft.reviewPolicy)}`;
-    const modelOption = `Advisor model: ${formatModel(draft)}`;
-    const speedOption = `Speed: ${detectSpeedPreset(draft)}`;
-    const applyOption = "Apply changes";
-    const cancelOption = "Cancel";
-    const choice = await ctx.ui.select("Advisor settings", [
+    const current = state.get();
+    const enabledOption = `Advisor supervision: ${current.enabled ? "on" : "off"}`;
+    const policyOption = `Behavior: ${formatPolicy(current.reviewPolicy)}`;
+    const modelOption = `Advisor model: ${formatModel(current)}`;
+    const fastModeOption = `OpenAI fast mode: ${current.fastMode ? "on" : "off"}`;
+    const thinkingOption = `Reasoning level: ${current.thinkingLevel}`;
+    const timeoutOption = `Advisor operation timeout: ${formatDuration(current.timeoutMs)}`;
+    const contextOption = `Context cap: ${current.maxContextChars.toLocaleString()} characters`;
+    const choice = await ctx.ui.select("Advisor settings · changes apply immediately", [
       enabledOption,
       policyOption,
       modelOption,
-      speedOption,
-      "Advanced settings",
-      applyOption,
-      cancelOption,
+      fastModeOption,
+      thinkingOption,
+      timeoutOption,
+      contextOption,
+      "Done",
     ]);
 
-    if (!choice || choice === cancelOption) return;
-    if (choice === applyOption) {
-      if (updateConfig(ctx, state, configPatchFromDraft(draft))) {
-        ctx.ui.notify(
-          `Advisor settings applied · ${formatPolicy(draft.reviewPolicy)} · ${detectSpeedPreset(draft)}`,
-          "info",
-        );
-      }
-      return;
-    }
+    if (!choice || choice === "Done") return;
     if (choice === enabledOption) {
-      draft = { ...draft, enabled: !draft.enabled };
+      updateConfig(ctx, state, { enabled: !current.enabled });
     } else if (choice === policyOption) {
-      const next = await choosePolicy(ctx, draft.reviewPolicy);
-      if (next) draft = { ...draft, reviewPolicy: next };
+      const next = await choosePolicy(ctx, current.reviewPolicy);
+      if (next && next !== current.reviewPolicy) updateConfig(ctx, state, { reviewPolicy: next });
     } else if (choice === modelOption) {
-      draft = await chooseAdvisorModel(ctx, draft);
-    } else if (choice === speedOption) {
-      const preset = await chooseSpeedPreset(ctx);
-      if (preset) {
-        draft = {
-          ...draft,
-          ...preset.patch,
-          thinkingLevel: clampDraftThinkingLevel(ctx, draft, preset.patch.thinkingLevel),
-        };
+      const next = await chooseAdvisorModel(ctx, current);
+      if (
+        next.provider !== current.provider ||
+        next.model !== current.model ||
+        next.thinkingLevel !== current.thinkingLevel
+      ) {
+        updateConfig(ctx, state, {
+          provider: next.provider,
+          model: next.model,
+          thinkingLevel: next.thinkingLevel,
+        });
       }
-    } else if (choice === "Advanced settings") {
-      draft = await openAdvancedSettings(ctx, draft);
+    } else if (choice === fastModeOption) {
+      updateConfig(ctx, state, { fastMode: !current.fastMode });
+    } else if (choice === thinkingOption) {
+      const thinkingLevel = await chooseThinkingLevel(ctx, current);
+      if (thinkingLevel && thinkingLevel !== current.thinkingLevel) {
+        updateConfig(ctx, state, { thinkingLevel });
+      }
+    } else if (choice === timeoutOption) {
+      const timeoutMs = await chooseNumericSetting(
+        ctx,
+        "Advisor operation timeout",
+        TIMEOUT_OPTIONS.map((item) => ({ label: formatDuration(item), value: item })),
+      );
+      if (timeoutMs !== undefined && timeoutMs !== current.timeoutMs) {
+        updateConfig(ctx, state, { timeoutMs });
+      }
+    } else if (choice === contextOption) {
+      const maxContextChars = await chooseNumericSetting(
+        ctx,
+        "Advisor context cap",
+        CONTEXT_OPTIONS.map((item) => ({
+          label: `${item.toLocaleString()} characters`,
+          value: item,
+        })),
+      );
+      if (maxContextChars !== undefined && maxContextChars !== current.maxContextChars) {
+        updateConfig(ctx, state, { maxContextChars });
+      }
     }
   }
 }
@@ -348,60 +345,6 @@ async function choosePolicy(
   const selected = await ctx.ui.select("Advisor behavior", labels);
   const normalized = selected?.replace(" (current)", "");
   return POLICY_OPTIONS.find(({ label }) => label === normalized)?.value;
-}
-
-async function chooseSpeedPreset(ctx: ExtensionCommandContext): Promise<SpeedPreset | undefined> {
-  const selected = await ctx.ui.select(
-    "Advisor speed",
-    SPEED_PRESETS.map(({ label }) => label),
-  );
-  return SPEED_PRESETS.find(({ label }) => label === selected);
-}
-
-async function openAdvancedSettings(
-  ctx: ExtensionCommandContext,
-  initial: ResolvedAdvisorConfig,
-): Promise<ResolvedAdvisorConfig> {
-  let draft = initial;
-  while (true) {
-    const fastModeOption = supportsFastModel(draft.provider, draft.model)
-      ? `OpenAI fast mode: ${draft.fastMode ? "on" : "off"}`
-      : undefined;
-    const thinkingOption = `Reasoning level: ${draft.thinkingLevel}`;
-    const timeoutOption = `Advisor operation timeout: ${formatDuration(draft.timeoutMs)}`;
-    const contextOption = `Context cap: ${draft.maxContextChars.toLocaleString()} characters`;
-    const choice = await ctx.ui.select(
-      "Advanced advisor settings",
-      [fastModeOption, thinkingOption, timeoutOption, contextOption, "Back"].filter(
-        (option): option is string => option !== undefined,
-      ),
-    );
-
-    if (!choice || choice === "Back") return draft;
-    if (fastModeOption && choice === fastModeOption) {
-      draft = { ...draft, fastMode: !draft.fastMode };
-    } else if (choice === thinkingOption) {
-      const thinkingLevel = await chooseThinkingLevel(ctx, draft);
-      if (thinkingLevel) draft = { ...draft, thinkingLevel };
-    } else if (choice === timeoutOption) {
-      const value = await chooseNumericSetting(
-        ctx,
-        "Advisor review timeout",
-        TIMEOUT_OPTIONS.map((item) => ({ label: formatDuration(item), value: item })),
-      );
-      if (value !== undefined) draft = { ...draft, timeoutMs: value };
-    } else if (choice === contextOption) {
-      const value = await chooseNumericSetting(
-        ctx,
-        "Advisor context cap",
-        CONTEXT_OPTIONS.map((item) => ({
-          label: `${item.toLocaleString()} characters`,
-          value: item,
-        })),
-      );
-      if (value !== undefined) draft = { ...draft, maxContextChars: value };
-    }
-  }
 }
 
 async function chooseAdvisorModel(
@@ -463,18 +406,6 @@ async function chooseThinkingLevel(
     : undefined;
 }
 
-function clampDraftThinkingLevel(
-  ctx: ExtensionCommandContext,
-  config: ResolvedAdvisorConfig,
-  level: ModelThinkingLevel,
-): ModelThinkingLevel {
-  const model =
-    config.provider && config.model
-      ? ctx.modelRegistry.find(config.provider, config.model)
-      : undefined;
-  return model ? clampThinkingLevel(model, level) : level;
-}
-
 async function chooseNumericSetting(
   ctx: ExtensionCommandContext,
   title: string,
@@ -485,19 +416,6 @@ async function chooseNumericSetting(
     options.map(({ label }) => label),
   );
   return options.find(({ label }) => label === selected)?.value;
-}
-
-function configPatchFromDraft(config: ResolvedAdvisorConfig): AdvisorConfigPatch {
-  return {
-    enabled: config.enabled,
-    provider: config.provider,
-    model: config.model,
-    fastMode: config.fastMode,
-    thinkingLevel: config.thinkingLevel,
-    reviewPolicy: config.reviewPolicy,
-    timeoutMs: config.timeoutMs,
-    maxContextChars: config.maxContextChars,
-  };
 }
 
 function updateConfig(
@@ -609,28 +527,13 @@ function formatModel(config: Pick<ResolvedAdvisorConfig, "provider" | "model">):
 
 function formatPolicy(policy: AdvisorReviewPolicy): string {
   switch (policy) {
+    case "corrective":
+      return "Corrective";
     case "guardrail":
       return "Guardrail";
-    case "strict":
-      return "Strict";
-    case "advice":
-      return "Advice only";
-    case "manual":
-      return "Manual";
+    case "advisory":
+      return "Advisory";
   }
-}
-
-function detectSpeedPreset(
-  config: Pick<ResolvedAdvisorConfig, "thinkingLevel" | "timeoutMs" | "maxContextChars">,
-): string {
-  return (
-    SPEED_PRESETS.find(
-      ({ patch }) =>
-        patch.thinkingLevel === config.thinkingLevel &&
-        patch.timeoutMs === config.timeoutMs &&
-        patch.maxContextChars === config.maxContextChars,
-    )?.label ?? "Custom"
-  );
 }
 
 function formatFastMode(
@@ -648,7 +551,6 @@ const NOOP_COMMAND_ACTIONS: AdvisorCommandActions = {
   resume: () => {},
   reviewLast: () => false,
   reviewNext: () => {},
-  setEnabled: () => {},
 };
 
 function formatSkippedReviews(skipped: Readonly<Record<string, number>>): string {
@@ -662,10 +564,8 @@ export const _settingsTest = {
   CLEAR_MODEL_OPTION,
   CONTEXT_OPTIONS,
   POLICY_OPTIONS,
-  SPEED_PRESETS,
   THINKING_LEVELS,
   TIMEOUT_OPTIONS,
-  detectSpeedPreset,
   formatDuration,
   formatFastMode,
   formatModel,

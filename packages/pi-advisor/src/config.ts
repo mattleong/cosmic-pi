@@ -12,7 +12,7 @@ export const MAX_TIMEOUT_MS = 180_000;
 export const MIN_CONTEXT_CHARS = 16_000;
 export const MAX_CONTEXT_CHARS = 240_000;
 
-export type AdvisorReviewPolicy = "guardrail" | "strict" | "advice" | "manual";
+export type AdvisorReviewPolicy = "corrective" | "guardrail" | "advisory";
 
 export interface AdvisorConfig {
   enabled?: boolean;
@@ -44,7 +44,7 @@ export const DEFAULT_ADVISOR_CONFIG = {
   enabled: true,
   fastMode: true,
   thinkingLevel: "high",
-  reviewPolicy: "strict",
+  reviewPolicy: "corrective",
   timeoutMs: 90_000,
   maxContextChars: 240_000,
 } as const satisfies Required<
@@ -81,7 +81,7 @@ export function normalizeAdvisorConfig(
   raw: unknown,
   configPath = getAdvisorConfigPath(),
 ): ResolvedAdvisorConfig {
-  const record = isRecord(raw) ? raw : {};
+  const record = migrateLegacyReviewPolicy(isRecord(raw) ? raw : {});
   const provider = nonEmptyString(record.provider);
   const model = nonEmptyString(record.model);
   const normalized: ResolvedAdvisorConfig = {
@@ -164,7 +164,8 @@ export function writeAdvisorConfigPatch(
   patch: AdvisorConfigPatch,
   path = getAdvisorConfigPath(),
 ): ResolvedAdvisorConfig {
-  const next = patchAdvisorConfig(readRawAdvisorConfig(path), patch);
+  const raw = migrateLegacyReviewPolicy(readRawAdvisorConfig(path));
+  const next = patchAdvisorConfig(raw, patch);
   writeRawAdvisorConfig(next, path);
   return normalizeAdvisorConfig(next, path);
 }
@@ -184,14 +185,22 @@ function normalizeReviewPolicy(value: unknown): AdvisorReviewPolicy {
 
 function validReviewPolicy(value: unknown): AdvisorReviewPolicy | undefined {
   switch (value) {
+    case "corrective":
     case "guardrail":
-    case "strict":
-    case "advice":
-    case "manual":
+    case "advisory":
       return value;
     default:
       return undefined;
   }
+}
+
+function migrateLegacyReviewPolicy(raw: Record<string, unknown>): Record<string, unknown> {
+  if (raw.reviewPolicy === "strict") return { ...raw, reviewPolicy: "corrective" };
+  if (raw.reviewPolicy === "advice") return { ...raw, reviewPolicy: "advisory" };
+  if (raw.reviewPolicy === "manual") {
+    return { ...raw, enabled: false, reviewPolicy: "advisory" };
+  }
+  return raw;
 }
 
 function validThinkingLevel(value: unknown): ModelThinkingLevel | undefined {

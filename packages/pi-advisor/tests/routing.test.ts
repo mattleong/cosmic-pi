@@ -9,7 +9,7 @@ import type { AdvisorReviewPolicy } from "../src/config.ts";
 import type { AdvisorSeverity } from "../src/review.ts";
 
 const states: AdvisorParentState[] = ["active", "idle", "final", "aborting"];
-const policies: AdvisorReviewPolicy[] = ["guardrail", "strict", "advice", "manual"];
+const policies: AdvisorReviewPolicy[] = ["corrective", "guardrail", "advisory"];
 const severities: AdvisorSeverity[] = ["nit", "concern", "blocker"];
 
 describe("advisor routing", () => {
@@ -46,10 +46,10 @@ describe("advisor routing", () => {
         }
       }
     }
-    expect(cases).toBe(192);
+    expect(cases).toBe(144);
   });
 
-  test("guardrail concerns preserve via next turn and strict concerns respect immunity", () => {
+  test("guardrail concerns preserve via next turn and corrective concerns respect immunity", () => {
     expect(
       routeAdvisorFinding({
         severity: "concern",
@@ -62,7 +62,7 @@ describe("advisor routing", () => {
     expect(
       routeAdvisorFinding({
         severity: "concern",
-        policy: "strict",
+        policy: "corrective",
         parentState: "active",
         immunityActive: false,
         cancellationLatched: false,
@@ -71,10 +71,27 @@ describe("advisor routing", () => {
     expect(
       routeAdvisorFinding({
         severity: "concern",
-        policy: "strict",
+        policy: "corrective",
         parentState: "active",
         immunityActive: true,
         cancellationLatched: false,
+      }),
+    ).toBe("preserve-next-turn");
+  });
+
+  test.each([
+    ["advisory", "concern"],
+    ["advisory", "blocker"],
+    ["guardrail", "concern"],
+  ] as const)("explicit scheduling preserves %s %s delivery policy", (policy, severity) => {
+    expect(
+      routeAdvisorFinding({
+        severity,
+        policy,
+        parentState: "final",
+        immunityActive: false,
+        cancellationLatched: false,
+        manualAction: true,
       }),
     ).toBe("preserve-next-turn");
   });
@@ -117,7 +134,7 @@ describe("advisor routing", () => {
     expect(
       routeAdvisorFinding({
         severity: "blocker",
-        policy: "strict",
+        policy: "corrective",
         parentState: "final",
         immunityActive: state.immunityActive,
         cancellationLatched: false,
@@ -129,7 +146,7 @@ describe("advisor routing", () => {
     expect(
       routeAdvisorFinding({
         severity: "blocker",
-        policy: "strict",
+        policy: "corrective",
         parentState: "idle",
         immunityActive: state.immunityActive,
         cancellationLatched: state.cancellationLatched,

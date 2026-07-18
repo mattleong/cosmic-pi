@@ -65,7 +65,6 @@ export type AdvisorSkipReason =
   | "disabled"
   | "empty"
   | "incomplete"
-  | "manual-policy"
   | "pending-input"
   | "session-paused"
   | "unconfigured";
@@ -250,10 +249,17 @@ function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependen
     const startRuntime = async (
       ctx: ExtensionContext,
       restoration: "preserve-live" | "restore-branch" = "preserve-live",
+      allowDisabled = false,
     ): Promise<void> => {
       const startEpoch = ++epoch;
       await stopRuntime();
-      if (startEpoch !== epoch || paused || !config.enabled || !config.configured) return;
+      if (
+        startEpoch !== epoch ||
+        paused ||
+        (!config.enabled && !allowDisabled) ||
+        !config.configured
+      )
+        return;
       const nextRuntime = createRuntime();
       runtime = nextRuntime;
       const branch =
@@ -509,7 +515,7 @@ function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependen
         if (cursorMismatch) {
           // One bounded restart remains part of this same checkpoint settlement,
           // so turn_end's hard catch-up barrier covers both re-seed and review.
-          await startRuntime(options.ctx, "restore-branch");
+          await startRuntime(options.ctx, "restore-branch", !options.requiresEnabled);
         }
         if (!validForDelivery || !queue || !started || !runtimeCursor) return "discarded";
 
@@ -686,29 +692,20 @@ function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependen
         paused = false;
         void startRuntime(ctx);
       },
-      reviewLast: (ctx, focus) => {
+      reviewLast: async (ctx, focus) => {
         if (!lastCandidate) return false;
-        requestCheckpoint({
+        if (!started) await startRuntime(ctx, "preserve-live", true);
+        const handle = requestCheckpoint({
           ctx,
           focus,
           phase: "final",
           source: focus === "verification" ? "verify" : "last",
           requiresEnabled: false,
         });
-        return true;
+        return Boolean(handle);
       },
       reviewNext: () => {
         reviewNext = true;
-      },
-      setEnabled: (ctx, enabled) => {
-        paused = false;
-        clearPendingRecovery();
-        if (!enabled) {
-          routingState.latchCancellation();
-          persistCurrentLedger(ctx);
-        }
-        cancellationEpoch += 1;
-        void startRuntime(ctx);
       },
     };
 
@@ -732,13 +729,13 @@ function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependen
           sequence: queue?.sequence ?? 0,
         }),
         update: (next) => {
+          const enabledChanged = config.enabled !== next.enabled;
           const disabling = config.enabled && !next.enabled;
           config = next;
           configRevision += 1;
+          if (enabledChanged) paused = false;
           if (disabling) {
-            clearPendingRecovery();
             routingState.latchCancellation();
-            cancellationEpoch += 1;
             if (activeContext) persistCurrentLedger(activeContext);
           }
           findingDedupe.reset();
@@ -806,8 +803,7 @@ function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependen
       clearPersistentTrajectory();
       clearPendingRecovery();
       parentTurnId += 1;
-      if (!config.enabled || paused || !config.configured || config.reviewPolicy === "manual")
-        return;
+      if (!config.enabled || paused || !config.configured) return;
       const observation: ActiveTurnObservation = {
         abortAllowed: false,
         ctx,
@@ -1038,17 +1034,16 @@ function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependen
         };
       }
       const explicitlyRequested = classification.phase === "final" && reviewNext;
-      if (explicitlyRequested) reviewNext = false;
+      if (explicitlyRequested) {
+        reviewNext = false;
+        if (!started) await startRuntime(ctx, "preserve-live", true);
+      }
       if (!explicitlyRequested && !config.enabled) {
         recordSkip("disabled");
         return;
       }
       if (!explicitlyRequested && paused) {
         recordSkip("session-paused");
-        return;
-      }
-      if (!explicitlyRequested && config.reviewPolicy === "manual") {
-        recordSkip("manual-policy");
         return;
       }
       if (!config.configured) {
