@@ -11,8 +11,6 @@ export const MIN_TIMEOUT_MS = 10_000;
 export const MAX_TIMEOUT_MS = 180_000;
 export const MIN_CONTEXT_CHARS = 16_000;
 export const MAX_CONTEXT_CHARS = 240_000;
-export const MIN_REVISION_COOLDOWN_TURNS = 0;
-export const MAX_REVISION_COOLDOWN_TURNS = 5;
 
 export type AdvisorReviewPolicy = "guardrail" | "strict" | "advice" | "manual";
 
@@ -23,7 +21,6 @@ export interface AdvisorConfig {
   fastMode?: boolean;
   thinkingLevel?: ModelThinkingLevel;
   reviewPolicy?: AdvisorReviewPolicy;
-  revisionCooldownTurns?: number;
   timeoutMs?: number;
   maxContextChars?: number;
 }
@@ -36,7 +33,6 @@ export interface ResolvedAdvisorConfig {
   fastMode: boolean;
   thinkingLevel: ModelThinkingLevel;
   reviewPolicy: AdvisorReviewPolicy;
-  revisionCooldownTurns: number;
   timeoutMs: number;
   maxContextChars: number;
   configured: boolean;
@@ -46,22 +42,15 @@ export type AdvisorConfigPatch = Partial<AdvisorConfig>;
 
 export const DEFAULT_ADVISOR_CONFIG = {
   enabled: true,
-  fastMode: false,
-  thinkingLevel: "medium",
-  reviewPolicy: "guardrail",
-  revisionCooldownTurns: 0,
-  timeoutMs: 30_000,
-  maxContextChars: 48_000,
+  fastMode: true,
+  thinkingLevel: "high",
+  reviewPolicy: "strict",
+  timeoutMs: 90_000,
+  maxContextChars: 240_000,
 } as const satisfies Required<
   Pick<
     AdvisorConfig,
-    | "enabled"
-    | "fastMode"
-    | "thinkingLevel"
-    | "reviewPolicy"
-    | "revisionCooldownTurns"
-    | "timeoutMs"
-    | "maxContextChars"
+    "enabled" | "fastMode" | "thinkingLevel" | "reviewPolicy" | "timeoutMs" | "maxContextChars"
   >
 >;
 
@@ -71,15 +60,6 @@ export function getAdvisorConfigPath(agentDir = getAgentDir()): string {
 
 export function clampTimeoutMs(value: unknown): number {
   return clampInteger(value, DEFAULT_ADVISOR_CONFIG.timeoutMs, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
-}
-
-export function clampRevisionCooldownTurns(value: unknown): number {
-  return clampInteger(
-    value,
-    DEFAULT_ADVISOR_CONFIG.revisionCooldownTurns,
-    MIN_REVISION_COOLDOWN_TURNS,
-    MAX_REVISION_COOLDOWN_TURNS,
-  );
 }
 
 export function clampContextChars(value: unknown): number {
@@ -111,7 +91,6 @@ export function normalizeAdvisorConfig(
       typeof record.fastMode === "boolean" ? record.fastMode : DEFAULT_ADVISOR_CONFIG.fastMode,
     thinkingLevel: normalizeThinkingLevel(record.thinkingLevel),
     reviewPolicy: normalizeReviewPolicy(record.reviewPolicy),
-    revisionCooldownTurns: clampRevisionCooldownTurns(record.revisionCooldownTurns),
     timeoutMs: clampTimeoutMs(record.timeoutMs),
     maxContextChars: clampContextChars(record.maxContextChars),
     configured: Boolean(provider && model),
@@ -160,10 +139,6 @@ export function patchAdvisorConfig(
     const reviewPolicy = validReviewPolicy(patch.reviewPolicy);
     if (reviewPolicy) next.reviewPolicy = reviewPolicy;
     else delete next.reviewPolicy;
-  }
-  if ("revisionCooldownTurns" in patch) {
-    if (patch.revisionCooldownTurns === undefined) delete next.revisionCooldownTurns;
-    else next.revisionCooldownTurns = clampRevisionCooldownTurns(patch.revisionCooldownTurns);
   }
   if ("timeoutMs" in patch) {
     if (patch.timeoutMs === undefined) delete next.timeoutMs;

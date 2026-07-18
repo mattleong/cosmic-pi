@@ -25,7 +25,7 @@ describe("advisor review renderer", () => {
         findings: [
           {
             category: "evidence",
-            severity: "medium",
+            severity: "concern",
             issue: "The validation claim is unsupported.",
             evidence: "No validation command result appears in the transcript.",
             recommendation: "Report the actual command result.",
@@ -42,7 +42,7 @@ describe("advisor review renderer", () => {
     };
     const output = component.render(100).join("\n");
 
-    expect(output).toContain("Advisor noted a concern anthropic/reviewer");
+    expect(output).toContain("Advisor preserved findings for the next turn anthropic/reviewer");
     expect(output).toContain("One material issue remains.");
     expect(output).toContain("The validation claim is unsupported.");
     expect(output).toContain("Report the actual command result.");
@@ -51,7 +51,7 @@ describe("advisor review renderer", () => {
       render(width: number): string[];
     };
     const collapsedOutput = collapsed.render(100).join("\n");
-    expect(collapsedOutput).toContain("1 medium · One material issue remains.");
+    expect(collapsedOutput).toContain("1 concern · One material issue remains.");
     expect(collapsedOutput).not.toContain("The validation claim is unsupported.");
 
     const guidance = renderer?.(
@@ -88,7 +88,7 @@ describe("advisor review renderer", () => {
             summary: "A historical review.",
             findings: [
               {
-                severity: "high",
+                severity: "blocker",
                 issue: "A legacy issue.",
                 recommendation: "Fix the legacy issue.",
               },

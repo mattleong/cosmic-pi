@@ -34,7 +34,7 @@ export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
         if (!review) return undefined;
         const label =
           details.action === "advice"
-            ? "Advisor noted a concern"
+            ? "Advisor preserved findings for the next turn"
             : details.action === "guidance"
               ? "Advisor suggested a course correction"
               : details.action === "recovery"
@@ -46,11 +46,13 @@ export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
           return new Text(`${heading} ${model}\n${formatAdvisorReview(review)}`, 1, 0);
         }
 
-        const high = review.findings.filter((finding) => finding.severity === "high").length;
-        const medium = review.findings.length - high;
+        const blocker = review.findings.filter((finding) => finding.severity === "blocker").length;
+        const concern = review.findings.filter((finding) => finding.severity === "concern").length;
+        const nit = review.findings.length - blocker - concern;
         const counts = [
-          high > 0 ? `${high} high` : undefined,
-          medium > 0 ? `${medium} medium` : undefined,
+          blocker > 0 ? `${blocker} blocker` : undefined,
+          concern > 0 ? `${concern} concern` : undefined,
+          nit > 0 ? `${nit} nit` : undefined,
         ]
           .filter((value): value is string => value !== undefined)
           .join(" · ");
@@ -81,7 +83,11 @@ function normalizeReviewForDisplay(value: unknown): AdvisorReview | undefined {
   for (const finding of value.findings) {
     if (
       !isRecord(finding) ||
-      (finding.severity !== "high" && finding.severity !== "medium") ||
+      (finding.severity !== "nit" &&
+        finding.severity !== "concern" &&
+        finding.severity !== "blocker" &&
+        finding.severity !== "high" &&
+        finding.severity !== "medium") ||
       typeof finding.issue !== "string" ||
       !finding.issue.trim() ||
       typeof finding.recommendation !== "string" ||
@@ -91,7 +97,12 @@ function normalizeReviewForDisplay(value: unknown): AdvisorReview | undefined {
     }
     findings.push({
       category: normalizeCategory(finding.category),
-      severity: finding.severity,
+      severity:
+        finding.severity === "high"
+          ? "blocker"
+          : finding.severity === "medium"
+            ? "concern"
+            : finding.severity,
       issue: finding.issue.trim(),
       evidence:
         typeof finding.evidence === "string" && finding.evidence.trim()

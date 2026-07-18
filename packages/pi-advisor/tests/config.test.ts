@@ -5,13 +5,10 @@ import { describe, expect, test } from "vitest";
 import {
   DEFAULT_ADVISOR_CONFIG,
   MAX_CONTEXT_CHARS,
-  MAX_REVISION_COOLDOWN_TURNS,
   MAX_TIMEOUT_MS,
   MIN_CONTEXT_CHARS,
-  MIN_REVISION_COOLDOWN_TURNS,
   MIN_TIMEOUT_MS,
   clampContextChars,
-  clampRevisionCooldownTurns,
   clampTimeoutMs,
   getAdvisorConfigPath,
   loadAdvisorConfig,
@@ -32,15 +29,14 @@ function withTempDir<T>(run: (tempDir: string) => T): T {
 }
 
 describe("advisor config", () => {
-  test("uses focused review defaults", () => {
+  test("uses capability-first review defaults", () => {
     expect(DEFAULT_ADVISOR_CONFIG).toEqual({
       enabled: true,
-      fastMode: false,
-      thinkingLevel: "medium",
-      reviewPolicy: "guardrail",
-      revisionCooldownTurns: 0,
-      timeoutMs: 30_000,
-      maxContextChars: 48_000,
+      fastMode: true,
+      thinkingLevel: "high",
+      reviewPolicy: "strict",
+      timeoutMs: 90_000,
+      maxContextChars: 240_000,
     });
   });
 
@@ -86,7 +82,6 @@ describe("advisor config", () => {
           fastMode: true,
           thinkingLevel: "high",
           reviewPolicy: "advice",
-          revisionCooldownTurns: 5,
           timeoutMs: 90_000,
           maxContextChars: 80_000,
         },
@@ -100,7 +95,6 @@ describe("advisor config", () => {
       fastMode: true,
       thinkingLevel: "high",
       reviewPolicy: "advice",
-      revisionCooldownTurns: 5,
       timeoutMs: 90_000,
       maxContextChars: 80_000,
       configured: true,
@@ -109,8 +103,6 @@ describe("advisor config", () => {
 
   test("clamps numeric settings to documented bounds", () => {
     expect(clampTimeoutMs(1)).toBe(MIN_TIMEOUT_MS);
-    expect(clampRevisionCooldownTurns(-1)).toBe(MIN_REVISION_COOLDOWN_TURNS);
-    expect(clampRevisionCooldownTurns(99)).toBe(MAX_REVISION_COOLDOWN_TURNS);
     expect(clampTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMEOUT_MS);
     expect(clampContextChars(1)).toBe(MIN_CONTEXT_CHARS);
     expect(clampContextChars(Number.MAX_SAFE_INTEGER)).toBe(MAX_CONTEXT_CHARS);
@@ -152,7 +144,6 @@ describe("advisor config", () => {
         fastMode: true,
         thinkingLevel: "high",
         reviewPolicy: "strict",
-        revisionCooldownTurns: 99,
         timeoutMs: 1,
         maxContextChars: 999_999,
       }),
@@ -163,7 +154,6 @@ describe("advisor config", () => {
       fastMode: true,
       thinkingLevel: "high",
       reviewPolicy: "strict",
-      revisionCooldownTurns: MAX_REVISION_COOLDOWN_TURNS,
       timeoutMs: MIN_TIMEOUT_MS,
       maxContextChars: MAX_CONTEXT_CHARS,
       futureSetting: { nested: true },
@@ -183,7 +173,6 @@ describe("advisor config", () => {
           model: "gpt-5.5",
           fastMode: true,
           thinkingLevel: "high",
-          revisionCooldownTurns: 3,
           timeoutMs: 30_000,
         },
         {
@@ -191,7 +180,6 @@ describe("advisor config", () => {
           model: undefined,
           fastMode: undefined,
           thinkingLevel: undefined,
-          revisionCooldownTurns: undefined,
           timeoutMs: undefined,
         },
       ),
@@ -207,6 +195,10 @@ describe("advisor config", () => {
           provider: "openai",
           unknownField: "keep me",
           future: { enabled: true },
+          revisionCooldownTurns: 5,
+          tools: ["all", "bash", "write"],
+          command: "rm -rf .",
+          customTools: { provider: "injected" },
         },
         configPath,
       );
@@ -217,7 +209,6 @@ describe("advisor config", () => {
           model: "gpt-5.5",
           fastMode: true,
           thinkingLevel: "xhigh",
-          revisionCooldownTurns: 1,
           timeoutMs: 500_000,
         },
         configPath,
@@ -230,7 +221,6 @@ describe("advisor config", () => {
         model: "gpt-5.5",
         fastMode: true,
         thinkingLevel: "xhigh",
-        revisionCooldownTurns: 1,
         timeoutMs: MAX_TIMEOUT_MS,
         configured: true,
       });
@@ -240,11 +230,18 @@ describe("advisor config", () => {
         model: "gpt-5.5",
         fastMode: true,
         thinkingLevel: "xhigh",
-        revisionCooldownTurns: 1,
         timeoutMs: MAX_TIMEOUT_MS,
         unknownField: "keep me",
         future: { enabled: true },
+        revisionCooldownTurns: 5,
+        tools: ["all", "bash", "write"],
+        command: "rm -rf .",
+        customTools: { provider: "injected" },
       });
+      expect("revisionCooldownTurns" in resolved).toBe(false);
+      expect("tools" in resolved).toBe(false);
+      expect("command" in resolved).toBe(false);
+      expect("customTools" in resolved).toBe(false);
     });
   });
 });

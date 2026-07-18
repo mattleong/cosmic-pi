@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { redactSensitiveText } from "./observation-protocol.ts";
 
 const MAX_LOG_BYTES = 1_000_000;
 const MAX_ERROR_MESSAGE_CHARS = 4_000;
@@ -56,12 +57,17 @@ function rotateLogIfNeeded(logPath: string): void {
 
 function serializeError(error: unknown): { name: string; message: string; stack?: string } {
   if (!(error instanceof Error)) {
-    return { name: "UnknownError", message: clip(String(error), MAX_ERROR_MESSAGE_CHARS) };
+    return {
+      name: "UnknownError",
+      message: clip(redactSensitiveText(String(error)), MAX_ERROR_MESSAGE_CHARS),
+    };
   }
   return {
-    name: error.name || "Error",
-    message: clip(error.message, MAX_ERROR_MESSAGE_CHARS),
-    ...(error.stack ? { stack: clip(error.stack, MAX_ERROR_STACK_CHARS) } : {}),
+    name: clip(redactSensitiveText(error.name || "Error"), MAX_ERROR_MESSAGE_CHARS),
+    message: clip(redactSensitiveText(error.message), MAX_ERROR_MESSAGE_CHARS),
+    ...(error.stack
+      ? { stack: clip(redactSensitiveText(error.stack), MAX_ERROR_STACK_CHARS) }
+      : {}),
   };
 }
 

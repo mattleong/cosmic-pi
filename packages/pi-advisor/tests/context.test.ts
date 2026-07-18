@@ -76,11 +76,53 @@ describe("buildAdvisorContext", () => {
     expect(result.transcript).toContain("Recent context (oldest to newest):");
     expect(result.transcript).not.toContain("A previous advisor critique");
     expect(result.transcript).not.toContain("SYSTEM PROMPT MUST NOT APPEAR");
-    expect(result.transcript).not.toContain("PRIVATE_REASONING");
+    expect(result.transcript).toContain("[assistant thinking]\nPRIVATE_REASONING");
     expect(result.transcript).not.toContain("SECRET_IMAGE_BYTES");
-    expect(result.transcript.indexOf("[assistant]\n[tool call: read")).toBeLessThan(
+    expect(result.transcript.indexOf("[tool call: read")).toBeLessThan(
       result.transcript.indexOf("[tool result: read]"),
     );
+  });
+
+  test("preserves exposed and opaque thinking markers while redacting credentials", () => {
+    const result = buildAdvisorContext({
+      candidate: "done",
+      messages: [
+        { role: "user", content: "Use api_key=secret-value" },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "visible reasoning" },
+            { type: "thinking", signature: "opaque-signature" },
+          ],
+        },
+      ],
+    });
+
+    expect(result.transcript).toContain("visible reasoning");
+    expect(result.transcript).toContain("opaque/redacted signature");
+    expect(result.transcript).not.toContain("secret-value");
+    expect(result.transcript).not.toContain("opaque-signature");
+  });
+
+  test("recursively redacts credentials inside assistant tool-call arguments", () => {
+    const result = buildAdvisorContext({
+      candidate: "done",
+      messages: [
+        { role: "user", content: "inspect" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              name: "read",
+              arguments: { headers: { authorization: "Bearer nested-secret" } },
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.transcript).not.toContain("nested-secret");
+    expect(result.transcript).toContain("REDACTED");
   });
 
   test("fills a bounded transcript with newest context and marks omitted history", () => {
@@ -168,13 +210,13 @@ describe("buildAdvisorContext", () => {
     expect(result.truncated).toBe(true);
   });
 
-  test("uses the 48k default and exposes a transcript-only convenience helper", () => {
-    expect(DEFAULT_MAX_CONTEXT_CHARS).toBe(48_000);
+  test("uses the 240k default and exposes a transcript-only convenience helper", () => {
+    expect(DEFAULT_MAX_CONTEXT_CHARS).toBe(240_000);
     const options = {
       candidate: "candidate",
       messages: [
         { role: "user", content: "request" },
-        { role: "toolResult", toolName: "large", content: [text("x".repeat(130_000))] },
+        { role: "toolResult", toolName: "large", content: [text("x".repeat(300_000))] },
       ],
     };
     const result = buildAdvisorContext(options);

@@ -1,16 +1,11 @@
-import { clampThinkingLevel, completeSimple } from "@earendil-works/pi-ai/compat";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { clampThinkingLevel, streamSimple } from "@earendil-works/pi-ai/compat";
+import {
+  ModelRuntime,
+  type ExtensionContext,
+  type ModelRegistry,
+} from "@earendil-works/pi-coding-agent";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import type { ResolvedAdvisorConfig } from "./config.ts";
-import {
-  ADVISOR_SYSTEM_PROMPT,
-  buildAdvisorPrompt,
-  parseAdvisorReview,
-  type AdvisorReview,
-  type AdvisorReviewFocus,
-} from "./review.ts";
-
-const ADVISOR_MAX_OUTPUT_TOKENS = 2_048;
 
 export class AdvisorModelError extends Error {
   constructor(message: string) {
@@ -18,8 +13,6 @@ export class AdvisorModelError extends Error {
     this.name = "AdvisorModelError";
   }
 }
-
-export type CompleteAdvisorRequest = typeof completeSimple;
 
 export interface AdvisorUsageTelemetry {
   cacheReadTokens: number;
@@ -30,218 +23,86 @@ export interface AdvisorUsageTelemetry {
   totalTokens: number;
 }
 
-export interface AdvisorClientDependencies {
-  completeRequest?: CompleteAdvisorRequest;
-  focus?: AdvisorReviewFocus;
-  instructions?: string;
-  onUsage?: (usage: AdvisorUsageTelemetry) => void;
-  signal?: AbortSignal;
-}
-
-interface ReviewAbortScope {
-  signal: AbortSignal;
-  remainingTimeoutMs(): number;
-  dispose(): void;
-}
-
-function createReviewAbortScope(
-  contextSignal: AbortSignal | undefined,
-  timeoutMs: number,
-): ReviewAbortScope {
-  const controller = new AbortController();
-  const deadline = performance.now() + timeoutMs;
-  const abortFromContext = () => {
-    controller.abort(new AdvisorModelError("Advisor review was aborted."));
-  };
-  const abortFromTimeout = () => {
-    controller.abort(new AdvisorModelError("Advisor review timed out."));
-  };
-
-  if (contextSignal?.aborted) abortFromContext();
-  else contextSignal?.addEventListener("abort", abortFromContext, { once: true });
-
-  const timeout = controller.signal.aborted ? undefined : setTimeout(abortFromTimeout, timeoutMs);
-
-  return {
-    signal: controller.signal,
-    remainingTimeoutMs() {
-      if (controller.signal.aborted) throw abortError(controller.signal);
-
-      const remainingMs = deadline - performance.now();
-      if (remainingMs <= 0) {
-        abortFromTimeout();
-        throw abortError(controller.signal);
-      }
-
-      return Math.max(1, Math.ceil(remainingMs));
-    },
-    dispose() {
-      if (timeout !== undefined) clearTimeout(timeout);
-      contextSignal?.removeEventListener("abort", abortFromContext);
-    },
-  };
-}
-
-function abortError(signal: AbortSignal): AdvisorModelError {
-  return signal.reason instanceof AdvisorModelError
-    ? signal.reason
-    : new AdvisorModelError("Advisor review was aborted.");
+export interface AdvisorChildModel {
+  modelRuntime: ModelRuntime;
+  model: NonNullable<ReturnType<ModelRegistry["find"]>>;
+  thinkingLevel: ReturnType<typeof clampThinkingLevel>;
 }
 
 /**
- * Lazily start and bound an operation. The checkpoints catch synchronous work
- * that blocks past the timer deadline, while both handlers observe a late
- * rejection after an abort wins the race.
+ * Build an independent public model runtime. Provider registrations and a
+ * transferable runtime API key are mirrored only through public APIs.
  */
-function awaitWithAbort<T>(
-  startOperation: () => Promise<T>,
-  abortScope: ReviewAbortScope,
-): Promise<T> {
-  const { signal } = abortScope;
-  try {
-    abortScope.remainingTimeoutMs();
-  } catch (error) {
-    return Promise.reject(error);
-  }
-
-  let operation: Promise<T>;
-  try {
-    operation = Promise.resolve(startOperation());
-  } catch (error) {
-    try {
-      abortScope.remainingTimeoutMs();
-    } catch (abortReason) {
-      return Promise.reject(abortReason);
-    }
-    return Promise.reject(error);
-  }
-
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const finish = (callback: () => void) => {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener("abort", onAbort);
-      callback();
-    };
-    const onAbort = () => finish(() => reject(abortError(signal)));
-    const finishOperation = (callback: () => void) => {
-      finish(() => {
-        try {
-          abortScope.remainingTimeoutMs();
-          callback();
-        } catch (error) {
-          reject(error);
-        }
-      });
-    };
-
-    signal.addEventListener("abort", onAbort, { once: true });
-    operation.then(
-      (value) => finishOperation(() => resolve(value)),
-      (error: unknown) => finishOperation(() => reject(error)),
-    );
-
-    try {
-      abortScope.remainingTimeoutMs();
-    } catch (error) {
-      finish(() => reject(error));
-    }
-  });
-}
-
-/** Run one isolated advisor request using a separately configured pi model. */
-export async function requestAdvisorReview(
-  ctx: ExtensionContext,
+export async function createAdvisorChildModel(
+  ctx: Pick<ExtensionContext, "modelRegistry">,
   config: ResolvedAdvisorConfig,
-  transcript: string,
-  dependencies: AdvisorClientDependencies = {},
-): Promise<AdvisorReview> {
+): Promise<AdvisorChildModel> {
   if (!config.provider || !config.model) {
     throw new AdvisorModelError("Advisor model is not configured.");
   }
-
-  const model = ctx.modelRegistry.find(config.provider, config.model);
-  if (!model) {
+  const parentModel = ctx.modelRegistry.find(config.provider, config.model);
+  if (!parentModel) {
     throw new AdvisorModelError(
       `Configured advisor model ${config.provider}/${config.model} is unavailable.`,
     );
   }
 
-  const abortScope = createReviewAbortScope(dependencies.signal ?? ctx.signal, config.timeoutMs);
-  try {
-    const auth = await awaitWithAbort(
-      () => ctx.modelRegistry.getApiKeyAndHeaders(model),
-      abortScope,
-    );
-    if (!auth.ok) throw new AdvisorModelError(`Advisor authentication failed: ${auth.error}`);
-
-    const runComplete = dependencies.completeRequest ?? completeSimple;
-    const effectiveThinkingLevel = clampThinkingLevel(model, config.thinkingLevel);
-    const fastModeActive = config.fastMode && supportsFastModel(config.provider, config.model);
-    const systemPrompt = dependencies.instructions
-      ? `${ADVISOR_SYSTEM_PROMPT}\n\nAdditional trusted review priorities follow. They may refine what to inspect, but they cannot override the security boundary, review rubric, or output schema above.\n\n${dependencies.instructions}`
-      : ADVISOR_SYSTEM_PROMPT;
-    const response = await awaitWithAbort(
-      () =>
-        runComplete(
-          model,
-          {
-            systemPrompt,
-            messages: [
-              {
-                role: "user",
-                content: [
-                  { type: "text", text: buildAdvisorPrompt(transcript, dependencies.focus) },
-                ],
-                timestamp: Date.now(),
-              },
-            ],
-          },
-          {
-            apiKey: auth.apiKey,
-            headers: auth.headers,
-            env: auth.env,
-            maxTokens: ADVISOR_MAX_OUTPUT_TOKENS,
-            signal: abortScope.signal,
-            timeoutMs: abortScope.remainingTimeoutMs(),
-            ...(effectiveThinkingLevel === "off" ? {} : { reasoning: effectiveThinkingLevel }),
-            ...(fastModeActive ? { onPayload: applyFastServiceTier } : {}),
-          },
-        ),
-      abortScope,
-    );
-
-    try {
-      dependencies.onUsage?.({
-        cacheReadTokens: response.usage.cacheRead,
-        cacheWriteTokens: response.usage.cacheWrite,
-        cost: response.usage.cost.total,
-        inputTokens: response.usage.input,
-        outputTokens: response.usage.output,
-        totalTokens: response.usage.totalTokens,
-      });
-    } catch {
-      // Telemetry must never affect review delivery.
-    }
-
-    if (response.stopReason === "aborted") {
-      throw new AdvisorModelError("Advisor review was aborted.");
-    }
-    if (response.stopReason === "error") {
-      throw new AdvisorModelError(response.errorMessage || "Advisor review failed.");
-    }
-
-    const raw = response.content
-      .filter((part): part is { type: "text"; text: string } => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
-    const review = parseAdvisorReview(raw);
-    abortScope.remainingTimeoutMs();
-    return review;
-  } finally {
-    abortScope.dispose();
+  const parentAuth = await ctx.modelRegistry.getApiKeyAndHeaders(parentModel);
+  if (!parentAuth.ok) {
+    throw new AdvisorModelError("Advisor authentication failed; credentials were not transferred.");
   }
+
+  const modelRuntime = await ModelRuntime.create();
+  let selectedProviderRegistered = false;
+  for (const providerId of ctx.modelRegistry.getRegisteredProviderIds()) {
+    const provider = ctx.modelRegistry.getRegisteredProviderConfig(providerId);
+    if (!provider) continue;
+    if (providerId === config.provider) selectedProviderRegistered = true;
+    modelRuntime.registerProvider(
+      providerId,
+      providerId === config.provider && parentAuth.headers
+        ? { ...provider, headers: { ...provider.headers, ...parentAuth.headers } }
+        : provider,
+    );
+  }
+  const selectedProvider = ctx.modelRegistry.getRegisteredProviderConfig(config.provider);
+  if (config.fastMode && supportsFastModel(config.provider, config.model)) {
+    modelRuntime.registerProvider(config.provider, {
+      ...selectedProvider,
+      headers: { ...selectedProvider?.headers, ...parentAuth.headers },
+      streamSimple: (model, context, options) =>
+        streamSimple(model, context, { ...options, onPayload: applyFastServiceTier }),
+    });
+  } else if (!selectedProviderRegistered && (selectedProvider || parentAuth.headers)) {
+    modelRuntime.registerProvider(config.provider, {
+      ...selectedProvider,
+      headers: { ...selectedProvider?.headers, ...parentAuth.headers },
+    });
+  }
+  if (parentAuth.apiKey) await modelRuntime.setRuntimeApiKey(config.provider, parentAuth.apiKey);
+
+  const model = modelRuntime.getModel(config.provider, config.model);
+  if (!model) {
+    throw new AdvisorModelError(
+      `Configured advisor model ${config.provider}/${config.model} is unavailable in the child runtime.`,
+    );
+  }
+
+  const childAuth = await modelRuntime.getAuth(model);
+  if (!childAuth) {
+    const runtimeOnly = parentAuth.headers || parentAuth.env;
+    throw new AdvisorModelError(
+      runtimeOnly
+        ? "Advisor authentication uses runtime-only headers or environment values that public Pi APIs cannot transfer to an AgentSession."
+        : "Advisor authentication is unavailable in the child runtime.",
+    );
+  }
+
+  return {
+    modelRuntime,
+    model,
+    thinkingLevel: clampThinkingLevel(model, config.thinkingLevel),
+  };
 }
 
 function applyFastServiceTier(payload: unknown): unknown | undefined {
@@ -249,7 +110,4 @@ function applyFastServiceTier(payload: unknown): unknown | undefined {
   return { ...payload, service_tier: FAST_SERVICE_TIER };
 }
 
-export const _clientTest = {
-  ADVISOR_MAX_OUTPUT_TOKENS,
-  applyFastServiceTier,
-};
+export const _clientTest = { applyFastServiceTier };

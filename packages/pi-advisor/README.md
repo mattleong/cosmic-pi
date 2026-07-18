@@ -1,12 +1,10 @@
 # pi-advisor
 
-A pi extension that uses a dedicated advisor model to supervise active work and completed responses, surface actionable findings, and give the main agent one bounded opportunity to correct course.
+A private pi extension that keeps a dedicated Advisor model alongside the main agent. The Advisor reviews ordered work observations, investigates the current project through a fixed read-only capability set, and routes bounded findings without replacing or hiding the primary output.
 
 ## Install
 
-Requires Node.js 22.19.0 or newer. pi-advisor is local-only and is not published to npm.
-
-Clone the workspace, install its development dependencies, and register the package with pi using its local path:
+Requires Node.js 22.19.0 or newer and Pi 0.80.8. pi-advisor is local-only and is not published to npm.
 
 ```bash
 git clone https://github.com/mattleong/cosmic-pi.git
@@ -15,43 +13,65 @@ pnpm install
 pi install "$PWD/packages/pi-advisor"
 ```
 
-The `pi install` command adds the extension persistently. To load the checkout for a single development session instead, run:
+For one development session:
 
 ```bash
 pi -e ./packages/pi-advisor
 ```
 
-## How it works
+## Runtime model
 
-During an agent run, pi-advisor queues background checks of meaningful work checkpoints: tool-calling turns, unusually long or strongly repetitive streamed reasoning, and the completed final response. Progress checks use a trajectory-specific rubric that does not penalize ordinary unfinished work; they flag only evidenced wrong directions, repeated non-progress, unsafe actions, ignored constraints, or contradictions. Final checks continue to cover correctness, completeness, user intent, evidence, and actionable risks.
+pi-advisor creates one persistent Advisor conversation for the active parent session. It uses only public Pi APIs, an in-memory child `SessionManager`, and an in-memory child transcript. Complete Advisor messages, including Advisor thinking, remain available to later checkpoints in memory but are never written as a second raw transcript or child session file.
 
-The main agent never waits synchronously for an Advisor model call. Reviews are serialized with one latest pending checkpoint, so a newer turn supersedes stale work instead of creating overlapping requests. A long active turn is checked after 90 seconds, or earlier when the visible thinking/text stream exhibits strong repetition. Provider streams that do not expose reasoning can only be assessed from elapsed time and visible activity.
+A compact `pi-advisor-checkpoint` ledger is appended to the parent session after coherent checkpoints. It contains only a protocol/fingerprint, active parent anchor, bounded state summary, routing/cancellation state, and bounded emission hashes. It contains no raw parent deltas, main or Advisor thinking, tool output, credentials, or copied files. On session resume the extension validates the latest active-branch ledger and re-primes a fresh in-memory Advisor from Pi's compacted active context plus compact state. Branch changes, compaction, configuration identity changes, context pressure, malformed protocol, and child failures reset or re-prime the child; old epochs cannot deliver.
 
-- A passing review stays silent and the agent continues normally.
-- The default **Guardrail** policy corrects high-severity findings and presents medium-only findings as non-triggering advice. **Strict** corrects medium and high findings, **Advice only** never triggers another turn, and **Manual** reviews only on request.
-- A progress correction is queued through Pi's steering channel and reaches the next safe model boundary. Steering cannot undo tool side effects that already completed. When a high-severity review confirms that the same streamed turn is still repetitively stalled, Advisor aborts that turn, waits for Pi to settle, then injects recovery guidance and starts the corrective continuation.
-- Advisor may inspect later checkpoints, including a correction turn, but it can trigger at most one automatic corrective intervention for each genuine user request. Later findings in that request are advice-only or suppressed when duplicated.
-- The default zero-request cooldown lets each new user request receive an independent correction. If a nonzero cooldown is configured, every finding-bearing checkpoint in that many subsequent requests remains advice-only. Passing, failed, and discarded reviews do not consume the cooldown.
-- Starting newer user work, pausing/cancelling Advisor, changing its configuration, or replacing the session cancels timers and invalidates queued or active checks. Stale results cannot send guidance or abort work.
-- Repeated findings are normalized only within the current user-request scope. A recurring defect in a later request remains visible.
-- Empty, aborted, errored, and length-truncated turns are not reviewed. Tool-calling turns are reviewed as progress; completed final responses remain eligible even when their turn reports tool results.
-- The original streamed output remains visible before any later critique or correction. Advisor messages are compact by default and show complete evidence and recommendations when expanded.
+Pi-exposed main-agent text and thinking deltas are forwarded as bounded ordered observations. Missing, opaque, or redacted thinking remains missing/opaque; pi-advisor does not invent it. Tool starts, bounded updates, results, errors, and completed-turn facts are also forwarded. Repository content and tool output are untrusted evidence, never Advisor instructions.
 
-Advisor calls never use tools and never fall back to the active main model. The separately configured Advisor model receives the latest user request, the candidate or visible work checkpoint, and bounded recent conversation evidence such as assistant text, tool calls/results, extension context, and included shell output. Raw streamed reasoning, system prompts, image bytes, credentials, and prior Advisor messages are excluded.
+## Completed-turn catch-up
 
-Model lookup, credentials, timeout, abort, provider, empty-output, and malformed-output failures all fail open: the original candidate remains available and a current background review failure produces only a concise warning. Failure diagnostics are appended to `$PI_CODING_AGENT_DIR/logs/pi-advisor.jsonl` without prompts, transcripts, or credentials; the log rotates at 1 MB.
+Every eligible completed primary `turn_end`—both a tool-calling progress turn and a terminal completed assistant turn—enqueues a correlated checkpoint and waits for only pi-advisor's own catch-up barrier. This prevents the next primary model step from starting before that checkpoint settles or fails open.
 
-## Setup and commands
+The catch-up wait has a hard **30,000 ms per-turn cap**. Provider failure, Advisor reset/disposal, or the parent abort signal releases it earlier. Timeout or failure never discards or aborts the primary output. A timed-out or cancelled checkpoint is permanently stale for delivery: a late result cannot steer, abort, trigger correction, or surprise-resume the parent. pi-advisor never calls parent `waitForIdle()` from an event. `message_update`, tool streaming updates, and other token-level handlers only perform bounded synchronous ingestion and never await Advisor work.
 
-Open the unified advisor dashboard:
+`timeoutMs` configures individual Advisor runtime operations, but cannot raise the completed-turn catch-up cap above 30 seconds.
+
+## Findings and routing
+
+Advisor findings use three severities:
+
+- **nit**: recorded only; never triggers a primary turn.
+- **concern**: preserved for `nextTurn` under Guardrail; Strict may interrupt when immunity permits.
+- **blocker**: Guardrail and Strict may interrupt; blockers may bypass immunity.
+
+Advice and Manual reviews do not automatically trigger work. Non-interrupting findings use Pi's `nextTurn` delivery so they remain available without waking an idle or cancelled agent. Live corrections use steering; an eligible idle terminal correction may trigger a turn only when cancellation is not latched.
+
+After an interrupting correction is actually delivered, concerns have fixed immunity for the next **three subsequently completed primary turns**. Reviews, passes, failures, user-request boundaries, and suppressed findings do not consume the window. A blocker may bypass and re-arm it. This fixed policy is not configurable.
+
+External/user-aborted turns, `/advisor cancel`, pause, and off latch conservative cancellation preservation. Late findings may be preserved for a future genuine user turn but cannot resume the parent. Only a genuine user prompt/resume clears the latch. Repeated findings are normalized and bounded by session/branch; equal or lower repeats are suppressed while a real severity escalation remains eligible.
+
+Progress routing also uses bounded stream and tool-trajectory evidence. Repeated calls/results/errors or oscillation can request a checkpoint, but elapsed time alone is not proof of a loop. Parent abort/recovery requires an independently confirmed Advisor blocker at an abort-safe boundary; active tools make abort unsafe.
+
+## Read-only investigation and exact safety boundary
+
+The Advisor can use exactly four package-owned tools:
+
+- `read`
+- `grep`
+- `find`
+- `ls`
+
+All paths are resolved and realpathed beneath the canonical parent project root. Absolute escape, `..` traversal, and symlink traversal are rejected. Reads, lines, matches, entries, recursion, scanned files, total bytes, and child tool rounds are bounded and abort-aware. `grep` is literal text search and `find` uses a package-owned filesystem glob matcher. Neither implementation invokes `rg`, `fd`, a shell, a package manager, or any process.
+
+The child uses a no-discovery resource loader, an explicit safe tool-name list, and package-identity assertions before work. It does not discover or inherit project/global extensions, prompts, skills, themes, agents files, provider tools, custom tools, or main-session tool registries.
+
+**Exact guarantee:** the Advisor capability path has no process-launch capability and no filesystem-mutation capability. It cannot run commands or activate bash, write, edit, patch, exec, process, provider, custom, `all`, or future inherited tools. Prompt text, repository text, provider metadata, extension registries, and unknown configuration cannot widen this set. There is no tool allowlist/grant configuration.
+
+Read-only does not mean data-free: files under the project root that the Advisor chooses to inspect are sent to the configured Advisor provider as bounded evidence. Credentials are not deliberately included, but users should select a project root and provider appropriate for their data policy.
+
+## Commands and status
 
 ```text
 /advisor
-```
-
-The dashboard provides review-next, review-last, evidence-focused verify-last, pause/resume, enable/disable, settings, and status actions. Direct forms are also available:
-
-```text
 /advisor once
 /advisor review-last
 /advisor verify-last
@@ -64,23 +84,19 @@ The dashboard provides review-next, review-last, evidence-focused verify-last, p
 /advisor status --verbose
 ```
 
-`verify-last` is an evidence-focused review of the supplied transcript; the advisor remains tool-free and does not claim external verification.
+`verify-last` requests an evidence-focused review and may use the same project-confined read-only tools. `/advisor-settings` is a compatibility shortcut for the settings dashboard. Changes are staged until **Apply changes**.
 
-`/advisor-settings` remains as a compatibility shortcut. Its main screen focuses on the model, behavior policy, and Fast/Balanced/Thorough speed presets. Reasoning, OpenAI fast mode, cooldown, timeout, and context limits are under Advanced settings. Changes are staged until **Apply changes**; Cancel leaves the active configuration untouched. The model picker supports fuzzy search by provider, model ID, or display name and lists models currently available through pi's model registry.
-
-`/advisor-status` shows a concise health summary. Use `/advisor-status --verbose` or `/advisor status --verbose` for model capabilities, limits, background state, cooldown, guidance paths, duration, tokens, cost, failure class, duplicate suppression, skip reasons, session counters, logs, and the global configuration path. If review is enabled but no model is configured, the extension skips reviews and points to `/advisor-settings` once per session.
+Verbose status reports persistent/in-memory behavior, fixed immunity, active safe tool names, observation backlog, processed/ingested sequence, pending checkpoints, catch-up waits/timeouts/failures/cancellations, child resets/re-primes, guidance, usage totals, and bounded failure classes. It never displays transcript text, thinking, tool evidence, auth values, or credentials.
 
 ## Configuration
 
-Configuration is global-only at:
+Configuration is global-only:
 
 ```text
 $PI_CODING_AGENT_DIR/extensions/pi-advisor.json
 ```
 
-When `PI_CODING_AGENT_DIR` is unset, the path defaults to `~/.pi/agent/extensions/pi-advisor.json`. A leading `~/` in `PI_CODING_AGENT_DIR` is expanded relative to your home directory. Project-local config does not override advisor settings.
-
-Example:
+When `PI_CODING_AGENT_DIR` is unset, the path defaults to `~/.pi/agent/extensions/pi-advisor.json`. Project-local config does not override Advisor settings.
 
 ```json
 {
@@ -89,46 +105,46 @@ Example:
   "model": "gpt-5.5",
   "fastMode": true,
   "thinkingLevel": "high",
-  "reviewPolicy": "guardrail",
-  "revisionCooldownTurns": 0,
-  "timeoutMs": 30000,
-  "maxContextChars": 48000
+  "reviewPolicy": "strict",
+  "timeoutMs": 90000,
+  "maxContextChars": 240000
 }
 ```
 
-Settings:
+- `enabled`: automatic supervision toggle; defaults to `true`.
+- `provider` and `model`: dedicated Advisor model identity; both must be non-empty.
+- `fastMode`: requests the shared supported OpenAI priority tier; defaults to `true`. It is active only for supported models.
+- `thinkingLevel`: Advisor reasoning level; defaults to `high` and is clamped to model support.
+- `reviewPolicy`: `guardrail`, `strict`, `advice`, or `manual`; defaults to `strict`. Three-turn concern immunity limits repeated interruptions.
+- `timeoutMs`: Advisor operation timeout, clamped to 10,000–180,000 ms and defaulting to 90,000 ms. It does not alter the hard 30,000 ms completed-turn barrier; work finishing later can still improve the persistent Advisor context but cannot deliver a stale intervention for that turn.
+- `maxContextChars`: bounded serialized seed limit, clamped to 16,000–240,000 characters and defaulting to 240,000. Fast and Balanced presets reduce it when lower latency or cost is preferred.
 
-- `enabled`: automatic Advisor supervision toggle; defaults to `true`.
-- `provider` and `model`: both must be non-empty for review to be configured. Use `/advisor-settings` to search for and select an authenticated model.
-- `fastMode`: sends `service_tier: "priority"` for advisor models in pi-better-openai's shared supported-model list; defaults to `false`. The settings picker only shows this toggle for supported models.
-- `thinkingLevel`: advisor reasoning level; defaults to `medium`. The settings picker only offers levels supported by the selected model, from `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
-- `reviewPolicy`: intervention behavior; one of `guardrail`, `strict`, `advice`, or `manual`. Defaults to `guardrail`.
-- `revisionCooldownTurns`: number of subsequent user requests during which findings become non-triggering advice after an automatic correction; defaults to `0` and is clamped to `0`–`5`. The legacy field name is retained for configuration compatibility even though the UI describes requests rather than turns.
-- `timeoutMs`: advisor request timeout in milliseconds; defaults to `30000` and is clamped to `10000`–`180000`.
-- `maxContextChars`: serialized review-context limit; defaults to `48000` and is clamped to `16000`–`240000`.
+### Migration and unknown fields
 
-Settings updates preserve unknown root JSON fields. When context must be shortened, the latest user request and candidate response are always retained, the newest context is selected first and then rendered chronologically, prior advisor-review messages are excluded, and omitted context is marked explicitly. Advisor output is capped at 2,048 tokens.
+`revisionCooldownTurns` is retired. If an existing file contains it, pi-advisor preserves the raw root field during settings round-trips but ignores it completely. Fixed three-completed-turn concern immunity with blocker bypass replaces it.
+
+Unknown root JSON is preserved for forward-compatible round-trips. This includes legacy or adversarial `tools`, mutating-tool options, `all`, provider/custom tool definitions, and command settings. Preserved does not mean active: unknown fields are excluded from resolved runtime config, runtime fingerprints, resource loading, and child tool construction. No configuration can grant Advisor tools.
 
 ## Advisor guidance
 
-Advisor-only review priorities can be placed in:
+Trusted Advisor-only priorities may be placed in:
 
 ```text
 $PI_CODING_AGENT_DIR/ADVISOR.md
 <project>/.pi/ADVISOR.md
 ```
 
-The global file loads first. The project file loads afterward only when the project is trusted, so narrower project guidance can refine global priorities. Guidance may focus the review on project risks and architectural constraints, but cannot replace the advisor security boundary, rubric, or JSON output schema. Each file is capped at 32,000 characters. Guidance is loaded at session start; use `/reload` or start a new session after editing it.
+The project file loads only for a trusted project. Guidance may refine review priorities but cannot replace the security boundary, fixed routing policy, or checkpoint schema. Each file is capped at 32,000 characters. Use `/reload` after editing.
+
+## Failure handling
+
+Model lookup, public-auth transfer, timeout, parent abort, provider errors, malformed checkpoints/ledgers, unsafe tool identity, child loop/context pressure, reset, and disposal all fail open. The primary output remains intact. Diagnostics are appended to `$PI_CODING_AGENT_DIR/logs/pi-advisor.jsonl` without prompts, transcripts, thinking, tool output, or credentials; the log rotates at 1 MB.
 
 ## Local development
-
-From the workspace root:
 
 ```bash
 pnpm install
 pnpm --filter pi-advisor test
 pnpm --filter pi-advisor validate
-pi -e ./packages/pi-advisor
+pnpm validate
 ```
-
-Run `pnpm validate` before committing to verify the full workspace.

@@ -22,7 +22,6 @@ function configAt(configPath: string): ResolvedAdvisorConfig {
     fastMode: false,
     thinkingLevel: "medium",
     reviewPolicy: "guardrail",
-    revisionCooldownTurns: 0,
     timeoutMs: 30_000,
     maxContextChars: 48_000,
     configured: false,
@@ -67,7 +66,15 @@ afterEach(() => {
 describe("advisor commands", () => {
   test("settings picker selects an authenticated model and preserves unknown fields", async () => {
     const configPath = tempConfigPath();
-    writeRawAdvisorConfig({ enabled: true, futureSetting: { keep: true } }, configPath);
+    writeRawAdvisorConfig(
+      {
+        enabled: true,
+        futureSetting: { keep: true },
+        revisionCooldownTurns: 5,
+        tools: ["all", "write"],
+      },
+      configPath,
+    );
     const harness = createCommands(configAt(configPath));
     const selections = [
       "Advisor model: not configured",
@@ -107,10 +114,11 @@ describe("advisor commands", () => {
       fastMode: false,
       thinkingLevel: "medium",
       reviewPolicy: "guardrail",
-      revisionCooldownTurns: 0,
       timeoutMs: 30_000,
       maxContextChars: 48_000,
       futureSetting: { keep: true },
+      revisionCooldownTurns: 5,
+      tools: ["all", "write"],
     });
     expect(notify).toHaveBeenCalledWith("Advisor settings applied · Guardrail · Balanced", "info");
   });
@@ -262,9 +270,7 @@ describe("advisor commands", () => {
     const selections = [
       "Advisor supervision: on",
       "Advanced settings",
-      "After a revision, advice-only for 0 requests",
-      "5 requests",
-      "Review timeout: 30s",
+      "Advisor operation timeout: 30s",
       "90s",
       "Context cap: 48,000 characters",
       "240,000 characters",
@@ -284,7 +290,6 @@ describe("advisor commands", () => {
 
     expect(harness.getConfig()).toMatchObject({
       enabled: false,
-      revisionCooldownTurns: 5,
       timeoutMs: 90_000,
       maxContextChars: 240_000,
     });
@@ -351,7 +356,7 @@ describe("advisor commands", () => {
     const harness = createCommands(configAt(configPath));
     const selections = [
       "Behavior: Guardrail",
-      "Strict",
+      "Strict (recommended)",
       "Speed: Balanced",
       "Thorough",
       "Apply changes",
@@ -368,7 +373,7 @@ describe("advisor commands", () => {
       reviewPolicy: "strict",
       thinkingLevel: "high",
       timeoutMs: 90_000,
-      maxContextChars: 120_000,
+      maxContextChars: 240_000,
     });
   });
 
@@ -378,7 +383,6 @@ describe("advisor commands", () => {
       ...configAt(configPath),
       provider: "openai",
       model: "reviewer",
-      revisionCooldownTurns: 3,
       configured: true,
     };
     const harness = createCommands(configured, {
@@ -389,15 +393,24 @@ describe("advisor commands", () => {
       discarded: 1,
       backgroundState: "reviewing",
       cacheReadTokens: 30,
+      activeCatchUpWaits: 1,
+      activeToolNames: ["read", "grep", "find", "ls"],
+      backlog: 7,
       cacheWriteTokens: 10,
-      cooldownRemaining: 2,
+      catchUpCancellations: 1,
+      catchUpFailures: 2,
+      catchUpTimeouts: 3,
+      catchUpWaits: 6,
+      childResets: 4,
       cost: 0.012345,
       guidancePaths: ["/tmp/ADVISOR.md"],
       inputTokens: 100,
       lastAction: "revision",
       latestDurationMs: 1234,
       outputTokens: 50,
+      processedSequence: 12,
       queuedReviews: 1,
+      sequence: 19,
       suppressedFindings: 2,
       totalTokens: 190,
     });
@@ -424,14 +437,21 @@ describe("advisor commands", () => {
     expect(output).toContain("Advisor: on · Guardrail · openai/reviewer");
     expect(output).toContain("Model access: ready");
     expect(output).toContain("OpenAI fast mode: disabled");
-    expect(output).toContain("Background state: reviewing (1 queued)");
+    expect(output).toContain("Background state: reviewing (1 checkpoints, 7 observations)");
     expect(output).toContain("Advisor guidance: /tmp/ADVISOR.md");
     expect(output).toContain("Latest review duration: 1,234 ms");
     expect(output).toContain("Advisor tokens: input 100, output 50");
     expect(output).toContain("Advisor cost: $0.012345");
     expect(output).toContain("Last advisor action: revision");
     expect(output).toContain("Suppressed duplicate findings: 2");
-    expect(output).toContain("After-revision advice window: 3 requests configured, 2 remaining");
+    expect(output).toContain(
+      "Interruption immunity: fixed at 3 subsequently completed primary turns",
+    );
+    expect(output).toContain("no second raw transcript");
+    expect(output).toContain("processed 12 / 19");
+    expect(output).toContain("waits 6, active 1, timeouts 3, failures 2, cancellations 1");
+    expect(output).toContain("Child resets/reprimes: 4");
+    expect(output).toContain("Active Advisor tools: read, grep, find, ls");
     expect(output).toContain("Session review attempts: 5");
     expect(output).toContain(
       "Session review outcomes: pass 1, revise 1, failure 1, discarded 1, in progress 1",

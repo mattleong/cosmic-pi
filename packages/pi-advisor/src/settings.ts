@@ -18,7 +18,6 @@ const ADVISOR_COMMAND = "advisor";
 
 const TIMEOUT_OPTIONS = [10_000, 30_000, 60_000, 90_000, 120_000, 180_000] as const;
 const CONTEXT_OPTIONS = [16_000, 48_000, 120_000, 240_000] as const;
-const COOLDOWN_OPTIONS = [0, 1, 2, 3, 4, 5] as const;
 const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
   "off",
   "minimal",
@@ -30,11 +29,8 @@ const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
 ];
 
 const POLICY_OPTIONS: Array<{ label: string; value: AdvisorReviewPolicy }> = [
-  {
-    label: "Guardrail (recommended)",
-    value: "guardrail",
-  },
-  { label: "Strict", value: "strict" },
+  { label: "Strict (recommended)", value: "strict" },
+  { label: "Guardrail", value: "guardrail" },
   { label: "Advice only", value: "advice" },
   { label: "Manual", value: "manual" },
 ];
@@ -55,7 +51,7 @@ const SPEED_PRESETS: readonly SpeedPreset[] = [
   },
   {
     label: "Thorough",
-    patch: { thinkingLevel: "high", timeoutMs: 90_000, maxContextChars: 120_000 },
+    patch: { thinkingLevel: "high", timeoutMs: 90_000, maxContextChars: 240_000 },
   },
 ];
 
@@ -84,7 +80,14 @@ export interface AdvisorSessionMetrics {
   backgroundState?: "idle" | "queued" | "reviewing" | "revision-pending";
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
-  cooldownRemaining?: number;
+  activeCatchUpWaits?: number;
+  activeToolNames?: readonly string[];
+  backlog?: number;
+  catchUpCancellations?: number;
+  catchUpFailures?: number;
+  catchUpTimeouts?: number;
+  catchUpWaits?: number;
+  childResets?: number;
   cost?: number;
   guidancePaths?: readonly string[];
   hasLastCandidate?: boolean;
@@ -102,8 +105,10 @@ export interface AdvisorSessionMetrics {
   latestDurationMs?: number;
   outputTokens?: number;
   paused?: boolean;
+  processedSequence?: number;
   queuedReviews?: number;
   reviewNext?: boolean;
+  sequence?: number;
   suppressedFindings?: number;
   totalTokens?: number;
 }
@@ -244,7 +249,7 @@ async function openAdvisorDashboard(
     "Done",
   ];
   const choice = await ctx.ui.select(
-    `Advisor · ${formatPolicy(config.reviewPolicy)} · ${formatModel(config)}`,
+    `Advisor · ${formatPolicy(config.reviewPolicy)} · persistent read-only · ${formatModel(config)}`,
     choices,
   );
 
@@ -363,12 +368,11 @@ async function openAdvancedSettings(
       ? `OpenAI fast mode: ${draft.fastMode ? "on" : "off"}`
       : undefined;
     const thinkingOption = `Reasoning level: ${draft.thinkingLevel}`;
-    const cooldownOption = `After a revision, advice-only for ${formatRequestCount(draft.revisionCooldownTurns)}`;
-    const timeoutOption = `Review timeout: ${formatDuration(draft.timeoutMs)}`;
+    const timeoutOption = `Advisor operation timeout: ${formatDuration(draft.timeoutMs)}`;
     const contextOption = `Context cap: ${draft.maxContextChars.toLocaleString()} characters`;
     const choice = await ctx.ui.select(
       "Advanced advisor settings",
-      [fastModeOption, thinkingOption, cooldownOption, timeoutOption, contextOption, "Back"].filter(
+      [fastModeOption, thinkingOption, timeoutOption, contextOption, "Back"].filter(
         (option): option is string => option !== undefined,
       ),
     );
@@ -379,13 +383,6 @@ async function openAdvancedSettings(
     } else if (choice === thinkingOption) {
       const thinkingLevel = await chooseThinkingLevel(ctx, draft);
       if (thinkingLevel) draft = { ...draft, thinkingLevel };
-    } else if (choice === cooldownOption) {
-      const value = await chooseNumericSetting(
-        ctx,
-        "Advice-only requests after revision",
-        COOLDOWN_OPTIONS.map((item) => ({ label: formatRequestCount(item), value: item })),
-      );
-      if (value !== undefined) draft = { ...draft, revisionCooldownTurns: value };
     } else if (choice === timeoutOption) {
       const value = await chooseNumericSetting(
         ctx,
@@ -498,7 +495,6 @@ function configPatchFromDraft(config: ResolvedAdvisorConfig): AdvisorConfigPatch
     fastMode: config.fastMode,
     thinkingLevel: config.thinkingLevel,
     reviewPolicy: config.reviewPolicy,
-    revisionCooldownTurns: config.revisionCooldownTurns,
     timeoutMs: config.timeoutMs,
     maxContextChars: config.maxContextChars,
   };
@@ -540,6 +536,7 @@ async function showAdvisorStatus(
     `Session: ${sessionState}`,
     `Model access: ${model && credentials ? "ready" : model ? "credentials required" : "model unavailable"}`,
     `Last review: ${formatLastReview(metrics)}`,
+    "Per-turn catch-up: fail open within 30s · tools: project-confined read/grep/find/ls",
   ];
 
   if (verbose) {
@@ -551,8 +548,15 @@ async function showAdvisorStatus(
       `Reasoning level: ${config.thinkingLevel}`,
       `Effective reasoning level: ${model ? clampThinkingLevel(model, config.thinkingLevel) : "unknown"}`,
       `OpenAI fast mode: ${formatFastMode(config)}`,
-      `After-revision advice window: ${formatRequestCount(config.revisionCooldownTurns)} configured, ${metrics.cooldownRemaining ?? 0} remaining`,
-      `Background state: ${metrics.backgroundState ?? "idle"} (${metrics.queuedReviews ?? 0} queued)`,
+      "Interruption immunity: fixed at 3 subsequently completed primary turns; blockers may bypass",
+      "Conversation: persistent in-memory Advisor with compact parent-session resume ledger (no second raw transcript)",
+      "Thinking: main thinking is forwarded when Pi exposes it; Advisor thinking remains in memory only",
+      "Investigation: project-confined package-owned read, grep, find, ls; no process launch or mutation",
+      `Background state: ${metrics.backgroundState ?? "idle"} (${metrics.queuedReviews ?? 0} checkpoints, ${metrics.backlog ?? 0} observations)`,
+      `Sequence: processed ${(metrics.processedSequence ?? 0).toLocaleString()} / ${(metrics.sequence ?? 0).toLocaleString()}`,
+      `Catch-up barrier: hard 30,000 ms cap; waits ${metrics.catchUpWaits ?? 0}, active ${metrics.activeCatchUpWaits ?? 0}, timeouts ${metrics.catchUpTimeouts ?? 0}, failures ${metrics.catchUpFailures ?? 0}, cancellations ${metrics.catchUpCancellations ?? 0}`,
+      `Child resets/reprimes: ${metrics.childResets ?? 0}`,
+      `Active Advisor tools: ${formatActiveTools(metrics.activeToolNames)}`,
       `Advisor guidance: ${formatGuidancePaths(metrics.guidancePaths)}`,
       `Latest review duration: ${metrics.latestDurationMs === undefined ? "not available" : `${Math.round(metrics.latestDurationMs).toLocaleString()} ms`}`,
       `Advisor tokens: input ${(metrics.inputTokens ?? 0).toLocaleString()}, output ${(metrics.outputTokens ?? 0).toLocaleString()}, cache read ${(metrics.cacheReadTokens ?? 0).toLocaleString()}, cache write ${(metrics.cacheWriteTokens ?? 0).toLocaleString()}, total ${(metrics.totalTokens ?? 0).toLocaleString()}`,
@@ -591,12 +595,12 @@ function formatDuration(milliseconds: number): string {
   return `${milliseconds / 1_000}s`;
 }
 
-function formatRequestCount(requests: number): string {
-  return `${requests} ${requests === 1 ? "request" : "requests"}`;
-}
-
 function formatGuidancePaths(paths: readonly string[] | undefined): string {
   return paths && paths.length > 0 ? paths.join(", ") : "none";
+}
+
+function formatActiveTools(names: readonly string[] | undefined): string {
+  return names && names.length > 0 ? names.join(", ") : "none";
 }
 
 function formatModel(config: Pick<ResolvedAdvisorConfig, "provider" | "model">): string {
@@ -657,7 +661,6 @@ function formatSkippedReviews(skipped: Readonly<Record<string, number>>): string
 export const _settingsTest = {
   CLEAR_MODEL_OPTION,
   CONTEXT_OPTIONS,
-  COOLDOWN_OPTIONS,
   POLICY_OPTIONS,
   SPEED_PRESETS,
   THINKING_LEVELS,

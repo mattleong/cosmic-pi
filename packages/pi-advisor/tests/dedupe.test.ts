@@ -5,7 +5,7 @@ import type { AdvisorFinding } from "../src/review.ts";
 function finding(issue: string, recommendation = "Fix it."): AdvisorFinding {
   return {
     category: "correctness",
-    severity: "medium",
+    severity: "concern",
     issue,
     evidence: "The transcript demonstrates the issue.",
     recommendation,

@@ -1,5 +1,6 @@
+import { redactSensitiveText, stringifyRedactedObservation } from "./observation-protocol.ts";
 import { isRecord } from "./utils.ts";
-export const DEFAULT_MAX_CONTEXT_CHARS = 48_000;
+export const DEFAULT_MAX_CONTEXT_CHARS = 240_000;
 
 export const ADVISOR_CONTEXT_TRUNCATION_MARKER = "[... advisor context truncated ...]";
 
@@ -206,7 +207,7 @@ function serializeMessage(value: unknown, index: number): SerializedMessage | un
       );
     }
     case "custom": {
-      if (value.customType === "advisor-review") return undefined;
+      if (value.customType === "advisor-review" || value.display === false) return undefined;
       const customType = nonEmptyString(value.customType) ?? "extension message";
       return withText(
         index,
@@ -236,7 +237,7 @@ function withText(
   text: string | undefined,
 ): SerializedMessage | undefined {
   const normalized = text?.trim();
-  return normalized ? { index, role, text: normalized } : undefined;
+  return normalized ? { index, role, text: redactSensitiveText(normalized) } : undefined;
 }
 
 function serializeAssistantContent(content: unknown): string {
@@ -245,6 +246,15 @@ function serializeAssistantContent(content: unknown): string {
     .flatMap((part) => {
       if (!isRecord(part) || typeof part.type !== "string") return [];
       if (part.type === "text" && typeof part.text === "string") return [part.text];
+      if (part.type === "thinking") {
+        if (typeof part.thinking === "string" && part.thinking) {
+          return [`[assistant thinking]\n${part.thinking}`];
+        }
+        if (typeof part.signature === "string" && part.signature) {
+          return ["[assistant thinking was exposed only as an opaque/redacted signature]"];
+        }
+        return ["[assistant thinking was redacted or unavailable]"];
+      }
       if (part.type !== "toolCall") return [];
 
       const name = nonEmptyString(part.name) ?? "unknown";
@@ -272,11 +282,7 @@ function serializeContent(content: unknown, includeImages: boolean): string {
 
 function safeJson(value: unknown): string | undefined {
   if (value === undefined) return undefined;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "[unserializable arguments]";
-  }
+  return stringifyRedactedObservation(value);
 }
 
 function findLatestUser(messages: readonly SerializedMessage[]): SerializedMessage | undefined {

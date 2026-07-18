@@ -5,14 +5,26 @@ import {
   type ExtensionContext,
   type TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
-import { supportsFastModel } from "pi-better-openai/fast-models";
-import { requestAdvisorReview, type AdvisorUsageTelemetry } from "./client.ts";
+import type { AdvisorUsageTelemetry } from "./client.ts";
 import {
-  loadAdvisorConfig,
-  type AdvisorReviewPolicy,
-  type ResolvedAdvisorConfig,
-} from "./config.ts";
+  AdvisorRuntime,
+  type AdvisorCheckpoint,
+  type AdvisorRuntimeDriver,
+} from "./advisor-runtime.ts";
+import { AdvisorReviewQueue } from "./review-queue.ts";
+import { stringifyRedactedObservation } from "./observation-protocol.ts";
+import {
+  ADVISOR_CHECKPOINT_ENTRY_TYPE,
+  createCheckpointLedger,
+  createLedgerFingerprint,
+  renderDurableReviewSummary,
+  restoreCheckpointLedger,
+  summarizeAdvisorReview,
+  type AdvisorDurableReviewSummary,
+} from "./checkpoint-ledger.ts";
+import { loadAdvisorConfig, type ResolvedAdvisorConfig } from "./config.ts";
 import { AdvisorFindingDedupe } from "./dedupe.ts";
+import { AdvisorEmissionGuard, highestAdvisorSeverity } from "./emission-guard.ts";
 import { buildAdvisorContext } from "./context.ts";
 import { logAdvisorFailure } from "./failure-log.ts";
 import { loadAdvisorInstructions, type LoadedAdvisorInstructions } from "./instructions.ts";
@@ -25,24 +37,28 @@ import {
   type AdvisorReview,
   type AdvisorReviewFocus,
 } from "./review.ts";
+import { AdvisorRoutingState, routeAdvisorFinding, type AdvisorRoute } from "./routing.ts";
 import {
   type AdvisorCommandActions,
   type AdvisorSessionMetrics,
   registerAdvisorCommands,
 } from "./settings.ts";
 import {
+  AdvisorToolTrajectoryDetector,
   AdvisorTrajectoryDetector,
   LONG_TURN_REVIEW_MS,
   MAX_TRAJECTORY_EVIDENCE_CHARS,
-  MIN_LOOP_REVIEW_MS,
 } from "./trajectory.ts";
 
 const STATUS_KEY = "pi-advisor";
-const STATUS_SPINNER_INTERVAL_MS = 80;
-const STATUS_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
-
+export const ADVISOR_CATCH_UP_TIMEOUT_MS = 30_000;
 type ReviewPhase = "final" | "progress";
-type RevisionThreshold = "none" | "high" | "medium";
+type CheckpointSettlement = "completed" | "discarded" | "failed";
+
+interface AdvisorCheckpointHandle {
+  invalidate(): void;
+  settlement: Promise<CheckpointSettlement>;
+}
 type ReviewSource = "automatic-final" | "automatic-progress" | "next" | "last" | "verify";
 
 export type AdvisorSkipReason =
@@ -54,46 +70,17 @@ export type AdvisorSkipReason =
   | "session-paused"
   | "unconfigured";
 
-interface PendingIntervention {
-  review: AdvisorReview;
-  reviewJob: PendingReview;
-}
-
-type PendingRecovery = PendingIntervention;
-
-interface PendingReview {
-  abortActiveTurn: boolean;
-  candidate: string;
-  checkpointSequence: number;
-  config: ResolvedAdvisorConfig;
-  configRevision: number;
-  cooldownBlocked: boolean;
-  ctx: ExtensionContext;
-  focus: AdvisorReviewFocus;
-  generation: number;
-  messages: unknown[];
-  metrics: AdvisorSessionMetrics;
-  phase: ReviewPhase;
-  requiresEnabled: boolean;
-  revisionThreshold: RevisionThreshold;
-  scope: string;
-  sessionEpoch: number;
-  source: ReviewSource;
-  turnObservationId?: number;
-  workEpoch: number;
-}
-
 interface ActiveTurnObservation {
   abortAllowed: boolean;
   ctx: ExtensionContext;
   detector: AdvisorTrajectoryDetector;
+  toolDetector: AdvisorToolTrajectoryDetector;
   generation: number;
   id: number;
   loopChannel?: "thinking" | "text";
   loopConfirmed: boolean;
   loopReason?: string;
   reviewQueued: boolean;
-  startedAt: number;
   text: string;
   thinkingChars: number;
   timer?: ReturnType<typeof setTimeout>;
@@ -110,507 +97,618 @@ interface LastCandidate {
 export interface AdvisorExtensionDependencies {
   loadConfig?: typeof loadAdvisorConfig;
   logFailure?: typeof logAdvisorFailure;
-  requestReview?: typeof requestAdvisorReview;
+  createRuntime?: () => AdvisorRuntimeDriver;
+  /** Test seam only. Production always uses the hard exported cap. */
+  catchUpTimeoutMs?: number;
 }
 
 export function createAdvisorExtension(dependencies: AdvisorExtensionDependencies = {}) {
+  return createPersistentAdvisorExtension(dependencies);
+}
+
+function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependencies) {
   const loadConfig = dependencies.loadConfig ?? loadAdvisorConfig;
   const logFailure = dependencies.logFailure ?? logAdvisorFailure;
-  const runReview = dependencies.requestReview ?? requestAdvisorReview;
+  const createRuntime = dependencies.createRuntime ?? (() => new AdvisorRuntime());
+  const catchUpTimeoutMs = Math.min(
+    ADVISOR_CATCH_UP_TIMEOUT_MS,
+    Math.max(1, dependencies.catchUpTimeoutMs ?? ADVISOR_CATCH_UP_TIMEOUT_MS),
+  );
 
-  return function registerAdvisorExtension(pi: ExtensionAPI): void {
+  return function registerPersistentAdvisorExtension(pi: ExtensionAPI): void {
     let config = loadConfig();
     let configRevision = 0;
+    let epoch = 0;
+    let parentTurnId = 0;
+    let checkpointId = 0;
+    let queue: AdvisorReviewQueue | undefined;
+    let runtime: AdvisorRuntimeDriver | undefined;
+    let runtimeCursor: { anchor: string | null; fingerprint: string } | undefined;
+    let activeContext: ExtensionContext | undefined;
     let metrics = emptySessionMetrics();
-    let setupWarningShown = false;
-    let generation = 0;
-    let workEpoch = 0;
-    let cooldownRemaining = 0;
     let instructions: LoadedAdvisorInstructions = { paths: [] };
-    const findingDedupe = new AdvisorFindingDedupe();
-    const reportedFailureKinds = new Set<string>();
-    let sessionEpoch = 0;
-    let pendingReview: PendingReview | undefined;
-    let pendingIntervention: PendingIntervention | undefined;
-    let pendingRecovery: PendingRecovery | undefined;
-    let activeReview: PendingReview | undefined;
-    let activeController: AbortController | undefined;
-    let draining = false;
-    let statusContext: ExtensionContext | undefined;
-    let correctionGeneration: number | undefined;
-    let cooldownConsumedGeneration: number | undefined;
-    let checkpointSequence = 0;
-    let activeTurnObservation: ActiveTurnObservation | undefined;
-    let turnObservationSequence = 0;
-    let sessionPaused = false;
+    let paused = false;
     let reviewNext = false;
     let lastCandidate: LastCandidate | undefined;
-    let statusSpinnerContext: ExtensionContext | undefined;
-    let statusSpinnerEffort: string | undefined;
-    let statusSpinnerFast = false;
-    let statusSpinnerFrame = 0;
-    let statusSpinnerModel: string | undefined;
-    let statusSpinnerTimer: ReturnType<typeof setInterval> | undefined;
-
-    const stopStatusSpinner = (): void => {
-      if (statusSpinnerTimer) clearInterval(statusSpinnerTimer);
-      statusSpinnerContext = undefined;
-      statusSpinnerEffort = undefined;
-      statusSpinnerFast = false;
-      statusSpinnerModel = undefined;
-      statusSpinnerTimer = undefined;
-      statusSpinnerFrame = 0;
-    };
-
-    const renderAdvisingStatus = (): void => {
-      if (!statusSpinnerContext || !statusSpinnerModel || !statusSpinnerEffort) return;
-      const frame = STATUS_SPINNER_FRAMES[statusSpinnerFrame] ?? STATUS_SPINNER_FRAMES[0];
-      statusSpinnerContext.ui.setStatus(
-        STATUS_KEY,
-        `${frame} ${statusSpinnerModel}:${statusSpinnerEffort}${statusSpinnerFast ? " ⚡advising…" : " advising…"}`,
-      );
-    };
-
-    const startStatusSpinner = (
-      ctx: ExtensionContext,
-      model: string,
-      effort: string,
-      fast: boolean,
-    ): void => {
-      if (
-        statusSpinnerTimer &&
-        statusSpinnerContext === ctx &&
-        statusSpinnerModel === model &&
-        statusSpinnerEffort === effort &&
-        statusSpinnerFast === fast
-      )
-        return;
-      stopStatusSpinner();
-      statusSpinnerContext = ctx;
-      statusSpinnerEffort = effort;
-      statusSpinnerFast = fast;
-      statusSpinnerModel = model;
-      renderAdvisingStatus();
-      if (ctx.mode !== "tui") return;
-      statusSpinnerTimer = setInterval(() => {
-        statusSpinnerFrame = (statusSpinnerFrame + 1) % STATUS_SPINNER_FRAMES.length;
-        renderAdvisingStatus();
-      }, STATUS_SPINNER_INTERVAL_MS);
-      statusSpinnerTimer.unref();
-    };
-
-    const recordUsage = (target: AdvisorSessionMetrics, usage: AdvisorUsageTelemetry): void => {
-      target.cacheReadTokens = (target.cacheReadTokens ?? 0) + usage.cacheReadTokens;
-      target.cacheWriteTokens = (target.cacheWriteTokens ?? 0) + usage.cacheWriteTokens;
-      target.cost = (target.cost ?? 0) + usage.cost;
-      target.inputTokens = (target.inputTokens ?? 0) + usage.inputTokens;
-      target.outputTokens = (target.outputTokens ?? 0) + usage.outputTokens;
-      target.totalTokens = (target.totalTokens ?? 0) + usage.totalTokens;
-    };
+    let started = false;
+    let childStartedOnce = false;
+    let activeTrajectory: ActiveTurnObservation | undefined;
+    let trajectorySequence = 0;
+    let pendingPersistentRecovery:
+      | {
+          review: AdvisorReview;
+          config: ResolvedAdvisorConfig;
+          phase: ReviewPhase;
+          epoch: number;
+          parentTurnId: number;
+          configRevision: number;
+          cancellationEpoch: number;
+          recovering: boolean;
+          emission: { checkpointId: string; hash: string };
+        }
+      | undefined;
+    let cancellationEpoch = 0;
+    let abortInProgress:
+      | {
+          epoch: number;
+          parentTurnId: number;
+          turnIndex: number;
+          trajectoryId: number;
+          cancellationEpoch: number;
+        }
+      | undefined;
+    const findingDedupe = new AdvisorFindingDedupe();
+    const routingState = new AdvisorRoutingState();
+    const emissionGuard = new AdvisorEmissionGuard();
+    const activeToolCalls = new Map<string, { toolName: string; args: unknown }>();
+    let latestStateSummary = "";
+    let latestDurableSummary: AdvisorDurableReviewSummary = summarizeAdvisorReview();
+    const reportedFailures = new Set<string>();
 
     const recordSkip = (reason: AdvisorSkipReason): void => {
-      const skippedReviews = (metrics.skippedReviews ??= {});
-      skippedReviews[reason] = (skippedReviews[reason] ?? 0) + 1;
+      const skipped = metrics.skippedReviews ?? {};
+      skipped[reason] = incrementBounded(skipped[reason]);
+      metrics.skippedReviews = skipped;
     };
 
-    const clearTurnObservation = (): void => {
-      if (activeTurnObservation?.timer) clearTimeout(activeTurnObservation.timer);
-      activeTurnObservation = undefined;
+    const recordUsage = (usage: AdvisorUsageTelemetry): void => {
+      metrics.cacheReadTokens = (metrics.cacheReadTokens ?? 0) + usage.cacheReadTokens;
+      metrics.cacheWriteTokens = (metrics.cacheWriteTokens ?? 0) + usage.cacheWriteTokens;
+      metrics.cost = (metrics.cost ?? 0) + usage.cost;
+      metrics.inputTokens = (metrics.inputTokens ?? 0) + usage.inputTokens;
+      metrics.outputTokens = (metrics.outputTokens ?? 0) + usage.outputTokens;
+      metrics.totalTokens = (metrics.totalTokens ?? 0) + usage.totalTokens;
     };
 
-    const clearBackgroundReviews = (
-      ctx?: ExtensionContext,
-      preserveCommittedRecovery = false,
-    ): boolean => {
-      const committedRecovery = preserveCommittedRecovery ? pendingRecovery : undefined;
-      const cleared = Boolean(
-        pendingReview ||
-        pendingIntervention ||
-        pendingRecovery ||
-        activeReview ||
-        activeTurnObservation,
+    const activeSeed = (ctx: ExtensionContext): string =>
+      buildAdvisorContext({
+        messages: activeContextMessages(ctx),
+        candidate: lastCandidate?.candidate ?? "[No completed candidate at this cursor.]",
+        maxChars: config.maxContextChars,
+      }).transcript;
+
+    const fingerprint = (ctx: ExtensionContext): string =>
+      createLedgerFingerprint({
+        provider: config.provider ?? "",
+        model: config.model ?? "",
+        cwd: ctx.cwd,
+        guidance: instructions.content ?? "",
+        fastMode: config.fastMode,
+        thinkingLevel: config.thinkingLevel,
+      });
+
+    const parentAnchor = (ctx: ExtensionContext): string | null => {
+      if (typeof ctx.sessionManager.getBranch !== "function") {
+        return ctx.sessionManager.getLeafId?.() ?? null;
+      }
+      const branch = ctx.sessionManager.getBranch();
+      for (let index = branch.length - 1; index >= 0; index -= 1) {
+        const entry = branch[index];
+        if (
+          entry &&
+          !(entry.type === "custom" && entry.customType === ADVISOR_CHECKPOINT_ENTRY_TYPE)
+        )
+          return entry.id;
+      }
+      return null;
+    };
+
+    const branchContains = (ctx: ExtensionContext, anchor: string | null): boolean => {
+      if (!anchor || typeof ctx.sessionManager.getBranch !== "function") return true;
+      return ctx.sessionManager.getBranch().some((entry) => entry.id === anchor);
+    };
+
+    const clearPersistentTrajectory = (): void => {
+      if (activeTrajectory?.timer) clearTimeout(activeTrajectory.timer);
+      activeTrajectory = undefined;
+      activeToolCalls.clear();
+    };
+
+    const clearPendingRecovery = (): void => {
+      const pending = pendingPersistentRecovery;
+      pendingPersistentRecovery = undefined;
+      abortInProgress = undefined;
+      if (pending) {
+        emissionGuard.forget(pending.emission.checkpointId, pending.emission.hash);
+        findingDedupe.reset();
+      }
+    };
+
+    const stopRuntime = async (): Promise<void> => {
+      clearPersistentTrajectory();
+      clearPendingRecovery();
+      const oldQueue = queue;
+      const oldRuntime = runtime;
+      queue = undefined;
+      runtime = undefined;
+      runtimeCursor = undefined;
+      started = false;
+      if (oldQueue) await oldQueue.dispose().catch(() => undefined);
+      else if (oldRuntime) await oldRuntime.dispose().catch(() => undefined);
+    };
+
+    const startRuntime = async (
+      ctx: ExtensionContext,
+      restoration: "preserve-live" | "restore-branch" = "preserve-live",
+    ): Promise<void> => {
+      const startEpoch = ++epoch;
+      await stopRuntime();
+      if (startEpoch !== epoch || paused || !config.enabled || !config.configured) return;
+      const nextRuntime = createRuntime();
+      runtime = nextRuntime;
+      const branch =
+        typeof ctx.sessionManager.getBranch === "function" ? ctx.sessionManager.getBranch() : [];
+      const ledger =
+        restoration === "restore-branch"
+          ? restoreCheckpointLedger(branch, fingerprint(ctx))
+          : undefined;
+      if (restoration === "restore-branch") {
+        routingState.reset();
+        emissionGuard.reset();
+        latestStateSummary = "";
+        latestDurableSummary = summarizeAdvisorReview();
+        if (ledger) {
+          routingState.restore({
+            cancellationLatched: ledger.routing.cancellationLatched,
+            completedPrimaryTurns: ledger.routing.completedPrimaryTurns,
+            immunityUntilCompletedTurn: ledger.routing.immunityUntilCompletedTurn,
+          });
+          emissionGuard.reset(ledger.emissionHashes);
+          latestDurableSummary = ledger.reviewSummary;
+          latestStateSummary = renderDurableReviewSummary(ledger.reviewSummary);
+        }
+      }
+      try {
+        await nextRuntime.start({
+          ctx,
+          config: { ...config },
+          seed: activeSeed(ctx),
+          stateSummary:
+            restoration === "restore-branch" && ledger
+              ? renderDurableReviewSummary(ledger.reviewSummary)
+              : latestStateSummary,
+          instructions: instructions.content,
+          onUsage: recordUsage,
+          onDiagnostic: (message) => ctx.ui.notify(message, "warning"),
+        });
+        if (startEpoch !== epoch) {
+          await nextRuntime.dispose();
+          return;
+        }
+        if (childStartedOnce) metrics.childResets = incrementBounded(metrics.childResets);
+        childStartedOnce = true;
+        runtimeCursor = { anchor: parentAnchor(ctx), fingerprint: fingerprint(ctx) };
+        queue = new AdvisorReviewQueue(nextRuntime, {
+          onCheckpointStart: () => {
+            metrics.attempted += 1;
+            ctx.ui.setStatus(STATUS_KEY, "advisor: reviewing…");
+          },
+          onCheckpointSettled: () =>
+            ctx.ui.setStatus(STATUS_KEY, paused ? "advisor: paused" : undefined),
+          onRuntimeReset: () => {
+            metrics.childResets = incrementBounded(metrics.childResets);
+          },
+          getReprimeState: () => ({ seed: activeSeed(ctx), stateSummary: latestStateSummary }),
+        });
+        started = true;
+      } catch (error) {
+        if (startEpoch !== epoch) return;
+        metrics.failure += 1;
+        metrics.lastAction = "failure";
+        const kind = classifyFailure(error);
+        metrics.lastFailureKind = kind;
+        if (!reportedFailures.has(kind)) {
+          reportedFailures.add(kind);
+          ctx.ui.notify(`Advisor ${kind} failure; primary work remains unaffected.`, "warning");
+        }
+        await nextRuntime.dispose().catch(() => undefined);
+        if (runtime === nextRuntime) runtime = undefined;
+      }
+    };
+
+    const persistLedger = (anchor: string | null, ctx: ExtensionContext): void => {
+      if (!anchor || typeof pi.appendEntry !== "function") return;
+      const route = routingState.snapshot;
+      pi.appendEntry(
+        ADVISOR_CHECKPOINT_ENTRY_TYPE,
+        createCheckpointLedger({
+          fingerprint: fingerprint(ctx),
+          anchorId: anchor,
+          reviewSummary: latestDurableSummary,
+          cancellationLatched: route.cancellationLatched,
+          completedPrimaryTurns: route.completedPrimaryTurns,
+          immunityUntilCompletedTurn: route.immunityUntilCompletedTurn,
+          emissionHashes: emissionGuard
+            .exportRecords()
+            .filter(
+              (record) =>
+                !pendingPersistentRecovery ||
+                !record.endsWith(`:${pendingPersistentRecovery.emission.hash}`),
+            ),
+        }),
       );
-      clearTurnObservation();
-      workEpoch += 1;
-      pendingReview = undefined;
-      pendingIntervention = undefined;
-      pendingRecovery = committedRecovery;
-      activeController?.abort();
-      stopStatusSpinner();
-      (ctx ?? statusContext)?.ui.setStatus(STATUS_KEY, undefined);
-      return cleared;
     };
 
-    const recoveryIsDeliverable = (recovery: PendingRecovery): boolean =>
-      recovery.reviewJob.sessionEpoch === sessionEpoch &&
-      recovery.reviewJob.generation === generation &&
-      !recovery.reviewJob.ctx.hasPendingMessages();
-
-    const reviewIsCurrent = (review: PendingReview): boolean =>
-      review.sessionEpoch === sessionEpoch &&
-      review.generation === generation &&
-      review.checkpointSequence === checkpointSequence &&
-      review.workEpoch === workEpoch &&
-      review.configRevision === configRevision &&
-      (!review.requiresEnabled || config.enabled) &&
-      config.configured &&
-      config.provider === review.config.provider &&
-      config.model === review.config.model &&
-      !review.ctx.hasPendingMessages();
-
-    const refreshReviewStatus = (): void => {
-      if (!statusContext) {
-        stopStatusSpinner();
-        return;
-      }
-      if (sessionPaused) {
-        stopStatusSpinner();
-        statusContext.ui.setStatus(STATUS_KEY, "advisor: paused");
-        return;
-      }
-      if (pendingRecovery !== undefined && recoveryIsDeliverable(pendingRecovery)) {
-        stopStatusSpinner();
-        statusContext.ui.setStatus(STATUS_KEY, "advisor: recovery pending…");
-        return;
-      }
-      if (pendingIntervention !== undefined && reviewIsCurrent(pendingIntervention.reviewJob)) {
-        stopStatusSpinner();
-        statusContext.ui.setStatus(STATUS_KEY, "advisor: guidance pending…");
-        return;
-      }
-      const currentReview =
-        activeReview !== undefined && reviewIsCurrent(activeReview)
-          ? activeReview
-          : pendingReview !== undefined && reviewIsCurrent(pendingReview)
-            ? pendingReview
-            : undefined;
-      if (currentReview) {
-        startStatusSpinner(
-          statusContext,
-          currentReview.config.model ?? "advisor",
-          currentReview.config.thinkingLevel,
-          currentReview.config.fastMode &&
-            supportsFastModel(currentReview.config.provider, currentReview.config.model),
-        );
-        return;
-      }
-      stopStatusSpinner();
-      statusContext.ui.setStatus(STATUS_KEY, undefined);
+    const persistCurrentLedger = (ctx: ExtensionContext): void => {
+      persistLedger(parentAnchor(ctx), ctx);
     };
 
-    const deliverReview = (reviewJob: PendingReview, review: AdvisorReview): void => {
-      if (!reviewIsCurrent(reviewJob)) return;
-      const filtered = findingDedupe.filter(review.findings, reviewJob.scope);
-      reviewJob.metrics.suppressedFindings =
-        (reviewJob.metrics.suppressedFindings ?? 0) + filtered.suppressed;
+    const deliver = (
+      checkpoint: AdvisorCheckpoint,
+      phase: ReviewPhase,
+      source: ReviewSource,
+      ctx: ExtensionContext,
+      scope: string,
+      expectedCancellationEpoch: number,
+      trajectoryId?: number,
+    ): AdvisorRoute => {
+      if (ctx.signal?.aborted || expectedCancellationEpoch !== cancellationEpoch) {
+        metrics.discarded += 1;
+        metrics.lastAction = "discarded";
+        return "silent";
+      }
+      const review: AdvisorReview = {
+        verdict: checkpoint.verdict,
+        summary: checkpoint.summary,
+        findings: checkpoint.findings,
+      };
+      if (review.verdict === "pass") {
+        metrics.pass += 1;
+        metrics.lastAction = "pass";
+        return "silent";
+      }
+      const filtered = findingDedupe.filter(review.findings, scope);
+      metrics.suppressedFindings = (metrics.suppressedFindings ?? 0) + filtered.suppressed;
       if (filtered.findings.length === 0) {
-        reviewJob.metrics.lastAction = "suppressed";
-        return;
-      }
-
-      if (
-        reviewJob.cooldownBlocked &&
-        cooldownRemaining > 0 &&
-        cooldownConsumedGeneration !== reviewJob.generation
-      ) {
-        cooldownRemaining -= 1;
-        cooldownConsumedGeneration = reviewJob.generation;
+        metrics.lastAction = "suppressed";
+        return "silent";
       }
       const filteredReview = { ...review, findings: filtered.findings };
-      const shouldCorrect =
-        correctionGeneration !== reviewJob.generation &&
-        shouldRevise(reviewJob.revisionThreshold, filteredReview);
-      if (shouldCorrect) {
-        if (reviewJob.phase === "progress") {
-          const recovering =
-            reviewJob.abortActiveTurn &&
-            filteredReview.findings.some((finding) => finding.severity === "high") &&
-            reviewJob.turnObservationId !== undefined &&
-            activeTurnObservation?.id === reviewJob.turnObservationId &&
-            activeTurnObservation.abortAllowed &&
-            activeTurnObservation.loopConfirmed &&
-            !reviewJob.ctx.isIdle();
-          correctionGeneration = reviewJob.generation;
-          cooldownRemaining = reviewJob.config.revisionCooldownTurns;
-          reviewJob.metrics.lastAction = recovering ? "recovery" : "guidance";
-          if (recovering && reviewIsCurrent(reviewJob)) {
-            pendingRecovery = { review: filteredReview, reviewJob };
-            reviewJob.ctx.abort();
-          } else {
-            sendProgressCorrection(pi, reviewJob.config, filteredReview, false);
-          }
-        } else {
-          sendRevisionRequest(pi, reviewJob.config, filteredReview);
-          correctionGeneration = reviewJob.generation;
-          cooldownRemaining = reviewJob.config.revisionCooldownTurns;
-          reviewJob.metrics.lastAction = "revision";
-        }
-      } else {
-        sendAdvisorAdvice(pi, reviewJob.config, filteredReview);
-        reviewJob.metrics.lastAction = "advice";
+      const emission = emissionGuard.evaluate(checkpoint.checkpointId, filteredReview);
+      if (!emission.accepted) {
+        metrics.lastAction = emission.reason === "pass" ? "pass" : "suppressed";
+        return "silent";
       }
+      metrics.revise += 1;
+      const severity = highestAdvisorSeverity(filteredReview);
+      if (!severity) return "silent";
+      const trajectory =
+        trajectoryId !== undefined && activeTrajectory?.id === trajectoryId
+          ? activeTrajectory
+          : undefined;
+      const aborting = Boolean(
+        (abortInProgress &&
+          abortInProgress.epoch === epoch &&
+          abortInProgress.parentTurnId === parentTurnId &&
+          abortInProgress.cancellationEpoch === cancellationEpoch) ||
+        (pendingPersistentRecovery &&
+          pendingPersistentRecovery.epoch === epoch &&
+          pendingPersistentRecovery.parentTurnId === parentTurnId &&
+          pendingPersistentRecovery.cancellationEpoch === cancellationEpoch),
+      );
+      const historicalManual = source === "last" || source === "verify";
+      const route = historicalManual
+        ? severity === "nit"
+          ? "silent"
+          : "preserve-next-turn"
+        : routeAdvisorFinding({
+            severity,
+            policy: config.reviewPolicy,
+            parentState: aborting
+              ? "aborting"
+              : ctx.isIdle()
+                ? phase === "final"
+                  ? "final"
+                  : "idle"
+                : "active",
+            immunityActive: routingState.immunityActive,
+            cancellationLatched: routingState.cancellationLatched,
+            manualAction: source === "next",
+            sameTurnStrongSignal:
+              severity === "blocker" &&
+              Boolean(trajectory?.loopConfirmed && trajectory.generation === parentTurnId),
+            abortSafe: Boolean(
+              trajectory?.abortAllowed && trajectory.toolDetector.activeToolCount === 0,
+            ),
+          });
+
+      // Cancellation is synchronous and wins over a provider completion queued in
+      // the same tick. Recheck at the exact delivery boundary before every send path.
+      if (ctx.signal?.aborted || expectedCancellationEpoch !== cancellationEpoch) {
+        emissionGuard.forget(checkpoint.checkpointId, emission.hash);
+        metrics.discarded += 1;
+        metrics.lastAction = "discarded";
+        return "silent";
+      }
+      if (route === "silent") {
+        metrics.lastAction = "suppressed";
+      } else if (route === "preserve-next-turn") {
+        sendAdvisorAdvice(pi, config, filteredReview, "nextTurn");
+        metrics.lastAction = "advice";
+      } else if (route === "steer-live") {
+        sendLiveCorrection(pi, config, filteredReview, phase);
+        routingState.armInterruption();
+        metrics.lastAction = phase === "progress" ? "guidance" : "revision";
+      } else if (route === "trigger-correction") {
+        sendTriggeredCorrection(pi, config, filteredReview, phase);
+        routingState.armInterruption();
+        metrics.lastAction = phase === "progress" ? "guidance" : "revision";
+      } else {
+        if (!trajectory || trajectoryId === undefined) {
+          sendAdvisorAdvice(pi, config, filteredReview, "nextTurn");
+          metrics.lastAction = "advice";
+          return "preserve-next-turn";
+        }
+        pendingPersistentRecovery = {
+          review: filteredReview,
+          config: { ...config },
+          phase,
+          epoch,
+          parentTurnId,
+          configRevision,
+          cancellationEpoch,
+          recovering: true,
+          emission: { checkpointId: checkpoint.checkpointId, hash: emission.hash },
+        };
+        abortInProgress = {
+          epoch,
+          parentTurnId,
+          turnIndex: trajectory.turnIndex,
+          trajectoryId,
+          cancellationEpoch,
+        };
+        metrics.lastAction = "recovery";
+        ctx.abort();
+      }
+      ctx.ui.setStatus(STATUS_KEY, undefined);
+      return route;
     };
 
-    const drainReviewQueue = async (): Promise<void> => {
-      if (draining) return;
-      draining = true;
+    const requestCheckpoint = (options: {
+      ctx: ExtensionContext;
+      focus: AdvisorReviewFocus;
+      phase: ReviewPhase;
+      source: ReviewSource;
+      requiresEnabled: boolean;
+      trajectoryId?: number;
+      abortOnBlocker?: boolean;
+    }): AdvisorCheckpointHandle | undefined => {
+      if ((!queue || !started) && (!config.enabled || !config.configured || paused)) {
+        return undefined;
+      }
+      let validForDelivery = true;
+      let requestEpoch = epoch;
+      let requestCancellationEpoch = cancellationEpoch;
+      let activeQueue: AdvisorReviewQueue | undefined;
+      const startedAt = Date.now();
+      const settlement: Promise<CheckpointSettlement> = (async () => {
+        const cursorMismatch =
+          !runtimeCursor ||
+          runtimeCursor.fingerprint !== fingerprint(options.ctx) ||
+          !branchContains(options.ctx, runtimeCursor.anchor);
+        if (cursorMismatch) {
+          // One bounded restart remains part of this same checkpoint settlement,
+          // so turn_end's hard catch-up barrier covers both re-seed and review.
+          await startRuntime(options.ctx, "restore-branch");
+        }
+        if (!validForDelivery || !queue || !started || !runtimeCursor) return "discarded";
+
+        activeQueue = queue;
+        requestEpoch = epoch;
+        requestCancellationEpoch = cancellationEpoch;
+        const requestParentTurnId = parentTurnId;
+        const requestConfigRevision = configRevision;
+        const requestSessionId = options.ctx.sessionManager.getSessionId?.();
+        const anchor = parentAnchor(options.ctx);
+        const id = `advisor-${requestEpoch}-${++checkpointId}`;
+        const scope = `${requestSessionId ?? requestEpoch}:${runtimeCursor.anchor ?? "root"}`;
+        const checkpoint = await activeQueue.checkpoint({
+          checkpointId: id,
+          focus: options.focus,
+          parentTurnId: requestParentTurnId,
+        });
+        metrics.latestDurationMs = Math.max(0, Date.now() - startedAt);
+        if (
+          !validForDelivery ||
+          requestEpoch !== epoch ||
+          requestCancellationEpoch !== cancellationEpoch ||
+          requestParentTurnId !== parentTurnId ||
+          requestConfigRevision !== configRevision ||
+          options.ctx.signal?.aborted ||
+          (options.requiresEnabled && (!config.enabled || paused || !config.configured)) ||
+          options.ctx.hasPendingMessages() ||
+          !branchContains(options.ctx, anchor)
+        ) {
+          metrics.discarded += 1;
+          metrics.lastAction = "discarded";
+          return "discarded";
+        }
+        if (options.trajectoryId !== undefined && activeTrajectory?.id !== options.trajectoryId) {
+          metrics.discarded += 1;
+          metrics.lastAction = "discarded";
+          return "discarded";
+        }
+
+        latestStateSummary = checkpoint.stateSummary;
+        latestDurableSummary = summarizeAdvisorReview(checkpoint);
+        const route = deliver(
+          checkpoint,
+          options.phase,
+          options.source,
+          options.ctx,
+          scope,
+          requestCancellationEpoch,
+          options.abortOnBlocker ? options.trajectoryId : undefined,
+        );
+        runtimeCursor = { anchor, fingerprint: fingerprint(options.ctx) };
+        if (route !== "abort-recover") persistLedger(anchor, options.ctx);
+        return "completed";
+      })().catch((error): CheckpointSettlement => {
+        metrics.latestDurationMs = Math.max(0, Date.now() - startedAt);
+        if (requestEpoch !== epoch || !validForDelivery) {
+          metrics.discarded += 1;
+          return "failed";
+        }
+        metrics.failure += 1;
+        metrics.lastAction = "failure";
+        const kind = classifyFailure(error);
+        metrics.lastFailureKind = kind;
+        logFailure(config.configPath, {
+          contextChars: activeQueue?.backlog ?? 0,
+          durationMs: metrics.latestDurationMs,
+          error,
+          model: config.model,
+          provider: config.provider,
+          timeoutMs: config.timeoutMs,
+        });
+        if (!reportedFailures.has(kind)) {
+          reportedFailures.add(kind);
+          options.ctx.ui.notify(
+            `Advisor ${kind} failure; keeping the primary response. See /advisor status --verbose.`,
+            "warning",
+          );
+        }
+        if (kind === "authentication") void stopRuntime();
+        return "failed";
+      });
+      return {
+        invalidate: () => {
+          validForDelivery = false;
+        },
+        settlement,
+      };
+    };
+
+    const awaitCatchUp = async (
+      handle: AdvisorCheckpointHandle,
+      ctx: ExtensionContext,
+    ): Promise<void> => {
+      metrics.catchUpWaits = incrementBounded(metrics.catchUpWaits);
+      metrics.activeCatchUpWaits = incrementBounded(metrics.activeCatchUpWaits);
+      const signal = ctx.signal;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let onAbort: (() => void) | undefined;
+      let cancellationRecorded = false;
+      const timeoutPromise = new Promise<"timeout">((resolve) => {
+        timeout = setTimeout(() => resolve("timeout"), catchUpTimeoutMs);
+        timeout.unref();
+      });
+      const cancellationPromise = new Promise<"cancelled">((resolve) => {
+        if (!signal) return;
+        onAbort = () => {
+          if (cancellationRecorded) return;
+          cancellationRecorded = true;
+          // Invalidate and advance the cancellation epoch synchronously in the
+          // abort event dispatch, before any provider-completion microtask sends.
+          handle.invalidate();
+          cancellationEpoch += 1;
+          routingState.latchCancellation();
+          clearPendingRecovery();
+          persistCurrentLedger(ctx);
+          metrics.catchUpCancellations = incrementBounded(metrics.catchUpCancellations);
+          resolve("cancelled");
+        };
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      });
       try {
-        while (pendingReview) {
-          const reviewJob = pendingReview;
-          pendingReview = undefined;
-          if (!reviewIsCurrent(reviewJob)) continue;
-
-          activeReview = reviewJob;
-          const controller = new AbortController();
-          activeController = controller;
-          reviewJob.metrics.attempted += 1;
-          const startedAt = performance.now();
-          let contextChars = 0;
-          refreshReviewStatus();
-
-          try {
-            const reviewContext = buildAdvisorContext({
-              messages: reviewJob.messages,
-              candidate: reviewJob.candidate,
-              maxChars: reviewJob.config.maxContextChars,
-              phase: reviewJob.phase,
-            });
-            contextChars = reviewContext.transcript.length;
-            const review = await runReview(
-              reviewJob.ctx,
-              reviewJob.config,
-              reviewContext.transcript,
-              {
-                focus: reviewJob.focus,
-                instructions: instructions.content,
-                onUsage: (usage) => recordUsage(reviewJob.metrics, usage),
-                signal: controller.signal,
-              },
-            );
-            if (!reviewIsCurrent(reviewJob)) {
-              reviewJob.metrics.discarded += 1;
-              reviewJob.metrics.lastAction = "discarded";
-              continue;
-            }
-            if (review.verdict === "pass") {
-              reviewJob.metrics.pass += 1;
-              reviewJob.metrics.lastAction = "pass";
-              continue;
-            }
-
-            const canCorrectProgressNow =
-              reviewJob.phase === "progress" &&
-              correctionGeneration !== reviewJob.generation &&
-              shouldRevise(reviewJob.revisionThreshold, review) &&
-              review.findings.some((finding) => finding.severity === "high");
-            if (!reviewJob.ctx.isIdle() && !canCorrectProgressNow) {
-              pendingIntervention = { review, reviewJob };
-            } else {
-              deliverReview(reviewJob, review);
-            }
-            reviewJob.metrics.revise += 1;
-          } catch (error) {
-            if (reviewIsCurrent(reviewJob)) {
-              reviewJob.metrics.failure += 1;
-              reviewJob.metrics.lastAction = "failure";
-              const failureKind = classifyFailure(error);
-              reviewJob.metrics.lastFailureKind = failureKind;
-              logFailure(reviewJob.config.configPath, {
-                contextChars,
-                durationMs: performance.now() - startedAt,
-                error,
-                model: reviewJob.config.model,
-                provider: reviewJob.config.provider,
-                timeoutMs: reviewJob.config.timeoutMs,
-              });
-              if (!reportedFailureKinds.has(failureKind)) {
-                reportedFailureKinds.add(failureKind);
-                reviewJob.ctx.ui.notify(
-                  `Advisor ${failureKind} failure; keeping the original response. See /advisor status --verbose.`,
-                  "warning",
-                );
-              }
-            } else {
-              reviewJob.metrics.discarded += 1;
-              reviewJob.metrics.lastAction = "discarded";
-            }
-          } finally {
-            reviewJob.metrics.latestDurationMs = performance.now() - startedAt;
-            if (activeReview === reviewJob) activeReview = undefined;
-            if (activeController === controller) activeController = undefined;
-            refreshReviewStatus();
-          }
+        const outcome = await Promise.race([
+          handle.settlement,
+          timeoutPromise,
+          cancellationPromise,
+        ]);
+        if (outcome === "timeout") {
+          handle.invalidate();
+          metrics.catchUpTimeouts = incrementBounded(metrics.catchUpTimeouts);
+        } else if (outcome === "failed") {
+          metrics.catchUpFailures = incrementBounded(metrics.catchUpFailures);
         }
       } finally {
-        draining = false;
-        refreshReviewStatus();
-        if (pendingReview) void drainReviewQueue();
+        if (timeout) clearTimeout(timeout);
+        if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+        metrics.activeCatchUpWaits = Math.max(0, (metrics.activeCatchUpWaits ?? 1) - 1);
       }
     };
 
-    const enqueueReview = (options: {
-      abortActiveTurn?: boolean;
-      candidate: string;
-      ctx: ExtensionContext;
-      focus?: AdvisorReviewFocus;
-      messages: unknown[];
-      phase: ReviewPhase;
-      requiresEnabled: boolean;
-      revisionThreshold: RevisionThreshold;
-      source: ReviewSource;
-      turnObservationId?: number;
-    }): void => {
-      if (pendingRecovery) return;
-      checkpointSequence += 1;
-      pendingIntervention = undefined;
-      activeController?.abort();
-      const cooldownBlocked =
-        correctionGeneration !== generation &&
-        (cooldownRemaining > 0 || cooldownConsumedGeneration === generation);
-      pendingReview = {
-        abortActiveTurn: options.abortActiveTurn ?? false,
-        candidate: options.candidate,
-        checkpointSequence,
-        config: { ...config },
-        configRevision,
-        cooldownBlocked,
-        ctx: options.ctx,
-        focus: options.focus ?? "standard",
-        generation,
-        messages: options.messages,
-        metrics,
-        phase: options.phase,
-        requiresEnabled: options.requiresEnabled,
-        revisionThreshold: cooldownBlocked ? "none" : options.revisionThreshold,
-        scope: `${sessionEpoch}:${generation}`,
-        sessionEpoch,
-        source: options.source,
-        turnObservationId: options.turnObservationId,
-        workEpoch,
-      };
-      statusContext = options.ctx;
-      refreshReviewStatus();
-      void drainReviewQueue();
-    };
-
-    const automaticSupervisionAvailable = (): boolean =>
-      config.enabled && config.configured && config.reviewPolicy !== "manual" && !sessionPaused;
-
-    const queueTrajectoryReview = (observation: ActiveTurnObservation, reason: string): void => {
-      if (
-        observation !== activeTurnObservation ||
-        observation.generation !== generation ||
-        observation.reviewQueued ||
-        !automaticSupervisionAvailable()
-      )
-        return;
-      observation.reviewQueued = true;
-      if (observation.timer) clearTimeout(observation.timer);
-      observation.timer = undefined;
-      const elapsedMs = Math.max(0, performance.now() - observation.startedAt);
-      const visible = observation.text.trim() || "[No visible assistant text yet.]";
-      const reasoningActivity =
-        observation.thinkingChars > 0
-          ? `${observation.thinkingChars.toLocaleString()} reasoning characters were observed locally; their raw content is intentionally excluded from the cross-model review.`
-          : "No streamed reasoning text was exposed.";
-      const candidate = [
-        `Checkpoint trigger: ${reason}`,
-        `Elapsed active-turn time: ${Math.round(elapsedMs / 1_000)} seconds`,
-        "Visible assistant output:",
-        visible,
-        "Reasoning stream activity:",
-        reasoningActivity,
-      ].join("\n\n");
+    const ingest = (input: Parameters<AdvisorReviewQueue["ingest"]>[1]): void => {
       try {
-        enqueueReview({
-          abortActiveTurn: observation.abortAllowed && observation.loopConfirmed,
-          candidate,
-          ctx: observation.ctx,
-          focus: "trajectory",
-          messages: activeContextMessages(observation.ctx),
-          phase: "progress",
-          requiresEnabled: true,
-          revisionThreshold: thresholdForPolicy(config.reviewPolicy),
-          source: "automatic-progress",
-          turnObservationId: observation.id,
-        });
+        queue?.ingest(parentTurnId, input);
       } catch {
-        // Streaming observation must never affect the primary response.
+        // Parent streaming and tool events always remain fail-open.
       }
-    };
-
-    const scheduleTrajectoryReview = (
-      observation: ActiveTurnObservation,
-      delayMs: number,
-      reason: () => string,
-    ): void => {
-      if (observation.timer) clearTimeout(observation.timer);
-      observation.timer = setTimeout(() => queueTrajectoryReview(observation, reason()), delayMs);
-      observation.timer.unref();
-    };
-
-    const invalidateTrajectoryReview = (turnObservationId: number): void => {
-      const matchesTurn = (review: PendingReview | undefined): boolean =>
-        review?.turnObservationId === turnObservationId;
-      if (
-        !matchesTurn(pendingReview) &&
-        !matchesTurn(activeReview) &&
-        !matchesTurn(pendingIntervention?.reviewJob)
-      )
-        return;
-      checkpointSequence += 1;
-      if (matchesTurn(pendingReview)) pendingReview = undefined;
-      if (matchesTurn(pendingIntervention?.reviewJob)) pendingIntervention = undefined;
-      if (matchesTurn(activeReview)) activeController?.abort();
-      refreshReviewStatus();
     };
 
     const commandActions: AdvisorCommandActions = {
       cancel: (ctx) => {
-        statusContext = ctx;
-        const hadNextReview = reviewNext;
         reviewNext = false;
-        const cleared = clearBackgroundReviews(ctx, true);
-        refreshReviewStatus();
-        return cleared || hadNextReview;
+        clearPendingRecovery();
+        routingState.latchCancellation();
+        cancellationEpoch += 1;
+        persistCurrentLedger(ctx);
+        const hadWork = Boolean(
+          queue && (queue.backlog > 0 || queue.processedThrough < queue.sequence),
+        );
+        void startRuntime(ctx);
+        return hadWork;
       },
       pause: (ctx) => {
-        statusContext = ctx;
-        sessionPaused = true;
+        paused = true;
         reviewNext = false;
-        clearBackgroundReviews(ctx, true);
-        refreshReviewStatus();
+        clearPendingRecovery();
+        routingState.latchCancellation();
+        cancellationEpoch += 1;
+        persistCurrentLedger(ctx);
+        ++epoch;
+        void stopRuntime();
+        ctx.ui.setStatus(STATUS_KEY, "advisor: paused");
       },
       resume: (ctx) => {
-        statusContext = ctx;
-        sessionPaused = false;
-        refreshReviewStatus();
+        paused = false;
+        void startRuntime(ctx);
       },
       reviewLast: (ctx, focus) => {
-        if (pendingRecovery || !lastCandidate || lastCandidate.sessionEpoch !== sessionEpoch)
-          return false;
-        clearBackgroundReviews(ctx);
-        enqueueReview({
-          candidate: lastCandidate.candidate,
+        if (!lastCandidate) return false;
+        requestCheckpoint({
           ctx,
           focus,
-          messages: lastCandidate.messages,
           phase: "final",
-          requiresEnabled: false,
-          revisionThreshold: "none",
           source: focus === "verification" ? "verify" : "last",
+          requiresEnabled: false,
         });
         return true;
       },
-      reviewNext: (ctx) => {
-        statusContext = ctx;
+      reviewNext: () => {
         reviewNext = true;
-        refreshReviewStatus();
       },
-      setEnabled: (ctx, _enabled) => {
-        statusContext = ctx;
-        sessionPaused = false;
-        refreshReviewStatus();
+      setEnabled: (ctx, enabled) => {
+        paused = false;
+        clearPendingRecovery();
+        if (!enabled) {
+          routingState.latchCancellation();
+          persistCurrentLedger(ctx);
+        }
+        cancellationEpoch += 1;
+        void startRuntime(ctx);
       },
     };
 
@@ -621,251 +719,398 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         get: () => config,
         getMetrics: () => ({
           ...metrics,
-          backgroundState:
-            pendingIntervention && reviewIsCurrent(pendingIntervention.reviewJob)
-              ? "revision-pending"
-              : activeReview && reviewIsCurrent(activeReview)
-                ? "reviewing"
-                : pendingReview && reviewIsCurrent(pendingReview)
-                  ? "queued"
-                  : "idle",
-          cooldownRemaining,
+          activeToolNames: queue?.activeToolNames ?? [],
+          backlog: queue?.backlog ?? 0,
+          backgroundState: queue ? (queue.pendingCheckpoints > 0 ? "queued" : "idle") : "idle",
+          childResets: metrics.childResets ?? 0,
           guidancePaths: instructions.paths,
-          hasLastCandidate: lastCandidate !== undefined,
-          paused: sessionPaused,
-          queuedReviews: pendingReview && reviewIsCurrent(pendingReview) ? 1 : 0,
+          hasLastCandidate: Boolean(lastCandidate),
+          paused,
+          processedSequence: queue?.processedThrough ?? 0,
+          queuedReviews: queue?.pendingCheckpoints ?? 0,
           reviewNext,
+          sequence: queue?.sequence ?? 0,
         }),
         update: (next) => {
-          const modelChanged = config.provider !== next.provider || config.model !== next.model;
+          const disabling = config.enabled && !next.enabled;
           config = next;
           configRevision += 1;
-          clearBackgroundReviews(undefined, true);
-          cooldownRemaining = Math.min(cooldownRemaining, next.revisionCooldownTurns);
-          if (modelChanged) findingDedupe.reset();
-          if (next.configured || !next.enabled) setupWarningShown = false;
-          refreshReviewStatus();
+          if (disabling) {
+            clearPendingRecovery();
+            routingState.latchCancellation();
+            cancellationEpoch += 1;
+            if (activeContext) persistCurrentLedger(activeContext);
+          }
+          findingDedupe.reset();
+          emissionGuard.reset();
+          clearPendingRecovery();
+          cancellationEpoch += 1;
+          if (activeContext) void startRuntime(activeContext);
         },
       },
       commandActions,
     );
 
-    pi.on("session_start", (_event, ctx) => {
-      sessionEpoch += 1;
-      generation += 1;
-      clearBackgroundReviews(ctx);
+    pi.on("session_start", async (_event, ctx) => {
+      activeContext = ctx;
       config = loadConfig(config.configPath);
       configRevision += 1;
       metrics = emptySessionMetrics();
-      cooldownRemaining = 0;
-      findingDedupe.reset();
-      reportedFailureKinds.clear();
+      childStartedOnce = false;
       instructions = loadAdvisorInstructions(config.configPath, ctx.cwd, ctx.isProjectTrusted());
-      setupWarningShown = false;
-      statusContext = ctx;
-      correctionGeneration = undefined;
-      cooldownConsumedGeneration = undefined;
-      sessionPaused = false;
+      paused = false;
       reviewNext = false;
       lastCandidate = undefined;
-      warnIfSetupRequired(ctx, config, () => {
-        setupWarningShown = true;
-      });
-      refreshReviewStatus();
+      parentTurnId = 0;
+      checkpointId = 0;
+      cancellationEpoch += 1;
+      findingDedupe.reset();
+      emissionGuard.reset();
+      routingState.reset();
+      latestStateSummary = "";
+      latestDurableSummary = summarizeAdvisorReview();
+      reportedFailures.clear();
+      if (!config.configured) warnIfSetupRequired(ctx, config, () => undefined);
+      await startRuntime(ctx, "restore-branch");
     });
 
-    pi.on("session_shutdown", (_event, ctx) => {
-      sessionEpoch += 1;
-      generation += 1;
-      clearBackgroundReviews(ctx);
-      statusContext = undefined;
+    pi.on("session_shutdown", async () => {
+      ++epoch;
+      activeContext = undefined;
+      await stopRuntime();
+    });
+
+    pi.on("session_compact", async (_event, ctx) => {
+      ingest({ type: "compaction", marker: "Parent context was compacted." });
+      await startRuntime(ctx);
+    });
+    pi.on("session_tree", async (_event, ctx) => {
+      ingest({ type: "tree", marker: "Parent active branch changed." });
+      lastCandidate = undefined;
+      findingDedupe.reset();
+      await startRuntime(ctx, "restore-branch");
     });
 
     pi.on("message_end", (event, ctx) => {
       if (!isGenuineUserMessage(event.message)) return;
-      generation += 1;
-      correctionGeneration = undefined;
-      cooldownConsumedGeneration = undefined;
-      lastCandidate = undefined;
-      findingDedupe.reset();
-      clearBackgroundReviews(ctx);
-      refreshReviewStatus();
+      clearPersistentTrajectory();
+      clearPendingRecovery();
+      cancellationEpoch += 1;
+      routingState.clearCancellationForGenuineUserPrompt();
+      const text = contentText(event.message);
+      ingest({ type: "user", text: text || "[user content unavailable]" });
+      activeContext = ctx;
     });
 
     pi.on("turn_start", (event, ctx) => {
-      clearTurnObservation();
-      if (pendingRecovery || !automaticSupervisionAvailable()) return;
+      clearPersistentTrajectory();
+      clearPendingRecovery();
+      parentTurnId += 1;
+      if (!config.enabled || paused || !config.configured || config.reviewPolicy === "manual")
+        return;
       const observation: ActiveTurnObservation = {
         abortAllowed: false,
         ctx,
         detector: new AdvisorTrajectoryDetector(),
-        generation,
-        id: ++turnObservationSequence,
+        toolDetector: new AdvisorToolTrajectoryDetector(),
+        generation: parentTurnId,
+        id: ++trajectorySequence,
         loopConfirmed: false,
         reviewQueued: false,
-        startedAt: performance.now(),
         text: "",
         thinkingChars: 0,
         turnIndex: event.turnIndex,
       };
-      activeTurnObservation = observation;
-      scheduleTrajectoryReview(
-        observation,
-        LONG_TURN_REVIEW_MS,
-        () => "the active turn exceeded the normal supervision interval",
-      );
+      activeTrajectory = observation;
+      observation.timer = setTimeout(() => {
+        if (activeTrajectory !== observation || observation.reviewQueued) return;
+        observation.reviewQueued = true;
+        requestCheckpoint({
+          ctx,
+          focus: "trajectory",
+          phase: "progress",
+          source: "automatic-progress",
+          requiresEnabled: true,
+          trajectoryId: observation.id,
+          abortOnBlocker: false,
+        });
+      }, LONG_TURN_REVIEW_MS);
+      observation.timer.unref();
     });
 
-    pi.on("message_update", (event, ctx) => {
-      const observation = activeTurnObservation;
-      if (!observation || observation.generation !== generation) return;
-      observation.ctx = ctx;
+    pi.on("message_update", (event, _ctx) => {
       const update = event.assistantMessageEvent;
-      if (update.type === "toolcall_start") {
-        observation.abortAllowed = false;
-        if (observation.timer) clearTimeout(observation.timer);
-        observation.timer = undefined;
-        return;
+      if (update.type === "text_delta") {
+        ingest({ type: "assistant_text_delta", text: update.delta });
+      } else if (update.type === "thinking_delta") {
+        ingest({ type: "assistant_thinking_delta", text: update.delta });
       }
-      if (
-        observation.loopChannel === "thinking" &&
-        (update.type === "text_start" || update.type === "text_delta")
-      ) {
-        observation.abortAllowed = false;
-      }
-      if (observation.reviewQueued) return;
-      if (update.type !== "thinking_delta" && update.type !== "text_delta") return;
+      const observation = activeTrajectory;
+      if (!observation || observation.reviewQueued) return;
+      if (update.type !== "text_delta" && update.type !== "thinking_delta") return;
       const channel = update.type === "thinking_delta" ? "thinking" : "text";
-      const delta = update.delta;
-      if (channel === "thinking") {
-        observation.thinkingChars += delta.length;
-      } else {
-        observation.text = `${observation.text}${delta}`.slice(-MAX_TRAJECTORY_EVIDENCE_CHARS);
-      }
-      const signal = observation.detector.push(channel, delta);
+      if (channel === "thinking") observation.thinkingChars += update.delta.length;
+      else
+        observation.text = `${observation.text}${update.delta}`.slice(
+          -MAX_TRAJECTORY_EVIDENCE_CHARS,
+        );
+      if (observation.loopChannel === "thinking" && channel === "text")
+        observation.abortAllowed = false;
+      const signal = observation.detector.push(channel, update.delta);
       if (!signal) return;
-      observation.abortAllowed = true;
+      observation.abortAllowed = observation.toolDetector.activeToolCount === 0;
       observation.loopChannel = signal.channel;
       observation.loopConfirmed = true;
       observation.loopReason = `${signal.channel} stream ${signal.reason}`;
-      const elapsed = performance.now() - observation.startedAt;
-      if (elapsed >= MIN_LOOP_REVIEW_MS) {
-        queueTrajectoryReview(observation, observation.loopReason);
-      } else {
-        scheduleTrajectoryReview(
-          observation,
-          MIN_LOOP_REVIEW_MS - elapsed,
-          () => observation.loopReason ?? "strong stream repetition was observed",
-        );
-      }
+      const queueReview = () => {
+        if (activeTrajectory !== observation || observation.reviewQueued) return;
+        observation.reviewQueued = true;
+        if (observation.timer) clearTimeout(observation.timer);
+        requestCheckpoint({
+          ctx: observation.ctx,
+          focus: "trajectory",
+          phase: "progress",
+          source: "automatic-progress",
+          requiresEnabled: true,
+          trajectoryId: observation.id,
+          abortOnBlocker: observation.abortAllowed,
+        });
+      };
+      queueReview();
     });
 
-    pi.on("tool_execution_start", (_event, _ctx) => {
-      const observation = activeTurnObservation;
+    pi.on("tool_execution_start", (event, _ctx) => {
+      activeToolCalls.set(event.toolCallId, { toolName: event.toolName, args: event.args });
+      if (activeTrajectory) {
+        activeTrajectory.abortAllowed = false;
+        activeTrajectory.toolDetector.start(event.toolCallId);
+        if (activeTrajectory.timer) clearTimeout(activeTrajectory.timer);
+        activeTrajectory.timer = undefined;
+      }
+      ingest({
+        type: "tool_start",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: safeObservationJson(event.args),
+      });
+    });
+    pi.on("tool_execution_update", (event, _ctx) => {
+      ingest({
+        type: "tool_update",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        update: safeObservationJson(event.partialResult),
+      });
+    });
+    pi.on("tool_execution_end", (event, _ctx) => {
+      const call = activeToolCalls.get(event.toolCallId);
+      activeToolCalls.delete(event.toolCallId);
+      ingest({
+        type: "tool_end",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        result: safeObservationJson(event.result),
+        isError: event.isError,
+      });
+      const observation = activeTrajectory;
       if (!observation) return;
-      observation.abortAllowed = false;
-      if (observation.timer) clearTimeout(observation.timer);
-      observation.timer = undefined;
+      const terminal = {
+        parentTurnId,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: call?.args ?? "[call arguments unavailable]",
+        result: event.result,
+        isError: event.isError,
+      };
+      const concreteProgress = observation.toolDetector.isMateriallyNovelTerminal(
+        terminal,
+        observation.loopConfirmed,
+      );
+      const signal = observation.toolDetector.end(terminal);
+      observation.abortAllowed = observation.toolDetector.activeToolCount === 0;
+      if (concreteProgress) {
+        observation.toolDetector.markConcreteProgress();
+        observation.loopConfirmed = false;
+        observation.loopReason = undefined;
+        observation.abortAllowed = false;
+        return;
+      }
+      if (!signal || observation.reviewQueued) return;
+      observation.loopConfirmed = true;
+      observation.loopReason = signal.reason;
+      observation.abortAllowed = signal.abortSafe;
+      ingest({
+        type: "trajectory_signal",
+        kind: signal.kind,
+        confidence: signal.confidence,
+        reason: signal.reason,
+        evidence: signal.evidence,
+        abortSafe: signal.abortSafe,
+      });
+      observation.reviewQueued = true;
+      requestCheckpoint({
+        ctx: observation.ctx,
+        focus: "trajectory",
+        phase: "progress",
+        source: "automatic-progress",
+        requiresEnabled: true,
+        trajectoryId: observation.id,
+        abortOnBlocker: true,
+      });
     });
 
     pi.on("agent_settled", (_event, ctx) => {
-      const recovery = pendingRecovery;
-      pendingRecovery = undefined;
-      if (recovery && recoveryIsDeliverable(recovery) && ctx.isIdle()) {
-        try {
-          sendProgressCorrection(pi, recovery.reviewJob.config, recovery.review, true);
-        } catch {
-          // Recovery delivery must never escape the settled-event boundary.
-        }
+      const recovery = pendingPersistentRecovery;
+      if (
+        !recovery ||
+        recovery.epoch !== epoch ||
+        recovery.parentTurnId !== parentTurnId ||
+        recovery.configRevision !== configRevision ||
+        recovery.cancellationEpoch !== cancellationEpoch ||
+        !config.enabled ||
+        paused ||
+        !config.configured ||
+        ctx.signal?.aborted ||
+        !ctx.isIdle() ||
+        ctx.hasPendingMessages()
+      ) {
+        clearPendingRecovery();
+        return;
       }
-
-      const intervention = pendingIntervention;
-      pendingIntervention = undefined;
-      if (intervention && reviewIsCurrent(intervention.reviewJob) && ctx.isIdle()) {
-        try {
-          deliverReview(intervention.reviewJob, intervention.review);
-        } catch {
-          // Deferred advice must remain fail-open.
-        }
-      }
-      refreshReviewStatus();
+      pendingPersistentRecovery = undefined;
+      abortInProgress = undefined;
+      sendTriggeredCorrection(
+        pi,
+        recovery.config,
+        recovery.review,
+        recovery.phase,
+        recovery.recovering,
+      );
+      routingState.armInterruption();
+      persistLedger(parentAnchor(ctx), ctx);
+      ctx.ui.setStatus(STATUS_KEY, undefined);
     });
 
-    pi.on("turn_end", (event, ctx) => {
-      const observation = activeTurnObservation;
-      clearTurnObservation();
+    pi.on("turn_end", async (event, ctx) => {
+      const trajectory = activeTrajectory;
+      clearPersistentTrajectory();
       const classification = classifyReviewCheckpoint(event);
+      const stopReason = assistantStopReason(event.message);
+      if (classification.eligible) {
+        ingest({
+          type: "assistant_final",
+          text: classification.candidate,
+          toolCalls: assistantToolCalls(event.message),
+        });
+      }
+      ingest({ type: "turn_complete", status: stopReason });
+      if (stopReason === "stop") routingState.completePrimaryTurn();
       if (!classification.eligible) {
-        if (classification.reason !== "not-assistant") recordSkip(classification.reason);
-        if (
-          classification.reason === "incomplete" &&
-          observation &&
-          pendingRecovery?.reviewJob.turnObservationId !== observation.id
-        ) {
-          invalidateTrajectoryReview(observation.id);
+        recordSkip(classification.reason === "empty" ? "empty" : "incomplete");
+        if (stopReason !== "stop" && trajectory) trajectory.abortAllowed = false;
+        if (stopReason === "aborted") {
+          const provenance = abortInProgress;
+          const matchingAdvisorAbort = Boolean(
+            provenance &&
+            provenance.epoch === epoch &&
+            provenance.parentTurnId === parentTurnId &&
+            provenance.cancellationEpoch === cancellationEpoch &&
+            provenance.turnIndex === event.turnIndex &&
+            trajectory?.id === provenance.trajectoryId,
+          );
+          if (matchingAdvisorAbort) {
+            abortInProgress = undefined;
+          } else {
+            clearPendingRecovery();
+            routingState.latchCancellation();
+            cancellationEpoch += 1;
+          }
         }
         return;
       }
-
       const messages = activeContextMessages(ctx);
       if (classification.phase === "final") {
         lastCandidate = {
           candidate: classification.candidate,
-          generation,
+          generation: parentTurnId,
           messages,
-          sessionEpoch,
+          sessionEpoch: epoch,
         };
       }
-      if (ctx.hasPendingMessages()) {
-        recordSkip("pending-input");
-        return;
-      }
-
       const explicitlyRequested = classification.phase === "final" && reviewNext;
       if (explicitlyRequested) reviewNext = false;
-      if (!explicitlyRequested) {
-        if (!config.enabled) {
-          recordSkip("disabled");
-          return;
-        }
-        if (sessionPaused) {
-          recordSkip("session-paused");
-          return;
-        }
-        if (config.reviewPolicy === "manual") {
-          recordSkip("manual-policy");
-          return;
-        }
+      if (!explicitlyRequested && !config.enabled) {
+        recordSkip("disabled");
+        return;
+      }
+      if (!explicitlyRequested && paused) {
+        recordSkip("session-paused");
+        return;
+      }
+      if (!explicitlyRequested && config.reviewPolicy === "manual") {
+        recordSkip("manual-policy");
+        return;
       }
       if (!config.configured) {
-        if (!setupWarningShown) {
-          warnIfSetupRequired(ctx, config, () => {
-            setupWarningShown = true;
-          });
-        }
         recordSkip("unconfigured");
         return;
       }
-
-      enqueueReview({
-        candidate: classification.candidate,
+      const handle = requestCheckpoint({
         ctx,
         focus: classification.phase === "progress" ? "trajectory" : "standard",
-        messages,
         phase: classification.phase,
-        requiresEnabled: !explicitlyRequested,
-        revisionThreshold: thresholdForPolicy(config.reviewPolicy),
         source: explicitlyRequested
           ? "next"
           : classification.phase === "progress"
             ? "automatic-progress"
             : "automatic-final",
+        requiresEnabled: !explicitlyRequested,
       });
+      if (handle) await awaitCatchUp(handle, ctx);
     });
   };
 }
 
 export const advisorExtension = createAdvisorExtension();
+
+function contentText(message: unknown): string {
+  if (!isRecord(message)) return "";
+  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .flatMap((part) =>
+      isRecord(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [],
+    )
+    .join("\n");
+}
+
+function safeObservationJson(value: unknown): string {
+  return stringifyRedactedObservation(value).slice(0, 12_000);
+}
+
+function assistantStopReason(message: unknown): "stop" | "aborted" | "error" | "length" {
+  if (!isRecord(message)) return "error";
+  return message.stopReason === "aborted" ||
+    message.stopReason === "error" ||
+    message.stopReason === "length"
+    ? message.stopReason
+    : "stop";
+}
+
+function assistantToolCalls(message: unknown): string[] {
+  if (!isRecord(message) || !Array.isArray(message.content)) return [];
+  return message.content.flatMap((part) =>
+    isRecord(part) && part.type === "toolCall"
+      ? [
+          `${typeof part.name === "string" ? part.name : "unknown"} ${safeObservationJson(part.arguments)}`,
+        ]
+      : [],
+  );
+}
+
+function incrementBounded(value: number | undefined): number {
+  return Math.min(Number.MAX_SAFE_INTEGER, (value ?? 0) + 1);
+}
 
 function emptySessionMetrics(): AdvisorSessionMetrics {
   return {
@@ -889,24 +1134,6 @@ function activeContextMessages(ctx: ExtensionContext): unknown[] {
   return ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages);
 }
 
-function thresholdForPolicy(policy: AdvisorReviewPolicy): RevisionThreshold {
-  switch (policy) {
-    case "strict":
-      return "medium";
-    case "guardrail":
-    case "manual":
-      return "high";
-    case "advice":
-      return "none";
-  }
-}
-
-function shouldRevise(threshold: RevisionThreshold, review: AdvisorReview): boolean {
-  if (threshold === "none") return false;
-  if (threshold === "medium") return review.findings.length > 0;
-  return review.findings.some((finding) => finding.severity === "high");
-}
-
 function classifyFailure(error: unknown): string {
   if (error instanceof AdvisorReviewParseError) return "response-format";
   const message =
@@ -920,48 +1147,48 @@ function classifyFailure(error: unknown): string {
   return "provider";
 }
 
-function sendProgressCorrection(
+function sendLiveCorrection(
   pi: ExtensionAPI,
   config: ResolvedAdvisorConfig,
   review: AdvisorReview,
+  phase: ReviewPhase,
+): void {
+  sendCorrection(pi, config, review, phase, false, false);
+}
+
+function sendTriggeredCorrection(
+  pi: ExtensionAPI,
+  config: ResolvedAdvisorConfig,
+  review: AdvisorReview,
+  phase: ReviewPhase,
+  recovering = false,
+): void {
+  sendCorrection(pi, config, review, phase, true, recovering);
+}
+
+function sendCorrection(
+  pi: ExtensionAPI,
+  config: ResolvedAdvisorConfig,
+  review: AdvisorReview,
+  phase: ReviewPhase,
+  triggerTurn: boolean,
   recovering: boolean,
 ): void {
   if (!config.provider || !config.model) return;
   pi.sendMessage(
     {
       customType: ADVISOR_REVIEW_MESSAGE_TYPE,
-      content: buildProgressSteer(review, recovering),
+      content:
+        phase === "progress" ? buildProgressSteer(review, recovering) : buildRevisionSteer(review),
       display: true,
       details: {
-        action: recovering ? "recovery" : "guidance",
+        action: recovering ? "recovery" : phase === "progress" ? "guidance" : "revision",
         review,
         provider: config.provider,
         model: config.model,
       },
     },
-    { deliverAs: "steer", triggerTurn: true },
-  );
-}
-
-function sendRevisionRequest(
-  pi: ExtensionAPI,
-  config: ResolvedAdvisorConfig,
-  review: AdvisorReview,
-): void {
-  if (!config.provider || !config.model) return;
-  pi.sendMessage(
-    {
-      customType: ADVISOR_REVIEW_MESSAGE_TYPE,
-      content: buildRevisionSteer(review),
-      display: true,
-      details: {
-        action: "revision",
-        review,
-        provider: config.provider,
-        model: config.model,
-      },
-    },
-    { deliverAs: "steer", triggerTurn: true },
+    triggerTurn ? { deliverAs: "steer", triggerTurn: true } : { deliverAs: "steer" },
   );
 }
 
@@ -969,6 +1196,7 @@ function sendAdvisorAdvice(
   pi: ExtensionAPI,
   config: ResolvedAdvisorConfig,
   review: AdvisorReview,
+  deliverAs: "nextTurn" = "nextTurn",
 ): void {
   if (!config.provider || !config.model) return;
   pi.sendMessage(
@@ -983,7 +1211,7 @@ function sendAdvisorAdvice(
         model: config.model,
       },
     },
-    { deliverAs: "steer" },
+    { deliverAs },
   );
 }
 
@@ -1093,6 +1321,4 @@ export const _extensionTest = {
   classifyReviewCheckpoint,
   isGenuineUserMessage,
   isReviewCandidate,
-  shouldRevise,
-  thresholdForPolicy,
 };

@@ -32,7 +32,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "pi-better-openai": "workspace:*"
+    "pi-better-openai": "workspace:*",
+    "typebox": "1.1.38"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.80.8",

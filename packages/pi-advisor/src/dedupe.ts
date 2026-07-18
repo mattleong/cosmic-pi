@@ -1,6 +1,7 @@
-import type { AdvisorFinding } from "./review.ts";
+import type { AdvisorFinding, AdvisorSeverity } from "./review.ts";
 
 const DEFAULT_FINDING_HISTORY_CAPACITY = 512;
+const SEVERITY_RANK: Record<AdvisorSeverity, number> = { nit: 0, concern: 1, blocker: 2 };
 
 export function normalizeAdvisorFinding(finding: AdvisorFinding): string {
   return `${finding.category}\n${finding.issue}\n${finding.recommendation}`
@@ -10,9 +11,10 @@ export function normalizeAdvisorFinding(finding: AdvisorFinding): string {
     .trim();
 }
 
+/** Suppress equal/lower repeats while allowing a genuine severity escalation. */
 export class AdvisorFindingDedupe {
   readonly #capacity: number;
-  readonly #seen = new Set<string>();
+  readonly #seen = new Map<string, AdvisorSeverity>();
   readonly #seenOrder: string[] = [];
   #scope: string | undefined;
 
@@ -28,22 +30,25 @@ export class AdvisorFindingDedupe {
     suppressed: number;
   } {
     if (scope !== this.#scope) {
-      this.#seen.clear();
-      this.#seenOrder.length = 0;
+      this.reset();
       this.#scope = scope;
     }
     const accepted: AdvisorFinding[] = [];
     let suppressed = 0;
     for (const finding of findings) {
       const key = normalizeAdvisorFinding(finding);
-      if (!key || this.#seen.has(key)) {
+      const previous = this.#seen.get(key);
+      if (
+        !key ||
+        (previous !== undefined && SEVERITY_RANK[previous] >= SEVERITY_RANK[finding.severity])
+      ) {
         suppressed += 1;
         continue;
       }
-      this.#seen.add(key);
-      this.#seenOrder.push(key);
+      if (previous === undefined) this.#seenOrder.push(key);
+      this.#seen.set(key, finding.severity);
       accepted.push(finding);
-      if (this.#seenOrder.length > this.#capacity) {
+      while (this.#seenOrder.length > this.#capacity) {
         const stale = this.#seenOrder.shift();
         if (stale !== undefined) this.#seen.delete(stale);
       }
