@@ -3,11 +3,14 @@ export const DEFAULT_MAX_CONTEXT_CHARS = 48_000;
 
 export const ADVISOR_CONTEXT_TRUNCATION_MARKER = "[... advisor context truncated ...]";
 
+export type AdvisorContextPhase = "final" | "progress";
+
 export interface BuildAdvisorContextOptions {
   /** Conversation messages only. Do not pass the agent system prompt or loaded context files. */
   messages: readonly unknown[];
   candidate: string;
   maxChars?: number;
+  phase?: AdvisorContextPhase;
 }
 
 export interface AdvisorContextResult {
@@ -24,7 +27,8 @@ interface SerializedMessage {
 }
 
 const TRANSCRIPT_HEADING = "ADVISOR REVIEW TRANSCRIPT";
-const CANDIDATE_HEADING = "Candidate response:";
+const FINAL_CANDIDATE_HEADING = "Candidate response:";
+const PROGRESS_CANDIDATE_HEADING = "Current work checkpoint:";
 const USER_HEADING = "Latest user request:";
 const CONTEXT_HEADING = "Recent context (oldest to newest):";
 const CONTENT_CLIP_MARKER = "\n[... content shortened ...]\n";
@@ -55,7 +59,11 @@ export function buildAdvisorContext(options: BuildAdvisorContextOptions): Adviso
   const candidate = options.candidate.trim();
   const userRequest = latestUser?.text.trim() ?? "[No genuine user request was found.]";
   const allHistory = historyNewestFirst.map(formatHistoryMessage);
-  const fullTranscript = composeTranscript(candidate, userRequest, allHistory);
+  const candidateHeading =
+    options.phase === "progress" ? PROGRESS_CANDIDATE_HEADING : FINAL_CANDIDATE_HEADING;
+  const compose = (history: readonly string[], truncationMarker?: string): string =>
+    composeTranscript(candidate, userRequest, history, truncationMarker, candidateHeading);
+  const fullTranscript = compose(allHistory);
 
   if (fullTranscript.length <= maxChars) {
     return {
@@ -66,35 +74,26 @@ export function buildAdvisorContext(options: BuildAdvisorContextOptions): Adviso
     };
   }
 
-  const requiredWithMarker = composeTranscript(
-    candidate,
-    userRequest,
-    [],
-    ADVISOR_CONTEXT_TRUNCATION_MARKER,
-  );
+  const requiredWithMarker = compose([], ADVISOR_CONTEXT_TRUNCATION_MARKER);
   if (requiredWithMarker.length > maxChars) {
-    return buildWithClippedRequiredContent(candidate, userRequest, allHistory.length, maxChars);
+    return buildWithClippedRequiredContent(
+      candidate,
+      userRequest,
+      allHistory.length,
+      maxChars,
+      candidateHeading,
+    );
   }
 
   const included: string[] = [];
   for (const message of allHistory) {
-    const next = composeTranscript(
-      candidate,
-      userRequest,
-      [...included, message],
-      ADVISOR_CONTEXT_TRUNCATION_MARKER,
-    );
+    const next = compose([...included, message], ADVISOR_CONTEXT_TRUNCATION_MARKER);
     if (next.length <= maxChars) {
       included.push(message);
       continue;
     }
 
-    const withoutPartial = composeTranscript(
-      candidate,
-      userRequest,
-      included,
-      ADVISOR_CONTEXT_TRUNCATION_MARKER,
-    );
+    const withoutPartial = compose(included, ADVISOR_CONTEXT_TRUNCATION_MARKER);
     const separatorLength = included.length === 0 ? 0 : 2;
     const available = maxChars - withoutPartial.length - separatorLength;
     if (available > CONTENT_CLIP_MARKER.length) {
@@ -104,12 +103,7 @@ export function buildAdvisorContext(options: BuildAdvisorContextOptions): Adviso
   }
 
   return {
-    transcript: composeTranscript(
-      candidate,
-      userRequest,
-      included,
-      ADVISOR_CONTEXT_TRUNCATION_MARKER,
-    ),
+    transcript: compose(included, ADVISOR_CONTEXT_TRUNCATION_MARKER),
     truncated: true,
     includedHistoryMessageCount: included.length,
     omittedHistoryMessageCount: Math.max(0, allHistory.length - included.length),
@@ -126,8 +120,15 @@ function buildWithClippedRequiredContent(
   userRequest: string,
   omittedHistoryMessageCount: number,
   maxChars: number,
+  candidateHeading: string,
 ): AdvisorContextResult {
-  const emptyRequired = composeTranscript("", "", [], ADVISOR_CONTEXT_TRUNCATION_MARKER);
+  const emptyRequired = composeTranscript(
+    "",
+    "",
+    [],
+    ADVISOR_CONTEXT_TRUNCATION_MARKER,
+    candidateHeading,
+  );
   if (emptyRequired.length >= maxChars) {
     return {
       transcript: emptyRequired.slice(0, maxChars),
@@ -152,6 +153,7 @@ function buildWithClippedRequiredContent(
     clipMiddle(userRequest, userBudget),
     [],
     ADVISOR_CONTEXT_TRUNCATION_MARKER,
+    candidateHeading,
   );
   return {
     transcript: transcript.slice(0, maxChars),
@@ -166,6 +168,7 @@ function composeTranscript(
   userRequest: string,
   historyNewestFirst: readonly string[],
   truncationMarker?: string,
+  candidateHeading = FINAL_CANDIDATE_HEADING,
 ): string {
   const recentContext =
     historyNewestFirst.length > 0
@@ -173,7 +176,7 @@ function composeTranscript(
       : "[No additional context.]";
   return [
     TRANSCRIPT_HEADING,
-    CANDIDATE_HEADING,
+    candidateHeading,
     candidate,
     USER_HEADING,
     userRequest,

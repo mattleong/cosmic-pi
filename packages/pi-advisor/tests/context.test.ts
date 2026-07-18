@@ -11,6 +11,17 @@ function text(value: string): { type: "text"; text: string } {
 }
 
 describe("buildAdvisorContext", () => {
+  test("labels in-progress checkpoints without changing final-response defaults", () => {
+    const messages = [{ role: "user", content: "Do the work" }];
+
+    expect(
+      buildAdvisorContext({ messages, candidate: "Working", phase: "progress" }).transcript,
+    ).toContain("Current work checkpoint:\n\nWorking");
+    expect(buildAdvisorContext({ messages, candidate: "Done" }).transcript).toContain(
+      "Candidate response:\n\nDone",
+    );
+  });
+
   test("selects recent context newest-first and renders it oldest-to-newest", () => {
     const candidate = "The implementation is complete.";
     const result = buildAdvisorContext({

@@ -260,7 +260,7 @@ describe("advisor commands", () => {
     const configPath = tempConfigPath();
     const harness = createCommands(configAt(configPath));
     const selections = [
-      "Automatic review: on",
+      "Advisor supervision: on",
       "Advanced settings",
       "After a revision, advice-only for 0 requests",
       "5 requests",
@@ -334,7 +334,7 @@ describe("advisor commands", () => {
   test("settings stages changes until Apply and discards them on Cancel", async () => {
     const configPath = tempConfigPath();
     const harness = createCommands(configAt(configPath));
-    const selections = ["Automatic review: on", "Cancel"];
+    const selections = ["Advisor supervision: on", "Cancel"];
     const ctx = {
       hasUI: true,
       ui: { notify: vi.fn(), select: vi.fn(async () => selections.shift()) },

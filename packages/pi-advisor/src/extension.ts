@@ -20,6 +20,7 @@ import { ADVISOR_REVIEW_MESSAGE_TYPE, registerAdvisorReviewRenderer } from "./re
 import {
   AdvisorReviewParseError,
   buildAdvisorAdvice,
+  buildProgressSteer,
   buildRevisionSteer,
   type AdvisorReview,
   type AdvisorReviewFocus,
@@ -29,25 +30,28 @@ import {
   type AdvisorSessionMetrics,
   registerAdvisorCommands,
 } from "./settings.ts";
+import {
+  AdvisorTrajectoryDetector,
+  LONG_TURN_REVIEW_MS,
+  MAX_TRAJECTORY_EVIDENCE_CHARS,
+  MIN_LOOP_REVIEW_MS,
+} from "./trajectory.ts";
 
 const STATUS_KEY = "pi-advisor";
 const STATUS_SPINNER_INTERVAL_MS = 80;
 const STATUS_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
-type ReviewCycleState = "eligible" | "reviewed";
+type ReviewPhase = "final" | "progress";
 type RevisionThreshold = "none" | "high" | "medium";
-type ReviewSource = "automatic" | "next" | "last" | "verify";
+type ReviewSource = "automatic-final" | "automatic-progress" | "next" | "last" | "verify";
 
 export type AdvisorSkipReason =
-  | "advisor-revision"
-  | "cycle-complete"
   | "disabled"
   | "empty"
   | "incomplete"
   | "manual-policy"
   | "pending-input"
   | "session-paused"
-  | "tool-call"
   | "unconfigured";
 
 interface PendingIntervention {
@@ -55,8 +59,12 @@ interface PendingIntervention {
   reviewJob: PendingReview;
 }
 
+type PendingRecovery = PendingIntervention;
+
 interface PendingReview {
+  abortActiveTurn: boolean;
   candidate: string;
+  checkpointSequence: number;
   config: ResolvedAdvisorConfig;
   configRevision: number;
   cooldownBlocked: boolean;
@@ -65,12 +73,31 @@ interface PendingReview {
   generation: number;
   messages: unknown[];
   metrics: AdvisorSessionMetrics;
+  phase: ReviewPhase;
   requiresEnabled: boolean;
   revisionThreshold: RevisionThreshold;
   scope: string;
   sessionEpoch: number;
   source: ReviewSource;
+  turnObservationId?: number;
   workEpoch: number;
+}
+
+interface ActiveTurnObservation {
+  abortAllowed: boolean;
+  ctx: ExtensionContext;
+  detector: AdvisorTrajectoryDetector;
+  generation: number;
+  id: number;
+  loopChannel?: "thinking" | "text";
+  loopConfirmed: boolean;
+  loopReason?: string;
+  reviewQueued: boolean;
+  startedAt: number;
+  text: string;
+  thinkingChars: number;
+  timer?: ReturnType<typeof setTimeout>;
+  turnIndex: number;
 }
 
 interface LastCandidate {
@@ -94,7 +121,6 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
   return function registerAdvisorExtension(pi: ExtensionAPI): void {
     let config = loadConfig();
     let configRevision = 0;
-    let cycle: ReviewCycleState = "eligible";
     let metrics = emptySessionMetrics();
     let setupWarningShown = false;
     let generation = 0;
@@ -106,11 +132,16 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     let sessionEpoch = 0;
     let pendingReview: PendingReview | undefined;
     let pendingIntervention: PendingIntervention | undefined;
+    let pendingRecovery: PendingRecovery | undefined;
     let activeReview: PendingReview | undefined;
     let activeController: AbortController | undefined;
     let draining = false;
     let statusContext: ExtensionContext | undefined;
-    let revisionGeneration: number | undefined;
+    let correctionGeneration: number | undefined;
+    let cooldownConsumedGeneration: number | undefined;
+    let checkpointSequence = 0;
+    let activeTurnObservation: ActiveTurnObservation | undefined;
+    let turnObservationSequence = 0;
     let sessionPaused = false;
     let reviewNext = false;
     let lastCandidate: LastCandidate | undefined;
@@ -182,20 +213,43 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       skippedReviews[reason] = (skippedReviews[reason] ?? 0) + 1;
     };
 
-    const clearBackgroundReviews = (ctx?: ExtensionContext): boolean => {
-      const cleared = Boolean(pendingReview || pendingIntervention || activeReview);
+    const clearTurnObservation = (): void => {
+      if (activeTurnObservation?.timer) clearTimeout(activeTurnObservation.timer);
+      activeTurnObservation = undefined;
+    };
+
+    const clearBackgroundReviews = (
+      ctx?: ExtensionContext,
+      preserveCommittedRecovery = false,
+    ): boolean => {
+      const committedRecovery = preserveCommittedRecovery ? pendingRecovery : undefined;
+      const cleared = Boolean(
+        pendingReview ||
+        pendingIntervention ||
+        pendingRecovery ||
+        activeReview ||
+        activeTurnObservation,
+      );
+      clearTurnObservation();
       workEpoch += 1;
       pendingReview = undefined;
       pendingIntervention = undefined;
+      pendingRecovery = committedRecovery;
       activeController?.abort();
       stopStatusSpinner();
       (ctx ?? statusContext)?.ui.setStatus(STATUS_KEY, undefined);
       return cleared;
     };
 
+    const recoveryIsDeliverable = (recovery: PendingRecovery): boolean =>
+      recovery.reviewJob.sessionEpoch === sessionEpoch &&
+      recovery.reviewJob.generation === generation &&
+      !recovery.reviewJob.ctx.hasPendingMessages();
+
     const reviewIsCurrent = (review: PendingReview): boolean =>
       review.sessionEpoch === sessionEpoch &&
       review.generation === generation &&
+      review.checkpointSequence === checkpointSequence &&
       review.workEpoch === workEpoch &&
       review.configRevision === configRevision &&
       (!review.requiresEnabled || config.enabled) &&
@@ -214,9 +268,14 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         statusContext.ui.setStatus(STATUS_KEY, "advisor: paused");
         return;
       }
+      if (pendingRecovery !== undefined && recoveryIsDeliverable(pendingRecovery)) {
+        stopStatusSpinner();
+        statusContext.ui.setStatus(STATUS_KEY, "advisor: recovery pending…");
+        return;
+      }
       if (pendingIntervention !== undefined && reviewIsCurrent(pendingIntervention.reviewJob)) {
         stopStatusSpinner();
-        statusContext.ui.setStatus(STATUS_KEY, "advisor: revision pending…");
+        statusContext.ui.setStatus(STATUS_KEY, "advisor: guidance pending…");
         return;
       }
       const currentReview =
@@ -240,6 +299,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     };
 
     const deliverReview = (reviewJob: PendingReview, review: AdvisorReview): void => {
+      if (!reviewIsCurrent(reviewJob)) return;
       const filtered = findingDedupe.filter(review.findings, reviewJob.scope);
       reviewJob.metrics.suppressedFindings =
         (reviewJob.metrics.suppressedFindings ?? 0) + filtered.suppressed;
@@ -248,13 +308,43 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         return;
       }
 
-      if (reviewJob.cooldownBlocked && cooldownRemaining > 0) cooldownRemaining -= 1;
+      if (
+        reviewJob.cooldownBlocked &&
+        cooldownRemaining > 0 &&
+        cooldownConsumedGeneration !== reviewJob.generation
+      ) {
+        cooldownRemaining -= 1;
+        cooldownConsumedGeneration = reviewJob.generation;
+      }
       const filteredReview = { ...review, findings: filtered.findings };
-      if (shouldRevise(reviewJob.revisionThreshold, filteredReview)) {
-        sendRevisionRequest(pi, reviewJob.config, filteredReview);
-        cooldownRemaining = reviewJob.config.revisionCooldownTurns;
-        reviewJob.metrics.lastAction = "revision";
-        revisionGeneration = reviewJob.generation;
+      const shouldCorrect =
+        correctionGeneration !== reviewJob.generation &&
+        shouldRevise(reviewJob.revisionThreshold, filteredReview);
+      if (shouldCorrect) {
+        if (reviewJob.phase === "progress") {
+          const recovering =
+            reviewJob.abortActiveTurn &&
+            filteredReview.findings.some((finding) => finding.severity === "high") &&
+            reviewJob.turnObservationId !== undefined &&
+            activeTurnObservation?.id === reviewJob.turnObservationId &&
+            activeTurnObservation.abortAllowed &&
+            activeTurnObservation.loopConfirmed &&
+            !reviewJob.ctx.isIdle();
+          correctionGeneration = reviewJob.generation;
+          cooldownRemaining = reviewJob.config.revisionCooldownTurns;
+          reviewJob.metrics.lastAction = recovering ? "recovery" : "guidance";
+          if (recovering && reviewIsCurrent(reviewJob)) {
+            pendingRecovery = { review: filteredReview, reviewJob };
+            reviewJob.ctx.abort();
+          } else {
+            sendProgressCorrection(pi, reviewJob.config, filteredReview, false);
+          }
+        } else {
+          sendRevisionRequest(pi, reviewJob.config, filteredReview);
+          correctionGeneration = reviewJob.generation;
+          cooldownRemaining = reviewJob.config.revisionCooldownTurns;
+          reviewJob.metrics.lastAction = "revision";
+        }
       } else {
         sendAdvisorAdvice(pi, reviewJob.config, filteredReview);
         reviewJob.metrics.lastAction = "advice";
@@ -283,6 +373,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
               messages: reviewJob.messages,
               candidate: reviewJob.candidate,
               maxChars: reviewJob.config.maxContextChars,
+              phase: reviewJob.phase,
             });
             contextChars = reviewContext.transcript.length;
             const review = await runReview(
@@ -307,7 +398,12 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
               continue;
             }
 
-            if (!reviewJob.ctx.isIdle()) {
+            const canCorrectProgressNow =
+              reviewJob.phase === "progress" &&
+              correctionGeneration !== reviewJob.generation &&
+              shouldRevise(reviewJob.revisionThreshold, review) &&
+              review.findings.some((finding) => finding.severity === "high");
+            if (!reviewJob.ctx.isIdle() && !canCorrectProgressNow) {
               pendingIntervention = { review, reviewJob };
             } else {
               deliverReview(reviewJob, review);
@@ -353,17 +449,28 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     };
 
     const enqueueReview = (options: {
+      abortActiveTurn?: boolean;
       candidate: string;
       ctx: ExtensionContext;
       focus?: AdvisorReviewFocus;
       messages: unknown[];
+      phase: ReviewPhase;
       requiresEnabled: boolean;
       revisionThreshold: RevisionThreshold;
       source: ReviewSource;
+      turnObservationId?: number;
     }): void => {
-      const cooldownBlocked = cooldownRemaining > 0;
+      if (pendingRecovery) return;
+      checkpointSequence += 1;
+      pendingIntervention = undefined;
+      activeController?.abort();
+      const cooldownBlocked =
+        correctionGeneration !== generation &&
+        (cooldownRemaining > 0 || cooldownConsumedGeneration === generation);
       pendingReview = {
+        abortActiveTurn: options.abortActiveTurn ?? false,
         candidate: options.candidate,
+        checkpointSequence,
         config: { ...config },
         configRevision,
         cooldownBlocked,
@@ -372,11 +479,13 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         generation,
         messages: options.messages,
         metrics,
+        phase: options.phase,
         requiresEnabled: options.requiresEnabled,
         revisionThreshold: cooldownBlocked ? "none" : options.revisionThreshold,
         scope: `${sessionEpoch}:${generation}`,
         sessionEpoch,
         source: options.source,
+        turnObservationId: options.turnObservationId,
         workEpoch,
       };
       statusContext = options.ctx;
@@ -384,12 +493,84 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       void drainReviewQueue();
     };
 
+    const automaticSupervisionAvailable = (): boolean =>
+      config.enabled && config.configured && config.reviewPolicy !== "manual" && !sessionPaused;
+
+    const queueTrajectoryReview = (observation: ActiveTurnObservation, reason: string): void => {
+      if (
+        observation !== activeTurnObservation ||
+        observation.generation !== generation ||
+        observation.reviewQueued ||
+        !automaticSupervisionAvailable()
+      )
+        return;
+      observation.reviewQueued = true;
+      if (observation.timer) clearTimeout(observation.timer);
+      observation.timer = undefined;
+      const elapsedMs = Math.max(0, performance.now() - observation.startedAt);
+      const visible = observation.text.trim() || "[No visible assistant text yet.]";
+      const reasoningActivity =
+        observation.thinkingChars > 0
+          ? `${observation.thinkingChars.toLocaleString()} reasoning characters were observed locally; their raw content is intentionally excluded from the cross-model review.`
+          : "No streamed reasoning text was exposed.";
+      const candidate = [
+        `Checkpoint trigger: ${reason}`,
+        `Elapsed active-turn time: ${Math.round(elapsedMs / 1_000)} seconds`,
+        "Visible assistant output:",
+        visible,
+        "Reasoning stream activity:",
+        reasoningActivity,
+      ].join("\n\n");
+      try {
+        enqueueReview({
+          abortActiveTurn: observation.abortAllowed && observation.loopConfirmed,
+          candidate,
+          ctx: observation.ctx,
+          focus: "trajectory",
+          messages: activeContextMessages(observation.ctx),
+          phase: "progress",
+          requiresEnabled: true,
+          revisionThreshold: thresholdForPolicy(config.reviewPolicy),
+          source: "automatic-progress",
+          turnObservationId: observation.id,
+        });
+      } catch {
+        // Streaming observation must never affect the primary response.
+      }
+    };
+
+    const scheduleTrajectoryReview = (
+      observation: ActiveTurnObservation,
+      delayMs: number,
+      reason: () => string,
+    ): void => {
+      if (observation.timer) clearTimeout(observation.timer);
+      observation.timer = setTimeout(() => queueTrajectoryReview(observation, reason()), delayMs);
+      observation.timer.unref();
+    };
+
+    const invalidateTrajectoryReview = (turnObservationId: number): void => {
+      const matchesTurn = (review: PendingReview | undefined): boolean =>
+        review?.turnObservationId === turnObservationId;
+      if (
+        !matchesTurn(pendingReview) &&
+        !matchesTurn(activeReview) &&
+        !matchesTurn(pendingIntervention?.reviewJob)
+      )
+        return;
+      checkpointSequence += 1;
+      if (matchesTurn(pendingReview)) pendingReview = undefined;
+      if (matchesTurn(pendingIntervention?.reviewJob)) pendingIntervention = undefined;
+      if (matchesTurn(activeReview)) activeController?.abort();
+      refreshReviewStatus();
+    };
+
     const commandActions: AdvisorCommandActions = {
       cancel: (ctx) => {
         statusContext = ctx;
         const hadNextReview = reviewNext;
         reviewNext = false;
-        const cleared = clearBackgroundReviews(ctx);
+        const cleared = clearBackgroundReviews(ctx, true);
         refreshReviewStatus();
         return cleared || hadNextReview;
       },
@@ -397,7 +578,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         statusContext = ctx;
         sessionPaused = true;
         reviewNext = false;
-        clearBackgroundReviews(ctx);
+        clearBackgroundReviews(ctx, true);
         refreshReviewStatus();
       },
       resume: (ctx) => {
@@ -406,13 +587,15 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         refreshReviewStatus();
       },
       reviewLast: (ctx, focus) => {
-        if (!lastCandidate || lastCandidate.sessionEpoch !== sessionEpoch) return false;
+        if (pendingRecovery || !lastCandidate || lastCandidate.sessionEpoch !== sessionEpoch)
+          return false;
         clearBackgroundReviews(ctx);
         enqueueReview({
           candidate: lastCandidate.candidate,
           ctx,
           focus,
           messages: lastCandidate.messages,
+          phase: "final",
           requiresEnabled: false,
           revisionThreshold: "none",
           source: focus === "verification" ? "verify" : "last",
@@ -457,7 +640,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           const modelChanged = config.provider !== next.provider || config.model !== next.model;
           config = next;
           configRevision += 1;
-          clearBackgroundReviews();
+          clearBackgroundReviews(undefined, true);
           cooldownRemaining = Math.min(cooldownRemaining, next.revisionCooldownTurns);
           if (modelChanged) findingDedupe.reset();
           if (next.configured || !next.enabled) setupWarningShown = false;
@@ -473,7 +656,6 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       clearBackgroundReviews(ctx);
       config = loadConfig(config.configPath);
       configRevision += 1;
-      cycle = "eligible";
       metrics = emptySessionMetrics();
       cooldownRemaining = 0;
       findingDedupe.reset();
@@ -481,7 +663,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       instructions = loadAdvisorInstructions(config.configPath, ctx.cwd, ctx.isProjectTrusted());
       setupWarningShown = false;
       statusContext = ctx;
-      revisionGeneration = undefined;
+      correctionGeneration = undefined;
+      cooldownConsumedGeneration = undefined;
       sessionPaused = false;
       reviewNext = false;
       lastCandidate = undefined;
@@ -501,67 +684,155 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     pi.on("message_end", (event, ctx) => {
       if (!isGenuineUserMessage(event.message)) return;
       generation += 1;
-      cycle = "eligible";
-      revisionGeneration = undefined;
+      correctionGeneration = undefined;
+      cooldownConsumedGeneration = undefined;
       lastCandidate = undefined;
       findingDedupe.reset();
       clearBackgroundReviews(ctx);
       refreshReviewStatus();
     });
 
-    pi.on("agent_settled", (_event, ctx) => {
-      const intervention = pendingIntervention;
-      pendingIntervention = undefined;
-      if (!intervention || !reviewIsCurrent(intervention.reviewJob) || !ctx.isIdle()) {
-        refreshReviewStatus();
+    pi.on("turn_start", (event, ctx) => {
+      clearTurnObservation();
+      if (pendingRecovery || !automaticSupervisionAvailable()) return;
+      const observation: ActiveTurnObservation = {
+        abortAllowed: false,
+        ctx,
+        detector: new AdvisorTrajectoryDetector(),
+        generation,
+        id: ++turnObservationSequence,
+        loopConfirmed: false,
+        reviewQueued: false,
+        startedAt: performance.now(),
+        text: "",
+        thinkingChars: 0,
+        turnIndex: event.turnIndex,
+      };
+      activeTurnObservation = observation;
+      scheduleTrajectoryReview(
+        observation,
+        LONG_TURN_REVIEW_MS,
+        () => "the active turn exceeded the normal supervision interval",
+      );
+    });
+
+    pi.on("message_update", (event, ctx) => {
+      const observation = activeTurnObservation;
+      if (!observation || observation.generation !== generation) return;
+      observation.ctx = ctx;
+      const update = event.assistantMessageEvent;
+      if (update.type === "toolcall_start") {
+        observation.abortAllowed = false;
+        if (observation.timer) clearTimeout(observation.timer);
+        observation.timer = undefined;
         return;
       }
-      deliverReview(intervention.reviewJob, intervention.review);
+      if (
+        observation.loopChannel === "thinking" &&
+        (update.type === "text_start" || update.type === "text_delta")
+      ) {
+        observation.abortAllowed = false;
+      }
+      if (observation.reviewQueued) return;
+      if (update.type !== "thinking_delta" && update.type !== "text_delta") return;
+      const channel = update.type === "thinking_delta" ? "thinking" : "text";
+      const delta = update.delta;
+      if (channel === "thinking") {
+        observation.thinkingChars += delta.length;
+      } else {
+        observation.text = `${observation.text}${delta}`.slice(-MAX_TRAJECTORY_EVIDENCE_CHARS);
+      }
+      const signal = observation.detector.push(channel, delta);
+      if (!signal) return;
+      observation.abortAllowed = true;
+      observation.loopChannel = signal.channel;
+      observation.loopConfirmed = true;
+      observation.loopReason = `${signal.channel} stream ${signal.reason}`;
+      const elapsed = performance.now() - observation.startedAt;
+      if (elapsed >= MIN_LOOP_REVIEW_MS) {
+        queueTrajectoryReview(observation, observation.loopReason);
+      } else {
+        scheduleTrajectoryReview(
+          observation,
+          MIN_LOOP_REVIEW_MS - elapsed,
+          () => observation.loopReason ?? "strong stream repetition was observed",
+        );
+      }
+    });
+
+    pi.on("tool_execution_start", (_event, _ctx) => {
+      const observation = activeTurnObservation;
+      if (!observation) return;
+      observation.abortAllowed = false;
+      if (observation.timer) clearTimeout(observation.timer);
+      observation.timer = undefined;
+    });
+
+    pi.on("agent_settled", (_event, ctx) => {
+      const recovery = pendingRecovery;
+      pendingRecovery = undefined;
+      if (recovery && recoveryIsDeliverable(recovery) && ctx.isIdle()) {
+        try {
+          sendProgressCorrection(pi, recovery.reviewJob.config, recovery.review, true);
+        } catch {
+          // Recovery delivery must never escape the settled-event boundary.
+        }
+      }
+
+      const intervention = pendingIntervention;
+      pendingIntervention = undefined;
+      if (intervention && reviewIsCurrent(intervention.reviewJob) && ctx.isIdle()) {
+        try {
+          deliverReview(intervention.reviewJob, intervention.review);
+        } catch {
+          // Deferred advice must remain fail-open.
+        }
+      }
       refreshReviewStatus();
     });
 
     pi.on("turn_end", (event, ctx) => {
-      const classification = classifyReviewCandidate(event);
+      const observation = activeTurnObservation;
+      clearTurnObservation();
+      const classification = classifyReviewCheckpoint(event);
       if (!classification.eligible) {
         if (classification.reason !== "not-assistant") recordSkip(classification.reason);
+        if (
+          classification.reason === "incomplete" &&
+          observation &&
+          pendingRecovery?.reviewJob.turnObservationId !== observation.id
+        ) {
+          invalidateTrajectoryReview(observation.id);
+        }
         return;
       }
 
-      const candidate = classification.candidate;
       const messages = activeContextMessages(ctx);
-      lastCandidate = { candidate, generation, messages, sessionEpoch };
-
-      if (revisionGeneration === generation) {
-        revisionGeneration = undefined;
-        cycle = "reviewed";
-        recordSkip("advisor-revision");
-        return;
-      }
-      if (cycle !== "eligible") {
-        recordSkip("cycle-complete");
-        return;
+      if (classification.phase === "final") {
+        lastCandidate = {
+          candidate: classification.candidate,
+          generation,
+          messages,
+          sessionEpoch,
+        };
       }
       if (ctx.hasPendingMessages()) {
-        cycle = "reviewed";
         recordSkip("pending-input");
         return;
       }
 
-      const explicitlyRequested = reviewNext;
+      const explicitlyRequested = classification.phase === "final" && reviewNext;
       if (explicitlyRequested) reviewNext = false;
       if (!explicitlyRequested) {
         if (!config.enabled) {
-          cycle = "reviewed";
           recordSkip("disabled");
           return;
         }
         if (sessionPaused) {
-          cycle = "reviewed";
           recordSkip("session-paused");
           return;
         }
         if (config.reviewPolicy === "manual") {
-          cycle = "reviewed";
           recordSkip("manual-policy");
           return;
         }
@@ -572,19 +843,23 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
             setupWarningShown = true;
           });
         }
-        cycle = "reviewed";
         recordSkip("unconfigured");
         return;
       }
 
-      cycle = "reviewed";
       enqueueReview({
-        candidate,
+        candidate: classification.candidate,
         ctx,
+        focus: classification.phase === "progress" ? "trajectory" : "standard",
         messages,
+        phase: classification.phase,
         requiresEnabled: !explicitlyRequested,
         revisionThreshold: thresholdForPolicy(config.reviewPolicy),
-        source: explicitlyRequested ? "next" : "automatic",
+        source: explicitlyRequested
+          ? "next"
+          : classification.phase === "progress"
+            ? "automatic-progress"
+            : "automatic-final",
       });
     });
   };
@@ -643,6 +918,29 @@ function classifyFailure(error: unknown): string {
   if (message.includes("unavailable") || message.includes("not configured")) return "model";
   if (message.includes("abort")) return "cancelled";
   return "provider";
+}
+
+function sendProgressCorrection(
+  pi: ExtensionAPI,
+  config: ResolvedAdvisorConfig,
+  review: AdvisorReview,
+  recovering: boolean,
+): void {
+  if (!config.provider || !config.model) return;
+  pi.sendMessage(
+    {
+      customType: ADVISOR_REVIEW_MESSAGE_TYPE,
+      content: buildProgressSteer(review, recovering),
+      display: true,
+      details: {
+        action: recovering ? "recovery" : "guidance",
+        review,
+        provider: config.provider,
+        model: config.model,
+      },
+    },
+    { deliverAs: "steer", triggerTurn: true },
+  );
 }
 
 function sendRevisionRequest(
@@ -707,28 +1005,70 @@ function isGenuineUserMessage(message: unknown): boolean {
 }
 
 type CandidateClassification =
-  | { eligible: true; candidate: string }
+  | { eligible: true; candidate: string; phase: ReviewPhase }
   | {
       eligible: false;
-      reason: "not-assistant" | "empty" | "incomplete" | "tool-call";
+      reason: "not-assistant" | "empty" | "incomplete";
     };
 
-function classifyReviewCandidate(event: TurnEndEvent): CandidateClassification {
+function classifyReviewCheckpoint(event: TurnEndEvent): CandidateClassification {
   const message = event.message;
   if (!isRecord(message) || message.role !== "assistant") {
     return { eligible: false, reason: "not-assistant" };
   }
-  if (message.stopReason !== "stop") return { eligible: false, reason: "incomplete" };
+  if (
+    message.stopReason === "aborted" ||
+    message.stopReason === "error" ||
+    message.stopReason === "length"
+  )
+    return { eligible: false, reason: "incomplete" };
   if (!Array.isArray(message.content)) return { eligible: false, reason: "empty" };
-  if (message.content.some((part) => isRecord(part) && part.type === "toolCall")) {
-    return { eligible: false, reason: "tool-call" };
+  const hasToolCall = message.content.some((part) => isRecord(part) && part.type === "toolCall");
+  if (hasToolCall) {
+    const candidate = assistantCheckpointText(message);
+    return candidate
+      ? { eligible: true, candidate, phase: "progress" }
+      : { eligible: false, reason: "empty" };
   }
+  if (message.stopReason !== "stop") return { eligible: false, reason: "incomplete" };
   const candidate = assistantText(message);
-  return candidate ? { eligible: true, candidate } : { eligible: false, reason: "empty" };
+  return candidate
+    ? { eligible: true, candidate, phase: "final" }
+    : { eligible: false, reason: "empty" };
+}
+
+function classifyReviewCandidate(event: TurnEndEvent): CandidateClassification {
+  const result = classifyReviewCheckpoint(event);
+  return result.eligible && result.phase !== "final"
+    ? { eligible: false, reason: "incomplete" }
+    : result;
 }
 
 function isReviewCandidate(event: TurnEndEvent): boolean {
   return classifyReviewCandidate(event).eligible;
+}
+
+function assistantCheckpointText(message: unknown): string | undefined {
+  if (!isRecord(message) || message.role !== "assistant" || !Array.isArray(message.content)) {
+    return undefined;
+  }
+  const parts = message.content.flatMap((part) => {
+    if (!isRecord(part)) return [];
+    if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
+      return [part.text.trim()];
+    }
+    if (part.type !== "toolCall") return [];
+    const name = typeof part.name === "string" && part.name ? part.name : "unknown";
+    let args = "";
+    try {
+      args = part.arguments === undefined ? "" : ` ${JSON.stringify(part.arguments)}`;
+    } catch {
+      args = " [unserializable arguments]";
+    }
+    return [`[tool call: ${name}${args}]`];
+  });
+  const text = parts.join("\n").trim();
+  return text || undefined;
 }
 
 function assistantText(message: unknown): string | undefined {
@@ -746,9 +1086,11 @@ function assistantText(message: unknown): string | undefined {
 
 export const _extensionTest = {
   activeContextMessages,
+  assistantCheckpointText,
   assistantText,
   classifyFailure,
   classifyReviewCandidate,
+  classifyReviewCheckpoint,
   isGenuineUserMessage,
   isReviewCandidate,
   shouldRevise,

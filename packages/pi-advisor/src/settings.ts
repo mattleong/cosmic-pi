@@ -89,7 +89,15 @@ export interface AdvisorSessionMetrics {
   guidancePaths?: readonly string[];
   hasLastCandidate?: boolean;
   inputTokens?: number;
-  lastAction?: "advice" | "discarded" | "failure" | "pass" | "revision" | "suppressed";
+  lastAction?:
+    | "advice"
+    | "discarded"
+    | "failure"
+    | "guidance"
+    | "pass"
+    | "recovery"
+    | "revision"
+    | "suppressed";
   lastFailureKind?: string;
   latestDurationMs?: number;
   outputTokens?: number;
@@ -129,7 +137,7 @@ export function registerAdvisorCommands(
     handler: async (args, ctx) => handleAdvisorCommand(args, ctx, state, actions),
   });
   pi.registerCommand(SETTINGS_COMMAND, {
-    description: "Configure automatic advisor review",
+    description: "Configure automatic advisor supervision",
     handler: async (_args, ctx) => openAdvisorSettings(ctx, state),
   });
   pi.registerCommand(STATUS_COMMAND, {
@@ -277,7 +285,7 @@ async function openAdvisorSettings(
 
   let draft = { ...state.get() };
   while (true) {
-    const enabledOption = `Automatic review: ${draft.enabled ? "on" : "off"}`;
+    const enabledOption = `Advisor supervision: ${draft.enabled ? "on" : "off"}`;
     const policyOption = `Behavior: ${formatPolicy(draft.reviewPolicy)}`;
     const modelOption = `Advisor model: ${formatModel(draft)}`;
     const speedOption = `Speed: ${detectSpeedPreset(draft)}`;

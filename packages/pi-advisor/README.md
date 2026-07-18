@@ -1,6 +1,6 @@
 # pi-advisor
 
-A pi extension that sends each eligible candidate response to a dedicated advisor model, shows actionable review findings, and gives the main agent one opportunity to revise its answer.
+A pi extension that uses a dedicated advisor model to supervise active work and completed responses, surface actionable findings, and give the main agent one bounded opportunity to correct course.
 
 ## Install
 
@@ -23,18 +23,23 @@ pi -e ./packages/pi-advisor
 
 ## How it works
 
-After the main agent finishes a completed response, pi-advisor queues a background request to a separately configured model to check correctness, completeness, user intent, evidence, and actionable risks. The main turn settles immediately instead of waiting for the advisor. The review includes the latest genuine user request and candidate response plus as much recent conversation and tool-result context as fits the configured limit. Recent messages are selected by recency and presented to the advisor in chronological order.
+During an agent run, pi-advisor queues background checks of meaningful work checkpoints: tool-calling turns, unusually long or strongly repetitive streamed reasoning, and the completed final response. Progress checks use a trajectory-specific rubric that does not penalize ordinary unfinished work; they flag only evidenced wrong directions, repeated non-progress, unsafe actions, ignored constraints, or contradictions. Final checks continue to cover correctness, completeness, user intent, evidence, and actionable risks.
 
-- A passing review leaves the candidate unchanged without adding another transcript notification.
-- The default **Guardrail** policy automatically revises high-severity findings and shows medium-only findings as non-triggering advice. **Strict** revises medium and high findings, **Advice only** never triggers another turn, and **Manual** reviews only on request.
-- The default zero-request cooldown lets each new user request receive an independent correction. If a nonzero cooldown is configured, findings during that many subsequent finding-bearing reviews appear as advice instead of restarting work. Passing, failed, and discarded reviews do not consume the cooldown.
-- Starting a newer user request cancels or discards the older review, preventing stale advice from interrupting current work. Background reviews are serialized rather than allowed to overlap.
-- Repeated findings are normalized only within the current request/review scope. A recurring defect in a later user request remains visible.
-- The advisor-triggered revision is not reviewed again. Revision suppression is bound to the reviewed request, so a queued follow-up cannot accidentally inherit it.
-- Responses that contain tool calls, have no assistant text, or were aborted or errored are not reviewed. A completed final response remains eligible even when its turn reports tool results.
-- The original streamed candidate remains visible before any later critique or revision. Advisor messages are compact by default and show complete evidence and recommendations when expanded.
+The main agent never waits synchronously for an Advisor model call. Reviews are serialized with one latest pending checkpoint, so a newer turn supersedes stale work instead of creating overlapping requests. A long active turn is checked after 90 seconds, or earlier when the visible thinking/text stream exhibits strong repetition. Provider streams that do not expose reasoning can only be assessed from elapsed time and visible activity.
 
-Advisor calls never use tools and never fall back to the active main model. Model lookup, credentials, timeout, abort, provider, empty-output, and malformed-output failures all fail open: the original candidate remains available and a current background review failure produces only a concise warning. Failure diagnostics are appended to `$PI_CODING_AGENT_DIR/logs/pi-advisor.jsonl` without prompts, transcripts, or credentials; the log rotates at 1 MB.
+- A passing review stays silent and the agent continues normally.
+- The default **Guardrail** policy corrects high-severity findings and presents medium-only findings as non-triggering advice. **Strict** corrects medium and high findings, **Advice only** never triggers another turn, and **Manual** reviews only on request.
+- A progress correction is queued through Pi's steering channel and reaches the next safe model boundary. Steering cannot undo tool side effects that already completed. When a high-severity review confirms that the same streamed turn is still repetitively stalled, Advisor aborts that turn, waits for Pi to settle, then injects recovery guidance and starts the corrective continuation.
+- Advisor may inspect later checkpoints, including a correction turn, but it can trigger at most one automatic corrective intervention for each genuine user request. Later findings in that request are advice-only or suppressed when duplicated.
+- The default zero-request cooldown lets each new user request receive an independent correction. If a nonzero cooldown is configured, every finding-bearing checkpoint in that many subsequent requests remains advice-only. Passing, failed, and discarded reviews do not consume the cooldown.
+- Starting newer user work, pausing/cancelling Advisor, changing its configuration, or replacing the session cancels timers and invalidates queued or active checks. Stale results cannot send guidance or abort work.
+- Repeated findings are normalized only within the current user-request scope. A recurring defect in a later request remains visible.
+- Empty, aborted, errored, and length-truncated turns are not reviewed. Tool-calling turns are reviewed as progress; completed final responses remain eligible even when their turn reports tool results.
+- The original streamed output remains visible before any later critique or correction. Advisor messages are compact by default and show complete evidence and recommendations when expanded.
+
+Advisor calls never use tools and never fall back to the active main model. The separately configured Advisor model receives the latest user request, the candidate or visible work checkpoint, and bounded recent conversation evidence such as assistant text, tool calls/results, extension context, and included shell output. Raw streamed reasoning, system prompts, image bytes, credentials, and prior Advisor messages are excluded.
+
+Model lookup, credentials, timeout, abort, provider, empty-output, and malformed-output failures all fail open: the original candidate remains available and a current background review failure produces only a concise warning. Failure diagnostics are appended to `$PI_CODING_AGENT_DIR/logs/pi-advisor.jsonl` without prompts, transcripts, or credentials; the log rotates at 1 MB.
 
 ## Setup and commands
 
@@ -93,12 +98,12 @@ Example:
 
 Settings:
 
-- `enabled`: automatic review toggle; defaults to `true`.
+- `enabled`: automatic Advisor supervision toggle; defaults to `true`.
 - `provider` and `model`: both must be non-empty for review to be configured. Use `/advisor-settings` to search for and select an authenticated model.
 - `fastMode`: sends `service_tier: "priority"` for advisor models in pi-better-openai's shared supported-model list; defaults to `false`. The settings picker only shows this toggle for supported models.
 - `thinkingLevel`: advisor reasoning level; defaults to `medium`. The settings picker only offers levels supported by the selected model, from `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 - `reviewPolicy`: intervention behavior; one of `guardrail`, `strict`, `advice`, or `manual`. Defaults to `guardrail`.
-- `revisionCooldownTurns`: number of subsequent finding-bearing reviews during which findings become non-triggering advice after an automatic revision; defaults to `0` and is clamped to `0`–`5`. The legacy field name is retained for configuration compatibility even though the UI describes requests rather than turns.
+- `revisionCooldownTurns`: number of subsequent user requests during which findings become non-triggering advice after an automatic correction; defaults to `0` and is clamped to `0`–`5`. The legacy field name is retained for configuration compatibility even though the UI describes requests rather than turns.
 - `timeoutMs`: advisor request timeout in milliseconds; defaults to `30000` and is clamped to `10000`–`180000`.
 - `maxContextChars`: serialized review-context limit; defaults to `48000` and is clamped to `16000`–`240000`.
 

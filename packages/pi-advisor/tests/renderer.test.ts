@@ -53,6 +53,20 @@ describe("advisor review renderer", () => {
     const collapsedOutput = collapsed.render(100).join("\n");
     expect(collapsedOutput).toContain("1 medium · One material issue remains.");
     expect(collapsedOutput).not.toContain("The validation claim is unsupported.");
+
+    const guidance = renderer?.(
+      { details: { ...details, action: "guidance" } },
+      { expanded: false },
+      theme,
+    ) as { render(width: number): string[] };
+    expect(guidance.render(100).join("\n")).toContain("Advisor suggested a course correction");
+
+    const recovery = renderer?.(
+      { details: { ...details, action: "recovery" } },
+      { expanded: false },
+      theme,
+    ) as { render(width: number): string[] };
+    expect(recovery.render(100).join("\n")).toContain("Advisor interrupted a stalled trajectory");
   });
 
   test("expands historical findings that predate category and evidence fields", () => {

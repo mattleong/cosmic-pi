@@ -98,6 +98,14 @@ function assistantEvent(
   };
 }
 
+function messageUpdate(type: "text_delta" | "thinking_delta", delta: string) {
+  return {
+    type: "message_update",
+    message: { role: "assistant", content: [] },
+    assistantMessageEvent: { type, contentIndex: 0, delta, partial: {} },
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -126,7 +134,14 @@ function createHarness(
   const getAvailableModels = vi.fn((): Array<{ provider: string; id: string }> => []);
   const findModel = vi.fn(() => ({ provider: "review-provider", id: "review-model" }));
   const hasConfiguredAuth = vi.fn(() => true);
-  const sendMessage = vi.fn();
+  const actionLog: string[] = [];
+  const sendMessage = vi.fn(
+    (
+      _message: { details?: { action?: string } },
+      _options?: { deliverAs?: string; triggerTurn?: boolean },
+    ) => actionLog.push("send"),
+  );
+  const abort = vi.fn(() => actionLog.push("abort"));
   const registerMessageRenderer = vi.fn();
   const logFailure = vi.fn(() => "/tmp/logs/pi-advisor.jsonl");
   const requestReview = vi.fn(
@@ -154,6 +169,7 @@ function createHarness(
     hasUI: true,
     mode: "tui",
     signal: undefined,
+    abort,
     hasPendingMessages,
     isIdle,
     isProjectTrusted: vi.fn(() => true),
@@ -177,6 +193,8 @@ function createHarness(
   }
 
   return {
+    abort,
+    actionLog,
     commands,
     ctx,
     emit,
@@ -233,14 +251,14 @@ describe("advisor extension lifecycle", () => {
     expect(harness.requestReview).not.toHaveBeenCalled();
   });
 
-  test("passes one candidate and resets only for a genuine user message", async () => {
+  test("reviews every final checkpoint and resets intervention scope only for genuine user work", async () => {
     const harness = createHarness();
 
     await harness.emit("before_agent_start", { type: "before_agent_start" });
     await harness.emit("turn_end", assistantEvent("first candidate"));
     await harness.emit("turn_end", assistantEvent("unprompted second candidate"));
 
-    expect(harness.requestReview).toHaveBeenCalledTimes(1);
+    expect(harness.requestReview).toHaveBeenCalledTimes(2);
     expect(harness.notify).not.toHaveBeenCalled();
     expect(harness.sendMessage).not.toHaveBeenCalled();
     expect(harness.setStatus).toHaveBeenNthCalledWith(
@@ -251,15 +269,15 @@ describe("advisor extension lifecycle", () => {
     expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined);
 
     await harness.emit("message_end", { message: { role: "custom", customType: "other" } });
-    await harness.emit("turn_end", assistantEvent("still not eligible"));
-    expect(harness.requestReview).toHaveBeenCalledTimes(1);
+    await harness.emit("turn_end", assistantEvent("still supervised"));
+    expect(harness.requestReview).toHaveBeenCalledTimes(3);
 
     await harness.emit("message_end", { message: { role: "user", content: "queued follow-up" } });
     await harness.emit("turn_end", assistantEvent("follow-up candidate"));
-    expect(harness.requestReview).toHaveBeenCalledTimes(2);
+    expect(harness.requestReview).toHaveBeenCalledTimes(4);
   });
 
-  test("skips the review cycle when a user message is already queued", async () => {
+  test("skips stale checkpoints while user input is queued and resumes afterward", async () => {
     const harness = createHarness();
     harness.hasPendingMessages.mockReturnValue(true);
 
@@ -269,12 +287,12 @@ describe("advisor extension lifecycle", () => {
     expect(harness.setStatus).not.toHaveBeenCalled();
 
     harness.hasPendingMessages.mockReturnValue(false);
-    await harness.emit("turn_end", assistantEvent("same cycle"));
-    expect(harness.requestReview).not.toHaveBeenCalled();
+    await harness.emit("turn_end", assistantEvent("current checkpoint"));
+    expect(harness.requestReview).toHaveBeenCalledTimes(1);
 
     await harness.emit("message_end", { message: { role: "user", content: "queued follow-up" } });
     await harness.emit("turn_end", assistantEvent("follow-up candidate"));
-    expect(harness.requestReview).toHaveBeenCalledTimes(1);
+    expect(harness.requestReview).toHaveBeenCalledTimes(2);
   });
 
   test("returns from turn end while the advisor continues in the background", async () => {
@@ -294,6 +312,224 @@ describe("advisor extension lifecycle", () => {
     await vi.waitFor(() =>
       expect(harness.setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined),
     );
+  });
+
+  test("detaches a long-turn trajectory review from message streaming", async () => {
+    vi.useFakeTimers();
+    const pendingReview = deferred<AdvisorReview>();
+    const harness = createHarness(resolvedConfig(), pendingReview.promise);
+
+    try {
+      await harness.emit("turn_start", { turnIndex: 0, timestamp: Date.now() });
+      await harness.emit("message_update", messageUpdate("thinking_delta", "still reasoning"));
+      expect(harness.requestReview).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(harness.requestReview).toHaveBeenCalledTimes(1);
+      expect(harness.requestReview.mock.calls[0]?.[2]).toContain(
+        "the active turn exceeded the normal supervision interval",
+      );
+      expect(harness.requestReview.mock.calls[0]?.[2]).toContain(
+        "raw content is intentionally excluded",
+      );
+      expect(harness.requestReview.mock.calls[0]?.[2]).not.toContain("still reasoning");
+      expect(harness.requestReview.mock.calls[0]?.[3]?.focus).toBe("trajectory");
+    } finally {
+      pendingReview.resolve(passingReview);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+    }
+  });
+
+  test("starts one early trajectory review for a strong repeated stream", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    const repeated = "repeat-this-unit".repeat(12);
+
+    try {
+      await harness.emit("turn_start", { turnIndex: 0, timestamp: Date.now() });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await harness.emit("message_update", messageUpdate("thinking_delta", repeated));
+      await harness.emit("message_update", messageUpdate("thinking_delta", repeated));
+
+      expect(harness.requestReview).toHaveBeenCalledTimes(1);
+      expect(harness.requestReview.mock.calls[0]?.[2]).toContain("repeated the same");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("aborts a confirmed repetitive trajectory and injects recovery after settling", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness(resolvedConfig(), revisionReview);
+    const repeated = "repeat-this-unit".repeat(12);
+    harness.isIdle.mockReturnValue(false);
+
+    try {
+      await harness.emit("turn_start", { turnIndex: 0, timestamp: Date.now() });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await harness.emit("message_update", messageUpdate("thinking_delta", repeated));
+      await harness.emit("message_update", messageUpdate("thinking_delta", repeated));
+      await vi.waitFor(() => expect(harness.abort).toHaveBeenCalledTimes(1));
+
+      expect(harness.actionLog).toEqual(["abort"]);
+      expect(harness.sendMessage).not.toHaveBeenCalled();
+
+      await harness.emit("turn_end", assistantEvent("cancelled", { stopReason: "aborted" }));
+      harness.isIdle.mockReturnValue(true);
+      await harness.emit("agent_settled", { type: "agent_settled" });
+
+      expect(harness.actionLog).toEqual(["abort", "send"]);
+      expect(harness.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ details: expect.objectContaining({ action: "recovery" }) }),
+        { deliverAs: "steer", triggerTurn: true },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("preserves committed recovery across an Advisor settings update", async () => {
+    vi.useFakeTimers();
+    const configPath = tempConfigPath();
+    const initial = resolvedConfig({ configPath });
+    writeRawAdvisorConfig({ ...initial }, configPath);
+    const harness = createHarness(initial, revisionReview);
+    const repeated = "repeat-this-unit".repeat(12);
+    harness.isIdle.mockReturnValue(false);
+
+    try {
+      await harness.emit("turn_start", { turnIndex: 0, timestamp: Date.now() });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await harness.emit("message_update", messageUpdate("thinking_delta", repeated));
+      await harness.emit("message_update", messageUpdate("thinking_delta", repeated));
+      await vi.waitFor(() => expect(harness.abort).toHaveBeenCalledTimes(1));
+
+      await harness.commands.get("advisor")?.handler("off", harness.ctx as never);
+      await harness.emit("turn_end", assistantEvent("cancelled", { stopReason: "aborted" }));
+      harness.isIdle.mockReturnValue(true);
+      await harness.emit("agent_settled", { type: "agent_settled" });
+
+      expect(harness.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ details: expect.objectContaining({ action: "recovery" }) }),
+        { deliverAs: "steer", triggerTurn: true },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("disarms recovery when repetitive reasoning transitions to visible progress", async () => {
+    vi.useFakeTimers();
+    const review = deferred<AdvisorReview>();
+    const harness = createHarness(resolvedConfig(), review.promise);
+    const repeated = "repeat-this-unit".repeat(12);
+    harness.isIdle.mockReturnValue(false);
+
+    try {
+      await harness.emit("turn_start", { turnIndex: 0, timestamp: Date.now() });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await harness.emit("message_update", messageUpdate("thinking_delta", repeated));
+      await harness.emit("message_update", messageUpdate("thinking_delta", repeated));
+      expect(harness.requestReview).toHaveBeenCalledTimes(1);
+
+      await harness.emit("message_update", {
+        type: "message_update",
+        message: { role: "assistant", content: [] },
+        assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: {} },
+      });
+      review.resolve(revisionReview);
+      await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(1));
+
+      expect(harness.abort).not.toHaveBeenCalled();
+      expect(harness.sendMessage.mock.calls[0]?.[0]?.details?.action).toBe("guidance");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("never aborts a long turn from elapsed time alone", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness(resolvedConfig(), revisionReview);
+    harness.isIdle.mockReturnValue(false);
+
+    try {
+      await harness.emit("turn_start", { turnIndex: 0, timestamp: Date.now() });
+      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.waitFor(() => expect(harness.sendMessage).toHaveBeenCalledTimes(1));
+
+      expect(harness.abort).not.toHaveBeenCalled();
+      expect(harness.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ details: expect.objectContaining({ action: "guidance" }) }),
+        { deliverAs: "steer", triggerTurn: true },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("invalidates an active trajectory review when its turn aborts externally", async () => {
+    vi.useFakeTimers();
+    const review = deferred<AdvisorReview>();
+    const harness = createHarness(resolvedConfig(), review.promise);
+
+    try {
+      await harness.emit("turn_start", { turnIndex: 0, timestamp: Date.now() });
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(harness.requestReview).toHaveBeenCalledTimes(1);
+
+      await harness.emit("turn_end", assistantEvent("cancelled", { stopReason: "aborted" }));
+      review.resolve(revisionReview);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(harness.sendMessage).not.toHaveBeenCalled();
+      expect(harness.abort).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("does not review a long-running tool as a stalled model turn", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+
+    try {
+      await harness.emit("turn_start", { turnIndex: 0, timestamp: Date.now() });
+      await harness.emit("tool_execution_start", { toolCallId: "1", toolName: "bash", args: {} });
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(harness.requestReview).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("cleans long-turn timers when genuine user work supersedes the turn", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+
+    try {
+      await harness.emit("turn_start", { turnIndex: 0, timestamp: Date.now() });
+      await harness.emit("message_end", { message: { role: "user", content: "new work" } });
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(harness.requestReview).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("advisor cancel reports and clears an armed long-turn observation", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+
+    try {
+      await harness.emit("turn_start", { turnIndex: 0, timestamp: Date.now() });
+      await harness.commands.get("advisor")?.handler("cancel", harness.ctx as never);
+      expect(harness.notify).toHaveBeenCalledWith("Cancelled the current advisor review.", "info");
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(harness.requestReview).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("animates model, effort, and active fast mode while a review is running", async () => {
@@ -324,6 +560,24 @@ describe("advisor extension lifecycle", () => {
       await vi.advanceTimersByTimeAsync(0);
       vi.useRealTimers();
     }
+  });
+
+  test("discards an older checkpoint when a newer final checkpoint arrives", async () => {
+    const first = deferred<AdvisorReview>();
+    const harness = createHarness();
+    harness.requestReview
+      .mockReset()
+      .mockImplementationOnce(async () => first.promise)
+      .mockResolvedValueOnce(passingReview);
+
+    await harness.emit("turn_end", assistantEvent("working", { toolCall: true }));
+    await harness.emit("turn_end", assistantEvent("final answer"));
+    expect(harness.requestReview).toHaveBeenCalledTimes(1);
+
+    first.resolve(revisionReview);
+    await vi.waitFor(() => expect(harness.requestReview).toHaveBeenCalledTimes(2));
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+    expect(harness.requestReview.mock.calls[1]?.[3]?.focus).toBe("standard");
   });
 
   test("aborts an in-flight background review when newer user work starts", async () => {
@@ -452,8 +706,53 @@ describe("advisor extension lifecycle", () => {
       message: { role: "custom", customType: "advisor-review" },
     });
     await harness.emit("turn_end", assistantEvent("revised candidate"));
-    expect(harness.requestReview).toHaveBeenCalledTimes(1);
+    expect(harness.requestReview).toHaveBeenCalledTimes(2);
     expect(harness.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test("allows only one automatic corrective intervention across progress and final checks", async () => {
+    const harness = createHarness();
+    harness.requestReview
+      .mockReset()
+      .mockResolvedValueOnce(revisionReview)
+      .mockResolvedValueOnce(secondRevisionReview);
+
+    await harness.emit("turn_end", assistantEvent("working", { toolCall: true }));
+    await harness.emit("turn_end", assistantEvent("final answer"));
+
+    expect(harness.sendMessage).toHaveBeenCalledTimes(2);
+    expect(harness.sendMessage.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ details: expect.objectContaining({ action: "guidance" }) }),
+    );
+    expect(harness.sendMessage.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ details: expect.objectContaining({ action: "advice" }) }),
+    );
+    expect(
+      harness.sendMessage.mock.calls.filter((call) => call[1]?.triggerTurn === true),
+    ).toHaveLength(1);
+  });
+
+  test("preserves the one-correction guard across settings updates in the same request", async () => {
+    const configPath = tempConfigPath();
+    const initial = resolvedConfig({ configPath });
+    writeRawAdvisorConfig({ ...initial }, configPath);
+    const harness = createHarness(initial);
+    harness.requestReview
+      .mockReset()
+      .mockResolvedValueOnce(revisionReview)
+      .mockResolvedValueOnce(secondRevisionReview);
+
+    await harness.emit("turn_end", assistantEvent("first candidate"));
+    await harness.commands.get("advisor")?.handler("off", harness.ctx as never);
+    await harness.commands.get("advisor")?.handler("on", harness.ctx as never);
+    await harness.emit("turn_end", assistantEvent("later checkpoint"));
+
+    expect(harness.sendMessage).toHaveBeenCalledTimes(2);
+    expect(harness.sendMessage.mock.calls[0]?.[0]?.details?.action).toBe("revision");
+    expect(harness.sendMessage.mock.calls[1]?.[0]?.details?.action).toBe("advice");
+    expect(
+      harness.sendMessage.mock.calls.filter((call) => call[1]?.triggerTurn === true),
+    ).toHaveLength(1);
   });
 
   test("defers a high-severity revision until the primary agent settles", async () => {
@@ -464,7 +763,7 @@ describe("advisor extension lifecycle", () => {
     await vi.waitFor(() =>
       expect(harness.setStatus).toHaveBeenLastCalledWith(
         "pi-advisor",
-        "advisor: revision pending…",
+        "advisor: guidance pending…",
       ),
     );
     expect(harness.sendMessage).not.toHaveBeenCalled();
@@ -486,7 +785,7 @@ describe("advisor extension lifecycle", () => {
     await vi.waitFor(() =>
       expect(harness.setStatus).toHaveBeenLastCalledWith(
         "pi-advisor",
-        "advisor: revision pending…",
+        "advisor: guidance pending…",
       ),
     );
     await harness.emit("message_end", { message: { role: "user", content: "new work" } });
@@ -527,6 +826,28 @@ describe("advisor extension lifecycle", () => {
       expect.objectContaining({ details: expect.objectContaining({ action: "advice" }) }),
       { deliverAs: "steer" },
     );
+  });
+
+  test("defers a strict-mode medium progress correction until the agent settles", async () => {
+    const harness = createHarness(resolvedConfig({ reviewPolicy: "strict" }), advisoryReview);
+    harness.isIdle.mockReturnValue(false);
+
+    await harness.emit("turn_end", assistantEvent("working", { toolCall: true }));
+    await vi.waitFor(() =>
+      expect(harness.setStatus).toHaveBeenLastCalledWith(
+        "pi-advisor",
+        "advisor: guidance pending…",
+      ),
+    );
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+
+    harness.isIdle.mockReturnValue(true);
+    await harness.emit("agent_settled", { type: "agent_settled" });
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ details: expect.objectContaining({ action: "guidance" }) }),
+      { deliverAs: "steer", triggerTurn: true },
+    );
+    expect(harness.abort).not.toHaveBeenCalled();
   });
 
   test("manual mode skips automatic work but /advisor once reviews the next response", async () => {
@@ -602,6 +923,27 @@ describe("advisor extension lifecycle", () => {
     );
   });
 
+  test("keeps the revision cooldown active for every checkpoint in one request", async () => {
+    const harness = createHarness(resolvedConfig({ revisionCooldownTurns: 1 }));
+    harness.requestReview
+      .mockReset()
+      .mockResolvedValueOnce(revisionReview)
+      .mockResolvedValueOnce(secondRevisionReview)
+      .mockResolvedValueOnce(revisionReview);
+
+    await harness.emit("turn_end", assistantEvent("first final"));
+    await harness.emit("message_end", { message: { role: "user", content: "next request" } });
+    await harness.emit("turn_end", assistantEvent("working", { toolCall: true }));
+    await harness.emit("turn_end", assistantEvent("second final"));
+
+    expect(harness.sendMessage).toHaveBeenCalledTimes(3);
+    expect(harness.sendMessage.mock.calls.map((call) => call[0]?.details?.action)).toEqual([
+      "revision",
+      "advice",
+      "advice",
+    ]);
+  });
+
   test("does not suppress recurring findings across independent user requests", async () => {
     const harness = createHarness(resolvedConfig(), advisoryReview);
 
@@ -617,7 +959,7 @@ describe("advisor extension lifecycle", () => {
     expect(harness.sendMessage).toHaveBeenCalledTimes(2);
     harness.notify.mockClear();
     await harness.commands.get("advisor-status")?.handler("--verbose", harness.ctx as never);
-    expect(String(harness.notify.mock.lastCall?.[0])).toContain("Suppressed duplicate findings: 0");
+    expect(String(harness.notify.mock.lastCall?.[0])).toContain("Suppressed duplicate findings: 1");
   });
 
   test("deduplicates repeated findings across review commands for the same request", async () => {
@@ -700,9 +1042,9 @@ describe("advisor extension lifecycle", () => {
     harness.notify.mockClear();
     await harness.commands.get("advisor-status")?.handler("--verbose", harness.ctx as never);
     const populatedStatus = String(harness.notify.mock.lastCall?.[0]);
-    expect(populatedStatus).toContain("Session review attempts: 3");
+    expect(populatedStatus).toContain("Session review attempts: 4");
     expect(populatedStatus).toContain(
-      "Session review outcomes: pass 1, revise 1, failure 1, discarded 0, in progress 0",
+      "Session review outcomes: pass 2, revise 1, failure 1, discarded 0, in progress 0",
     );
 
     await harness.emit("session_start", { type: "session_start", reason: "new" });
@@ -717,7 +1059,6 @@ describe("advisor extension lifecycle", () => {
 
   test.each([
     ["textless", assistantEvent("")],
-    ["tool-calling", assistantEvent("working", { toolCall: true })],
     ["length-truncated", assistantEvent("incomplete", { stopReason: "length" })],
     ["errored", assistantEvent("failed", { stopReason: "error" })],
     ["aborted", assistantEvent("cancelled", { stopReason: "aborted" })],
@@ -725,6 +1066,21 @@ describe("advisor extension lifecycle", () => {
     const harness = createHarness();
     await harness.emit("turn_end", event);
     expect(harness.requestReview).not.toHaveBeenCalled();
+  });
+
+  test("reviews tool-calling progress and still reviews the completed final response", async () => {
+    const harness = createHarness();
+
+    await harness.emit("turn_end", assistantEvent("working", { toolCall: true }));
+    expect(harness.requestReview).toHaveBeenCalledTimes(1);
+    expect(harness.requestReview.mock.calls[0]?.[2]).toContain("Current work checkpoint:");
+    expect(harness.requestReview.mock.calls[0]?.[2]).toContain("[tool call: read {}]");
+    expect(harness.requestReview.mock.calls[0]?.[3]?.focus).toBe("trajectory");
+
+    await harness.emit("turn_end", assistantEvent("completed"));
+    expect(harness.requestReview).toHaveBeenCalledTimes(2);
+    expect(harness.requestReview.mock.calls[1]?.[2]).toContain("Candidate response:");
+    expect(harness.requestReview.mock.calls[1]?.[3]?.focus).toBe("standard");
   });
 
   test("reviews a completed final response even when the turn reports tool results", async () => {

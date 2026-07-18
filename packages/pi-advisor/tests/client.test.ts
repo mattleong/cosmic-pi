@@ -84,7 +84,7 @@ describe("advisor client", () => {
       expect.objectContaining({ provider: "advisor-provider", id: "advisor-model" }),
       expect.objectContaining({
         systemPrompt: expect.stringMatching(
-          /independent response advisor[\s\S]*Watch durable queue invariants/,
+          /independent advisor supervising[\s\S]*Watch durable queue invariants/,
         ),
         messages: [
           expect.objectContaining({

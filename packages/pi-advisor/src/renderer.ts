@@ -14,7 +14,7 @@ export interface AdvisorReviewMessageDetails {
   review: AdvisorReview;
   provider: string;
   model: string;
-  action?: "advice" | "revision";
+  action?: "advice" | "guidance" | "recovery" | "revision";
 }
 
 export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
@@ -33,7 +33,13 @@ export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
         const review = normalizeReviewForDisplay(details.review);
         if (!review) return undefined;
         const label =
-          details.action === "advice" ? "Advisor noted a concern" : "Advisor requested a revision";
+          details.action === "advice"
+            ? "Advisor noted a concern"
+            : details.action === "guidance"
+              ? "Advisor suggested a course correction"
+              : details.action === "recovery"
+                ? "Advisor interrupted a stalled trajectory"
+                : "Advisor requested a revision";
         const heading = theme.bold(theme.fg("warning", label));
         const model = theme.fg("muted", `${details.provider}/${details.model}`);
         if (expanded) {
