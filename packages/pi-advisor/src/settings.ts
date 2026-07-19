@@ -14,6 +14,7 @@ import type { AdvisorReviewFocus } from "./review.ts";
 
 const SETTINGS_COMMAND = "advisor-settings";
 const STATUS_COMMAND = "advisor-status";
+const USAGE_COMMAND = "advisor-usage";
 const ADVISOR_COMMAND = "advisor";
 
 const TIMEOUT_OPTIONS = [10_000, 30_000, 60_000, 90_000, 120_000, 180_000] as const;
@@ -46,6 +47,18 @@ export interface AdvisorCommandActions {
   resume(ctx: ExtensionCommandContext): void;
   reviewLast(ctx: ExtensionCommandContext, focus: AdvisorReviewFocus): boolean | Promise<boolean>;
   reviewNext(ctx: ExtensionCommandContext): void;
+}
+
+export interface AdvisorModelUsage {
+  provider: string;
+  model: string;
+  responses: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
 }
 
 export interface AdvisorSessionMetrics {
@@ -81,6 +94,7 @@ export interface AdvisorSessionMetrics {
     | "suppressed";
   lastFailureKind?: string;
   latestDurationMs?: number;
+  modelResponses?: number;
   outputTokens?: number;
   paused?: boolean;
   processedSequence?: number;
@@ -88,7 +102,10 @@ export interface AdvisorSessionMetrics {
   reviewNext?: boolean;
   sequence?: number;
   suppressedFindings?: number;
+  timedReviews?: number;
+  totalDurationMs?: number;
   totalTokens?: number;
+  usageByModel?: Record<string, AdvisorModelUsage>;
 }
 
 export function registerAdvisorCommands(
@@ -127,6 +144,10 @@ export function registerAdvisorCommands(
     description: "Show advisor model and configuration status",
     handler: async (args, ctx) =>
       showAdvisorStatus(ctx, state.get(), state.getMetrics(), isVerbose(args)),
+  });
+  pi.registerCommand(USAGE_COMMAND, {
+    description: "Show advisor usage for this session",
+    handler: async (_args, ctx) => showAdvisorUsage(ctx, state.get(), state.getMetrics()),
   });
 }
 
@@ -433,6 +454,59 @@ function updateConfig(
   }
 }
 
+async function showAdvisorUsage(
+  ctx: ExtensionCommandContext,
+  config: ResolvedAdvisorConfig,
+  metrics: Readonly<AdvisorSessionMetrics>,
+): Promise<void> {
+  const model =
+    config.provider && config.model
+      ? ctx.modelRegistry.find(config.provider, config.model)
+      : undefined;
+  const reasoning = model ? clampThinkingLevel(model, config.thinkingLevel) : config.thinkingLevel;
+  const mode =
+    config.fastMode && supportsFastModel(config.provider, config.model) ? "fast" : "standard";
+  const settled = metrics.timedReviews ?? 0;
+  const inProgress = Math.max(0, metrics.attempted - settled);
+  const totalDuration = metrics.totalDurationMs ?? 0;
+  const reviewTime = settled
+    ? `${formatUsageDuration(totalDuration)} total · ${formatUsageDuration(totalDuration / settled)} average · ${formatUsageDuration(metrics.latestDurationMs ?? 0)} latest`
+    : "not available";
+  const lines = [
+    "Advisor usage · this session",
+    "",
+    `Current model: ${formatModel(config)} · ${reasoning} · ${mode}`,
+    `Model responses: ${(metrics.modelResponses ?? 0).toLocaleString()}`,
+    `Reviews: ${metrics.attempted.toLocaleString()} attempted · ${settled.toLocaleString()} settled · ${inProgress.toLocaleString()} in progress`,
+    `Outcomes: pass ${metrics.pass.toLocaleString()} · revise ${metrics.revise.toLocaleString()} · failed ${metrics.failure.toLocaleString()} · discarded ${metrics.discarded.toLocaleString()}`,
+    "",
+    "Tokens",
+    `  Input:        ${(metrics.inputTokens ?? 0).toLocaleString()}`,
+    `  Output:       ${(metrics.outputTokens ?? 0).toLocaleString()}`,
+    `  Cache read:   ${(metrics.cacheReadTokens ?? 0).toLocaleString()}`,
+    `  Cache write:  ${(metrics.cacheWriteTokens ?? 0).toLocaleString()}`,
+    `  Total:        ${(metrics.totalTokens ?? 0).toLocaleString()}`,
+    "",
+    `Reported cost: $${(metrics.cost ?? 0).toFixed(6)}`,
+    `Review time: ${reviewTime}`,
+  ];
+
+  const modelUsage = Object.values(metrics.usageByModel ?? {}).sort(
+    (left, right) => right.totalTokens - left.totalTokens,
+  );
+  if (modelUsage.length > 1) {
+    lines.push("", "Models");
+    for (const usage of modelUsage) {
+      const responseLabel = usage.responses === 1 ? "response" : "responses";
+      lines.push(
+        `  ${usage.provider}/${usage.model}: ${usage.responses.toLocaleString()} ${responseLabel} · ${usage.totalTokens.toLocaleString()} tokens · $${usage.cost.toFixed(6)}`,
+      );
+    }
+  }
+
+  ctx.ui.notify(lines.join("\n"), "info");
+}
+
 async function showAdvisorStatus(
   ctx: ExtensionCommandContext,
   config: ResolvedAdvisorConfig,
@@ -511,6 +585,12 @@ function formatLastReview(metrics: Readonly<AdvisorSessionMetrics>): string {
 
 function formatDuration(milliseconds: number): string {
   return `${milliseconds / 1_000}s`;
+}
+
+function formatUsageDuration(milliseconds: number): string {
+  return milliseconds < 1_000
+    ? `${Math.round(milliseconds)}ms`
+    : `${(milliseconds / 1_000).toFixed(1)}s`;
 }
 
 function formatGuidancePaths(paths: readonly string[] | undefined): string {

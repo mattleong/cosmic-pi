@@ -540,6 +540,7 @@ describe("persistent extension cutover", () => {
       "advisor",
       "advisor-settings",
       "advisor-status",
+      "advisor-usage",
     ]);
     const command = value.commands.get("advisor");
     if (!command) throw new Error("advisor command missing");
@@ -1223,6 +1224,12 @@ describe("persistent extension cutover", () => {
       const status = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
       expect(status).toContain("input 10, output 5, cache read 3, cache write 4, total 22");
       expect(status).toContain(join(agentDirectory, "ADVISOR.md"));
+
+      await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+      const usage = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
+      expect(usage).toContain("Model responses: 1");
+      expect(usage).toContain("Input:        10");
+      expect(usage).toContain("Reported cost: $0.125000");
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

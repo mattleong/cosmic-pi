@@ -462,4 +462,75 @@ describe("advisor commands", () => {
     expect(output).toContain(configPath);
     expect(output).not.toMatch(/api[_-]?key|secret/i);
   });
+
+  test("reports session usage with timing and per-model attribution", async () => {
+    const configPath = tempConfigPath();
+    const configured = {
+      ...configAt(configPath),
+      provider: "openai",
+      model: "reviewer",
+      thinkingLevel: "high" as const,
+      configured: true,
+    };
+    const harness = createCommands(configured, {
+      attempted: 5,
+      pass: 3,
+      revise: 1,
+      failure: 0,
+      discarded: 0,
+      cacheReadTokens: 300,
+      cacheWriteTokens: 40,
+      cost: 0.012345,
+      inputTokens: 1_000,
+      latestDurationMs: 1_200,
+      modelResponses: 6,
+      outputTokens: 200,
+      timedReviews: 4,
+      totalDurationMs: 10_000,
+      totalTokens: 1_540,
+      usageByModel: {
+        first: {
+          provider: "openai",
+          model: "reviewer",
+          responses: 5,
+          cacheReadTokens: 300,
+          cacheWriteTokens: 40,
+          cost: 0.01,
+          inputTokens: 900,
+          outputTokens: 180,
+          totalTokens: 1_420,
+        },
+        second: {
+          provider: "anthropic",
+          model: "backup",
+          responses: 1,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          cost: 0.002345,
+          inputTokens: 100,
+          outputTokens: 20,
+          totalTokens: 120,
+        },
+      },
+    });
+    const notify = vi.fn();
+    const ctx = {
+      ui: { notify },
+      modelRegistry: {
+        find: () => ({ provider: "openai", id: "reviewer", reasoning: true }),
+      },
+    } as unknown as ExtensionCommandContext;
+
+    await harness.commands.get("advisor-usage")?.("", ctx);
+    const output = String(notify.mock.calls[0]?.[0]);
+    expect(output).toContain("Advisor usage · this session");
+    expect(output).toContain("Current model: openai/reviewer · high · standard");
+    expect(output).toContain("Model responses: 6");
+    expect(output).toContain("Reviews: 5 attempted · 4 settled · 1 in progress");
+    expect(output).toContain("Input:        1,000");
+    expect(output).toContain("Reported cost: $0.012345");
+    expect(output).toContain("Review time: 10.0s total · 2.5s average · 1.2s latest");
+    expect(output).toContain("openai/reviewer: 5 responses · 1,420 tokens · $0.010000");
+    expect(output).toContain("anthropic/backup: 1 response · 120 tokens · $0.002345");
+  });
 });

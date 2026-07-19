@@ -209,13 +209,41 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       metrics.skippedReviews = skipped;
     };
 
-    const recordUsage = (usage: AdvisorUsageTelemetry): void => {
+    const recordUsage = (
+      usage: AdvisorUsageTelemetry,
+      runtimeConfig: ResolvedAdvisorConfig,
+    ): void => {
       metrics.cacheReadTokens = (metrics.cacheReadTokens ?? 0) + usage.cacheReadTokens;
       metrics.cacheWriteTokens = (metrics.cacheWriteTokens ?? 0) + usage.cacheWriteTokens;
       metrics.cost = (metrics.cost ?? 0) + usage.cost;
       metrics.inputTokens = (metrics.inputTokens ?? 0) + usage.inputTokens;
+      metrics.modelResponses = incrementBounded(metrics.modelResponses);
       metrics.outputTokens = (metrics.outputTokens ?? 0) + usage.outputTokens;
       metrics.totalTokens = (metrics.totalTokens ?? 0) + usage.totalTokens;
+
+      const provider = runtimeConfig.provider ?? "unknown";
+      const model = runtimeConfig.model ?? "unknown";
+      const key = JSON.stringify([provider, model]);
+      const previous = metrics.usageByModel?.[key];
+      metrics.usageByModel ??= {};
+      metrics.usageByModel[key] = {
+        provider,
+        model,
+        responses: incrementBounded(previous?.responses),
+        cacheReadTokens: (previous?.cacheReadTokens ?? 0) + usage.cacheReadTokens,
+        cacheWriteTokens: (previous?.cacheWriteTokens ?? 0) + usage.cacheWriteTokens,
+        cost: (previous?.cost ?? 0) + usage.cost,
+        inputTokens: (previous?.inputTokens ?? 0) + usage.inputTokens,
+        outputTokens: (previous?.outputTokens ?? 0) + usage.outputTokens,
+        totalTokens: (previous?.totalTokens ?? 0) + usage.totalTokens,
+      };
+    };
+
+    const recordReviewDuration = (startedAt: number): void => {
+      const duration = Math.max(0, Date.now() - startedAt);
+      metrics.latestDurationMs = duration;
+      metrics.timedReviews = incrementBounded(metrics.timedReviews);
+      metrics.totalDurationMs = (metrics.totalDurationMs ?? 0) + duration;
     };
 
     const activeSeed = (ctx: ExtensionContext): string =>
@@ -326,16 +354,17 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         }
       }
       try {
+        const runtimeConfig = { ...config };
         await nextRuntime.start({
           ctx,
-          config: { ...config },
+          config: runtimeConfig,
           seed: activeSeed(ctx),
           stateSummary:
             restoration === "restore-branch" && ledger
               ? renderDurableReviewSummary(ledger.reviewSummary)
               : latestStateSummary,
           instructions: instructions.content,
-          onUsage: recordUsage,
+          onUsage: (usage) => recordUsage(usage, runtimeConfig),
           onDiagnostic: (message) => ctx.ui.notify(message, "warning"),
         });
         if (startEpoch !== epoch) {
@@ -547,6 +576,12 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       let requestCancellationEpoch = cancellationEpoch;
       let activeQueue: AdvisorReviewQueue | undefined;
       const startedAt = Date.now();
+      let durationRecorded = false;
+      const finishReviewDuration = () => {
+        if (durationRecorded) return;
+        durationRecorded = true;
+        recordReviewDuration(startedAt);
+      };
       const settlement: Promise<CheckpointSettlement> = (async () => {
         const cursorMismatch =
           !runtimeCursor ||
@@ -573,7 +608,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           focus: options.focus,
           parentTurnId: requestParentTurnId,
         });
-        metrics.latestDurationMs = Math.max(0, Date.now() - startedAt);
+        finishReviewDuration();
         if (
           !validForDelivery ||
           requestEpoch !== epoch ||
@@ -610,7 +645,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         if (route !== "abort-recover") persistLedger(anchor, options.ctx);
         return "completed";
       })().catch((error): CheckpointSettlement => {
-        metrics.latestDurationMs = Math.max(0, Date.now() - startedAt);
+        finishReviewDuration();
         if (requestEpoch !== epoch || !validForDelivery) {
           metrics.discarded += 1;
           return "failed";
@@ -621,7 +656,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         metrics.lastFailureKind = kind;
         logFailure(config.configPath, {
           contextChars: activeQueue?.backlog ?? 0,
-          durationMs: metrics.latestDurationMs,
+          durationMs: metrics.latestDurationMs ?? 0,
           error,
           model: config.model,
           provider: config.provider,
@@ -1156,12 +1191,16 @@ function emptySessionMetrics(): AdvisorSessionMetrics {
     discarded: 0,
     failure: 0,
     inputTokens: 0,
+    modelResponses: 0,
     outputTokens: 0,
     pass: 0,
     revise: 0,
     skippedReviews: {},
     suppressedFindings: 0,
+    timedReviews: 0,
+    totalDurationMs: 0,
     totalTokens: 0,
+    usageByModel: {},
   };
 }
 
