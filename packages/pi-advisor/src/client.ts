@@ -69,6 +69,7 @@ export async function createAdvisorChildModel(
   if (config.fastMode && supportsFastModel(config.provider, config.model)) {
     modelRuntime.registerProvider(config.provider, {
       ...selectedProvider,
+      api: parentModel.api,
       headers: { ...selectedProvider?.headers, ...parentAuth.headers },
       streamSimple: (model, context, options) =>
         streamSimple(model, context, { ...options, onPayload: applyFastServiceTier }),
@@ -79,7 +80,9 @@ export async function createAdvisorChildModel(
       headers: { ...selectedProvider?.headers, ...parentAuth.headers },
     });
   }
-  if (parentAuth.apiKey) await modelRuntime.setRuntimeApiKey(config.provider, parentAuth.apiKey);
+  if (parentAuth.apiKey && !ctx.modelRegistry.isUsingOAuth(parentModel)) {
+    await modelRuntime.setRuntimeApiKey(config.provider, parentAuth.apiKey);
+  }
 
   const model = modelRuntime.getModel(config.provider, config.model);
   if (!model) {

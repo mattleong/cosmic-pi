@@ -19,14 +19,28 @@ function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisor
   };
 }
 
-function harness(options: { auth?: unknown; childAuth?: unknown; childModel?: unknown } = {}) {
-  const parentModel = { provider: "advisor-provider", id: "advisor-model", reasoning: true };
+function harness(
+  options: {
+    auth?: unknown;
+    childAuth?: unknown;
+    childModel?: unknown;
+    usingOAuth?: boolean;
+  } = {},
+) {
+  const parentModel = {
+    provider: "advisor-provider",
+    id: "advisor-model",
+    api: "openai-responses" as const,
+    reasoning: true,
+  };
   const childModel = options.childModel ?? parentModel;
   const runtime = {
     registerProvider: vi.fn(),
     setRuntimeApiKey: vi.fn(async () => undefined),
     getModel: vi.fn(() => childModel),
-    getAuth: vi.fn(async () => options.childAuth ?? { apiKey: "child-key" }),
+    getAuth: vi.fn(
+      async () => options.childAuth ?? { auth: { apiKey: "child-key" }, source: "test" },
+    ),
   };
   vi.spyOn(ModelRuntime, "create").mockResolvedValue(runtime as unknown as ModelRuntime);
   const ctx = {
@@ -35,6 +49,7 @@ function harness(options: { auth?: unknown; childAuth?: unknown; childModel?: un
       getRegisteredProviderIds: vi.fn(() => ["custom-provider"]),
       getRegisteredProviderConfig: vi.fn(() => ({ name: "Custom" })),
       getApiKeyAndHeaders: vi.fn(async () => options.auth ?? { ok: true, apiKey: "runtime-key" }),
+      isUsingOAuth: vi.fn(() => options.usingOAuth ?? false),
     },
   } as unknown as Pick<ExtensionContext, "modelRegistry">;
   return { ctx, runtime };
@@ -64,6 +79,30 @@ describe("advisor child model construction", () => {
       name: "Custom",
       headers: { "x-runtime-auth": "secret" },
     });
+  });
+
+  test("preserves child OAuth refresh instead of pinning the resolved access token", async () => {
+    const { ctx, runtime } = harness({
+      auth: { ok: true, apiKey: "ephemeral-oauth-token" },
+      usingOAuth: true,
+    });
+    await createAdvisorChildModel(ctx, config());
+
+    expect(runtime.setRuntimeApiKey).not.toHaveBeenCalled();
+    expect(runtime.getAuth).toHaveBeenCalledOnce();
+  });
+
+  test("registers the selected model API for fast-mode builtin providers", async () => {
+    const { ctx, runtime } = harness({ usingOAuth: true });
+    await createAdvisorChildModel(
+      ctx,
+      config({ provider: "openai-codex", model: "gpt-5.6-sol", fastMode: true }),
+    );
+
+    expect(runtime.registerProvider).toHaveBeenCalledWith(
+      "openai-codex",
+      expect.objectContaining({ api: "openai-responses", streamSimple: expect.any(Function) }),
+    );
   });
 
   test("retains fast-mode priority payload behavior for supported child models", async () => {
