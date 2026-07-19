@@ -47,6 +47,29 @@ describe("advisor failure log", () => {
     expect(JSON.stringify(entry)).not.toContain("credential");
   });
 
+  test("redacts and clips provider and model labels before persistence", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-label-log-"));
+    tempDirectories.push(agentDir);
+    const configPath = join(agentDir, "extensions", "pi-advisor.json");
+    mkdirSync(join(agentDir, "extensions"), { recursive: true });
+
+    const logPath = logAdvisorFailure(configPath, {
+      contextChars: 1,
+      durationMs: 2,
+      error: new Error("failed"),
+      model: `model-token=secret-value-${"x".repeat(400)}`,
+      provider: "provider-api_key=sk-abcdefghijklmnop",
+      timeoutMs: 3,
+    });
+    const persisted = readFileSync(logPath!, "utf8");
+    const entry = JSON.parse(persisted) as { provider: string; model: string };
+
+    expect(persisted).not.toMatch(/secret-value|sk-abcdefghijklmnop/);
+    expect(persisted).toContain("REDACTED");
+    expect(entry.provider.length).toBeLessThanOrEqual(256);
+    expect(entry.model.length).toBeLessThanOrEqual(256);
+  });
+
   test("redacts credential-like text from persisted error messages and stacks", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-secret-log-"));
     tempDirectories.push(agentDir);

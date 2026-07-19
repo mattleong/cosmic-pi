@@ -49,6 +49,7 @@ function harness(
     runtimeStartPromises?: Array<Promise<void> | undefined>;
     catchUpTimeoutMs?: number;
     branch?: Array<Record<string, unknown>>;
+    withoutSessionId?: boolean;
   } = {},
 ) {
   type Handler = (event: never, ctx: ExtensionContext) => unknown | Promise<unknown>;
@@ -128,7 +129,7 @@ function harness(
       buildContextEntries: vi.fn(() => []),
       getBranch: vi.fn(() => branch),
       getLeafId: vi.fn(() => "anchor"),
-      getSessionId: vi.fn(() => "session"),
+      ...(options.withoutSessionId ? {} : { getSessionId: vi.fn(() => "session") }),
     },
   } as unknown as ExtensionContext;
   const logFailure = vi.fn();
@@ -181,8 +182,17 @@ function revise(
     summary: "An issue remains.",
     findings: [
       {
+        fingerprint:
+          issue
+            .normalize("NFKC")
+            .toLowerCase()
+            .replace(/[^\p{L}\p{N}]+/gu, "-")
+            .replace(/^-|-$/g, "")
+            .slice(0, 160) || "finding",
         category: "correctness",
         severity,
+        confidence: "high",
+        evidenceBasis: "direct",
         issue,
         evidence: "The transcript contradicts it.",
         recommendation: "Correct the answer.",
@@ -191,8 +201,44 @@ function revise(
   };
 }
 
+function confidentBlocker(
+  request: AdvisorCheckpointRequest,
+  fingerprint = "verified-blocker",
+): AdvisorCheckpoint {
+  const checkpoint = revise(request, "blocker", "A verified blocker remains.");
+  return {
+    ...checkpoint,
+    findings: checkpoint.findings.map((finding) => ({
+      ...finding,
+      fingerprint,
+      confidence: "high",
+      evidenceBasis: "direct",
+    })),
+  };
+}
+
 async function tick() {
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function resolveVerifiedBlocker(
+  runtime: ReturnType<typeof harness>["runtimes"][number],
+  initialIndex: number,
+  issue = "The answer is wrong.",
+): Promise<number> {
+  const initial = revise(runtime.requests[initialIndex]!, "blocker", issue);
+  runtime.pending[initialIndex]!.resolve(initial);
+  await tick();
+  const verificationIndex = runtime.requests.length - 1;
+  expect(runtime.requests[verificationIndex]?.focus).toBe("blocker-verification");
+  expect(runtime.requests[verificationIndex]?.verificationReview?.findings).toEqual(
+    initial.findings,
+  );
+  runtime.pending[verificationIndex]!.resolve(
+    revise(runtime.requests[verificationIndex]!, "blocker", issue),
+  );
+  await tick();
+  return verificationIndex;
 }
 
 async function emitToolLoop(value: ReturnType<typeof harness>, prefix: string): Promise<void> {
@@ -278,10 +324,42 @@ describe("persistent extension cutover", () => {
     await tick();
     expect(settled).toBe(false);
     const current = value.runtimes[0]!;
-    expect(current.requests[0]?.focus).toBe("trajectory");
+    expect(current.requests[0]?.focus).toBe("observation");
     current.pending[0]!.resolve(pass(current.requests[0]!));
     await turn;
     expect(settled).toBe(true);
+  });
+
+  test("tool-boundary catch-up is observation-only while a final blocker still delivers", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    const progress = {
+      ...finalTurn(""),
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "read", arguments: { path: "src/a.ts" } }],
+        stopReason: "stop",
+      },
+    };
+
+    const progressTurn = value.emitAwait("turn_end", progress);
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(
+      revise(current.requests[0]!, "blocker", "The response is not finished yet."),
+    );
+    await progressTurn;
+    expect(value.sendMessage).not.toHaveBeenCalled();
+
+    const final = value.emitAwait("turn_end", finalTurn("finished answer"));
+    await tick();
+    await resolveVerifiedBlocker(current, 1, "The finished answer has a material error.");
+    await final;
+    expect(value.sendMessage).toHaveBeenCalledOnce();
+    expect(value.sendMessage.mock.lastCall?.[1]).toEqual({
+      deliverAs: "steer",
+      triggerTurn: true,
+    });
   });
 
   test("catch-up timeout fails open and permanently stales the late result", async () => {
@@ -348,6 +426,28 @@ describe("persistent extension cutover", () => {
     expect(value.appended.at(-1)).toMatchObject({
       routing: { cancellationLatched: true },
     });
+  });
+
+  test("counts cancellation at the final delivery boundary as a calibration discard", async () => {
+    const value = harness({ reviewPolicy: "guardrail" });
+    const controller = new AbortController();
+    (value.ctx as unknown as { signal: AbortSignal }).signal = controller.signal;
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      controller.abort();
+      return true;
+    });
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("delivery-boundary candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(revise(current.requests[0]!, "concern", "delivery-boundary issue"));
+    await tick();
+
+    expect(value.sendMessage).not.toHaveBeenCalled();
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
+      "Discarded: 1 · failures 0",
+    );
   });
 
   test("ingests thinking synchronously and serializes checkpoints without cancellation", async () => {
@@ -521,21 +621,22 @@ describe("persistent extension cutover", () => {
     await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
     const usage = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
     expect(usage).toContain("Reviews: 1 attempted · 1 settled · 0 in progress");
-    expect(usage).toContain("Operational failures: 1");
+    expect(usage).toContain("Discarded: 0 · failures 1");
   });
 
   test("suppresses duplicate findings within one parent-turn scope", async () => {
     const value = harness();
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("first checkpoint"));
     await value.emit("turn_end", finalTurn("second checkpoint"));
     await tick();
     const current = value.runtimes[0];
     if (!current?.requests[0]) throw new Error("missing first checkpoint");
-    current.pending[0]?.resolve(revise(current.requests[0]));
+    current.pending[0]!.resolve(revise(current.requests[0]!, "concern"));
     await tick();
     if (!current.requests[1]) throw new Error("missing second checkpoint");
-    current.pending[1]?.resolve(revise(current.requests[1]));
+    current.pending[1]!.resolve(revise(current.requests[1]!, "concern"));
     await tick();
     expect(value.sendMessage).toHaveBeenCalledTimes(1);
     await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
@@ -598,8 +699,7 @@ describe("persistent extension cutover", () => {
     await value.emit("turn_end", finalTurn("candidate"));
     await tick();
     const current = value.runtimes[0]!;
-    current.pending[0]!.resolve(revise(current.requests[0]!));
-    await tick();
+    await resolveVerifiedBlocker(current, 0);
     expect(value.sendMessage).toHaveBeenCalledWith(expect.anything(), { deliverAs: "steer" });
     expect(value.ctx.abort).not.toHaveBeenCalled();
   });
@@ -621,12 +721,15 @@ describe("persistent extension cutover", () => {
       await vi.advanceTimersByTimeAsync(15_000);
       const current = value.runtimes[0]!;
       expect(current.requests[0]?.focus).toBe("trajectory");
-      current.pending[0]!.resolve(revise(current.requests[0]!));
-      await Promise.resolve();
-      await Promise.resolve();
-      await vi.runAllTicks();
+      const initial = revise(current.requests[0]!);
+      current.pending[0]!.resolve(initial);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.requests[1]?.focus).toBe("blocker-verification");
+      expect(current.requests[1]?.verificationReview?.findings).toEqual(initial.findings);
+      current.pending[1]!.resolve(revise(current.requests[1]!));
+      await vi.advanceTimersByTimeAsync(0);
       expect(value.ctx.abort).toHaveBeenCalledOnce();
-      expect(value.appended).toHaveLength(0);
+      expect(value.appended).toHaveLength(1);
 
       await value.emit("turn_end", {
         ...finalTurn(""),
@@ -638,7 +741,7 @@ describe("persistent extension cutover", () => {
         expect.objectContaining({ details: expect.objectContaining({ action: "recovery" }) }),
         { deliverAs: "steer", triggerTurn: true },
       );
-      expect(value.appended).toHaveLength(1);
+      expect(value.appended).toHaveLength(2);
     } finally {
       vi.useRealTimers();
     }
@@ -690,22 +793,192 @@ describe("persistent extension cutover", () => {
     },
   );
 
-  test("allows blocker bypasses in one request and re-arms immunity", async () => {
+  test("allows at most one advisor correction in one request", async () => {
     const value = harness();
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("first"));
-    await value.emit("turn_end", finalTurn("second"));
     await tick();
     const current = value.runtimes[0]!;
-    current.pending[0]!.resolve(revise(current.requests[0]!, "blocker", "first issue"));
+    await resolveVerifiedBlocker(current, 0, "first issue");
+    await value.emit("turn_end", finalTurn("second"));
     await tick();
-    current.pending[1]!.resolve(revise(current.requests[1]!, "blocker", "second issue"));
-    await tick();
-    expect(value.sendMessage).toHaveBeenCalledTimes(2);
+    await resolveVerifiedBlocker(current, 2, "second issue");
+    expect(value.sendMessage).toHaveBeenCalledTimes(1);
     expect(
       value.sendMessage.mock.calls.filter((call) => call[1]?.triggerTurn === true),
-    ).toHaveLength(2);
-    expect(value.sendMessage.mock.calls[1]?.[0]?.details?.action).toBe("revision");
+    ).toHaveLength(1);
+    expect(value.sendMessage.mock.calls[0]?.[0]?.details?.action).toBe("revision");
+  });
+
+  test("requires a correlated second pass before delivering a high-confidence blocker", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    const initial = confidentBlocker(current.requests[0]!);
+    current.pending[0]!.resolve(initial);
+    await tick();
+
+    expect(value.sendMessage).not.toHaveBeenCalled();
+    expect(current.requests[1]?.focus).toBe("blocker-verification");
+    expect(current.requests[1]?.verificationReview?.findings).toEqual(initial.findings);
+    current.pending[1]!.resolve(confidentBlocker(current.requests[1]!));
+    await tick();
+
+    expect(value.sendMessage).toHaveBeenCalledOnce();
+    expect(value.sendMessage.mock.lastCall?.[1]).toEqual({
+      deliverAs: "steer",
+      triggerTurn: true,
+    });
+  });
+
+  test("correlates blocker verification with canonical fingerprint formatting", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(confidentBlocker(current.requests[0]!, "Unsupported Test Claim"));
+    await tick();
+    current.pending[1]!.resolve(confidentBlocker(current.requests[1]!, "unsupported_test-claim"));
+    await tick();
+
+    expect(value.sendMessage).toHaveBeenCalledOnce();
+    expect(value.sendMessage.mock.lastCall?.[0]?.details?.review).toMatchObject({
+      findings: [expect.objectContaining({ status: "acknowledged", severity: "blocker" })],
+    });
+  });
+
+  test("retains weaker blockers for deterministic downgrade when strong blockers are rejected", async () => {
+    const value = harness({ reviewPolicy: "guardrail" });
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    const strong = confidentBlocker(current.requests[0]!, "strong-blocker").findings[0]!;
+    const weak = {
+      ...strong,
+      fingerprint: "weak-blocker",
+      confidence: "medium" as const,
+      evidenceBasis: "inferred" as const,
+      issue: "A weaker blocker should be downgraded.",
+    };
+    current.pending[0]!.resolve({
+      ...pass(current.requests[0]!),
+      verdict: "revise",
+      summary: "Mixed blockers.",
+      findings: [strong, weak],
+    });
+    await tick();
+    current.pending[1]!.resolve(pass(current.requests[1]!));
+    await tick();
+
+    expect(value.sendMessage).toHaveBeenCalledOnce();
+    expect(value.sendMessage.mock.lastCall?.[0]?.details?.review).toMatchObject({
+      findings: [expect.objectContaining({ severity: "concern", status: "acknowledged" })],
+    });
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
+      "Verification reviews: 1 attempted · blocker fingerprints 0 confirmed · 1 rejected",
+    );
+  });
+
+  test("drops an unconfirmed blocker without disturbing the primary response", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(confidentBlocker(current.requests[0]!));
+    await tick();
+    current.pending[1]!.resolve(pass(current.requests[1]!));
+    await tick();
+
+    expect(value.sendMessage).not.toHaveBeenCalled();
+    expect(value.ctx.abort).not.toHaveBeenCalled();
+  });
+
+  test("preserves the original summary when blocker verification leaves a concern", async () => {
+    const value = harness();
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    const initial = confidentBlocker(current.requests[0]!, "unconfirmed-blocker");
+    initial.summary = "The completed response still has a supported concern.";
+    initial.findings.push({
+      fingerprint: "supported-concern",
+      category: "evidence",
+      severity: "concern",
+      confidence: "high",
+      evidenceBasis: "direct",
+      issue: "A validation claim is unsupported.",
+      evidence: "No matching test result is present.",
+      recommendation: "Run and report the focused test.",
+    });
+    current.pending[0]!.resolve(initial);
+    await tick();
+    current.pending[1]!.resolve({
+      ...pass(current.requests[1]!),
+      summary: "No blocker was confirmed.",
+    });
+    await tick();
+
+    expect(value.sendMessage.mock.lastCall?.[0]?.details?.review).toMatchObject({
+      summary: "The completed response still has a supported concern.",
+      findings: [expect.objectContaining({ severity: "concern" })],
+    });
+  });
+
+  test("counts confirmed and rejected blockers per fingerprint", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    const initial = confidentBlocker(current.requests[0]!, "confirmed-blocker");
+    initial.findings.push({
+      ...initial.findings[0]!,
+      fingerprint: "rejected-blocker",
+      issue: "A second blocker was proposed.",
+    });
+    current.pending[0]!.resolve(initial);
+    await tick();
+    current.pending[1]!.resolve(confidentBlocker(current.requests[1]!, "confirmed-blocker"));
+    await tick();
+
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
+      "Verification reviews: 1 attempted · blocker fingerprints 1 confirmed · 1 rejected",
+    );
+  });
+
+  test("allows a resolved finding to recur in a later genuine request", async () => {
+    const value = harness({ reviewPolicy: "guardrail" });
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("first candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(revise(current.requests[0]!, "concern", "recurring issue"));
+    await tick();
+
+    await value.emit("message_end", { message: { role: "user", content: "resolve it" } });
+    await value.emit("turn_end", finalTurn("resolved candidate"));
+    await tick();
+    current.pending[1]!.resolve(pass(current.requests[1]!));
+    await tick();
+
+    await value.emit("message_end", { message: { role: "user", content: "new request" } });
+    await value.emit("turn_end", finalTurn("regressed candidate"));
+    await tick();
+    current.pending[2]!.resolve(revise(current.requests[2]!, "concern", "recurring issue"));
+    await tick();
+
+    expect(value.sendMessage).toHaveBeenCalledTimes(2);
   });
 
   test("allows blocker routing across genuine user request boundaries", async () => {
@@ -716,8 +989,7 @@ describe("persistent extension cutover", () => {
       await tick();
       const current = value.runtimes[0]!;
       const index = current.requests.length - 1;
-      current.pending[index]!.resolve(revise(current.requests[index]!, "blocker", issue));
-      await tick();
+      await resolveVerifiedBlocker(current, index, issue);
     };
     await complete("first");
     await value.emit("message_end", { message: { role: "user", content: "second request" } });
@@ -732,12 +1004,11 @@ describe("persistent extension cutover", () => {
   });
 
   test.each([
-    ["guardrail", "concern", "advice", false],
-    ["corrective", "concern", "revision", true],
-    ["advisory", "blocker", "advice", false],
+    ["guardrail", "concern"],
+    ["advisory", "blocker"],
   ] as const)(
-    "routes %s policy findings through baseline behavior",
-    async (policy, severity, action, trigger) => {
+    "drops automatic direct %s %s advice when the parent is idle",
+    async (policy, severity) => {
       const value = harness({ reviewPolicy: policy });
       await value.emit("session_start", { type: "session_start" });
       await value.emit("turn_end", finalTurn("candidate"));
@@ -745,12 +1016,191 @@ describe("persistent extension cutover", () => {
       const current = value.runtimes[0]!;
       current.pending[0]!.resolve(revise(current.requests[0]!, severity));
       await tick();
-      expect(value.sendMessage.mock.calls[0]?.[0]?.details?.action).toBe(action);
-      expect(value.sendMessage.mock.calls[0]?.[1]?.triggerTurn === true).toBe(trigger);
+      expect(value.sendMessage).not.toHaveBeenCalled();
     },
   );
 
-  test("corrective concerns are preserved for exactly three completed turns", async () => {
+  test("redacts and clips provider/model labels in advice message details", async () => {
+    const value = harness({
+      provider: "provider-api_key=sk-abcdefghijklmnop",
+      model: `model-token=secret-value-${"x".repeat(400)}`,
+    });
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(pass(current.requests[0]!));
+    await tick();
+    await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
+    await tick();
+    const manualIndex = current.requests.length - 1;
+    current.pending[manualIndex]!.resolve(
+      revise(current.requests[manualIndex]!, "concern", "manual label issue"),
+    );
+    await tick();
+    const details = value.sendMessage.mock.lastCall?.[0]?.details as {
+      provider: string;
+      model: string;
+    };
+    const persisted = JSON.stringify(details);
+
+    expect(details.provider.length).toBeLessThanOrEqual(256);
+    expect(details.model.length).toBeLessThanOrEqual(256);
+    expect(persisted).toContain("REDACTED");
+    expect(persisted).not.toMatch(/sk-abcdefghijklmnop|secret-value/);
+  });
+
+  test("redacts and clips provider/model labels in correction message details", async () => {
+    const value = harness({
+      provider: "provider-api_key=sk-abcdefghijklmnop",
+      model: `model-token=secret-value-${"x".repeat(400)}`,
+      reviewPolicy: "corrective",
+    });
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(revise(current.requests[0]!, "concern", "correction label issue"));
+    await tick();
+    const details = value.sendMessage.mock.lastCall?.[0]?.details as {
+      provider: string;
+      model: string;
+    };
+    const persisted = JSON.stringify(details);
+
+    expect(details.provider.length).toBeLessThanOrEqual(256);
+    expect(details.model.length).toBeLessThanOrEqual(256);
+    expect(persisted).toContain("REDACTED");
+    expect(persisted).not.toMatch(/sk-abcdefghijklmnop|secret-value/);
+  });
+
+  test("idle automatic direct drop rolls back emission and dedupe across manual review and restore", async () => {
+    const value = harness({ reviewPolicy: "guardrail" });
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(revise(current.requests[0]!, "concern", "idle rollback issue"));
+    await tick();
+
+    expect(value.sendMessage).not.toHaveBeenCalled();
+    expect(value.appended.at(-1)).toMatchObject({
+      routing: { interventionBudget: { delivered: 0, correctionUsed: false } },
+      emissionHashes: [],
+    });
+    const branchAfterDrop = structuredClone(value.branch);
+
+    await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
+    await tick();
+    current.pending[1]!.resolve(revise(current.requests[1]!, "concern", "idle rollback issue"));
+    await tick();
+    expect(value.sendMessage).toHaveBeenCalledOnce();
+
+    const restored = harness({ reviewPolicy: "guardrail" }, { branch: branchAfterDrop });
+    (restored.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await restored.emit("session_start", { type: "session_start" });
+    await restored.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const restoredRuntime = restored.runtimes[0]!;
+    restoredRuntime.pending[0]!.resolve(
+      revise(restoredRuntime.requests[0]!, "concern", "idle rollback issue"),
+    );
+    await tick();
+    expect(restored.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  test("idle corrective concerns still trigger an immediate correction", async () => {
+    const value = harness({ reviewPolicy: "corrective" });
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(revise(current.requests[0]!, "concern"));
+    await tick();
+    expect(value.sendMessage.mock.calls[0]?.[0]?.details?.action).toBe("revision");
+    expect(value.sendMessage.mock.calls[0]?.[1]?.triggerTurn === true).toBe(true);
+  });
+
+  test("direct advice steers an active parent without waiting for user input", async () => {
+    const value = harness({ reviewPolicy: "guardrail" });
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(revise(current.requests[0]!, "concern"));
+    await tick();
+
+    expect(value.sendMessage.mock.lastCall?.[1]).toEqual({ deliverAs: "steer" });
+  });
+
+  test("records a causal receipt when main-agent processing continues after advice", async () => {
+    const value = harness({ reviewPolicy: "guardrail" });
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(revise(current.requests[0]!, "concern"));
+    await tick();
+    await value.emit("turn_start", { type: "turn_start", turnIndex: 2 });
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    const usage = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
+    expect(usage).toContain("Receipts: 1 of 1 delivered interventions");
+  });
+
+  test("persists the reset intervention budget at a genuine request boundary", async () => {
+    const value = harness({ reviewPolicy: "guardrail" });
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(revise(current.requests[0]!, "concern", "budgeted issue"));
+    await tick();
+    expect(value.appended.at(-1)).toMatchObject({
+      routing: { interventionBudget: { delivered: 1 } },
+    });
+
+    await value.emit("message_end", {
+      type: "message_end",
+      message: { role: "user", content: "new request" },
+    });
+    expect(value.appended.at(-1)).toMatchObject({
+      routing: { interventionBudget: { delivered: 0, correctionUsed: false } },
+    });
+  });
+
+  test("aggregates causal receipts when multiple manual interventions precede processing", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("completed answer"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(pass(current.requests[0]!));
+    await tick();
+    await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
+    await tick();
+    const firstManualIndex = current.requests.length - 1;
+    current.pending[firstManualIndex]!.resolve(
+      revise(current.requests[firstManualIndex]!, "concern", "first manual issue"),
+    );
+    await tick();
+    await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
+    await tick();
+    const secondManualIndex = current.requests.length - 1;
+    current.pending[secondManualIndex]!.resolve(
+      revise(current.requests[secondManualIndex]!, "concern", "second manual issue"),
+    );
+    await tick();
+    await value.emit("turn_start", { type: "turn_start", turnIndex: 2 });
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    const usage = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
+    expect(usage).toContain("Receipts: 2 of 2 delivered interventions");
+  });
+
+  test("corrective concerns are dropped during three-turn immunity", async () => {
     const value = harness({ reviewPolicy: "corrective" });
     await value.emit("session_start", { type: "session_start" });
     const complete = async (index: number) => {
@@ -765,10 +1215,6 @@ describe("persistent extension cutover", () => {
     };
     for (let index = 1; index <= 5; index += 1) await complete(index);
     expect(value.sendMessage.mock.calls.map((call) => call[1])).toEqual([
-      { deliverAs: "steer", triggerTurn: true },
-      { deliverAs: "nextTurn" },
-      { deliverAs: "nextTurn" },
-      { deliverAs: "nextTurn" },
       { deliverAs: "steer", triggerTurn: true },
     ]);
   });
@@ -806,8 +1252,7 @@ describe("persistent extension cutover", () => {
     expect(evidence).toContain("trajectory_signal");
     expect(evidence.indexOf("tool_start")).toBeLessThan(evidence.indexOf("trajectory_signal"));
     expect(value.ctx.abort).not.toHaveBeenCalled();
-    current.pending[0]!.resolve(revise(current.requests[0]!, "blocker"));
-    await tick();
+    await resolveVerifiedBlocker(current, 0);
     expect(value.ctx.abort).toHaveBeenCalledOnce();
   });
 
@@ -828,14 +1273,19 @@ describe("persistent extension cutover", () => {
 
     current.pending[1]!.resolve(revise(current.requests[1]!, "blocker", "loop blocker"));
     await tick();
-    expect(value.ctx.abort).toHaveBeenCalledOnce();
     current.pending[2]!.resolve(revise(current.requests[2]!, "blocker", "second blocker"));
     await tick();
+    expect(current.requests[3]?.focus).toBe("blocker-verification");
+    current.pending[3]!.resolve(revise(current.requests[3]!, "blocker", "loop blocker"));
+    await tick();
+    expect(value.ctx.abort).toHaveBeenCalledOnce();
 
     expect(value.ctx.abort).toHaveBeenCalledOnce();
-    expect(value.sendMessage.mock.lastCall?.[1]).toEqual({ deliverAs: "nextTurn" });
-    expect(value.appended).toHaveLength(1);
-    expect((value.appended[0] as { emissionHashes?: unknown[] }).emissionHashes).toHaveLength(1);
+    expect(value.sendMessage.mock.lastCall?.[1]).toEqual({ deliverAs: "steer" });
+    expect(value.appended).toHaveLength(2);
+    expect((value.appended.at(-1) as { emissionHashes?: unknown[] }).emissionHashes).toHaveLength(
+      1,
+    );
   });
 
   test("materially novel terminal tool evidence invalidates a queued loop blocker", async () => {
@@ -860,24 +1310,36 @@ describe("persistent extension cutover", () => {
       result: "materially new terminal evidence",
       isError: false,
     });
-    current.pending[0]!.resolve(revise(current.requests[0]!, "blocker"));
-    await tick();
+    await resolveVerifiedBlocker(current, 0);
 
     expect(value.ctx.abort).not.toHaveBeenCalled();
     expect(value.sendMessage).toHaveBeenCalledWith(expect.anything(), { deliverAs: "steer" });
   });
 
-  test("a suppressed recovery is neither persisted nor retained for dedupe", async () => {
+  test("a suppressed recovery releases delivery capacity but preserves the correction-attempt latch", async () => {
     const value = harness();
     (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
     await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("unrelated candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(
+      revise(current.requests[0]!, "concern", "unrelated delivered history"),
+    );
+    await tick();
+    expect(value.sendMessage).toHaveBeenCalledOnce();
+
     await value.emit("turn_start", { type: "turn_start", turnIndex: 1 });
     await emitToolLoop(value, "suppressed-one");
     await tick();
-    const current = value.runtimes[0]!;
-    current.pending[0]!.resolve(revise(current.requests[0]!, "blocker", "repeatable blocker"));
-    await tick();
-    expect(value.appended).toHaveLength(0);
+    await resolveVerifiedBlocker(current, 1, "repeatable blocker");
+    expect(value.appended).toHaveLength(2);
+    expect(value.appended.at(-1)).toMatchObject({
+      routing: { interventionBudget: { delivered: 1, correctionUsed: true } },
+    });
+    expect((value.appended.at(-1) as { emissionHashes?: unknown[] }).emissionHashes).toHaveLength(
+      1,
+    );
 
     await value.emit("turn_end", {
       ...finalTurn(""),
@@ -887,17 +1349,92 @@ describe("persistent extension cutover", () => {
     (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (value.ctx.hasPendingMessages as ReturnType<typeof vi.fn>).mockReturnValue(true);
     await value.emit("agent_settled", { type: "agent_settled" });
-    expect(value.appended).toHaveLength(0);
-    expect(value.sendMessage).not.toHaveBeenCalled();
+    expect(value.appended).toHaveLength(2);
+    expect(value.sendMessage).toHaveBeenCalledOnce();
+
+    await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
+    await tick();
+    const manualDuplicate = current.requests.length - 1;
+    current.pending[manualDuplicate]!.resolve(
+      revise(current.requests[manualDuplicate]!, "concern", "unrelated delivered history"),
+    );
+    await tick();
+    expect(value.sendMessage).toHaveBeenCalledOnce();
 
     (value.ctx.hasPendingMessages as ReturnType<typeof vi.fn>).mockReturnValue(false);
     (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
     await value.emit("turn_start", { type: "turn_start", turnIndex: 2 });
     await emitToolLoop(value, "suppressed-two");
     await tick();
-    current.pending[1]!.resolve(revise(current.requests[1]!, "blocker", "repeatable blocker"));
+    await resolveVerifiedBlocker(current, current.requests.length - 1, "repeatable blocker");
+    expect(value.ctx.abort).toHaveBeenCalledOnce();
+    expect(value.sendMessage).toHaveBeenCalledWith(expect.anything(), { deliverAs: "steer" });
+  });
+
+  test("persists a correction attempt across restart without consuming undelivered capacity", async () => {
+    const first = harness();
+    (first.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await first.emit("session_start", { type: "session_start" });
+    await first.emit("turn_start", { type: "turn_start", turnIndex: 1 });
+    await emitToolLoop(first, "restart-attempt-one");
     await tick();
-    expect(value.ctx.abort).toHaveBeenCalledTimes(2);
+    const initial = first.runtimes[0]!;
+    await resolveVerifiedBlocker(initial, 0, "restart blocker");
+    expect(first.ctx.abort).toHaveBeenCalledOnce();
+    expect(first.appended.at(-1)).toMatchObject({
+      routing: { interventionBudget: { delivered: 0, correctionUsed: true } },
+    });
+
+    const second = harness({}, { branch: first.branch });
+    (second.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await second.emit("session_start", { type: "session_start" });
+    await second.emit("turn_start", { type: "turn_start", turnIndex: 2 });
+    await emitToolLoop(second, "restart-attempt-two");
+    await tick();
+    const restored = second.runtimes[0]!;
+    await resolveVerifiedBlocker(restored, 0, "restart blocker");
+
+    expect(second.ctx.abort).not.toHaveBeenCalled();
+    expect(second.sendMessage).toHaveBeenCalledWith(expect.anything(), { deliverAs: "steer" });
+  });
+
+  test("keeps lifecycle identity stable across restart without a session ID", async () => {
+    const first = harness({ reviewPolicy: "guardrail" }, { withoutSessionId: true });
+    (first.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await first.emit("session_start", { type: "session_start" });
+    await first.emit("turn_end", finalTurn("first candidate"));
+    await tick();
+    const initial = first.runtimes[0]!;
+    initial.pending[0]!.resolve(revise(initial.requests[0]!, "concern", "stable fallback issue"));
+    await tick();
+    const firstLedger = first.appended.at(-1) as {
+      findingLifecycle: Array<{ id: string; status: string }>;
+    };
+    const findingId = firstLedger.findingLifecycle[0]!.id;
+    for (const entry of first.branch) {
+      if (entry.type === "custom" && typeof entry.data === "object" && entry.data) {
+        (entry.data as { emissionHashes?: string[] }).emissionHashes = [];
+      }
+    }
+
+    const second = harness(
+      { reviewPolicy: "guardrail" },
+      {
+        branch: first.branch,
+        withoutSessionId: true,
+      },
+    );
+    await second.emit("session_start", { type: "session_start" });
+    await second.emit("turn_end", finalTurn("second candidate"));
+    await tick();
+    const restored = second.runtimes[0]!;
+    restored.pending[0]!.resolve(revise(restored.requests[0]!, "concern", "stable fallback issue"));
+    await tick();
+
+    expect(second.sendMessage).not.toHaveBeenCalled();
+    expect(second.appended.at(-1)).toMatchObject({
+      findingLifecycle: [expect.objectContaining({ id: findingId, status: "acknowledged" })],
+    });
   });
 
   test("stale advisor abort provenance cannot consume a later unrelated aborted turn", async () => {
@@ -908,8 +1445,7 @@ describe("persistent extension cutover", () => {
     await emitToolLoop(value, "stale-one");
     await tick();
     const current = value.runtimes[0]!;
-    current.pending[0]!.resolve(revise(current.requests[0]!, "blocker", "stale blocker"));
-    await tick();
+    await resolveVerifiedBlocker(current, 0, "stale blocker");
     expect(value.ctx.abort).toHaveBeenCalledOnce();
 
     await value.emit("message_end", {
@@ -924,11 +1460,10 @@ describe("persistent extension cutover", () => {
     await value.emit("turn_start", { type: "turn_start", turnIndex: 2 });
     await emitToolLoop(value, "stale-two");
     await tick();
-    current.pending[1]!.resolve(revise(current.requests[1]!, "blocker", "fresh blocker"));
-    await tick();
+    await resolveVerifiedBlocker(current, 2, "fresh blocker");
 
     expect(value.ctx.abort).toHaveBeenCalledOnce();
-    expect(value.sendMessage.mock.lastCall?.[1]).toEqual({ deliverAs: "nextTurn" });
+    expect(value.sendMessage).not.toHaveBeenCalled();
   });
 
   test("disabled supervision skips automatic checkpoints but once reviews the next final turn", async () => {
@@ -979,7 +1514,7 @@ describe("persistent extension cutover", () => {
     ["advisory", "blocker"],
     ["guardrail", "concern"],
   ] as const)(
-    "/advisor once preserves %s policy delivery for %s findings",
+    "/advisor once pushes %s policy advice directly for %s findings",
     async (reviewPolicy, severity) => {
       const value = harness({ enabled: false, reviewPolicy });
       await value.emit("session_start", { type: "session_start" });
@@ -992,12 +1527,35 @@ describe("persistent extension cutover", () => {
 
       expect(value.sendMessage).toHaveBeenCalledOnce();
       expect(value.sendMessage.mock.calls[0]?.[0]?.details?.action).toBe("advice");
-      expect(value.sendMessage.mock.calls[0]?.[1]).toEqual({ deliverAs: "nextTurn" });
+      expect(value.sendMessage.mock.calls[0]?.[1]).toEqual({ deliverAs: "steer" });
       expect(value.ctx.abort).not.toHaveBeenCalled();
     },
   );
 
-  test("manual review-last and verify-last never trigger corrections for blockers", async () => {
+  test("/advisor once bypasses automatic intervention budget without consuming it", async () => {
+    const value = harness({ reviewPolicy: "guardrail" });
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("automatic candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(revise(current.requests[0]!, "concern", "automatic concern"));
+    await tick();
+    expect(value.sendMessage).toHaveBeenCalledOnce();
+
+    await value.commands.get("advisor")!.handler("once", value.ctx as never);
+    await value.emit("turn_end", finalTurn("manual candidate"));
+    await tick();
+    current.pending[1]!.resolve(revise(current.requests[1]!, "concern", "manual concern"));
+    await tick();
+    expect(value.sendMessage).toHaveBeenCalledTimes(2);
+
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    const usage = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
+    expect(usage).toContain("Intervention budget: 1/2 delivered");
+  });
+
+  test("manual review-last and verify-last push direct advice for blockers", async () => {
     const value = harness({ reviewPolicy: "corrective" });
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("candidate"));
@@ -1017,8 +1575,8 @@ describe("persistent extension cutover", () => {
     await tick();
 
     expect(value.sendMessage.mock.calls.slice(-2).map((call) => call[1])).toEqual([
-      { deliverAs: "nextTurn" },
-      { deliverAs: "nextTurn" },
+      { deliverAs: "steer" },
+      { deliverAs: "steer" },
     ]);
     expect(value.ctx.abort).not.toHaveBeenCalled();
   });
@@ -1123,7 +1681,7 @@ describe("persistent extension cutover", () => {
     await value.emit("turn_end", finalTurn("persisted candidate"));
     await tick();
     const first = value.runtimes[0]!;
-    first.pending[0]!.resolve(revise(first.requests[0]!, "blocker", "persisted blocker"));
+    first.pending[0]!.resolve(revise(first.requests[0]!, "concern", "persisted concern"));
     await tick();
     expect(value.appended).toHaveLength(1);
 
@@ -1135,7 +1693,7 @@ describe("persistent extension cutover", () => {
     restarted.pending[0]!.resolve(revise(restarted.requests[0]!, "blocker", "new blocker"));
     await tick();
 
-    expect(value.sendMessage.mock.lastCall?.[1]).toEqual({ deliverAs: "nextTurn" });
+    expect(value.sendMessage.mock.lastCall?.[1]).toEqual({ deliverAs: "steer" });
   });
 
   test("pause invalidates an in-flight checkpoint before it can deliver", async () => {
@@ -1195,6 +1753,49 @@ describe("persistent extension cutover", () => {
     },
   );
 
+  test("config updates clear pending recovery before resetting the request budget", async () => {
+    const value = harness();
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_start", { type: "turn_start", turnIndex: 1 });
+    await emitToolLoop(value, "config-recovery");
+    await tick();
+    await resolveVerifiedBlocker(value.runtimes[0]!, 0, "pending config recovery");
+    expect(value.ctx.abort).toHaveBeenCalledOnce();
+
+    await value.commands.get("advisor")!.handler("off", value.ctx as never);
+    await tick();
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
+      "Intervention budget: 0/2 delivered · correction available",
+    );
+  });
+
+  test("policy updates persist reset lifecycle and emission state", async () => {
+    const value = harness({ reviewPolicy: "guardrail" });
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(revise(current.requests[0]!, "concern", "policy reset issue"));
+    await tick();
+    expect(value.sendMessage).toHaveBeenCalledOnce();
+
+    const select = value.ctx.ui.select as ReturnType<typeof vi.fn>;
+    select
+      .mockResolvedValueOnce("Behavior: Guardrail")
+      .mockResolvedValueOnce("Advisory")
+      .mockResolvedValueOnce("Done");
+    await value.commands.get("advisor")!.handler("settings", value.ctx as never);
+    await tick();
+    expect(value.appended.at(-1)).toMatchObject({
+      findingLifecycle: [],
+      emissionHashes: [],
+      routing: { interventionBudget: { delivered: 0, correctionUsed: false } },
+    });
+  });
+
   test("off persists the cancellation latch before stopping automatic review", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pi-advisor-off-"));
     try {
@@ -1206,7 +1807,12 @@ describe("persistent extension cutover", () => {
 
       expect(value.appended.length).toBeGreaterThan(0);
       expect(value.appended.at(-1)).toMatchObject({
-        routing: { cancellationLatched: true },
+        findingLifecycle: [],
+        emissionHashes: [],
+        routing: {
+          cancellationLatched: true,
+          interventionBudget: { delivered: 0, correctionUsed: false },
+        },
       });
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1221,6 +1827,10 @@ describe("persistent extension cutover", () => {
       "warning",
     );
     expect(value.ctx.abort).not.toHaveBeenCalled();
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
+      "Discarded: 0 · failures 1",
+    );
   });
 
   test("passes trusted guidance into the child lifecycle and accumulates usage telemetry", async () => {
@@ -1283,10 +1893,15 @@ describe("persistent extension cutover", () => {
     expect(value.logFailure).toHaveBeenCalledTimes(2);
   });
 
-  test("shows a delayed animated status while a checkpoint is active", async () => {
+  test("shows the model and effective effort in the delayed animated status", async () => {
     vi.useFakeTimers();
     try {
       const value = harness();
+      (value.ctx.modelRegistry.find as ReturnType<typeof vi.fn>).mockReturnValue({
+        provider: "p",
+        id: "m",
+        reasoning: false,
+      });
       await value.emit("session_start", { type: "session_start" });
       await value.emit("turn_end", finalTurn("candidate"));
       await vi.advanceTimersByTimeAsync(0);
@@ -1295,14 +1910,14 @@ describe("persistent extension cutover", () => {
       const reviewStatuses = () =>
         setStatus.mock.calls
           .map((call) => call[1])
-          .filter((text): text is string => typeof text === "string" && text.includes("reviewing"));
+          .filter((text): text is string => typeof text === "string" && text.includes("advising"));
 
       expect(current.requests).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(199);
       expect(reviewStatuses()).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(1);
       const firstFrame = reviewStatuses().at(-1);
-      expect(firstFrame).toMatch(/^⠋ advisor reviewing…$/);
+      expect(firstFrame).toMatch(/^⠋ m:off advising…$/);
 
       await vi.advanceTimersByTimeAsync(120);
       expect(reviewStatuses().at(-1)).not.toBe(firstFrame);
@@ -1310,6 +1925,27 @@ describe("persistent extension cutover", () => {
       current.pending[0]!.resolve(pass(current.requests[0]!));
       await vi.advanceTimersByTimeAsync(0);
       expect(setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("redacts model secrets in the delayed spinner label", async () => {
+    vi.useFakeTimers();
+    try {
+      const value = harness({ model: "reviewer-token=secret-value" });
+      await value.emit("session_start", { type: "session_start" });
+      await value.emit("turn_end", finalTurn("candidate"));
+      await vi.advanceTimersByTimeAsync(200);
+      const statuses = (value.ctx.ui.setStatus as ReturnType<typeof vi.fn>).mock.calls.map((call) =>
+        String(call[1]),
+      );
+      expect(
+        statuses.some((status) => status.includes("REDACTED") && status.includes("advising")),
+      ).toBe(true);
+      expect(statuses.join("\n")).not.toContain("secret-value");
+      value.runtimes[0]!.pending[0]!.resolve(pass(value.runtimes[0]!.requests[0]!));
+      await vi.advanceTimersByTimeAsync(0);
     } finally {
       vi.useRealTimers();
     }
@@ -1327,9 +1963,7 @@ describe("persistent extension cutover", () => {
 
       current.pending[0]!.resolve(pass(current.requests[0]!));
       await vi.advanceTimersByTimeAsync(500);
-      expect(setStatus.mock.calls.some((call) => String(call[1]).includes("reviewing"))).toBe(
-        false,
-      );
+      expect(setStatus.mock.calls.some((call) => String(call[1]).includes("advising"))).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -1354,7 +1988,7 @@ describe("persistent extension cutover", () => {
       await vi.advanceTimersByTimeAsync(200);
       expect(setStatus).toHaveBeenCalledWith(
         "pi-advisor",
-        expect.stringMatching(/^⠋ advisor reviewing…$/),
+        expect.stringMatching(/^⠋ m:medium advising…$/),
       );
 
       current.pending[1]!.resolve(pass(current.requests[1]!));
@@ -1386,9 +2020,10 @@ describe("persistent extension cutover", () => {
       });
       await vi.advanceTimersByTimeAsync(15_000);
       current.pending[1]!.resolve(revise(current.requests[1]!));
-      await Promise.resolve();
-      await Promise.resolve();
-      await vi.runAllTicks();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.requests[2]?.focus).toBe("blocker-verification");
+      current.pending[2]!.resolve(revise(current.requests[2]!));
+      await vi.advanceTimersByTimeAsync(0);
       expect(value.ctx.abort).toHaveBeenCalledOnce();
 
       await value.emit("turn_end", {
@@ -1401,7 +2036,7 @@ describe("persistent extension cutover", () => {
       const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
       expect(setStatus).toHaveBeenLastCalledWith(
         "pi-advisor",
-        expect.stringMatching(/^⠋ advisor reviewing…$/),
+        expect.stringMatching(/^⠋ m:medium advising…$/),
       );
 
       setStatus.mockClear();
@@ -1435,7 +2070,7 @@ describe("persistent extension cutover", () => {
       const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
       expect(setStatus).toHaveBeenLastCalledWith(
         "pi-advisor",
-        expect.stringMatching(/^⠋ advisor reviewing…$/),
+        expect.stringMatching(/^⠋ m:medium advising…$/),
       );
 
       setStatus.mockClear();
@@ -1455,7 +2090,7 @@ describe("persistent extension cutover", () => {
       const usage = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
       expect(usage).toContain("Model responses: 0");
       expect(usage).toContain("Reviews: 1 attempted · 0 settled · 1 in progress");
-      expect(usage).toContain("Operational failures: 0");
+      expect(usage).toContain("Discarded: 0 · failures 0");
 
       current.pending[0]!.resolve(pass(current.requests[0]!));
       await vi.advanceTimersByTimeAsync(0);
@@ -1799,8 +2434,7 @@ describe("persistent extension cutover", () => {
     await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
     const usage = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
     expect(usage).toContain("Reviews: 2 attempted · 2 settled · 0 in progress");
-    expect(usage).toContain("Review results: pass 0 · revise 0 · discarded 2");
-    expect(usage).toContain("Operational failures: 0");
+    expect(usage).toContain("Discarded: 2 · failures 0");
     await value.commands.get("advisor-status")!.handler("--verbose", value.ctx as never);
     expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
       "timeouts 0, failures 0",
@@ -1827,8 +2461,8 @@ describe("persistent extension cutover", () => {
     await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
     const usage = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
     expect(usage).toContain("Reviews: 19 attempted · 19 settled · 0 in progress");
-    expect(usage).toContain("Review results: pass 1 · revise 0 · discarded 17");
-    expect(usage).toContain("Operational failures: 1");
+    expect(usage).toContain("Pass: 1 (100.0%)");
+    expect(usage).toContain("Discarded: 17 · failures 1");
   });
 
   test("status exposes attempts, pass outcomes and bounded queue metrics", async () => {
@@ -1893,6 +2527,34 @@ describe("persistent extension cutover", () => {
     await tick();
   });
 
+  test("persists an external aborted turn cancellation across shutdown and restart", async () => {
+    const first = harness({ reviewPolicy: "corrective" });
+    await first.emit("session_start", { type: "session_start" });
+    await first.emit("turn_end", finalTurn("baseline"));
+    await tick();
+    first.runtimes[0]!.pending[0]!.resolve(pass(first.runtimes[0]!.requests[0]!));
+    await tick();
+    await first.emit("turn_end", {
+      ...finalTurn(""),
+      message: { role: "assistant", content: [], stopReason: "aborted" },
+    });
+    expect(first.appended.at(-1)).toMatchObject({
+      routing: { cancellationLatched: true },
+    });
+    await first.emit("session_shutdown", { type: "session_shutdown" });
+
+    const second = harness({ reviewPolicy: "corrective" }, { branch: first.branch });
+    await second.emit("session_start", { type: "session_start" });
+    await second.emit("turn_end", finalTurn("after restart"));
+    await tick();
+    const current = second.runtimes[0]!;
+    current.pending[0]!.resolve(confidentBlocker(current.requests[0]!));
+    await tick();
+    current.pending[1]!.resolve(confidentBlocker(current.requests[1]!));
+    await tick();
+    expect(second.sendMessage).not.toHaveBeenCalled();
+  });
+
   test("restores a persisted cancellation across shutdown and a new extension session", async () => {
     const first = harness({ reviewPolicy: "corrective" });
     await first.emit("session_start", { type: "session_start" });
@@ -1908,10 +2570,10 @@ describe("persistent extension cutover", () => {
     await tick();
     const current = second.runtimes[0]!;
     current.pending[0]!.resolve(
-      revise(current.requests[0]!, "blocker", "restored cancellation blocker"),
+      revise(current.requests[0]!, "concern", "restored cancellation concern"),
     );
     await tick();
-    expect(second.sendMessage.mock.lastCall?.[1]).toEqual({ deliverAs: "nextTurn" });
+    expect(second.sendMessage).not.toHaveBeenCalled();
 
     await second.emit("message_end", {
       type: "message_end",
@@ -1920,8 +2582,7 @@ describe("persistent extension cutover", () => {
     await second.emit("turn_start", { type: "turn_start", turnIndex: 2 });
     await second.emit("turn_end", { ...finalTurn("after prompt"), turnIndex: 2 });
     await tick();
-    current.pending[1]!.resolve(revise(current.requests[1]!, "blocker", "post-prompt blocker"));
-    await tick();
+    await resolveVerifiedBlocker(current, 1, "post-prompt blocker");
     expect(second.sendMessage.mock.lastCall?.[1]).toEqual({
       deliverAs: "steer",
       triggerTurn: true,

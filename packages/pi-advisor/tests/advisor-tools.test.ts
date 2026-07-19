@@ -121,6 +121,31 @@ describe("package-owned Advisor tools", () => {
     expect(text).not.toContain("README.md");
   });
 
+  test("rejects oversized path and grep pattern strings at execution boundaries", async () => {
+    const root = await fixture();
+    const longPath = "a".repeat(ADVISOR_TOOL_LIMITS.maxPathChars + 1);
+    await expect(execute(root, "read", { path: longPath })).rejects.toThrow(AdvisorToolSafetyError);
+    await expect(execute(root, "find", { path: longPath, pattern: "**" })).rejects.toThrow(
+      AdvisorToolSafetyError,
+    );
+    await expect(execute(root, "grep", { path: longPath, pattern: "answer" })).rejects.toThrow(
+      AdvisorToolSafetyError,
+    );
+    await expect(execute(root, "grep", { path: ".", pattern: longPath })).rejects.toThrow(
+      AdvisorToolSafetyError,
+    );
+  });
+
+  test("declares schema limits for path and pattern strings", async () => {
+    const tools = await createAdvisorTools(await fixture());
+    expect(JSON.stringify(tools.find((tool) => tool.name === "read")?.parameters)).toContain(
+      `"maxLength":${ADVISOR_TOOL_LIMITS.maxPathChars}`,
+    );
+    expect(JSON.stringify(tools.find((tool) => tool.name === "grep")?.parameters)).toContain(
+      `"maxLength":${ADVISOR_TOOL_LIMITS.maxPatternChars}`,
+    );
+  });
+
   test("rejects oversized find patterns without regular-expression evaluation", async () => {
     const root = await fixture();
     await expect(

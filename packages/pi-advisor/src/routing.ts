@@ -6,7 +6,7 @@ export const ADVISOR_IMMUNITY_COMPLETED_TURNS = 3;
 export type AdvisorParentState = "active" | "idle" | "final" | "aborting";
 export type AdvisorRoute =
   | "silent"
-  | "preserve-next-turn"
+  | "push-direct"
   | "steer-live"
   | "abort-recover"
   | "trigger-correction";
@@ -17,8 +17,6 @@ export interface AdvisorRoutingInput {
   parentState: AdvisorParentState;
   immunityActive: boolean;
   cancellationLatched: boolean;
-  /** Explicit scheduling such as /advisor once; it never changes delivery policy. */
-  manualAction?: boolean;
   /** Strong local evidence produced during this exact, still-current parent turn. */
   sameTurnStrongSignal?: boolean;
   /** False while any main-agent tool call is executing. */
@@ -29,16 +27,16 @@ export interface AdvisorRoutingInput {
 export function routeAdvisorFinding(input: AdvisorRoutingInput): AdvisorRoute {
   if (input.severity === "nit") return "silent";
 
-  if (input.policy === "advisory") return "preserve-next-turn";
-  if (input.severity === "concern" && input.policy === "guardrail") {
-    return "preserve-next-turn";
-  }
+  // Automatic findings are either delivered immediately or dropped. Never
+  // attach stale advice to a later user prompt.
+  if (input.cancellationLatched || input.parentState === "aborting") return "silent";
+  if (input.severity === "concern" && input.immunityActive) return "silent";
 
-  if (input.cancellationLatched || input.parentState === "aborting") {
-    return "preserve-next-turn";
+  if (input.policy === "advisory") {
+    return input.parentState === "active" ? "push-direct" : "silent";
   }
-  if (input.severity === "concern" && input.immunityActive) {
-    return "preserve-next-turn";
+  if (input.severity === "concern" && input.policy === "guardrail") {
+    return input.parentState === "active" ? "push-direct" : "silent";
   }
 
   if (input.parentState === "active") {

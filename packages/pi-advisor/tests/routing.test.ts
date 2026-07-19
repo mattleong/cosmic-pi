@@ -31,14 +31,13 @@ describe("advisor routing", () => {
               });
               expect([
                 "silent",
-                "preserve-next-turn",
+                "push-direct",
                 "steer-live",
                 "abort-recover",
                 "trigger-correction",
               ]).toContain(route);
-              if (severity === "nit") expect(route).toBe("silent");
-              if (cancellationLatched && severity !== "nit" && route !== "silent") {
-                expect(route).toBe("preserve-next-turn");
+              if (severity === "nit" || cancellationLatched || parentState === "aborting") {
+                expect(route).toBe("silent");
               }
               cases += 1;
             }
@@ -49,7 +48,7 @@ describe("advisor routing", () => {
     expect(cases).toBe(144);
   });
 
-  test("guardrail concerns preserve via next turn and corrective concerns respect immunity", () => {
+  test("guardrail concerns push directly and corrective concerns respect immunity", () => {
     expect(
       routeAdvisorFinding({
         severity: "concern",
@@ -58,7 +57,7 @@ describe("advisor routing", () => {
         immunityActive: false,
         cancellationLatched: false,
       }),
-    ).toBe("preserve-next-turn");
+    ).toBe("push-direct");
     expect(
       routeAdvisorFinding({
         severity: "concern",
@@ -76,14 +75,23 @@ describe("advisor routing", () => {
         immunityActive: true,
         cancellationLatched: false,
       }),
-    ).toBe("preserve-next-turn");
+    ).toBe("silent");
   });
 
   test.each([
     ["advisory", "concern"],
     ["advisory", "blocker"],
     ["guardrail", "concern"],
-  ] as const)("explicit scheduling preserves %s %s delivery policy", (policy, severity) => {
+  ] as const)("automatic direct %s %s advice is immediate-or-drop", (policy, severity) => {
+    expect(
+      routeAdvisorFinding({
+        severity,
+        policy,
+        parentState: "active",
+        immunityActive: false,
+        cancellationLatched: false,
+      }),
+    ).toBe("push-direct");
     expect(
       routeAdvisorFinding({
         severity,
@@ -91,9 +99,8 @@ describe("advisor routing", () => {
         parentState: "final",
         immunityActive: false,
         cancellationLatched: false,
-        manualAction: true,
       }),
-    ).toBe("preserve-next-turn");
+    ).toBe("silent");
   });
 
   test("only a same-turn strong blocker at a safe boundary can abort", () => {
@@ -127,7 +134,7 @@ describe("advisor routing", () => {
     expect(state.immunityActive).toBe(false);
   });
 
-  test("blockers bypass and re-arm immunity while cancellation stays preserved", () => {
+  test("blockers bypass and re-arm immunity while cancellation drops stale findings", () => {
     const state = new AdvisorRoutingState();
     state.armInterruption();
     state.completePrimaryTurn();
@@ -151,7 +158,7 @@ describe("advisor routing", () => {
         immunityActive: state.immunityActive,
         cancellationLatched: state.cancellationLatched,
       }),
-    ).toBe("preserve-next-turn");
+    ).toBe("silent");
     state.clearCancellationForGenuineUserPrompt();
     expect(state.cancellationLatched).toBe(false);
   });

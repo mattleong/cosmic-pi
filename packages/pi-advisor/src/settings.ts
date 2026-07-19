@@ -2,6 +2,11 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { supportsFastModel } from "pi-better-openai/fast-models";
+import { redactSensitiveText } from "./observation-protocol.ts";
+import {
+  MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST,
+  type AdvisorInterventionBudgetSnapshot,
+} from "./intervention-budget.ts";
 import { CLEAR_MODEL_OPTION, selectAdvisorModel } from "./model-picker.ts";
 import { getAdvisorFailureLogPath } from "./failure-log.ts";
 import {
@@ -66,6 +71,18 @@ export interface AdvisorModelUsage {
   totalTokens: number;
 }
 
+export interface AdvisorOutcomeMetrics {
+  pass: number;
+  findings: number;
+  advice: number;
+  guidance: number;
+  revision: number;
+  recovery: number;
+  suppressed: number;
+  discarded: number;
+  failures: number;
+}
+
 export interface AdvisorSessionMetrics {
   attempted: number;
   pass: number;
@@ -101,6 +118,14 @@ export interface AdvisorSessionMetrics {
   latestDurationMs?: number;
   modelResponses?: number;
   outputTokens?: number;
+  outcomes?: AdvisorOutcomeMetrics;
+  blockerVerificationAttempts?: number;
+  blockersVerified?: number;
+  blockersRejected?: number;
+  interventionsDelivered?: number;
+  interventionsAcknowledged?: number;
+  findingLifecycle?: Record<"open" | "acknowledged" | "resolved" | "superseded", number>;
+  interventionBudget?: AdvisorInterventionBudgetSnapshot;
   paused?: boolean;
   processedSequence?: number;
   queuedReviews?: number;
@@ -476,14 +501,37 @@ async function showAdvisorUsage(
   const reviewTime = settled
     ? `${formatUsageDuration(totalDuration)} total · ${formatUsageDuration(totalDuration / settled)} average · ${formatUsageDuration(metrics.latestDurationMs ?? 0)} latest`
     : "not available";
+  const outcomes = metrics.outcomes ?? {
+    pass: metrics.pass,
+    findings: metrics.revise,
+    advice: 0,
+    guidance: 0,
+    revision: 0,
+    recovery: 0,
+    suppressed: 0,
+    discarded: metrics.discarded,
+    failures: metrics.failure,
+  };
+  const evaluated = outcomes.pass + outcomes.findings;
+  const delivered = outcomes.advice + outcomes.guidance + outcomes.revision + outcomes.recovery;
   const lines = [
     "Advisor usage · this session",
     "",
     `Current model: ${formatModel(config)} · ${reasoning} · ${mode}`,
     `Model responses: ${(metrics.modelResponses ?? 0).toLocaleString()}`,
     `Reviews: ${metrics.attempted.toLocaleString()} attempted · ${settled.toLocaleString()} settled · ${inProgress.toLocaleString()} in progress`,
-    `Review results: pass ${metrics.pass.toLocaleString()} · revise ${metrics.revise.toLocaleString()} · discarded ${metrics.discarded.toLocaleString()}`,
-    `Operational failures: ${metrics.failure.toLocaleString()}`,
+    "Calibration outcomes",
+    `  Evaluated: ${evaluated.toLocaleString()}`,
+    `  Pass: ${outcomes.pass.toLocaleString()} (${formatPercent(outcomes.pass, evaluated)})`,
+    `  Finding reviews: ${outcomes.findings.toLocaleString()} (${formatPercent(outcomes.findings, evaluated)})`,
+    `  Delivered: ${delivered.toLocaleString()} (${formatPercent(delivered, outcomes.findings)} of finding reviews)`,
+    `    Advice ${outcomes.advice.toLocaleString()} · guidance ${outcomes.guidance.toLocaleString()} · revision ${outcomes.revision.toLocaleString()} · recovery ${outcomes.recovery.toLocaleString()}`,
+    `  Suppressed: ${outcomes.suppressed.toLocaleString()} (${formatPercent(outcomes.suppressed, outcomes.findings)} of finding reviews)`,
+    `  Discarded: ${outcomes.discarded.toLocaleString()} · failures ${outcomes.failures.toLocaleString()}`,
+    `  Verification reviews: ${(metrics.blockerVerificationAttempts ?? 0).toLocaleString()} attempted · blocker fingerprints ${(metrics.blockersVerified ?? 0).toLocaleString()} confirmed · ${(metrics.blockersRejected ?? 0).toLocaleString()} rejected`,
+    `  Receipts: ${(metrics.interventionsAcknowledged ?? 0).toLocaleString()} of ${(metrics.interventionsDelivered ?? 0).toLocaleString()} delivered interventions`,
+    `  Finding lifecycle: open ${(metrics.findingLifecycle?.open ?? 0).toLocaleString()} · acknowledged ${(metrics.findingLifecycle?.acknowledged ?? 0).toLocaleString()} · resolved ${(metrics.findingLifecycle?.resolved ?? 0).toLocaleString()} · superseded ${(metrics.findingLifecycle?.superseded ?? 0).toLocaleString()}`,
+    `  Intervention budget: ${(metrics.interventionBudget?.delivered ?? 0).toLocaleString()}/${MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST.toLocaleString()} delivered · correction ${metrics.interventionBudget?.correctionUsed ? "used" : "available"}`,
     "",
     "Tokens",
     `  Input:        ${(metrics.inputTokens ?? 0).toLocaleString()}`,
@@ -504,7 +552,7 @@ async function showAdvisorUsage(
     for (const usage of modelUsage) {
       const responseLabel = usage.responses === 1 ? "response" : "responses";
       lines.push(
-        `  ${usage.provider}/${usage.model}: ${usage.responses.toLocaleString()} ${responseLabel} · ${usage.totalTokens.toLocaleString()} tokens · $${usage.cost.toFixed(6)}`,
+        `  ${safeLabel(usage.provider)}/${safeLabel(usage.model)}: ${usage.responses.toLocaleString()} ${responseLabel} · ${usage.totalTokens.toLocaleString()} tokens · $${usage.cost.toFixed(6)}`,
       );
     }
   }
@@ -594,10 +642,19 @@ function formatDuration(milliseconds: number): string {
   return `${milliseconds / 1_000}s`;
 }
 
+function formatPercent(value: number, total: number): string {
+  return total > 0 ? `${((value / total) * 100).toFixed(1)}%` : "not available";
+}
+
 function formatUsageDuration(milliseconds: number): string {
   return milliseconds < 1_000
     ? `${Math.round(milliseconds)}ms`
     : `${(milliseconds / 1_000).toFixed(1)}s`;
+}
+
+function safeLabel(value: string): string {
+  const redacted = redactSensitiveText(value);
+  return redacted.length <= 256 ? redacted : `${redacted.slice(0, 238)}[... truncated]`;
 }
 
 function formatGuidancePaths(paths: readonly string[] | undefined): string {
@@ -609,7 +666,9 @@ function formatActiveTools(names: readonly string[] | undefined): string {
 }
 
 function formatModel(config: Pick<ResolvedAdvisorConfig, "provider" | "model">): string {
-  return config.provider && config.model ? `${config.provider}/${config.model}` : "not configured";
+  return config.provider && config.model
+    ? `${safeLabel(config.provider)}/${safeLabel(config.model)}`
+    : "not configured";
 }
 
 function formatPolicy(policy: AdvisorReviewPolicy): string {

@@ -10,7 +10,7 @@ import {
   type AdvisorObservation,
   type AdvisorObservationInput,
 } from "./observation-protocol.ts";
-import type { AdvisorReviewFocus } from "./review.ts";
+import type { AdvisorReview, AdvisorReviewFocus } from "./review.ts";
 
 export const MAX_PENDING_CHECKPOINTS = 16;
 
@@ -19,6 +19,7 @@ export interface ReviewQueueCheckpointRequest {
   focus: AdvisorReviewFocus;
   parentTurnId: number;
   targetSequence?: number;
+  verificationReview?: AdvisorReview;
 }
 
 class AdvisorBatchDroppedError extends Error {
@@ -165,6 +166,7 @@ export class AdvisorReviewQueue {
           processedThrough: waiter.target,
           observations,
           focus: waiter.request.focus,
+          verificationReview: waiter.request.verificationReview,
         };
         try {
           const result = await this.checkpointWithBoundedRecovery(runtimeRequest, waiter.epoch);
@@ -266,7 +268,9 @@ function isReprimeRequired(error: unknown): boolean {
   if (error instanceof AdvisorRuntimeResetRequiredError) return true;
   const message =
     error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return /(?:context|overflow|too large|malformed checkpoint|compaction)/.test(message);
+  return /(?:context|overflow|too large|maximum response size|malformed checkpoint|compaction)/.test(
+    message,
+  );
 }
 
 function renderPreviouslyProcessed(target: number): string {

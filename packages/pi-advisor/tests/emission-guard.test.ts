@@ -89,11 +89,43 @@ describe("AdvisorEmissionGuard", () => {
     });
   });
 
-  test("forgets an accepted recovery that never reached delivery", () => {
+  test("rolls back severity escalation without deleting the prior hash", () => {
+    const guard = new AdvisorEmissionGuard();
+    expect(guard.evaluate("one", review("concern")).accepted).toBe(true);
+    const escalation = guard.evaluate("two", review("blocker", "Missing timeout handling."));
+    if (!escalation.accepted) throw new Error("expected escalation");
+    guard.rollback(escalation.rollback);
+
+    expect(guard.evaluate("retry-concern", review("concern"))).toEqual({
+      accepted: false,
+      reason: "duplicate",
+    });
+    expect(guard.evaluate("retry-blocker", review("blocker"))).toMatchObject({
+      accepted: true,
+    });
+  });
+
+  test("rolls back capacity eviction exactly", () => {
+    const guard = new AdvisorEmissionGuard([], 1);
+    const first = review("concern", "First issue");
+    const second = review("concern", "Second issue");
+    expect(guard.evaluate("one", first).accepted).toBe(true);
+    const accepted = guard.evaluate("two", second);
+    if (!accepted.accepted) throw new Error("expected accepted emission");
+    guard.rollback(accepted.rollback);
+
+    expect(guard.evaluate("first-retry", first)).toEqual({
+      accepted: false,
+      reason: "duplicate",
+    });
+    expect(guard.evaluate("second-retry", second)).toMatchObject({ accepted: true });
+  });
+
+  test("rolls back an accepted recovery that never reached delivery", () => {
     const guard = new AdvisorEmissionGuard();
     const accepted = guard.evaluate("aborted", review("blocker"));
     if (!accepted.accepted) throw new Error("expected accepted emission");
-    guard.forget("aborted", accepted.hash);
+    guard.rollback(accepted.rollback);
 
     expect(guard.exportRecords()).toEqual([]);
     expect(guard.evaluate("retry", review("blocker"))).toMatchObject({ accepted: true });

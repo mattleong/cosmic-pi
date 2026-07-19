@@ -126,6 +126,55 @@ describe("observation protocol", () => {
     ]);
   });
 
+  test("records bounded intervention delivery and receipt facts without critique text", () => {
+    const buffer = new AdvisorObservationBuffer();
+    const id = "af_0123456789abcdef0123456789abcdef";
+    buffer.ingest(3, {
+      type: "advisor_intervention",
+      findingIds: [id, "invalid-secret-id"],
+      action: "revision",
+      requestSequence: 2,
+    });
+    buffer.ingest(4, {
+      type: "advisor_intervention_receipt",
+      findingIds: [id],
+      requestSequence: 2,
+    });
+    const rendered = buffer.takeThrough()?.rendered ?? "";
+    expect(rendered).toContain("advisor_intervention");
+    expect(rendered).toContain("advisor_intervention_receipt");
+    expect(rendered).toContain(id);
+    expect(rendered).not.toContain("invalid-secret-id");
+  });
+
+  test("retains intervention facts under observation pressure", () => {
+    const buffer = new AdvisorObservationBuffer();
+    const id = "af_0123456789abcdef0123456789abcdef";
+    buffer.ingest(1, {
+      type: "advisor_intervention",
+      findingIds: [id],
+      action: "revision",
+      requestSequence: 1,
+    });
+    buffer.ingest(1, {
+      type: "advisor_intervention_receipt",
+      findingIds: [id],
+      requestSequence: 1,
+    });
+    for (let index = 0; index < MAX_OBSERVATION_RECORDS * 2; index += 1) {
+      buffer.ingest(1, {
+        type: "assistant_text_delta",
+        text: `noise-${index}-${"x".repeat(1_000)}`,
+      });
+    }
+    for (let index = 0; index < MAX_OBSERVATION_RECORDS * 2; index += 1) {
+      buffer.ingest(1, { type: "turn_complete", status: "stop" });
+    }
+    const types = buffer.takeThrough()?.observations.map((record) => record.type) ?? [];
+    expect(types).toContain("advisor_intervention");
+    expect(types).toContain("advisor_intervention_receipt");
+  });
+
   test("caps a single streamed channel", () => {
     const buffer = new AdvisorObservationBuffer();
     for (let index = 0; index < 100; index += 1) {

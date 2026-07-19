@@ -42,7 +42,7 @@ describe("advisor review renderer", () => {
     };
     const output = component.render(100).join("\n");
 
-    expect(output).toContain("Advisor preserved findings for the next turn anthropic/reviewer");
+    expect(output).toContain("Advisor provided advice anthropic/reviewer");
     expect(output).toContain("One material issue remains.");
     expect(output).toContain("The validation claim is unsupported.");
     expect(output).toContain("Report the actual command result.");
@@ -67,6 +67,88 @@ describe("advisor review renderer", () => {
       theme,
     ) as { render(width: number): string[] };
     expect(recovery.render(100).join("\n")).toContain("Advisor interrupted a stalled trajectory");
+  });
+
+  test("redacts historical reviews and configured model labels before rendering", () => {
+    let renderer: ((message: unknown, options: unknown, theme: unknown) => unknown) | undefined;
+    registerAdvisorReviewRenderer({
+      registerMessageRenderer: (_type: string, nextRenderer: typeof renderer) => {
+        renderer = nextRenderer;
+      },
+    } as unknown as ExtensionAPI);
+
+    const component = renderer?.(
+      {
+        details: {
+          action: "advice",
+          provider: "openai-api-key=sk-abcdefghijklmnop",
+          model: "reviewer-token=secret-value",
+          review: {
+            verdict: "revise",
+            summary: "Authorization: Bearer abc.def.ghi",
+            findings: [
+              {
+                severity: "concern",
+                issue: "api_key=sk-secondsecretvalue",
+                evidence: "password=hunter2",
+                recommendation: "token=another-secret-value",
+              },
+            ],
+          },
+        },
+      },
+      { expanded: true },
+      {
+        bold: (text: string) => text,
+        fg: (_color: string, text: string) => text,
+      },
+    ) as { render(width: number): string[] };
+    const output = component.render(120).join("\n");
+
+    expect(output).toContain("Advisor provided advice");
+    expect(output).toContain("REDACTED");
+    expect(output).not.toMatch(
+      /sk-abcdefghijklmnop|secret-value|abc\.def\.ghi|sk-secondsecretvalue|hunter2|another-secret-value/,
+    );
+  });
+
+  test("clips oversized historical reviews before rendering", () => {
+    let renderer: ((message: unknown, options: unknown, theme: unknown) => unknown) | undefined;
+    registerAdvisorReviewRenderer({
+      registerMessageRenderer: (_type: string, nextRenderer: typeof renderer) => {
+        renderer = nextRenderer;
+      },
+    } as unknown as ExtensionAPI);
+
+    const component = renderer?.(
+      {
+        details: {
+          action: "advice",
+          provider: `provider-${"p".repeat(1_000)}`,
+          model: `model-${"m".repeat(1_000)}`,
+          review: {
+            verdict: "revise",
+            summary: "s".repeat(10_000),
+            findings: Array.from({ length: 20 }, (_, index) => ({
+              severity: "concern",
+              issue: `issue-${index}-${"i".repeat(10_000)}`,
+              evidence: `evidence-${index}-${"e".repeat(10_000)}`,
+              recommendation: `recommendation-${index}-${"r".repeat(10_000)}`,
+            })),
+          },
+        },
+      },
+      { expanded: true },
+      {
+        bold: (text: string) => text,
+        fg: (_color: string, text: string) => text,
+      },
+    ) as { render(width: number): string[] };
+    const output = component.render(120).join("\n");
+
+    expect(output).toContain("[... truncated]");
+    expect(output.match(/\[CONCERN\]/g)).toHaveLength(5);
+    expect(output.length).toBeLessThan(80_000);
   });
 
   test("expands historical findings that predate category and evidence fields", () => {

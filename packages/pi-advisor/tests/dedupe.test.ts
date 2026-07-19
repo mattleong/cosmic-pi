@@ -39,6 +39,32 @@ describe("advisor finding dedupe", () => {
     });
   });
 
+  test("rolls back severity escalation without losing the prior severity", () => {
+    const dedupe = new AdvisorFindingDedupe();
+    const concern = finding("Escalating issue");
+    const blocker = { ...concern, severity: "blocker" as const };
+    dedupe.filter([concern]);
+    const filtered = dedupe.filterWithRollback([blocker]);
+    expect(filtered.findings).toEqual([blocker]);
+    dedupe.rollback(filtered.rollback);
+
+    expect(dedupe.filter([concern])).toEqual({ findings: [], suppressed: 1 });
+    expect(dedupe.filter([blocker])).toEqual({ findings: [blocker], suppressed: 0 });
+  });
+
+  test("rolls back capacity eviction exactly", () => {
+    const dedupe = new AdvisorFindingDedupe(1);
+    const first = finding("First");
+    const second = finding("Second");
+    dedupe.filter([first]);
+    const filtered = dedupe.filterWithRollback([second]);
+    expect(filtered.findings).toEqual([second]);
+    dedupe.rollback(filtered.rollback);
+
+    expect(dedupe.filter([first])).toEqual({ findings: [], suppressed: 1 });
+    expect(dedupe.filter([second])).toEqual({ findings: [second], suppressed: 0 });
+  });
+
   test("evicts old findings at the bounded capacity and resets", () => {
     const dedupe = new AdvisorFindingDedupe(2);
     const first = finding("First");

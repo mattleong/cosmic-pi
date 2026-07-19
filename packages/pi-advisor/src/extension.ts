@@ -1,3 +1,4 @@
+import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
 import { isRecord } from "./utils.ts";
 import {
   sessionEntryToContextMessages,
@@ -12,7 +13,7 @@ import {
   type AdvisorRuntimeDriver,
 } from "./advisor-runtime.ts";
 import { AdvisorReviewQueue } from "./review-queue.ts";
-import { stringifyRedactedObservation } from "./observation-protocol.ts";
+import { redactSensitiveText, stringifyRedactedObservation } from "./observation-protocol.ts";
 import {
   ADVISOR_CHECKPOINT_ENTRY_TYPE,
   createCheckpointLedger,
@@ -23,8 +24,19 @@ import {
   type AdvisorDurableReviewSummary,
 } from "./checkpoint-ledger.ts";
 import { loadAdvisorConfig, type ResolvedAdvisorConfig } from "./config.ts";
-import { AdvisorFindingDedupe } from "./dedupe.ts";
-import { AdvisorEmissionGuard, highestAdvisorSeverity } from "./emission-guard.ts";
+import { safeAdvisorLabel } from "./advisor-label.ts";
+import { AdvisorFindingDedupe, type AdvisorFindingDedupeRollback } from "./dedupe.ts";
+import { gateAdvisorFindings } from "./finding-gates.ts";
+import { AdvisorFindingLifecycle } from "./finding-lifecycle.ts";
+import {
+  AdvisorInterventionBudget,
+  type AdvisorInterventionBudgetSnapshot,
+} from "./intervention-budget.ts";
+import {
+  AdvisorEmissionGuard,
+  highestAdvisorSeverity,
+  type AdvisorEmissionRollback,
+} from "./emission-guard.ts";
 import { buildAdvisorContext } from "./context.ts";
 import { logAdvisorFailure } from "./failure-log.ts";
 import { loadAdvisorInstructions, type LoadedAdvisorInstructions } from "./instructions.ts";
@@ -34,6 +46,9 @@ import {
   buildAdvisorAdvice,
   buildProgressSteer,
   buildRevisionSteer,
+  canonicalAdvisorFindingFingerprint,
+  sanitizeAdvisorReview,
+  type AdvisorFinding,
   type AdvisorReview,
   type AdvisorReviewFocus,
 } from "./review.ts";
@@ -62,7 +77,13 @@ interface AdvisorCheckpointHandle {
   invalidate(): void;
   settlement: Promise<CheckpointSettlement>;
 }
-type ReviewSource = "automatic-final" | "automatic-progress" | "next" | "last" | "verify";
+type ReviewSource =
+  | "automatic-final"
+  | "automatic-progress"
+  | "automatic-catch-up"
+  | "next"
+  | "last"
+  | "verify";
 
 export type AdvisorSkipReason =
   | "disabled"
@@ -144,7 +165,11 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           configRevision: number;
           cancellationEpoch: number;
           recovering: boolean;
-          emission: { checkpointId: string; hash: string };
+          findingIds: string[];
+          metrics: AdvisorSessionMetrics;
+          budgetBefore: AdvisorInterventionBudgetSnapshot;
+          dedupeRollback: AdvisorFindingDedupeRollback;
+          emission: { checkpointId: string; hash: string; rollback: AdvisorEmissionRollback };
         }
       | undefined;
     let cancellationEpoch = 0;
@@ -158,7 +183,13 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         }
       | undefined;
     const findingDedupe = new AdvisorFindingDedupe();
+    const findingLifecycle = new AdvisorFindingLifecycle();
+    const interventionBudget = new AdvisorInterventionBudget();
     const routingState = new AdvisorRoutingState();
+    let requestSequence = 0;
+    let pendingInterventionReceipt:
+      | { ids: string[]; count: number; cancellationEpoch: number; requestSequence: number }
+      | undefined;
     const emissionGuard = new AdvisorEmissionGuard();
     const activeToolCalls = new Map<string, { toolName: string; args: unknown }>();
     let latestStateSummary = "";
@@ -188,7 +219,15 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     const renderReviewStatus = (): void => {
       if (!statusSpinnerContext) return;
       const frame = STATUS_SPINNER_FRAMES[statusSpinnerFrame] ?? STATUS_SPINNER_FRAMES[0];
-      statusSpinnerContext.ui.setStatus(STATUS_KEY, `${frame} advisor reviewing…`);
+      const model =
+        config.provider && config.model
+          ? statusSpinnerContext.modelRegistry.find(config.provider, config.model)
+          : undefined;
+      const effort = model ? clampThinkingLevel(model, config.thinkingLevel) : config.thinkingLevel;
+      statusSpinnerContext.ui.setStatus(
+        STATUS_KEY,
+        `${frame} ${redactSensitiveText(config.model ?? "advisor").slice(0, 256)}:${effort} advising…`,
+      );
     };
 
     const startStatusSpinner = (ctx: ExtensionContext, owner: string): void => {
@@ -290,6 +329,16 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       return null;
     };
 
+    const lifecycleScope = (ctx: ExtensionContext): string => {
+      const sessionId = ctx.sessionManager.getSessionId?.();
+      if (sessionId) return `session:${sessionId}`;
+      const branch = ctx.sessionManager.getBranch?.() ?? [];
+      const root = branch.find(
+        (entry) => !(entry.type === "custom" && entry.customType === ADVISOR_CHECKPOINT_ENTRY_TYPE),
+      );
+      return `branch:${root?.id ?? parentAnchor(ctx) ?? "root"}`;
+    };
+
     const branchContains = (ctx: ExtensionContext, anchor: string | null): boolean => {
       if (!anchor || typeof ctx.sessionManager.getBranch !== "function") return true;
       return ctx.sessionManager.getBranch().some((entry) => entry.id === anchor);
@@ -306,8 +355,10 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       pendingPersistentRecovery = undefined;
       abortInProgress = undefined;
       if (pending) {
-        emissionGuard.forget(pending.emission.checkpointId, pending.emission.hash);
-        findingDedupe.reset();
+        emissionGuard.rollback(pending.emission.rollback);
+        findingDedupe.rollback(pending.dedupeRollback);
+        pending.metrics.outcomes!.suppressed += 1;
+        interventionBudget.restore({ ...pending.budgetBefore, correctionUsed: true });
       }
     };
 
@@ -351,6 +402,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           : undefined;
       if (restoration === "restore-branch") {
         routingState.reset();
+        interventionBudget.reset();
+        findingLifecycle.reset();
         emissionGuard.reset();
         latestStateSummary = "";
         latestDurableSummary = summarizeAdvisorReview();
@@ -360,6 +413,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
             completedPrimaryTurns: ledger.routing.completedPrimaryTurns,
             immunityUntilCompletedTurn: ledger.routing.immunityUntilCompletedTurn,
           });
+          interventionBudget.restore(ledger.routing.interventionBudget);
+          findingLifecycle.restore(ledger.findingLifecycle);
           emissionGuard.reset(ledger.emissionHashes);
           latestDurableSummary = ledger.reviewSummary;
           latestStateSummary = renderDurableReviewSummary(ledger.reviewSummary);
@@ -400,6 +455,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       } catch (error) {
         if (startEpoch !== epoch) return;
         runtimeMetrics.failure += 1;
+        runtimeMetrics.outcomes!.failures += 1;
         runtimeMetrics.lastAction = "failure";
         const kind = classifyFailure(error);
         runtimeMetrics.lastFailureKind = kind;
@@ -448,6 +504,10 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           cancellationLatched: route.cancellationLatched,
           completedPrimaryTurns: route.completedPrimaryTurns,
           immunityUntilCompletedTurn: route.immunityUntilCompletedTurn,
+          interventionBudget: pendingPersistentRecovery
+            ? { ...pendingPersistentRecovery.budgetBefore, correctionUsed: true }
+            : interventionBudget.snapshot,
+          findingLifecycle: findingLifecycle.snapshot(),
           emissionHashes: emissionGuard
             .exportRecords()
             .filter(
@@ -472,10 +532,14 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       expectedCancellationEpoch: number,
       trajectoryId?: number,
     ): AdvisorRoute => {
-      if (ctx.signal?.aborted || expectedCancellationEpoch !== cancellationEpoch) {
+      const discardAtDeliveryBoundary = (): AdvisorRoute => {
         metrics.discarded += 1;
+        if (source !== "automatic-catch-up") metrics.outcomes!.discarded += 1;
         metrics.lastAction = "discarded";
         return "silent";
+      };
+      if (ctx.signal?.aborted || expectedCancellationEpoch !== cancellationEpoch) {
+        return discardAtDeliveryBoundary();
       }
       const review: AdvisorReview = {
         verdict: checkpoint.verdict,
@@ -483,25 +547,62 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         findings: checkpoint.findings,
       };
       if (review.verdict === "pass") {
+        if (phase === "final") {
+          findingLifecycle.reconcile([], {
+            scope,
+            completedTurn: routingState.snapshot.completedPrimaryTurns,
+            complete: true,
+          });
+        }
         metrics.pass += 1;
+        if (source !== "automatic-catch-up") metrics.outcomes!.pass += 1;
         metrics.lastAction = "pass";
         return "silent";
       }
-      const filtered = findingDedupe.filter(review.findings, scope);
+      // Tool-calling turn boundaries keep the persistent Advisor caught up, but
+      // they are not completed responses and must never emit "unfinished work"
+      // critiques. Explicit trajectory checkpoints remain independently routable.
+      if (source === "automatic-catch-up") {
+        metrics.suppressedFindings = (metrics.suppressedFindings ?? 0) + review.findings.length;
+        metrics.lastAction = "suppressed";
+        return "silent";
+      }
+      metrics.outcomes!.findings += 1;
+      const gated = gateAdvisorFindings(review.findings);
+      metrics.suppressedFindings = (metrics.suppressedFindings ?? 0) + gated.suppressed;
+      const lifecycleFindings = findingLifecycle.reconcile(gated.actionable, {
+        scope,
+        completedTurn: routingState.snapshot.completedPrimaryTurns,
+        complete: phase === "final",
+      });
+      const filtered = findingDedupe.filterWithRollback(
+        lifecycleFindings.filter((finding) => finding.status === "open"),
+        scope,
+      );
       metrics.suppressedFindings = (metrics.suppressedFindings ?? 0) + filtered.suppressed;
       if (filtered.findings.length === 0) {
+        metrics.outcomes!.suppressed += 1;
         metrics.lastAction = "suppressed";
         return "silent";
       }
       const filteredReview = { ...review, findings: filtered.findings };
+      const rollbackUndelivered = (emission?: { rollback: AdvisorEmissionRollback }): void => {
+        findingDedupe.rollback(filtered.rollback);
+        if (emission) emissionGuard.rollback(emission.rollback);
+      };
       const emission = emissionGuard.evaluate(checkpoint.checkpointId, filteredReview);
       if (!emission.accepted) {
+        rollbackUndelivered();
+        metrics.outcomes!.suppressed += 1;
         metrics.lastAction = emission.reason === "pass" ? "pass" : "suppressed";
         return "silent";
       }
       metrics.revise += 1;
       const severity = highestAdvisorSeverity(filteredReview);
-      if (!severity) return "silent";
+      if (!severity) {
+        rollbackUndelivered(emission);
+        return "silent";
+      }
       const trajectory =
         trajectoryId !== undefined && activeTrajectory?.id === trajectoryId
           ? activeTrajectory
@@ -517,10 +618,18 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           pendingPersistentRecovery.cancellationEpoch === cancellationEpoch),
       );
       const historicalManual = source === "last" || source === "verify";
-      const route = historicalManual
+      const explicitManual = historicalManual || source === "next";
+      const budgeted = !explicitManual;
+      if (budgeted && !interventionBudget.canDeliver(severity)) {
+        rollbackUndelivered(emission);
+        metrics.outcomes!.suppressed += 1;
+        metrics.lastAction = "suppressed";
+        return "silent";
+      }
+      let route = explicitManual
         ? severity === "nit"
           ? "silent"
-          : "preserve-next-turn"
+          : "push-direct"
         : routeAdvisorFinding({
             severity,
             policy: config.reviewPolicy,
@@ -533,7 +642,6 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
                 : "active",
             immunityActive: routingState.immunityActive,
             cancellationLatched: routingState.cancellationLatched,
-            manualAction: source === "next",
             sameTurnStrongSignal:
               severity === "blocker" &&
               Boolean(trajectory?.loopConfirmed && trajectory.generation === parentTurnId),
@@ -541,34 +649,74 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
               trajectory?.abortAllowed && trajectory.toolDetector.activeToolCount === 0,
             ),
           });
+      const correctionRoute =
+        route === "steer-live" || route === "trigger-correction" || route === "abort-recover";
+      if (budgeted && correctionRoute && !interventionBudget.canCorrect()) route = "push-direct";
+      if (budgeted && !explicitManual && route === "push-direct" && ctx.isIdle()) route = "silent";
 
       // Cancellation is synchronous and wins over a provider completion queued in
       // the same tick. Recheck at the exact delivery boundary before every send path.
       if (ctx.signal?.aborted || expectedCancellationEpoch !== cancellationEpoch) {
-        emissionGuard.forget(checkpoint.checkpointId, emission.hash);
-        metrics.discarded += 1;
-        metrics.lastAction = "discarded";
-        return "silent";
+        rollbackUndelivered(emission);
+        return discardAtDeliveryBoundary();
       }
+      const findingIds = filteredReview.findings.flatMap((finding) =>
+        finding.id ? [finding.id] : [],
+      );
+      const recordDelivery = (
+        correction: boolean,
+        outcome: "advice" | "guidance" | "revision",
+      ): AdvisorReview => {
+        findingLifecycle.acknowledge(findingIds);
+        if (budgeted) interventionBudget.commit(severity, correction);
+        const priorReceipt = pendingInterventionReceipt;
+        pendingInterventionReceipt = {
+          ids:
+            priorReceipt?.requestSequence === requestSequence
+              ? [...new Set([...priorReceipt.ids, ...findingIds])].slice(0, 5)
+              : findingIds,
+          count: priorReceipt?.requestSequence === requestSequence ? priorReceipt.count + 1 : 1,
+          cancellationEpoch,
+          requestSequence,
+        };
+        ingest({
+          type: "advisor_intervention",
+          findingIds,
+          action: outcome,
+          requestSequence,
+        });
+        metrics.outcomes![outcome] += 1;
+        metrics.interventionsDelivered = (metrics.interventionsDelivered ?? 0) + 1;
+        return reviewWithAcknowledgedFindings(filteredReview, findingIds);
+      };
+      const pushAdvice = (): void => {
+        sendAdvisorAdvice(pi, config, recordDelivery(false, "advice"));
+      };
       if (route === "silent") {
+        rollbackUndelivered(emission);
+        metrics.outcomes!.suppressed += 1;
         metrics.lastAction = "suppressed";
-      } else if (route === "preserve-next-turn") {
-        sendAdvisorAdvice(pi, config, filteredReview, "nextTurn");
+      } else if (route === "push-direct") {
+        pushAdvice();
         metrics.lastAction = "advice";
       } else if (route === "steer-live") {
-        sendLiveCorrection(pi, config, filteredReview, phase);
+        const outcome = phase === "progress" ? "guidance" : "revision";
+        sendLiveCorrection(pi, config, recordDelivery(true, outcome), phase);
         routingState.armInterruption();
         metrics.lastAction = phase === "progress" ? "guidance" : "revision";
       } else if (route === "trigger-correction") {
-        sendTriggeredCorrection(pi, config, filteredReview, phase);
+        const outcome = phase === "progress" ? "guidance" : "revision";
+        sendTriggeredCorrection(pi, config, recordDelivery(true, outcome), phase);
         routingState.armInterruption();
         metrics.lastAction = phase === "progress" ? "guidance" : "revision";
       } else {
         if (!trajectory || trajectoryId === undefined) {
-          sendAdvisorAdvice(pi, config, filteredReview, "nextTurn");
+          pushAdvice();
           metrics.lastAction = "advice";
-          return "preserve-next-turn";
+          return "push-direct";
         }
+        const budgetBefore = interventionBudget.snapshot;
+        if (budgeted) interventionBudget.commit(severity, true);
         pendingPersistentRecovery = {
           review: filteredReview,
           config: { ...config },
@@ -578,7 +726,15 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           configRevision,
           cancellationEpoch,
           recovering: true,
-          emission: { checkpointId: checkpoint.checkpointId, hash: emission.hash },
+          findingIds,
+          metrics,
+          budgetBefore,
+          dedupeRollback: filtered.rollback,
+          emission: {
+            checkpointId: checkpoint.checkpointId,
+            hash: emission.hash,
+            rollback: emission.rollback,
+          },
         };
         abortInProgress = {
           epoch,
@@ -642,16 +798,56 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         requestCancellationEpoch = cancellationEpoch;
         const requestParentTurnId = parentTurnId;
         const requestConfigRevision = configRevision;
-        const requestSessionId = options.ctx.sessionManager.getSessionId?.();
         const anchor = parentAnchor(options.ctx);
         const id = `advisor-${requestEpoch}-${++checkpointId}`;
-        const scope = `${requestSessionId ?? requestEpoch}:${runtimeCursor.anchor ?? "root"}`;
+        const scope = lifecycleScope(options.ctx);
         requestMetrics.attempted += 1;
-        const checkpoint = await activeQueue.checkpoint({
+        let checkpoint = await activeQueue.checkpoint({
           checkpointId: id,
           focus: options.focus,
           parentTurnId: requestParentTurnId,
         });
+        const verifyBlocker =
+          options.source !== "automatic-catch-up" &&
+          options.source !== "last" &&
+          options.source !== "verify" &&
+          config.reviewPolicy !== "advisory" &&
+          checkpoint.findings.some(
+            (finding) =>
+              finding.severity === "blocker" &&
+              finding.confidence === "high" &&
+              finding.evidenceBasis === "direct",
+          );
+        if (verifyBlocker) {
+          requestMetrics.blockerVerificationAttempts =
+            (requestMetrics.blockerVerificationAttempts ?? 0) + 1;
+          const verification = await activeQueue.checkpoint({
+            checkpointId: `advisor-${requestEpoch}-${++checkpointId}`,
+            focus: "blocker-verification",
+            parentTurnId: requestParentTurnId,
+            verificationReview: checkpoint,
+          });
+          const proposedBlockers = new Set(
+            checkpoint.findings.flatMap((finding) =>
+              isVerificationCandidate(finding) && finding.fingerprint
+                ? [canonicalAdvisorFindingFingerprint(finding.fingerprint)]
+                : [],
+            ),
+          );
+          checkpoint = applyBlockerVerification(checkpoint, verification);
+          const retainedBlockers = new Set(
+            checkpoint.findings.flatMap((finding) =>
+              isVerificationCandidate(finding) && finding.fingerprint
+                ? [canonicalAdvisorFindingFingerprint(finding.fingerprint)]
+                : [],
+            ),
+          );
+          requestMetrics.blockersVerified =
+            (requestMetrics.blockersVerified ?? 0) + retainedBlockers.size;
+          requestMetrics.blockersRejected =
+            (requestMetrics.blockersRejected ?? 0) +
+            Math.max(0, proposedBlockers.size - retainedBlockers.size);
+        }
         finishReviewDuration();
         if (
           !validForDelivery ||
@@ -665,18 +861,22 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           !branchContains(options.ctx, anchor)
         ) {
           requestMetrics.discarded += 1;
+          if (options.source !== "automatic-catch-up") requestMetrics.outcomes!.discarded += 1;
           requestMetrics.lastAction = "discarded";
           return "discarded";
         }
         if (options.trajectoryId !== undefined && activeTrajectory?.id !== options.trajectoryId) {
           requestMetrics.discarded += 1;
+          if (options.source !== "automatic-catch-up") requestMetrics.outcomes!.discarded += 1;
           requestMetrics.lastAction = "discarded";
           return "discarded";
         }
 
-        latestStateSummary = checkpoint.stateSummary;
-        latestDurableSummary = summarizeAdvisorReview(checkpoint);
-        const route = deliver(
+        if (options.source !== "automatic-catch-up") {
+          latestStateSummary = checkpoint.stateSummary;
+          latestDurableSummary = summarizeAdvisorReview(checkpoint);
+        }
+        deliver(
           checkpoint,
           options.phase,
           options.source,
@@ -686,15 +886,17 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           options.abortOnBlocker ? options.trajectoryId : undefined,
         );
         runtimeCursor = { anchor, fingerprint: fingerprint(options.ctx) };
-        if (route !== "abort-recover") persistLedger(anchor, options.ctx);
+        persistLedger(anchor, options.ctx);
         return "completed";
       })().catch((error): CheckpointSettlement => {
         finishReviewDuration();
         if (requestEpoch !== epoch || !validForDelivery) {
           requestMetrics.discarded += 1;
+          if (options.source !== "automatic-catch-up") requestMetrics.outcomes!.discarded += 1;
           return "discarded";
         }
         requestMetrics.failure += 1;
+        if (options.source !== "automatic-catch-up") requestMetrics.outcomes!.failures += 1;
         requestMetrics.lastAction = "failure";
         const kind = classifyFailure(error);
         requestMetrics.lastFailureKind = kind;
@@ -750,6 +952,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           cancellationEpoch += 1;
           routingState.latchCancellation();
           clearPendingRecovery();
+          pendingInterventionReceipt = undefined;
           persistCurrentLedger(ctx);
           catchUpMetrics.catchUpCancellations = incrementBounded(
             catchUpMetrics.catchUpCancellations,
@@ -797,6 +1000,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         reviewNext = false;
         pendingExplicitStart = undefined;
         clearPendingRecovery();
+        pendingInterventionReceipt = undefined;
         routingState.latchCancellation();
         cancellationEpoch += 1;
         persistCurrentLedger(ctx);
@@ -818,6 +1022,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         reviewNext = false;
         pendingExplicitStart = undefined;
         clearPendingRecovery();
+        pendingInterventionReceipt = undefined;
         routingState.latchCancellation();
         cancellationEpoch += 1;
         persistCurrentLedger(ctx);
@@ -866,6 +1071,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           childResets: metrics.childResets ?? 0,
           guidancePaths: instructions.paths,
           hasLastCandidate: Boolean(lastCandidate),
+          findingLifecycle: findingLifecycle.counts(),
+          interventionBudget: interventionBudget.snapshot,
           paused,
           processedSequence: queue?.processedThrough ?? 0,
           queuedReviews: queue?.pendingCheckpoints ?? 0,
@@ -878,15 +1085,18 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           config = next;
           configRevision += 1;
           if (enabledChanged) paused = false;
-          if (disabling) {
-            routingState.latchCancellation();
-            if (activeContext) persistCurrentLedger(activeContext);
-          }
+          clearPendingRecovery();
           findingDedupe.reset();
+          findingLifecycle.reset();
+          interventionBudget.reset();
+          latestStateSummary = "";
+          latestDurableSummary = summarizeAdvisorReview();
+          pendingInterventionReceipt = undefined;
           emissionGuard.reset();
           pendingExplicitStart = undefined;
-          clearPendingRecovery();
+          if (disabling) routingState.latchCancellation();
           cancellationEpoch += 1;
+          if (activeContext) persistCurrentLedger(activeContext);
           if (activeContext) void startRuntime(activeContext);
         },
       },
@@ -908,6 +1118,10 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       checkpointId = 0;
       cancellationEpoch += 1;
       findingDedupe.reset();
+      findingLifecycle.reset();
+      interventionBudget.reset();
+      pendingInterventionReceipt = undefined;
+      requestSequence = 0;
       emissionGuard.reset();
       routingState.reset();
       latestStateSummary = "";
@@ -934,6 +1148,9 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       pendingExplicitStart = undefined;
       lastCandidate = undefined;
       findingDedupe.reset();
+      findingLifecycle.reset();
+      interventionBudget.reset();
+      pendingInterventionReceipt = undefined;
       await startRuntime(ctx, "restore-branch");
     });
 
@@ -941,8 +1158,14 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       if (!isGenuineUserMessage(event.message)) return;
       clearPersistentTrajectory();
       clearPendingRecovery();
+      pendingInterventionReceipt = undefined;
+      requestSequence += 1;
+      interventionBudget.reset();
+      findingDedupe.reset();
+      emissionGuard.reset();
       cancellationEpoch += 1;
       routingState.clearCancellationForGenuineUserPrompt();
+      persistCurrentLedger(ctx);
       const text = contentText(event.message);
       ingest({ type: "user", text: text || "[user content unavailable]" });
       activeContext = ctx;
@@ -951,6 +1174,21 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     pi.on("turn_start", (event, ctx) => {
       clearPersistentTrajectory();
       clearPendingRecovery();
+      const receipt = pendingInterventionReceipt;
+      if (
+        receipt &&
+        receipt.cancellationEpoch === cancellationEpoch &&
+        receipt.requestSequence === requestSequence
+      ) {
+        ingest({
+          type: "advisor_intervention_receipt",
+          findingIds: receipt.ids,
+          requestSequence,
+        });
+        metrics.interventionsAcknowledged =
+          (metrics.interventionsAcknowledged ?? 0) + receipt.count;
+      }
+      pendingInterventionReceipt = undefined;
       parentTurnId += 1;
       if (!config.enabled || paused || !config.configured) return;
       const observation: ActiveTurnObservation = {
@@ -1124,13 +1362,32 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       }
       pendingPersistentRecovery = undefined;
       abortInProgress = undefined;
+      findingLifecycle.acknowledge(recovery.findingIds);
       sendTriggeredCorrection(
         pi,
         recovery.config,
-        recovery.review,
+        reviewWithAcknowledgedFindings(recovery.review, recovery.findingIds),
         recovery.phase,
         recovery.recovering,
       );
+      recovery.metrics.outcomes!.recovery += 1;
+      recovery.metrics.interventionsDelivered = (recovery.metrics.interventionsDelivered ?? 0) + 1;
+      const priorReceipt = pendingInterventionReceipt;
+      pendingInterventionReceipt = {
+        ids:
+          priorReceipt?.requestSequence === requestSequence
+            ? [...new Set([...priorReceipt.ids, ...recovery.findingIds])].slice(0, 5)
+            : recovery.findingIds,
+        count: priorReceipt?.requestSequence === requestSequence ? priorReceipt.count + 1 : 1,
+        cancellationEpoch,
+        requestSequence,
+      };
+      ingest({
+        type: "advisor_intervention",
+        findingIds: recovery.findingIds,
+        action: "recovery",
+        requestSequence,
+      });
       routingState.armInterruption();
       persistLedger(parentAnchor(ctx), ctx);
     });
@@ -1168,6 +1425,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
             clearPendingRecovery();
             routingState.latchCancellation();
             cancellationEpoch += 1;
+            persistCurrentLedger(ctx);
           }
         }
         return;
@@ -1210,9 +1468,9 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       }
       const handle = requestCheckpoint({
         ctx,
-        focus: classification.phase === "progress" ? "trajectory" : "standard",
+        focus: classification.phase === "progress" ? "observation" : "standard",
         phase: classification.phase,
-        source: classification.phase === "progress" ? "automatic-progress" : "automatic-final",
+        source: classification.phase === "progress" ? "automatic-catch-up" : "automatic-final",
         requiresEnabled: true,
       });
       if (handle) await awaitCatchUp(handle, ctx);
@@ -1257,6 +1515,51 @@ function assistantToolCalls(message: unknown): string[] {
   );
 }
 
+function applyBlockerVerification(
+  initial: AdvisorCheckpoint,
+  verification: AdvisorCheckpoint,
+): AdvisorCheckpoint {
+  const verified = new Set(
+    verification.findings.flatMap((finding) =>
+      isVerificationCandidate(finding) && finding.fingerprint
+        ? [canonicalAdvisorFindingFingerprint(finding.fingerprint)]
+        : [],
+    ),
+  );
+  const findings = initial.findings.filter(
+    (finding) =>
+      !isVerificationCandidate(finding) ||
+      verified.has(canonicalAdvisorFindingFingerprint(finding.fingerprint ?? "")),
+  );
+  return {
+    ...initial,
+    verdict: findings.length > 0 ? "revise" : "pass",
+    summary: findings.length > 0 ? initial.summary : verification.summary,
+    findings,
+  };
+}
+
+function isVerificationCandidate(finding: AdvisorFinding): boolean {
+  return (
+    finding.severity === "blocker" &&
+    finding.confidence === "high" &&
+    finding.evidenceBasis === "direct"
+  );
+}
+
+function reviewWithAcknowledgedFindings(
+  review: AdvisorReview,
+  findingIds: readonly string[],
+): AdvisorReview {
+  const acknowledged = new Set(findingIds);
+  return {
+    ...review,
+    findings: review.findings.map((finding) =>
+      finding.id && acknowledged.has(finding.id) ? { ...finding, status: "acknowledged" } : finding,
+    ),
+  };
+}
+
 function incrementBounded(value: number | undefined): number {
   return Math.min(Number.MAX_SAFE_INTEGER, (value ?? 0) + 1);
 }
@@ -1272,6 +1575,17 @@ function emptySessionMetrics(): AdvisorSessionMetrics {
     inputTokens: 0,
     modelResponses: 0,
     outputTokens: 0,
+    outcomes: {
+      pass: 0,
+      findings: 0,
+      advice: 0,
+      guidance: 0,
+      revision: 0,
+      recovery: 0,
+      suppressed: 0,
+      discarded: 0,
+      failures: 0,
+    },
     pass: 0,
     revise: 0,
     skippedReviews: {},
@@ -1328,17 +1642,20 @@ function sendCorrection(
   recovering: boolean,
 ): void {
   if (!config.provider || !config.model) return;
+  const safeReview = sanitizeAdvisorReview(review);
   pi.sendMessage(
     {
       customType: ADVISOR_REVIEW_MESSAGE_TYPE,
       content:
-        phase === "progress" ? buildProgressSteer(review, recovering) : buildRevisionSteer(review),
+        phase === "progress"
+          ? buildProgressSteer(safeReview, recovering)
+          : buildRevisionSteer(safeReview),
       display: true,
       details: {
         action: recovering ? "recovery" : phase === "progress" ? "guidance" : "revision",
-        review,
-        provider: config.provider,
-        model: config.model,
+        review: safeReview,
+        provider: safeAdvisorLabel(config.provider),
+        model: safeAdvisorLabel(config.model),
       },
     },
     triggerTurn ? { deliverAs: "steer", triggerTurn: true } : { deliverAs: "steer" },
@@ -1349,22 +1666,22 @@ function sendAdvisorAdvice(
   pi: ExtensionAPI,
   config: ResolvedAdvisorConfig,
   review: AdvisorReview,
-  deliverAs: "nextTurn" = "nextTurn",
 ): void {
   if (!config.provider || !config.model) return;
+  const safeReview = sanitizeAdvisorReview(review);
   pi.sendMessage(
     {
       customType: ADVISOR_REVIEW_MESSAGE_TYPE,
-      content: buildAdvisorAdvice(review),
+      content: buildAdvisorAdvice(safeReview),
       display: true,
       details: {
         action: "advice",
-        review,
-        provider: config.provider,
-        model: config.model,
+        review: safeReview,
+        provider: safeAdvisorLabel(config.provider),
+        model: safeAdvisorLabel(config.model),
       },
     },
-    { deliverAs },
+    { deliverAs: "steer" },
   );
 }
 

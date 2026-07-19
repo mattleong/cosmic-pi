@@ -5,6 +5,7 @@ coverage/
 package-lock.json
 yarn.lock
 .pi/
+.pi-subagents/
 *.tgz
 *.log
 .DS_Store

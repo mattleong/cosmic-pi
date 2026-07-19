@@ -11,7 +11,19 @@ export function normalizeAdvisorFinding(finding: AdvisorFinding): string {
     .trim();
 }
 
+export interface AdvisorFindingDedupeRollbackEntry {
+  key: string;
+  previous?: AdvisorSeverity;
+  wasNew: boolean;
+  evicted: Array<{ key: string; severity: AdvisorSeverity }>;
+}
+
 /** Suppress equal/lower repeats while allowing a genuine severity escalation. */
+export interface AdvisorFindingDedupeRollback {
+  scope: string;
+  entries: AdvisorFindingDedupeRollbackEntry[];
+}
+
 export class AdvisorFindingDedupe {
   readonly #capacity: number;
   readonly #seen = new Map<string, AdvisorSeverity>();
@@ -29,11 +41,24 @@ export class AdvisorFindingDedupe {
     findings: AdvisorFinding[];
     suppressed: number;
   } {
+    const { rollback: _rollback, ...result } = this.filterWithRollback(findings, scope);
+    return result;
+  }
+
+  filterWithRollback(
+    findings: readonly AdvisorFinding[],
+    scope = "default",
+  ): {
+    findings: AdvisorFinding[];
+    suppressed: number;
+    rollback: AdvisorFindingDedupeRollback;
+  } {
     if (scope !== this.#scope) {
       this.reset();
       this.#scope = scope;
     }
     const accepted: AdvisorFinding[] = [];
+    const entries: AdvisorFindingDedupeRollbackEntry[] = [];
     let suppressed = 0;
     for (const finding of findings) {
       const key = normalizeAdvisorFinding(finding);
@@ -45,15 +70,42 @@ export class AdvisorFindingDedupe {
         suppressed += 1;
         continue;
       }
+      const entry: AdvisorFindingDedupeRollbackEntry = {
+        key,
+        previous,
+        wasNew: previous === undefined,
+        evicted: [],
+      };
       if (previous === undefined) this.#seenOrder.push(key);
       this.#seen.set(key, finding.severity);
       accepted.push(finding);
       while (this.#seenOrder.length > this.#capacity) {
         const stale = this.#seenOrder.shift();
-        if (stale !== undefined) this.#seen.delete(stale);
+        if (stale === undefined) continue;
+        const severity = this.#seen.get(stale);
+        if (severity) entry.evicted.push({ key: stale, severity });
+        this.#seen.delete(stale);
+      }
+      entries.push(entry);
+    }
+    return { findings: accepted, suppressed, rollback: { scope, entries } };
+  }
+
+  rollback(token: AdvisorFindingDedupeRollback): void {
+    if (token.scope !== this.#scope) return;
+    for (const entry of [...token.entries].reverse()) {
+      if (entry.wasNew) {
+        this.#seen.delete(entry.key);
+        const index = this.#seenOrder.lastIndexOf(entry.key);
+        if (index >= 0) this.#seenOrder.splice(index, 1);
+      } else if (entry.previous) {
+        this.#seen.set(entry.key, entry.previous);
+      }
+      for (const evicted of [...entry.evicted].reverse()) {
+        this.#seen.set(evicted.key, evicted.severity);
+        if (!this.#seenOrder.includes(evicted.key)) this.#seenOrder.unshift(evicted.key);
       }
     }
-    return { findings: accepted, suppressed };
   }
 
   reset(): void {

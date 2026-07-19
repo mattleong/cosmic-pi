@@ -3,38 +3,59 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { DynamicBorder, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter, Input, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { supportsFastModel } from "pi-better-openai/fast-models";
+import { safeAdvisorLabel } from "./advisor-label.ts";
 import type { ResolvedAdvisorConfig } from "./config.ts";
 
 export const CLEAR_MODEL_OPTION = "Clear advisor model";
+
+export interface AdvisorModelChoice {
+  item: SelectItem;
+  searchText: string;
+  rawValue: string;
+}
+
+export function createAdvisorModelChoices(
+  models: readonly Model<Api>[],
+  config: Pick<ResolvedAdvisorConfig, "provider" | "model">,
+): AdvisorModelChoice[] {
+  const currentValue =
+    config.provider && config.model ? `${config.provider}/${config.model}` : undefined;
+  return models.map((model) => {
+    const rawValue = `${model.provider}/${model.id}`;
+    const safeValue = `${safeAdvisorLabel(model.provider) ?? "provider"}/${safeAdvisorLabel(model.id) ?? "model"}`;
+    const levels = getSupportedThinkingLevels(model).join(", ");
+    const name = model.name && model.name !== model.id ? safeAdvisorLabel(model.name) : undefined;
+    return {
+      item: {
+        value: rawValue,
+        label: rawValue === currentValue ? `${safeValue} (current)` : safeValue,
+        description: `${name ? `${name} · ` : ""}reasoning: ${levels}${supportsFastModel(model.provider, model.id) ? " · fast mode available" : ""}`,
+      } satisfies SelectItem,
+      searchText: `${safeValue} ${name ?? ""}`,
+      rawValue,
+    };
+  });
+}
 
 export async function selectAdvisorModel(
   ctx: ExtensionCommandContext,
   models: readonly Model<Api>[],
   config: Pick<ResolvedAdvisorConfig, "provider" | "model">,
 ): Promise<string | undefined> {
+  const choices = createAdvisorModelChoices(models, config);
   if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
-    return await ctx.ui.select("Dedicated advisor model", [
-      ...models.map((model) => `${model.provider}/${model.id}`),
-      CLEAR_MODEL_OPTION,
-    ]);
+    const labels = [...choices.map((choice) => choice.item.label), CLEAR_MODEL_OPTION];
+    const selected = await ctx.ui.select("Dedicated advisor model", labels);
+    if (selected === CLEAR_MODEL_OPTION) return CLEAR_MODEL_OPTION;
+    return choices.find((choice) => choice.item.label === selected)?.rawValue;
   }
 
   const currentValue =
     config.provider && config.model ? `${config.provider}/${config.model}` : undefined;
-  const choices: Array<{ item: SelectItem; searchText: string }> = models.map((model) => {
-    const value = `${model.provider}/${model.id}`;
-    const levels = getSupportedThinkingLevels(model).join(", ");
-    const name = model.name && model.name !== model.id ? model.name : undefined;
-    return {
-      item: {
-        value,
-        label: value === currentValue ? `${value} (current)` : value,
-        description: `${name ? `${name} · ` : ""}reasoning: ${levels}${supportsFastModel(model.provider, model.id) ? " · fast mode available" : ""}`,
-      } satisfies SelectItem,
-      searchText: `${value} ${model.name ?? ""}`,
-    };
-  });
-  choices.push({
+  const tuiChoices: Array<{ item: SelectItem; searchText: string }> = choices.map(
+    ({ item, searchText }) => ({ item, searchText }),
+  );
+  tuiChoices.push({
     item: { value: CLEAR_MODEL_OPTION, label: CLEAR_MODEL_OPTION },
     searchText: CLEAR_MODEL_OPTION,
   });
@@ -65,7 +86,7 @@ export async function selectAdvisorModel(
         noMatch: (_text: string) => theme.fg("warning", "  No matching models"),
       };
       let query = "";
-      let selectList = buildModelSelectList(choices, query, currentValue, listTheme, done);
+      let selectList = buildModelSelectList(tuiChoices, query, currentValue, listTheme, done);
 
       return {
         get focused() {
@@ -107,7 +128,7 @@ export async function selectAdvisorModel(
             const nextQuery = input.getValue();
             if (nextQuery !== query) {
               query = nextQuery;
-              selectList = buildModelSelectList(choices, query, currentValue, listTheme, done);
+              selectList = buildModelSelectList(tuiChoices, query, currentValue, listTheme, done);
             }
           }
           tui.requestRender();

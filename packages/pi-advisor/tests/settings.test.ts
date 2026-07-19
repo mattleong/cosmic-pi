@@ -487,6 +487,20 @@ describe("advisor commands", () => {
       latestDurationMs: 1_200,
       modelResponses: 6,
       outputTokens: 200,
+      blockerVerificationAttempts: 2,
+      blockersVerified: 3,
+      blockersRejected: 1,
+      outcomes: {
+        pass: 3,
+        findings: 1,
+        advice: 0,
+        guidance: 0,
+        revision: 1,
+        recovery: 0,
+        suppressed: 0,
+        discarded: 0,
+        failures: 0,
+      },
       settledReviews: 4,
       totalDurationMs: 10_000,
       totalTokens: 1_540,
@@ -529,11 +543,57 @@ describe("advisor commands", () => {
     expect(output).toContain("Current model: openai/reviewer · high · standard");
     expect(output).toContain("Model responses: 6");
     expect(output).toContain("Reviews: 5 attempted · 4 settled · 1 in progress");
+    expect(output).toContain("Pass: 3 (75.0%)");
+    expect(output).toContain("Finding reviews: 1 (25.0%)");
+    expect(output).toContain("Delivered: 1 (100.0% of finding reviews)");
+    expect(output).toContain(
+      "Verification reviews: 2 attempted · blocker fingerprints 3 confirmed · 1 rejected",
+    );
     expect(output).toContain("Input:        1,000");
     expect(output).toContain("Reported cost: $0.012345");
     expect(output).toContain("Review time: 10.0s total · 2.5s average · 1.2s latest");
     expect(output).toContain("openai/reviewer: 5 responses · 1,420 tokens · $0.010000");
     expect(output).toContain("anthropic/backup: 1 response · 120 tokens · $0.002345");
+  });
+
+  test("redacts provider and model labels in usage output", async () => {
+    const configPath = tempConfigPath();
+    const harness = createCommands(
+      {
+        ...configAt(configPath),
+        provider: "openai-api-key=sk-abcdefghijklmnop",
+        model: "reviewer-token=secret-value",
+        configured: true,
+      },
+      {
+        attempted: 0,
+        pass: 0,
+        revise: 0,
+        failure: 0,
+        discarded: 0,
+        usageByModel: {
+          secret: {
+            provider: "anthropic-token=another-secret-value",
+            model: "model-password=hunter2",
+            responses: 1,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            cost: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+          },
+        },
+      },
+    );
+    const notify = vi.fn();
+    await harness.commands.get("advisor-usage")?.("", {
+      ui: { notify },
+      modelRegistry: { find: () => undefined },
+    } as unknown as ExtensionCommandContext);
+    const output = String(notify.mock.calls[0]?.[0]);
+    expect(output).toContain("REDACTED");
+    expect(output).not.toMatch(/sk-abcdefghijklmnop|secret-value|hunter2/);
   });
 
   test("renders zero session usage without a model breakdown", async () => {
@@ -549,6 +609,8 @@ describe("advisor commands", () => {
     expect(output).toContain("Model responses: 0");
     expect(output).toContain("Reviews: 0 attempted · 0 settled · 0 in progress");
     expect(output).toContain("Review time: not available");
+    expect(output).toContain("not available");
+    expect(output).not.toMatch(/NaN|Infinity/);
     expect(output).not.toContain("\nModels\n");
   });
 

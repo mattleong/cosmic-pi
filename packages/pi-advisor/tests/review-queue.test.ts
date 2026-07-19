@@ -234,13 +234,13 @@ describe("AdvisorReviewQueue", () => {
     expect(reset).toHaveBeenCalledOnce();
   });
 
-  test("drops a repeatedly overflowing batch and a later small checkpoint succeeds", async () => {
+  test("drops a repeated maximum-response batch and a later small checkpoint succeeds", async () => {
     const harness = runtimeHarness();
     let attempt = 0;
     (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(
       async (request: AdvisorCheckpointRequest) => {
         attempt += 1;
-        if (attempt <= 2) throw new Error("context overflow");
+        if (attempt <= 2) throw new Error("Advisor checkpoint exceeds the maximum response size.");
         return result(request);
       },
     );

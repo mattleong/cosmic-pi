@@ -2,6 +2,9 @@ import type { AgentSession, CreateAgentSessionOptions } from "@earendil-works/pi
 import { describe, expect, test, vi } from "vitest";
 import {
   AdvisorRuntime,
+  MAX_ADVISOR_CHECKPOINT_CHARS,
+  MAX_ADVISOR_CHECKPOINT_ID_CHARS,
+  MAX_ADVISOR_STREAM_CHARS,
   NoDiscoveryAdvisorResourceLoader,
   parseAdvisorCheckpoint,
   type AdvisorCheckpointRequest,
@@ -190,6 +193,20 @@ describe("AdvisorRuntime", () => {
     );
     expect(firstPrompt).toContain("START-");
     expect(firstPrompt).toContain("-END");
+  });
+
+  test("uses an evidence-specific rule for verification checkpoints", async () => {
+    const value = harness();
+    await start(value.runtime);
+    await value.runtime.checkpoint({
+      checkpointId: "verify",
+      processedThrough: 1,
+      observations: "completed response",
+      focus: "verification",
+    });
+    expect(String(value.session.prompt.mock.calls[0]?.[0])).toContain(
+      "Evidence verification: check factual support, cited evidence, and validation claims",
+    );
   });
 
   test("ignores prompt, config, provider registry, and extension registry capability injection", async () => {
@@ -416,6 +433,101 @@ describe("AdvisorRuntime", () => {
     ).resolves.toMatchObject({ checkpointId: "small" });
   });
 
+  test("aborts a unique oversized child stream before final parsing", async () => {
+    const value = harness("stop", true);
+    await start(value.runtime);
+    const pending = value.runtime.checkpoint({
+      checkpointId: "oversized-stream",
+      processedThrough: 1,
+      observations: "batch",
+      focus: "standard",
+    });
+    await vi.waitFor(() => expect(value.session.isStreaming).toBe(true));
+    for (let index = 0; index < 8; index += 1) {
+      value.emit({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: Array.from(
+            { length: Math.ceil(MAX_ADVISOR_STREAM_CHARS / 48) },
+            (_item, inner) => `${index}-${inner};`,
+          ).join(""),
+        },
+      });
+    }
+    value.releaseAnalysis();
+    await expect(pending).rejects.toThrow(/maximum response size|fresh context|stale/i);
+    expect(value.session.abort).toHaveBeenCalled();
+  });
+
+  test("does not double-count cumulative stream snapshots after valid deltas", async () => {
+    const value = harness("stop", true);
+    await start(value.runtime);
+    const pending = value.runtime.checkpoint({
+      checkpointId: "snapshot-stream",
+      processedThrough: 1,
+      observations: "batch",
+      focus: "standard",
+    });
+    await vi.waitFor(() => expect(value.session.isStreaming).toBe(true));
+    const nearLimit = Array.from(
+      { length: 3_000 },
+      (_item, index) => `${index.toString(36)};`,
+    ).join("");
+    value.emit({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: nearLimit,
+      },
+    });
+    value.emit({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_end",
+        text: nearLimit,
+      },
+    });
+    value.emit({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "done",
+        message: { role: "assistant", content: [{ type: "text", text: "x".repeat(10_000) }] },
+      },
+    });
+    value.releaseAnalysis();
+    await expect(pending).resolves.toMatchObject({ checkpointId: "snapshot-stream" });
+    expect(value.session.abort).not.toHaveBeenCalled();
+  });
+
+  test("does not count completed tool-start args after near-limit tool-call deltas", async () => {
+    const value = harness("stop", true);
+    await start(value.runtime);
+    const pending = value.runtime.checkpoint({
+      checkpointId: "tool-delta-stream",
+      processedThrough: 1,
+      observations: "batch",
+      focus: "standard",
+    });
+    await vi.waitFor(() => expect(value.session.isStreaming).toBe(true));
+    value.emit({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "toolcall_delta",
+        delta: "x".repeat(MAX_ADVISOR_STREAM_CHARS - 64),
+      },
+    });
+    value.emit({
+      type: "tool_execution_start",
+      toolCallId: "read-1",
+      toolName: "read",
+      args: { path: "x".repeat(10_000) },
+    });
+    value.releaseAnalysis();
+
+    await expect(pending).resolves.toMatchObject({ checkpointId: "tool-delta-stream" });
+  });
+
   test("aborts when the child exceeds its independent tool-round cap", async () => {
     const value = harness("stop", true);
     await start(value.runtime);
@@ -461,5 +573,45 @@ describe("AdvisorRuntime", () => {
     expect(sanitized.stateSummary).toContain("REDACTED");
     expect(() => parseAdvisorCheckpoint("{}")).toThrow();
     expect(() => parseAdvisorCheckpoint("not json")).toThrow();
+    expect(() => parseAdvisorCheckpoint("x".repeat(MAX_ADVISOR_CHECKPOINT_CHARS + 1))).toThrow(
+      "maximum response size",
+    );
+    expect(() =>
+      parseAdvisorCheckpoint(
+        JSON.stringify({
+          ...JSON.parse(checkpointJson(request)),
+          checkpointId: "x".repeat(MAX_ADVISOR_CHECKPOINT_ID_CHARS + 1),
+        }),
+      ),
+    ).toThrow("checkpoint ID");
+  });
+
+  test("rejects duplicate fingerprints before blocker verification can correlate them", () => {
+    const request: AdvisorCheckpointRequest = {
+      checkpointId: "duplicate",
+      processedThrough: 1,
+      observations: "",
+      focus: "standard",
+    };
+    const finding = {
+      fingerprint: "same-blocker",
+      category: "correctness",
+      severity: "blocker",
+      confidence: "high",
+      evidenceBasis: "direct",
+      issue: "Wrong result.",
+      evidence: "The output contradicts the claim.",
+      recommendation: "Correct the result.",
+    };
+    expect(() =>
+      parseAdvisorCheckpoint(
+        JSON.stringify({
+          ...JSON.parse(checkpointJson(request)),
+          verdict: "revise",
+          summary: "Two blockers.",
+          findings: [finding, { ...finding, issue: "Another wrong result." }],
+        }),
+      ),
+    ).toThrow("distinct fingerprints");
   });
 });

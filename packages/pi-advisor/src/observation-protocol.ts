@@ -43,7 +43,18 @@ export type AdvisorObservation =
       evidence: string;
       abortSafe: boolean;
     })
-  | (ObservationBase & { type: "manual_checkpoint"; checkpointId: string; focus: string });
+  | (ObservationBase & { type: "manual_checkpoint"; checkpointId: string; focus: string })
+  | (ObservationBase & {
+      type: "advisor_intervention";
+      findingIds: string[];
+      action: "advice" | "guidance" | "revision" | "recovery";
+      requestSequence: number;
+    })
+  | (ObservationBase & {
+      type: "advisor_intervention_receipt";
+      findingIds: string[];
+      requestSequence: number;
+    });
 
 export type AdvisorObservationInput = AdvisorObservation extends infer Record
   ? Record extends AdvisorObservation
@@ -223,11 +234,8 @@ export class AdvisorObservationBuffer {
   private enforceBounds(): void {
     let chars = estimateChars(this.records);
     while (this.records.length > MAX_OBSERVATION_RECORDS || chars > MAX_OBSERVATION_CHARS) {
-      const removable = this.records.findIndex(
-        (record) => record.sequence > this.protectedThrough && !isTerminal(record),
-      );
-      const fallback = this.records.findIndex((record) => record.sequence > this.protectedThrough);
-      const index = removable >= 0 ? removable : fallback;
+      const removable = findRemovableObservation(this.records, this.protectedThrough);
+      const index = removable;
       // A frozen in-flight batch is bounded when captured and must survive until commit/reset.
       if (index < 0) break;
       const removed = this.records.splice(index, 1)[0];
@@ -274,6 +282,12 @@ function sanitizeObservation(value: unknown): AdvisorObservation {
   if (Array.isArray(clipped.toolCalls)) {
     clipped.toolCalls = clipped.toolCalls.slice(0, 32).map((call) => clip(String(call), 2_000));
   }
+  if (Array.isArray(clipped.findingIds)) {
+    clipped.findingIds = clipped.findingIds
+      .map(String)
+      .filter((id) => /^af_[a-f\d]{32}$/u.test(id))
+      .slice(0, 5);
+  }
   return clipped as unknown as AdvisorObservation;
 }
 
@@ -299,6 +313,26 @@ function coalesce(left: AdvisorObservation, right: AdvisorObservation): AdvisorO
   return right;
 }
 
+function findRemovableObservation(
+  records: readonly AdvisorObservation[],
+  protectedThrough: number,
+): number {
+  for (const rank of [0, 1, 2]) {
+    const index = records.findIndex(
+      (record) => record.sequence > protectedThrough && retentionRank(record) === rank,
+    );
+    if (index >= 0) return index;
+  }
+  return -1;
+}
+
+function retentionRank(record: AdvisorObservation): 0 | 1 | 2 {
+  if (record.type === "advisor_intervention" || record.type === "advisor_intervention_receipt") {
+    return 2;
+  }
+  return isTerminal(record) ? 1 : 0;
+}
+
 function isTerminal(record: AdvisorObservation): boolean {
   return (
     record.type === "tool_start" ||
@@ -307,7 +341,9 @@ function isTerminal(record: AdvisorObservation): boolean {
     record.type === "compaction" ||
     record.type === "tree" ||
     record.type === "trajectory_signal" ||
-    record.type === "manual_checkpoint"
+    record.type === "manual_checkpoint" ||
+    record.type === "advisor_intervention" ||
+    record.type === "advisor_intervention_receipt"
   );
 }
 

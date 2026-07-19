@@ -5,8 +5,22 @@ export const MAX_EMISSION_HISTORY = 32;
 
 export type EmissionSuppressionReason = "pass" | "content-free" | "duplicate" | "checkpoint-budget";
 
+export interface AdvisorEmissionRollback {
+  checkpointId: string;
+  checkpointEvicted: string[];
+  hash: string;
+  previousSeverity?: AdvisorSeverity;
+  wasNewHash: boolean;
+  hashEvicted: Array<{ hash: string; severity: AdvisorSeverity }>;
+}
+
 export type AdvisorEmissionDecision =
-  | { accepted: true; hash: string; severity: AdvisorSeverity }
+  | {
+      accepted: true;
+      hash: string;
+      severity: AdvisorSeverity;
+      rollback: AdvisorEmissionRollback;
+    }
   | { accepted: false; reason: EmissionSuppressionReason };
 
 const SEVERITY_RANK: Record<AdvisorSeverity, number> = { nit: 0, concern: 1, blocker: 2 };
@@ -72,33 +86,52 @@ export class AdvisorEmissionGuard {
     const normalized = normalizeReview(review);
     if (!normalized) return { accepted: false, reason: "content-free" };
     const hash = createHash("sha256").update(normalized).digest("hex");
-    const previous = this.seen.get(hash);
-    if (previous && SEVERITY_RANK[previous] >= SEVERITY_RANK[severity]) {
+    const previousSeverity = this.seen.get(hash);
+    if (previousSeverity && SEVERITY_RANK[previousSeverity] >= SEVERITY_RANK[severity]) {
       return { accepted: false, reason: "duplicate" };
     }
+
+    const rollback: AdvisorEmissionRollback = {
+      checkpointId,
+      checkpointEvicted: [],
+      hash,
+      previousSeverity,
+      wasNewHash: previousSeverity === undefined,
+      hashEvicted: [],
+    };
     this.acceptedCheckpoints.add(checkpointId);
     this.checkpointOrder.push(checkpointId);
     while (this.checkpointOrder.length > this.capacity) {
       const stale = this.checkpointOrder.shift();
-      if (stale) this.acceptedCheckpoints.delete(stale);
+      if (stale) {
+        rollback.checkpointEvicted.push(stale);
+        this.acceptedCheckpoints.delete(stale);
+      }
     }
-    this.record(hash, severity);
-    return { accepted: true, hash, severity };
+    this.record(hash, severity, rollback.hashEvicted);
+    return { accepted: true, hash, severity, rollback };
   }
 
-  /**
-   * Roll back an accepted result that never reached its delivery boundary.
-   * This is intentionally exact so an invalidated abort-recovery cannot poison
-   * either the checkpoint budget or the persisted content dedupe ledger.
-   */
-  forget(checkpointId: string, hash: string): void {
-    this.acceptedCheckpoints.delete(checkpointId);
-    const checkpointIndex = this.checkpointOrder.indexOf(checkpointId);
+  rollback(token: AdvisorEmissionRollback): void {
+    this.acceptedCheckpoints.delete(token.checkpointId);
+    const checkpointIndex = this.checkpointOrder.indexOf(token.checkpointId);
     if (checkpointIndex >= 0) this.checkpointOrder.splice(checkpointIndex, 1);
-    if (!this.seen.has(hash)) return;
-    this.seen.delete(hash);
-    const hashIndex = this.order.indexOf(hash);
-    if (hashIndex >= 0) this.order.splice(hashIndex, 1);
+    for (const checkpointId of [...token.checkpointEvicted].reverse()) {
+      this.acceptedCheckpoints.add(checkpointId);
+      if (!this.checkpointOrder.includes(checkpointId)) this.checkpointOrder.unshift(checkpointId);
+    }
+
+    if (token.wasNewHash) {
+      this.seen.delete(token.hash);
+      const hashIndex = this.order.indexOf(token.hash);
+      if (hashIndex >= 0) this.order.splice(hashIndex, 1);
+    } else if (token.previousSeverity) {
+      this.seen.set(token.hash, token.previousSeverity);
+    }
+    for (const evicted of [...token.hashEvicted].reverse()) {
+      this.seen.set(evicted.hash, evicted.severity);
+      if (!this.order.includes(evicted.hash)) this.order.unshift(evicted.hash);
+    }
   }
 
   /** Compact, sanitized records suitable for the checkpoint ledger. */
@@ -125,13 +158,20 @@ export class AdvisorEmissionGuard {
     }
   }
 
-  private record(hash: string, severity: AdvisorSeverity): void {
+  private record(
+    hash: string,
+    severity: AdvisorSeverity,
+    evicted: Array<{ hash: string; severity: AdvisorSeverity }> = [],
+  ): void {
     const previous = this.seen.get(hash);
     if (!previous) this.order.push(hash);
     this.seen.set(hash, severity);
     while (this.order.length > this.capacity) {
       const stale = this.order.shift();
-      if (stale) this.seen.delete(stale);
+      if (!stale) continue;
+      const staleSeverity = this.seen.get(stale);
+      if (staleSeverity) evicted.push({ hash: stale, severity: staleSeverity });
+      this.seen.delete(stale);
     }
   }
 }

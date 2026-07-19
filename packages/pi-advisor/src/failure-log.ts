@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { safeAdvisorLabel } from "./advisor-label.ts";
 import { redactSensitiveText } from "./observation-protocol.ts";
 
 const MAX_LOG_BYTES = 1_000_000;
@@ -33,8 +34,8 @@ export function logAdvisorFailure(
       logPath,
       `${JSON.stringify({
         timestamp: new Date().toISOString(),
-        provider: details.provider,
-        model: details.model,
+        provider: safeAdvisorLabel(details.provider),
+        model: safeAdvisorLabel(details.model),
         timeoutMs: details.timeoutMs,
         contextChars: details.contextChars,
         durationMs: Math.round(details.durationMs),

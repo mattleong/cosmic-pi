@@ -1,8 +1,15 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { redactSensitiveText } from "./observation-protocol.ts";
 import { isRecord } from "./utils.ts";
 import {
   formatAdvisorReview,
+  MAX_ADVISOR_EVIDENCE_CHARS,
+  MAX_ADVISOR_FINDINGS,
+  MAX_ADVISOR_ISSUE_CHARS,
+  MAX_ADVISOR_RECOMMENDATION_CHARS,
+  MAX_ADVISOR_SUMMARY_CHARS,
+  sanitizeAdvisorReview,
   type AdvisorFinding,
   type AdvisorFindingCategory,
   type AdvisorReview,
@@ -30,18 +37,22 @@ export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
         return undefined;
       }
       try {
-        const review = normalizeReviewForDisplay(details.review);
-        if (!review) return undefined;
+        const normalizedReview = normalizeReviewForDisplay(details.review);
+        if (!normalizedReview) return undefined;
+        const review = sanitizeAdvisorReview(normalizedReview);
         const label =
           details.action === "advice"
-            ? "Advisor preserved findings for the next turn"
+            ? "Advisor provided advice"
             : details.action === "guidance"
               ? "Advisor suggested a course correction"
               : details.action === "recovery"
                 ? "Advisor interrupted a stalled trajectory"
                 : "Advisor requested a revision";
         const heading = theme.bold(theme.fg("warning", label));
-        const model = theme.fg("muted", `${details.provider}/${details.model}`);
+        const model = theme.fg(
+          "muted",
+          `${safeLabel(details.provider)}/${safeLabel(details.model)}`,
+        );
         if (expanded) {
           return new Text(`${heading} ${model}\n${formatAdvisorReview(review)}`, 1, 0);
         }
@@ -80,7 +91,7 @@ function normalizeReviewForDisplay(value: unknown): AdvisorReview | undefined {
   }
 
   const findings: AdvisorFinding[] = [];
-  for (const finding of value.findings) {
+  for (const finding of value.findings.slice(0, MAX_ADVISOR_FINDINGS)) {
     if (
       !isRecord(finding) ||
       (finding.severity !== "nit" &&
@@ -97,22 +108,55 @@ function normalizeReviewForDisplay(value: unknown): AdvisorReview | undefined {
     }
     findings.push({
       category: normalizeCategory(finding.category),
+      ...(typeof finding.id === "string" && /^af_[a-f\d]{32}$/u.test(finding.id)
+        ? { id: finding.id }
+        : {}),
+      ...(finding.status === "open" ||
+      finding.status === "acknowledged" ||
+      finding.status === "resolved" ||
+      finding.status === "superseded"
+        ? { status: finding.status }
+        : {}),
+      ...(finding.confidence === "low" ||
+      finding.confidence === "medium" ||
+      finding.confidence === "high"
+        ? { confidence: finding.confidence }
+        : {}),
+      ...(finding.evidenceBasis === "none" ||
+      finding.evidenceBasis === "inferred" ||
+      finding.evidenceBasis === "direct"
+        ? { evidenceBasis: finding.evidenceBasis }
+        : {}),
       severity:
         finding.severity === "high"
           ? "blocker"
           : finding.severity === "medium"
             ? "concern"
             : finding.severity,
-      issue: finding.issue.trim(),
+      issue: clip(finding.issue.trim(), MAX_ADVISOR_ISSUE_CHARS),
       evidence:
         typeof finding.evidence === "string" && finding.evidence.trim()
-          ? finding.evidence.trim()
+          ? clip(finding.evidence.trim(), MAX_ADVISOR_EVIDENCE_CHARS)
           : "Not recorded by this earlier advisor review.",
-      recommendation: finding.recommendation.trim(),
+      recommendation: clip(finding.recommendation.trim(), MAX_ADVISOR_RECOMMENDATION_CHARS),
     });
   }
 
-  return { verdict: value.verdict, summary: value.summary.trim(), findings };
+  return {
+    verdict: value.verdict,
+    summary: clip(value.summary.trim(), MAX_ADVISOR_SUMMARY_CHARS),
+    findings,
+  };
+}
+
+function safeLabel(value: string): string {
+  return clip(redactSensitiveText(value), 256);
+}
+
+function clip(value: string, limit: number): string {
+  return value.length <= limit
+    ? value
+    : `${value.slice(0, Math.max(0, limit - 18))}[... truncated]`;
 }
 
 function normalizeCategory(value: unknown): AdvisorFindingCategory {

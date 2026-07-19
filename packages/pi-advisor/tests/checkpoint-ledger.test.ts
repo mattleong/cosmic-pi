@@ -1,5 +1,6 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
+import { advisorFindingId } from "../src/finding-lifecycle.ts";
 import {
   ADVISOR_CHECKPOINT_ENTRY_TYPE,
   ADVISOR_CHECKPOINT_PROTOCOL_VERSION,
@@ -71,6 +72,23 @@ describe("checkpoint ledger", () => {
       cancellationLatched: true,
       completedPrimaryTurns: 9,
       immunityUntilCompletedTurn: 12,
+      interventionBudget: {
+        delivered: 1,
+        highestSeverity: "blocker",
+        correctionUsed: true,
+      },
+      findingLifecycle: [
+        {
+          id: advisorFindingId("b".repeat(64), 2),
+          key: "b".repeat(64),
+          generation: 2,
+          category: "correctness",
+          severity: "blocker",
+          status: "acknowledged",
+          firstSeenTurn: 3,
+          lastSeenTurn: 9,
+        },
+      ],
       emissionHashes: Array.from(
         { length: MAX_LEDGER_EMISSION_HASHES + 4 },
         (_, index) => `concern:${index.toString(16).padStart(64, "0")}`,
@@ -88,7 +106,24 @@ describe("checkpoint ledger", () => {
       cancellationLatched: true,
       completedPrimaryTurns: 9,
       immunityUntilCompletedTurn: 12,
+      interventionBudget: {
+        delivered: 1,
+        highestSeverity: "blocker",
+        correctionUsed: true,
+      },
     });
+    expect(ledger.findingLifecycle).toEqual([
+      {
+        id: advisorFindingId("b".repeat(64), 2),
+        key: "b".repeat(64),
+        generation: 2,
+        category: "correctness",
+        severity: "blocker",
+        status: "acknowledged",
+        firstSeenTurn: 3,
+        lastSeenTurn: 9,
+      },
+    ]);
     expect(restoreCheckpointLedger(branch, fingerprint)).toEqual(ledger);
     expect(renderDurableReviewSummary(ledger.reviewSummary)).toBe(JSON.stringify(reviewSummary()));
   });
@@ -167,6 +202,29 @@ describe("checkpoint ledger", () => {
         },
       }),
     ).toBeUndefined();
+  });
+
+  test("rejects lifecycle records whose ID does not match key and generation", () => {
+    const ledger = createCheckpointLedger({
+      fingerprint: "a".repeat(64),
+      anchorId: "anchor",
+    });
+    const parsed = parseLedger({
+      ...ledger,
+      findingLifecycle: [
+        {
+          id: advisorFindingId("c".repeat(64), 0),
+          key: "d".repeat(64),
+          generation: 0,
+          category: "correctness",
+          severity: "concern",
+          status: "open",
+          firstSeenTurn: 1,
+          lastSeenTurn: 1,
+        },
+      ],
+    });
+    expect(parsed?.findingLifecycle).toEqual([]);
   });
 
   test("ignores stale branches, fingerprints and malformed versions", () => {

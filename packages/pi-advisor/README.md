@@ -23,13 +23,13 @@ pi -e ./packages/pi-advisor
 
 pi-advisor creates one persistent Advisor conversation for the active parent session. It uses only public Pi APIs, an in-memory child `SessionManager`, and an in-memory child transcript. Complete Advisor messages, including Advisor thinking, remain available to later checkpoints in memory but are never written as a second raw transcript or child session file.
 
-A compact `pi-advisor-checkpoint` ledger is appended to the parent session after coherent checkpoints. It contains only a protocol/fingerprint, active parent anchor, bounded state summary, routing/cancellation state, and bounded emission hashes. It contains no raw parent deltas, main or Advisor thinking, tool output, credentials, or copied files. On session resume the extension validates the latest active-branch ledger and re-primes a fresh in-memory Advisor from Pi's compacted active context plus compact state. Branch changes, compaction, configuration identity changes, context pressure, malformed protocol, and child failures reset or re-prime the child; old epochs cannot deliver.
+A compact `pi-advisor-checkpoint` ledger is appended to the parent session after coherent checkpoints. It contains only a protocol/fingerprint, active parent anchor, bounded state summary, routing/cancellation state, bounded intervention budget, bounded lifecycle metadata, and bounded emission hashes. It contains no raw parent deltas, main or Advisor thinking, tool output, credentials, or copied files. On session resume the extension validates the latest active-branch ledger and re-primes a fresh in-memory Advisor from Pi's compacted active context plus compact state. Branch changes, compaction, configuration identity changes, context pressure, malformed protocol, and child failures reset or re-prime the child; old epochs cannot deliver.
 
 Pi-exposed main-agent text and thinking deltas are forwarded as bounded ordered observations. Missing, opaque, or redacted thinking remains missing/opaque; pi-advisor does not invent it. Tool starts, bounded updates, results, errors, and completed-turn facts are also forwarded. Repository content and tool output are untrusted evidence, never Advisor instructions.
 
 ## Completed-turn catch-up
 
-Every eligible completed primary `turn_end`—both a tool-calling progress turn and a terminal completed assistant turn—enqueues a correlated checkpoint and waits for only pi-advisor's own catch-up barrier. This prevents the next primary model step from starting before that checkpoint settles or fails open.
+Every eligible completed primary `turn_end`—both a tool-calling progress turn and a terminal completed assistant turn—enqueues a correlated checkpoint and waits for only pi-advisor's own catch-up barrier. This prevents the next primary model step from starting before that checkpoint settles or fails open. Ordinary tool-boundary checkpoints are observation-only: they update the persistent Advisor context but cannot emit premature “unfinished work” notes. Independently triggered trajectory reviews remain routable, as do terminal response reviews.
 
 The catch-up wait has a hard **30,000 ms per-turn cap**. Provider failure, Advisor reset/disposal, or the parent abort signal releases it earlier. Timeout or failure never discards or aborts the primary output. A timed-out or cancelled checkpoint is permanently stale for delivery: a late result cannot steer, abort, trigger correction, or surprise-resume the parent. pi-advisor never calls parent `waitForIdle()` from an event. `message_update`, tool streaming updates, and other token-level handlers only perform bounded synchronous ingestion and never await Advisor work.
 
@@ -40,16 +40,20 @@ The catch-up wait has a hard **30,000 ms per-turn cap**. Provider failure, Advis
 Advisor findings use three severities:
 
 - **nit**: recorded only; never triggers a primary turn.
-- **concern**: preserved for `nextTurn` under Guardrail; Corrective may interrupt when immunity permits.
-- **blocker**: Guardrail and Corrective may interrupt; blockers may bypass immunity.
+- **concern**: pushed directly under Guardrail and Advisory; Corrective may interrupt when immunity permits.
+- **blocker**: pushed directly under Advisory; Guardrail and Corrective may interrupt and may bypass immunity.
 
-Advisory findings never automatically trigger work. Non-interrupting findings use Pi's `nextTurn` delivery so they remain available without waking an idle or cancelled agent. Live corrections use steering; an eligible idle terminal correction may trigger a turn only when cancellation is not latched. Turning supervision off disables automatic review while keeping explicit review commands available.
+Automatic findings are immediate-or-drop and never wait for a later user prompt. Direct advice is injected immediately with steering but never wakes an idle parent. Live corrections use steering, and an eligible idle terminal correction may trigger a turn immediately. Turning supervision off disables automatic review while keeping explicit review commands available.
 
-After an interrupting correction is actually delivered, concerns have fixed immunity for the next **three subsequently completed primary turns**. Reviews, passes, failures, user-request boundaries, and suppressed findings do not consume the window. A blocker may bypass and re-arm it. This fixed policy is not configurable.
+After an interrupting correction is actually delivered, concerns have fixed immunity for the next **three subsequently completed primary turns**. Reviews, passes, failures, user-request boundaries, and suppressed findings do not consume the window. A blocker may bypass and re-arm it. Findings suppressed by immunity are dropped rather than deferred. This fixed policy is not configurable.
 
-External/user-aborted turns, `/advisor cancel`, pause, and off latch conservative cancellation preservation. Late findings may be preserved for a future genuine user turn but cannot resume the parent. Only a genuine user prompt/resume clears the latch. Repeated findings are normalized and bounded by session/branch; equal or lower repeats are suppressed while a real severity escalation remains eligible.
+External/user-aborted turns, `/advisor cancel`, pause, and off latch conservative cancellation. Late findings are dropped and cannot resume the parent or appear after a future user prompt. Only a genuine user prompt clears the latch. Repeated findings are normalized and bounded by session/branch; equal or lower repeats are suppressed while a real severity escalation remains eligible.
 
-Progress routing also uses bounded stream and tool-trajectory evidence. Repeated calls/results/errors or oscillation can request a checkpoint, but elapsed time alone is not proof of a loop. Parent abort/recovery requires an independently confirmed Advisor blocker at an abort-safe boundary; active tools make abort unsafe.
+Progress routing also uses bounded stream and tool-trajectory evidence. Repeated calls/results/errors or oscillation can request a checkpoint, but elapsed time alone is not proof of a loop. Ordinary tool-boundary checkpoints are observation-only. Parent abort/recovery requires both strong local trajectory evidence and a correlated second Advisor pass that reconfirms a high-confidence, direct-evidence blocker; active tools make abort unsafe.
+
+Findings receive runtime-generated stable IDs and move through bounded in-memory lifecycle states: open, acknowledged after delivery, resolved after a complete later checkpoint omits them, or superseded for reserved future protocols. The Advisor reports closed confidence and evidence-basis fields. Deterministic gates require high confidence plus direct evidence for blocker routing; weaker blockers are downgraded to concerns, while low-confidence or evidence-free findings remain internal.
+
+Automatic interventions have a fixed per-request budget: at most two strictly escalating deliveries (concern then blocker) and at most one correction-class intervention. A blocker-first delivery exhausts the request. Genuine user input resets the budget; tool turns and Advisor-triggered corrections do not. Pi exposes causal delivery receipts, not semantic agreement, so acknowledgement metrics mean the main agent continued processing after injection rather than proving the critique was accepted.
 
 ## Read-only investigation and exact safety boundary
 
@@ -87,9 +91,9 @@ Read-only does not mean data-free: files under the project root that the Advisor
 
 `verify-last` requests an evidence-focused review and may use the same project-confined read-only tools. `/advisor-settings` is a compatibility shortcut for the settings dashboard. The dashboard shows every setting in one flat list and persists each change immediately; there is no Apply step or nested Advanced section.
 
-`/advisor-usage` reports provider-recorded model responses, tokens, cache usage, cost, review timing, and per-model attribution for the current session. Its counters reset on session start, but not on compaction or branch changes. It does not include parent-agent usage or estimate unreported costs.
+`/advisor-usage` reports provider-recorded model responses, tokens, cache usage, cost, review timing, per-model attribution, blocker-verification results, finding lifecycle counts, intervention receipts/budget, and operational calibration outcomes for the current session. Calibration separates passes, finding-bearing reviews, delivered advice/guidance/revisions/recoveries, suppression, discard, and failure. These counters measure Advisor/routing behavior, not objective correctness or user acceptance. They reset on session start but not on compaction or branch changes, exclude parent-agent usage, and never estimate unreported costs.
 
-Verbose status reports persistent/in-memory behavior, fixed immunity, active safe tool names, observation backlog, processed/ingested sequence, pending checkpoints, catch-up waits/timeouts/failures/cancellations, child resets/re-primes, guidance, usage totals, and bounded failure classes. It never displays transcript text, thinking, tool evidence, auth values, or credentials.
+Verbose status reports persistent/in-memory behavior, fixed immunity, active safe tool names, observation backlog, processed/ingested sequence, pending checkpoints, catch-up waits/timeouts/failures/cancellations, child resets/re-primes, guidance, usage totals, and bounded failure classes. Injected parent notes use a compact Issue/Action form; full sanitized evidence and recommendations remain available only in the expanded local renderer. Status and usage never display transcript text, thinking, tool evidence, auth values, or credentials.
 
 ## Configuration
 
@@ -118,7 +122,7 @@ When `PI_CODING_AGENT_DIR` is unset, the path defaults to `~/.pi/agent/extension
 - `provider` and `model`: dedicated Advisor model identity; both must be non-empty.
 - `fastMode`: requests the shared supported OpenAI priority tier; defaults to `true`. It is active only for supported models.
 - `thinkingLevel`: Advisor reasoning level; defaults to `high` and is clamped to model support.
-- `reviewPolicy`: `corrective`, `guardrail`, or `advisory`; defaults to `corrective`. Corrective can act on concerns and blockers, Guardrail acts only on blockers, and Advisory never interrupts or triggers corrections. Three-turn concern immunity limits repeated interruptions.
+- `reviewPolicy`: `corrective`, `guardrail`, or `advisory`; defaults to `corrective`. Corrective can act on concerns and blockers, Guardrail directly advises on concerns and acts on blockers, and Advisory pushes all actionable findings directly without aborting or waking an idle parent. Three-turn concern immunity limits repeated interruptions.
 - `timeoutMs`: Advisor operation timeout, clamped to 10,000–180,000 ms and defaulting to 90,000 ms. It does not alter the hard 30,000 ms completed-turn barrier; work finishing later can still improve the persistent Advisor context but cannot deliver a stale intervention for that turn.
 - `maxContextChars`: bounded serialized seed limit, clamped to 16,000–240,000 characters and defaulting to 240,000. Users can lower it directly when lower latency or cost is preferred.
 
