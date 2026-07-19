@@ -15,18 +15,11 @@ export function gateAdvisorFinding(finding: AdvisorFinding): AdvisorFindingGateD
   if (finding.severity === "nit") {
     return { actionable: false, finding };
   }
-  if (confidence === "low") {
+  if (confidence === "low" || evidenceBasis === "none") {
     return {
       actionable: false,
       finding: { ...finding, severity: "nit" },
-      reason: "low-confidence",
-    };
-  }
-  if (evidenceBasis === "none") {
-    return {
-      actionable: false,
-      finding: { ...finding, severity: "nit" },
-      reason: "no-evidence",
+      reason: confidence === "low" ? "low-confidence" : "no-evidence",
     };
   }
   if (finding.severity === "blocker" && (confidence !== "high" || evidenceBasis !== "direct")) {

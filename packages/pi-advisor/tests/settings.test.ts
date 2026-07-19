@@ -4,7 +4,11 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { type ResolvedAdvisorConfig, writeRawAdvisorConfig } from "../src/config.ts";
-import { type AdvisorSessionMetrics, registerAdvisorCommands } from "../src/settings.ts";
+import {
+  emptyAdvisorOutcomes,
+  type AdvisorSessionMetrics,
+  registerAdvisorCommands,
+} from "../src/settings.ts";
 
 type CommandHandler = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 const tempDirectories: string[] = [];
@@ -28,20 +32,6 @@ function configAt(configPath: string): ResolvedAdvisorConfig {
   };
 }
 
-function zeroOutcomes(): AdvisorSessionMetrics["outcomes"] {
-  return {
-    pass: 0,
-    findings: 0,
-    advice: 0,
-    guidance: 0,
-    revision: 0,
-    recovery: 0,
-    suppressed: 0,
-    discarded: 0,
-    failures: 0,
-  };
-}
-
 function createCommands(
   initial: ResolvedAdvisorConfig,
   metrics: AdvisorSessionMetrics = {
@@ -50,7 +40,7 @@ function createCommands(
     revise: 0,
     failure: 0,
     discarded: 0,
-    outcomes: zeroOutcomes(),
+    outcomes: emptyAdvisorOutcomes(),
   },
 ) {
   const commands = new Map<string, CommandHandler>();
@@ -409,7 +399,7 @@ describe("advisor commands", () => {
       revise: 1,
       failure: 1,
       discarded: 1,
-      outcomes: zeroOutcomes(),
+      outcomes: emptyAdvisorOutcomes(),
       backgroundState: "reviewing",
       cacheReadTokens: 30,
       activeCatchUpWaits: 1,
@@ -587,7 +577,7 @@ describe("advisor commands", () => {
         revise: 0,
         failure: 0,
         discarded: 0,
-        outcomes: zeroOutcomes(),
+        outcomes: emptyAdvisorOutcomes(),
         usageByModel: {
           secret: {
             provider: "anthropic-token=another-secret-value",
@@ -646,7 +636,7 @@ describe("advisor commands", () => {
         revise: 0,
         failure: 0,
         discarded: 0,
-        outcomes: zeroOutcomes(),
+        outcomes: emptyAdvisorOutcomes(),
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
         cost: 0.01,

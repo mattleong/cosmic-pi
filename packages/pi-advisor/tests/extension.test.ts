@@ -1033,42 +1033,51 @@ describe("persistent extension cutover", () => {
     expect(persisted).not.toMatch(/sk-abcdefghijklmnop|secret-value/);
   };
 
-  test("redacts and clips provider/model labels in advice message details", async () => {
-    const value = harness({
-      provider: "provider-api_key=sk-abcdefghijklmnop",
-      model: `model-token=secret-value-${"x".repeat(400)}`,
-    });
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const current = value.runtimes[0]!;
-    current.pending[0]!.resolve(pass(current.requests[0]!));
-    await tick();
-    await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
-    await tick();
-    const manualIndex = current.requests.length - 1;
-    current.pending[manualIndex]!.resolve(
-      revise(current.requests[manualIndex]!, "concern", "manual label issue"),
-    );
-    await tick();
-    expectRedactedLabels(value);
-  });
-
-  test("redacts and clips provider/model labels in correction message details", async () => {
-    const value = harness({
-      provider: "provider-api_key=sk-abcdefghijklmnop",
-      model: `model-token=secret-value-${"x".repeat(400)}`,
-      reviewPolicy: "corrective",
-    });
-    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
-    await value.emit("session_start", { type: "session_start" });
-    await value.emit("turn_end", finalTurn("candidate"));
-    await tick();
-    const current = value.runtimes[0]!;
-    current.pending[0]!.resolve(revise(current.requests[0]!, "concern", "correction label issue"));
-    await tick();
-    expectRedactedLabels(value);
-  });
+  test.each([
+    {
+      mode: "advice" as const,
+      prepare: async (value: ReturnType<typeof harness>) => {
+        await value.emit("session_start", { type: "session_start" });
+        await value.emit("turn_end", finalTurn("candidate"));
+        await tick();
+        const current = value.runtimes[0]!;
+        current.pending[0]!.resolve(pass(current.requests[0]!));
+        await tick();
+        await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
+        await tick();
+        const manualIndex = current.requests.length - 1;
+        current.pending[manualIndex]!.resolve(
+          revise(current.requests[manualIndex]!, "concern", "manual label issue"),
+        );
+        await tick();
+      },
+    },
+    {
+      mode: "correction" as const,
+      prepare: async (value: ReturnType<typeof harness>) => {
+        (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+        await value.emit("session_start", { type: "session_start" });
+        await value.emit("turn_end", finalTurn("candidate"));
+        await tick();
+        const current = value.runtimes[0]!;
+        current.pending[0]!.resolve(
+          revise(current.requests[0]!, "concern", "correction label issue"),
+        );
+        await tick();
+      },
+    },
+  ])(
+    "redacts and clips provider/model labels in $mode message details",
+    async ({ mode, prepare }) => {
+      const value = harness({
+        provider: "provider-api_key=sk-abcdefghijklmnop",
+        model: `model-token=secret-value-${"x".repeat(400)}`,
+        ...(mode === "correction" ? { reviewPolicy: "corrective" as const } : {}),
+      });
+      await prepare(value);
+      expectRedactedLabels(value);
+    },
+  );
 
   test("idle automatic direct drop rolls back emission and dedupe across manual review and restore", async () => {
     const value = harness({ reviewPolicy: "guardrail" });

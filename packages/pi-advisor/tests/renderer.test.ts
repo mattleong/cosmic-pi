@@ -6,7 +6,7 @@ import {
 } from "../src/renderer.ts";
 
 describe("advisor review renderer", () => {
-  function captureRenderer(): (details: unknown, options: unknown, width?: number) => string {
+  function captureRenderer() {
     let renderer: ((message: unknown, options: unknown, theme: unknown) => unknown) | undefined;
     registerAdvisorReviewRenderer({
       registerMessageRenderer: (_type: string, nextRenderer: typeof renderer) => {
@@ -17,16 +17,21 @@ describe("advisor review renderer", () => {
       bold: (text: string) => text,
       fg: (_color: string, text: string) => text,
     };
-    return (details, options, width = 100) => {
-      const component = renderer?.({ details }, options, theme) as {
-        render(width: number): string[];
-      };
-      return component.render(width).join("\n");
+    return {
+      render(details: unknown, options: unknown, width = 100): string {
+        const component = renderer?.({ details }, options, theme) as {
+          render(width: number): string[];
+        };
+        return component.render(width).join("\n");
+      },
+      raw(message: unknown, options: unknown = {}, customTheme: unknown = theme): unknown {
+        return renderer?.(message, options, customTheme);
+      },
     };
   }
 
   test("renders the complete critique and configured model", () => {
-    const render = captureRenderer();
+    const { render } = captureRenderer();
 
     const details: AdvisorReviewMessageDetails = {
       action: "advice",
@@ -66,7 +71,7 @@ describe("advisor review renderer", () => {
   });
 
   test("redacts historical reviews and configured model labels before rendering", () => {
-    const output = captureRenderer()(
+    const output = captureRenderer().render(
       {
         action: "advice",
         provider: "openai-api-key=sk-abcdefghijklmnop",
@@ -96,7 +101,7 @@ describe("advisor review renderer", () => {
   });
 
   test("clips oversized historical reviews before rendering", () => {
-    const output = captureRenderer()(
+    const output = captureRenderer().render(
       {
         action: "advice",
         provider: `provider-${"p".repeat(1_000)}`,
@@ -122,7 +127,7 @@ describe("advisor review renderer", () => {
   });
 
   test("expands historical findings that predate category and evidence fields", () => {
-    const output = captureRenderer()(
+    const output = captureRenderer().render(
       {
         action: "revision",
         provider: "legacy",
@@ -147,23 +152,8 @@ describe("advisor review renderer", () => {
   });
 
   test("falls back to the default custom-message display for invalid details", () => {
-    let renderer: ((message: unknown, options: unknown, theme: unknown) => unknown) | undefined;
-    registerAdvisorReviewRenderer({
-      registerMessageRenderer: (_type: string, nextRenderer: typeof renderer) => {
-        renderer = nextRenderer;
-      },
-    } as unknown as ExtensionAPI);
-
-    expect(renderer?.({ details: undefined }, {}, {})).toBeUndefined();
-    expect(
-      renderer?.(
-        { details: { provider: "openai", model: "reviewer", review: {} } },
-        {},
-        {
-          bold: (text: string) => text,
-          fg: (_color: string, text: string) => text,
-        },
-      ),
-    ).toBeUndefined();
+    const { raw } = captureRenderer();
+    expect(raw({ details: undefined })).toBeUndefined();
+    expect(raw({ details: { provider: "openai", model: "reviewer", review: {} } })).toBeUndefined();
   });
 });

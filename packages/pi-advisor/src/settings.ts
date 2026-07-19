@@ -83,6 +83,20 @@ export interface AdvisorOutcomeMetrics {
   failures: number;
 }
 
+export function emptyAdvisorOutcomes(): AdvisorOutcomeMetrics {
+  return {
+    pass: 0,
+    findings: 0,
+    advice: 0,
+    guidance: 0,
+    revision: 0,
+    recovery: 0,
+    suppressed: 0,
+    discarded: 0,
+    failures: 0,
+  };
+}
+
 export interface AdvisorSessionMetrics {
   attempted: number;
   pass: number;

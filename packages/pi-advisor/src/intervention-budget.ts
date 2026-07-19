@@ -10,10 +10,12 @@ export interface AdvisorInterventionBudgetSnapshot {
 export function sanitizeInterventionBudgetSnapshot(
   snapshot: Partial<AdvisorInterventionBudgetSnapshot> | undefined,
 ): AdvisorInterventionBudgetSnapshot {
+  const delivered = snapshot?.delivered;
   return {
-    delivered: Number.isSafeInteger(snapshot?.delivered)
-      ? Math.max(0, Math.min(MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST, Number(snapshot?.delivered)))
-      : 0,
+    delivered:
+      typeof delivered === "number" && Number.isSafeInteger(delivered)
+        ? Math.max(0, Math.min(MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST, delivered))
+        : 0,
     ...(snapshot?.highestSeverity === "concern" || snapshot?.highestSeverity === "blocker"
       ? { highestSeverity: snapshot.highestSeverity }
       : {}),

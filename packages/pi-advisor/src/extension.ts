@@ -13,7 +13,7 @@ import {
   type AdvisorRuntimeDriver,
 } from "./advisor-runtime.ts";
 import { AdvisorReviewQueue } from "./review-queue.ts";
-import { stringifyRedactedObservation } from "./observation-protocol.ts";
+import { redactSensitiveText, stringifyRedactedObservation } from "./observation-protocol.ts";
 import {
   ADVISOR_CHECKPOINT_ENTRY_TYPE,
   createCheckpointLedger,
@@ -54,6 +54,7 @@ import {
 } from "./review.ts";
 import { AdvisorRoutingState, routeAdvisorFinding, type AdvisorRoute } from "./routing.ts";
 import {
+  emptyAdvisorOutcomes,
   type AdvisorCommandActions,
   type AdvisorSessionMetrics,
   registerAdvisorCommands,
@@ -238,7 +239,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       const effort = model ? clampThinkingLevel(model, config.thinkingLevel) : config.thinkingLevel;
       statusSpinnerContext.ui.setStatus(
         STATUS_KEY,
-        `${frame} ${safeAdvisorLabel(config.model ?? "advisor")}:${effort} advising…`,
+        `${frame} ${redactSensitiveText(config.model ?? "advisor").slice(0, 256)}:${effort} advising…`,
       );
     };
 
@@ -558,6 +559,11 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         summary: checkpoint.summary,
         findings: checkpoint.findings,
       };
+      const suppress = (lastAction: "suppressed" | "pass" = "suppressed"): "silent" => {
+        metrics.outcomes.suppressed += 1;
+        metrics.lastAction = lastAction;
+        return "silent";
+      };
       if (review.verdict === "pass") {
         if (phase === "final") {
           findingLifecycle.reconcile([], {
@@ -592,11 +598,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         scope,
       );
       metrics.suppressedFindings = (metrics.suppressedFindings ?? 0) + filtered.suppressed;
-      if (filtered.findings.length === 0) {
-        metrics.outcomes.suppressed += 1;
-        metrics.lastAction = "suppressed";
-        return "silent";
-      }
+      if (filtered.findings.length === 0) return suppress();
       const filteredReview = { ...review, findings: filtered.findings };
       const rollbackUndelivered = (emission?: { rollback: AdvisorEmissionRollback }): void => {
         findingDedupe.rollback(filtered.rollback);
@@ -605,9 +607,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       const emission = emissionGuard.evaluate(checkpoint.checkpointId, filteredReview);
       if (!emission.accepted) {
         rollbackUndelivered();
-        metrics.outcomes.suppressed += 1;
-        metrics.lastAction = emission.reason === "pass" ? "pass" : "suppressed";
-        return "silent";
+        return suppress(emission.reason === "pass" ? "pass" : "suppressed");
       }
       metrics.revise += 1;
       const severity = highestAdvisorSeverity(filteredReview);
@@ -634,9 +634,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       const budgeted = !explicitManual;
       if (budgeted && !interventionBudget.canDeliver(severity)) {
         rollbackUndelivered(emission);
-        metrics.outcomes.suppressed += 1;
-        metrics.lastAction = "suppressed";
-        return "silent";
+        return suppress();
       }
       let route = explicitManual
         ? severity === "nit"
@@ -697,21 +695,22 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       };
       if (route === "silent") {
         rollbackUndelivered(emission);
-        metrics.outcomes.suppressed += 1;
-        metrics.lastAction = "suppressed";
+        suppress();
       } else if (route === "push-direct") {
         pushAdvice();
         metrics.lastAction = "advice";
-      } else if (route === "steer-live") {
+      } else if (route === "steer-live" || route === "trigger-correction") {
         const outcome = phase === "progress" ? "guidance" : "revision";
-        sendLiveCorrection(pi, config, recordDelivery(true, outcome), phase);
+        sendCorrection(
+          pi,
+          config,
+          recordDelivery(true, outcome),
+          phase,
+          route === "trigger-correction",
+          false,
+        );
         routingState.armInterruption();
-        metrics.lastAction = phase === "progress" ? "guidance" : "revision";
-      } else if (route === "trigger-correction") {
-        const outcome = phase === "progress" ? "guidance" : "revision";
-        sendTriggeredCorrection(pi, config, recordDelivery(true, outcome), phase);
-        routingState.armInterruption();
-        metrics.lastAction = phase === "progress" ? "guidance" : "revision";
+        metrics.lastAction = outcome;
       } else {
         if (!trajectory || trajectoryId === undefined) {
           pushAdvice();
@@ -1553,17 +1552,7 @@ function emptySessionMetrics(): AdvisorSessionMetrics {
     inputTokens: 0,
     modelResponses: 0,
     outputTokens: 0,
-    outcomes: {
-      pass: 0,
-      findings: 0,
-      advice: 0,
-      guidance: 0,
-      revision: 0,
-      recovery: 0,
-      suppressed: 0,
-      discarded: 0,
-      failures: 0,
-    },
+    outcomes: emptyAdvisorOutcomes(),
     pass: 0,
     revise: 0,
     skippedReviews: {},
@@ -1592,15 +1581,6 @@ function classifyFailure(error: unknown): string {
   return "provider";
 }
 
-function sendLiveCorrection(
-  pi: ExtensionAPI,
-  config: ResolvedAdvisorConfig,
-  review: AdvisorReview,
-  phase: ReviewPhase,
-): void {
-  sendCorrection(pi, config, review, phase, false, false);
-}
-
 function sendTriggeredCorrection(
   pi: ExtensionAPI,
   config: ResolvedAdvisorConfig,
@@ -1611,6 +1591,14 @@ function sendTriggeredCorrection(
   sendCorrection(pi, config, review, phase, true, recovering);
 }
 
+function sendAdvisorAdvice(
+  pi: ExtensionAPI,
+  config: ResolvedAdvisorConfig,
+  review: AdvisorReview,
+): void {
+  sendAdvisorMessage(pi, config, review, "advice", buildAdvisorAdvice);
+}
+
 function sendCorrection(
   pi: ExtensionAPI,
   config: ResolvedAdvisorConfig,
@@ -1619,47 +1607,43 @@ function sendCorrection(
   triggerTurn: boolean,
   recovering: boolean,
 ): void {
-  if (!config.provider || !config.model) return;
-  const safeReview = sanitizeAdvisorReview(review);
-  pi.sendMessage(
-    {
-      customType: ADVISOR_REVIEW_MESSAGE_TYPE,
-      content:
-        phase === "progress"
-          ? buildProgressSteer(safeReview, recovering)
-          : buildRevisionSteer(safeReview),
-      display: true,
-      details: {
-        action: recovering ? "recovery" : phase === "progress" ? "guidance" : "revision",
-        review: safeReview,
-        provider: safeAdvisorLabel(config.provider),
-        model: safeAdvisorLabel(config.model),
-      },
-    },
-    triggerTurn ? { deliverAs: "steer", triggerTurn: true } : { deliverAs: "steer" },
+  const action = recovering ? "recovery" : phase === "progress" ? "guidance" : "revision";
+  sendAdvisorMessage(
+    pi,
+    config,
+    review,
+    action,
+    (safeReview) =>
+      phase === "progress"
+        ? buildProgressSteer(safeReview, recovering)
+        : buildRevisionSteer(safeReview),
+    triggerTurn,
   );
 }
 
-function sendAdvisorAdvice(
+function sendAdvisorMessage(
   pi: ExtensionAPI,
   config: ResolvedAdvisorConfig,
   review: AdvisorReview,
+  action: "advice" | "guidance" | "recovery" | "revision",
+  content: (review: AdvisorReview) => string,
+  triggerTurn = false,
 ): void {
   if (!config.provider || !config.model) return;
   const safeReview = sanitizeAdvisorReview(review);
   pi.sendMessage(
     {
       customType: ADVISOR_REVIEW_MESSAGE_TYPE,
-      content: buildAdvisorAdvice(safeReview),
+      content: content(safeReview),
       display: true,
       details: {
-        action: "advice",
+        action,
         review: safeReview,
         provider: safeAdvisorLabel(config.provider),
         model: safeAdvisorLabel(config.model),
       },
     },
-    { deliverAs: "steer" },
+    triggerTurn ? { deliverAs: "steer", triggerTurn: true } : { deliverAs: "steer" },
   );
 }
 

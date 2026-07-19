@@ -17,11 +17,18 @@ import {
 
 export const ADVISOR_REVIEW_MESSAGE_TYPE = "advisor-review";
 
+const ACTION_LABELS = {
+  advice: "Advisor provided advice",
+  guidance: "Advisor suggested a course correction",
+  recovery: "Advisor interrupted a stalled trajectory",
+  revision: "Advisor requested a revision",
+} as const;
+
 export interface AdvisorReviewMessageDetails {
   review: AdvisorReview;
   provider: string;
   model: string;
-  action?: "advice" | "guidance" | "recovery" | "revision";
+  action?: keyof typeof ACTION_LABELS;
 }
 
 export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
@@ -40,14 +47,7 @@ export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
         const normalizedReview = normalizeReviewForDisplay(details.review);
         if (!normalizedReview) return undefined;
         const review = sanitizeAdvisorReview(normalizedReview);
-        const label =
-          details.action === "advice"
-            ? "Advisor provided advice"
-            : details.action === "guidance"
-              ? "Advisor suggested a course correction"
-              : details.action === "recovery"
-                ? "Advisor interrupted a stalled trajectory"
-                : "Advisor requested a revision";
+        const label = ACTION_LABELS[details.action ?? "revision"];
         const heading = theme.bold(theme.fg("warning", label));
         const model = theme.fg(
           "muted",
