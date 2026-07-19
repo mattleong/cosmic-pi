@@ -1,6 +1,6 @@
 # pi-advisor
 
-A private pi extension that keeps a dedicated Advisor model alongside the main agent. The Advisor reviews ordered work observations, investigates the current project through a fixed read-only capability set, and routes bounded findings without replacing or hiding the primary output.
+A private pi extension that keeps one dedicated Advisor model alongside the main agent. The Advisor reviews ordered work observations, investigates the current project through a fixed read-only capability set, offers bounded complementary perspectives during active work, and routes evidence-backed corrective findings without replacing or hiding the primary output.
 
 ## Install
 
@@ -29,15 +29,17 @@ Pi-exposed main-agent text and thinking deltas are forwarded as bounded ordered 
 
 ## Completed-turn catch-up
 
-Every eligible completed primary `turn_end`—both a tool-calling progress turn and a terminal completed assistant turn—enqueues a correlated checkpoint and waits for only pi-advisor's own catch-up barrier. This prevents the next primary model step from starting before that checkpoint settles or fails open. Ordinary tool-boundary checkpoints are observation-only: they update the persistent Advisor context but cannot emit premature “unfinished work” notes. Independently triggered trajectory reviews remain routable, as do terminal response reviews.
+Every eligible completed primary `turn_end`—both a tool-calling progress turn and a terminal completed assistant turn—enqueues a correlated checkpoint and waits for only pi-advisor's own catch-up barrier. This prevents the next primary model step from starting before that checkpoint settles or fails open. The first eligible tool-progress boundary for each genuine user request is a perspective checkpoint: it may offer at most one non-interrupting, materially different angle that the main agent has not already considered. Later ordinary tool-boundary checkpoints are observation-only: they update the persistent Advisor context but cannot emit premature “unfinished work” notes. Independently triggered trajectory reviews remain routable, as do terminal response reviews.
 
 The catch-up wait has a hard **30,000 ms per-turn cap**. Provider failure, Advisor reset/disposal, or the parent abort signal releases it earlier. Timeout or failure never discards or aborts the primary output. A timed-out or cancelled checkpoint is permanently stale for delivery: a late result cannot steer, abort, trigger correction, or surprise-resume the parent. pi-advisor never calls parent `waitForIdle()` from an event. `message_update`, tool streaming updates, and other token-level handlers only perform bounded synchronous ingestion and never await Advisor work.
 
 `timeoutMs` configures individual Advisor runtime operations, but cannot raise the completed-turn catch-up cap above 30 seconds.
 
-## Findings and routing
+## Perspectives, findings, and routing
 
-Advisor findings use three severities:
+The Advisor has two deliberately separate output lanes. A **perspective** is an optional alternative, investigation path, verification method, simplification, trade-off, or likely edge case. It does not assert that the main agent is wrong, never interrupts or wakes an idle parent, does not consume correction immunity or the correction budget, and is delivered only while work is still active. At most two distinct perspectives may be delivered per genuine user request, although the normal early checkpoint emits at most one. Repeated semantic fingerprints are suppressed.
+
+A **corrective finding** asserts a material problem and continues through the existing evidence gates and routing policy. Advisor findings use three severities:
 
 - **nit**: recorded only; never triggers a primary turn.
 - **concern**: pushed directly under Guardrail and Advisory; Corrective may interrupt when immunity permits.
@@ -53,7 +55,7 @@ Progress routing also uses bounded stream and tool-trajectory evidence. Repeated
 
 Findings receive runtime-generated stable IDs and move through bounded in-memory lifecycle states: open, acknowledged after delivery, resolved after a complete later checkpoint omits them, or superseded for reserved future protocols. The Advisor reports enum confidence and evidence-basis fields. Deterministic gates require high confidence plus direct evidence for blocker routing; weaker blockers are downgraded to concerns, while low-confidence or evidence-free findings remain internal.
 
-Automatic interventions have a fixed per-request budget: at most two strictly escalating deliveries (concern then blocker) and at most one correction-class intervention. A blocker-first delivery exhausts the request. Genuine user input resets the budget; tool turns and Advisor-triggered corrections do not. Delivery receipts only prove the main agent continued processing after injection, not that it accepted the critique.
+Automatic corrective interventions have a fixed per-request budget: at most two strictly escalating deliveries (concern then blocker) and at most one correction-class intervention. A blocker-first delivery exhausts the request. The separate perspective budget permits at most two non-interrupting angles and does not consume corrective capacity. Genuine user input resets both budgets; tool turns and Advisor-triggered corrections do not. Delivery receipts only prove the main agent continued processing after injection, not that it accepted the critique.
 
 ## Read-only investigation and exact safety boundary
 

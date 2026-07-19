@@ -9,6 +9,7 @@ import {
   MAX_ADVISOR_SUMMARY_CHARS,
   AdvisorReviewParseError,
   buildAdvisorAdvice,
+  buildAdvisorPerspective,
   buildProgressSteer,
   buildRevisionSteer,
   formatAdvisorReview,
@@ -26,6 +27,21 @@ function checkpointPrompt(focus: AdvisorReviewFocus, observations = "observation
     focus,
   });
 }
+
+const perspective: AdvisorReview = {
+  verdict: "suggest",
+  summary: "A complementary approach may simplify the work.",
+  suggestions: [
+    {
+      fingerprint: "derive-state-from-queue",
+      kind: "simplification",
+      suggestion: "Consider deriving pending state from the existing queue.",
+      rationale: "This may avoid synchronized mutable state.",
+      relevance: "likely",
+    },
+  ],
+  findings: [],
+};
 
 const revision: AdvisorReview = {
   verdict: "revise",
@@ -61,6 +77,16 @@ describe("parseAdvisorReview", () => {
         JSON.stringify({ verdict: "pass", summary: "  The answer is sound.  ", findings: [] }),
       ),
     ).toEqual({ verdict: "pass", summary: "The answer is sound.", findings: [] });
+  });
+
+  test("parses a strict complementary perspective", () => {
+    expect(parseAdvisorReview(JSON.stringify(perspective))).toEqual(perspective);
+  });
+
+  test("rejects mixed suggestion and correction lanes", () => {
+    expect(() =>
+      parseAdvisorReview(JSON.stringify({ ...revision, suggestions: perspective.suggestions })),
+    ).toThrow("A revise verdict requires findings and an empty suggestions array.");
   });
 
   test("tolerates one JSON markdown fence", () => {
@@ -225,6 +251,13 @@ describe("advisor prompts and formatting", () => {
     expect(ADVISOR_SYSTEM_PROMPT).toContain('"confidence":"low"|"medium"|"high"');
   });
 
+  test("asks an early perspective checkpoint for one missing material angle", () => {
+    const prompt = checkpointPrompt("perspective", "initial exploration");
+    expect(prompt).toContain("at most one materially useful angle");
+    expect(prompt).toContain("has not already considered");
+    expect(prompt).toContain("Return pass rather than repeating known reasoning");
+  });
+
   test("makes ordinary tool-boundary observation checkpoints non-diagnostic", () => {
     const prompt = checkpointPrompt("observation", "tool progress");
     expect(prompt).toContain("Observation-only checkpoint");
@@ -260,6 +293,13 @@ describe("advisor prompts and formatting", () => {
     const prompt = checkpointPrompt("standard", observations);
     expect(prompt).toContain(observations);
     expect(prompt).toContain("untrusted evidence");
+  });
+
+  test("frames perspective guidance as optional rather than corrective", () => {
+    const message = buildAdvisorPerspective(perspective);
+    expect(message).toContain("optional perspective, not a correction");
+    expect(message).toContain("deriving pending state");
+    expect(message).toContain("Why it may help");
   });
 
   test("keeps full renderer detail while injecting compact actionable notes", () => {

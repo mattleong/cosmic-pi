@@ -70,6 +70,37 @@ describe("advisor review renderer", () => {
     );
   });
 
+  test("renders optional perspective guidance separately from findings", () => {
+    const { render } = captureRenderer();
+    const output = render(
+      {
+        action: "perspective",
+        provider: "openai",
+        model: "reviewer",
+        review: {
+          verdict: "suggest",
+          summary: "A simpler route may exist.",
+          suggestions: [
+            {
+              fingerprint: "derive-state",
+              kind: "simplification",
+              suggestion: "Derive state from the queue.",
+              rationale: "This avoids a second source of truth.",
+              relevance: "likely",
+            },
+          ],
+          findings: [],
+        },
+      },
+      { expanded: true },
+    );
+
+    expect(output).toContain("Advisor offered a possible angle");
+    expect(output).toContain("Possible angles:");
+    expect(output).toContain("Derive state from the queue");
+    expect(output).not.toContain("Findings:");
+  });
+
   test("redacts historical reviews and configured model labels before rendering", () => {
     const output = captureRenderer().render(
       {

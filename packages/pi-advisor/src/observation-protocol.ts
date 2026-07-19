@@ -47,7 +47,7 @@ export type AdvisorObservation =
   | (ObservationBase & {
       type: "advisor_intervention";
       findingIds: string[];
-      action: "advice" | "guidance" | "revision" | "recovery";
+      action: "advice" | "guidance" | "perspective" | "revision" | "recovery";
       requestSequence: number;
     })
   | (ObservationBase & {

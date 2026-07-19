@@ -8,11 +8,16 @@ import {
   MAX_ADVISOR_FINDINGS,
   MAX_ADVISOR_ISSUE_CHARS,
   MAX_ADVISOR_RECOMMENDATION_CHARS,
+  MAX_ADVISOR_RATIONALE_CHARS,
+  MAX_ADVISOR_SUGGESTION_CHARS,
+  MAX_ADVISOR_SUGGESTIONS,
   MAX_ADVISOR_SUMMARY_CHARS,
   sanitizeAdvisorReview,
   type AdvisorFinding,
   type AdvisorFindingCategory,
   type AdvisorReview,
+  type AdvisorSuggestion,
+  type AdvisorSuggestionKind,
 } from "./review.ts";
 
 export const ADVISOR_REVIEW_MESSAGE_TYPE = "advisor-review";
@@ -20,6 +25,7 @@ export const ADVISOR_REVIEW_MESSAGE_TYPE = "advisor-review";
 const ACTION_LABELS = {
   advice: "Advisor provided advice",
   guidance: "Advisor suggested a course correction",
+  perspective: "Advisor offered a possible angle",
   recovery: "Advisor interrupted a stalled trajectory",
   revision: "Advisor requested a revision",
 } as const;
@@ -57,10 +63,12 @@ export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
           return new Text(`${heading} ${model}\n${formatAdvisorReview(review)}`, 1, 0);
         }
 
+        const perspective = review.suggestions?.length ?? 0;
         const blocker = review.findings.filter((finding) => finding.severity === "blocker").length;
         const concern = review.findings.filter((finding) => finding.severity === "concern").length;
         const nit = review.findings.length - blocker - concern;
         const counts = [
+          perspective > 0 ? `${perspective} possible angle` : undefined,
           blocker > 0 ? `${blocker} blocker` : undefined,
           concern > 0 ? `${concern} concern` : undefined,
           nit > 0 ? `${nit} nit` : undefined,
@@ -82,7 +90,7 @@ export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
 function normalizeReviewForDisplay(value: unknown): AdvisorReview | undefined {
   if (
     !isRecord(value) ||
-    (value.verdict !== "pass" && value.verdict !== "revise") ||
+    (value.verdict !== "pass" && value.verdict !== "suggest" && value.verdict !== "revise") ||
     typeof value.summary !== "string" ||
     !value.summary.trim() ||
     !Array.isArray(value.findings)
@@ -90,6 +98,8 @@ function normalizeReviewForDisplay(value: unknown): AdvisorReview | undefined {
     return undefined;
   }
 
+  const suggestions = normalizeSuggestions(value.suggestions);
+  if (!suggestions) return undefined;
   const findings: AdvisorFinding[] = [];
   for (const finding of value.findings.slice(0, MAX_ADVISOR_FINDINGS)) {
     if (
@@ -145,8 +155,52 @@ function normalizeReviewForDisplay(value: unknown): AdvisorReview | undefined {
   return {
     verdict: value.verdict,
     summary: clip(value.summary.trim(), MAX_ADVISOR_SUMMARY_CHARS),
+    ...(suggestions.length > 0 ? { suggestions } : {}),
     findings,
   };
+}
+
+function normalizeSuggestions(value: unknown): AdvisorSuggestion[] | undefined {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return undefined;
+  const suggestions: AdvisorSuggestion[] = [];
+  for (const suggestion of value.slice(0, MAX_ADVISOR_SUGGESTIONS)) {
+    if (
+      !isRecord(suggestion) ||
+      !isSuggestionKind(suggestion.kind) ||
+      (suggestion.relevance !== "possible" &&
+        suggestion.relevance !== "likely" &&
+        suggestion.relevance !== "high") ||
+      typeof suggestion.suggestion !== "string" ||
+      !suggestion.suggestion.trim() ||
+      typeof suggestion.rationale !== "string" ||
+      !suggestion.rationale.trim()
+    ) {
+      return undefined;
+    }
+    suggestions.push({
+      fingerprint:
+        typeof suggestion.fingerprint === "string" && suggestion.fingerprint.trim()
+          ? clip(suggestion.fingerprint.trim(), 160)
+          : "historical-suggestion",
+      kind: suggestion.kind,
+      suggestion: clip(suggestion.suggestion.trim(), MAX_ADVISOR_SUGGESTION_CHARS),
+      rationale: clip(suggestion.rationale.trim(), MAX_ADVISOR_RATIONALE_CHARS),
+      relevance: suggestion.relevance,
+    });
+  }
+  return suggestions;
+}
+
+function isSuggestionKind(value: unknown): value is AdvisorSuggestionKind {
+  return (
+    value === "alternative" ||
+    value === "investigation" ||
+    value === "verification" ||
+    value === "simplification" ||
+    value === "tradeoff" ||
+    value === "edge-case"
+  );
 }
 
 function clip(value: string, limit: number): string {

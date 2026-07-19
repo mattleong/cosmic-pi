@@ -74,6 +74,7 @@ export interface AdvisorModelUsage {
 export interface AdvisorOutcomeMetrics {
   pass: number;
   findings: number;
+  perspective: number;
   advice: number;
   guidance: number;
   revision: number;
@@ -87,6 +88,7 @@ export function emptyAdvisorOutcomes(): AdvisorOutcomeMetrics {
   return {
     pass: 0,
     findings: 0,
+    perspective: 0,
     advice: 0,
     guidance: 0,
     revision: 0,
@@ -100,6 +102,7 @@ export function emptyAdvisorOutcomes(): AdvisorOutcomeMetrics {
 export interface AdvisorSessionMetrics {
   attempted: number;
   pass: number;
+  suggest?: number;
   revise: number;
   failure: number;
   discarded: number;
@@ -125,6 +128,7 @@ export interface AdvisorSessionMetrics {
     | "failure"
     | "guidance"
     | "pass"
+    | "perspective"
     | "recovery"
     | "revision"
     | "suppressed";
@@ -138,6 +142,7 @@ export interface AdvisorSessionMetrics {
   blockersRejected?: number;
   interventionsDelivered?: number;
   interventionsAcknowledged?: number;
+  perspectivesDelivered?: number;
   findingLifecycle?: Record<"open" | "acknowledged" | "resolved" | "superseded", number>;
   interventionBudget?: AdvisorInterventionBudgetSnapshot;
   paused?: boolean;
@@ -516,7 +521,8 @@ async function showAdvisorUsage(
     ? `${formatUsageDuration(totalDuration)} total · ${formatUsageDuration(totalDuration / settled)} average · ${formatUsageDuration(metrics.latestDurationMs ?? 0)} latest`
     : "not available";
   const outcomes = metrics.outcomes;
-  const evaluated = outcomes.pass + outcomes.findings;
+  const perspective = outcomes.perspective ?? 0;
+  const evaluated = outcomes.pass + perspective + outcomes.findings;
   const delivered = outcomes.advice + outcomes.guidance + outcomes.revision + outcomes.recovery;
   const lines = [
     "Advisor usage · this session",
@@ -527,6 +533,7 @@ async function showAdvisorUsage(
     "Calibration outcomes",
     `  Evaluated: ${evaluated.toLocaleString()}`,
     `  Pass: ${outcomes.pass.toLocaleString()} (${formatPercent(outcomes.pass, evaluated)})`,
+    `  Perspective delivered: ${perspective.toLocaleString()} (${formatPercent(perspective, evaluated)})`,
     `  Finding reviews: ${outcomes.findings.toLocaleString()} (${formatPercent(outcomes.findings, evaluated)})`,
     `  Delivered: ${delivered.toLocaleString()} (${formatPercent(delivered, outcomes.findings)} of finding reviews)`,
     `    Advice ${outcomes.advice.toLocaleString()} · guidance ${outcomes.guidance.toLocaleString()} · revision ${outcomes.revision.toLocaleString()} · recovery ${outcomes.recovery.toLocaleString()}`,
@@ -618,7 +625,7 @@ async function showAdvisorStatus(
       `Context cap: ${config.maxContextChars.toLocaleString()} characters`,
       `Session review attempts: ${metrics.attempted}`,
       `Session reviews: settled ${settled}, in progress ${inProgress}`,
-      `Session review results: pass ${metrics.pass}, revise ${metrics.revise}, discarded ${metrics.discarded}`,
+      `Session review results: pass ${metrics.pass}, revise ${metrics.revise}, discarded ${metrics.discarded} · suggest ${metrics.suggest ?? 0}`,
       `Operational failures: ${metrics.failure}`,
       `Failure log: ${getAdvisorFailureLogPath(config.configPath)}`,
       `Settings file: ${config.configPath}`,

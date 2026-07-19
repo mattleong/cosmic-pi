@@ -499,10 +499,17 @@ export function parseAdvisorCheckpoint(raw: string): AdvisorCheckpoint {
     "stateSummary",
     "verdict",
     "summary",
+    "suggestions",
     "findings",
   ].sort();
+  const legacyExpected = expected.filter((key) => key !== "suggestions");
   const keys = Object.keys(parsed).sort();
-  if (keys.length !== expected.length || !expected.every((key, index) => key === keys[index])) {
+  const exact =
+    keys.length === expected.length && expected.every((key, index) => key === keys[index]);
+  const legacy =
+    keys.length === legacyExpected.length &&
+    legacyExpected.every((key, index) => key === keys[index]);
+  if (!exact && !legacy) {
     throw new AdvisorModelError("Advisor checkpoint fields are invalid.");
   }
   if (
@@ -522,7 +529,12 @@ export function parseAdvisorCheckpoint(raw: string): AdvisorCheckpoint {
     throw new AdvisorModelError("Advisor state summary is invalid or too large.");
   }
   const review = parseAdvisorReview(
-    JSON.stringify({ verdict: parsed.verdict, summary: parsed.summary, findings: parsed.findings }),
+    JSON.stringify({
+      verdict: parsed.verdict,
+      summary: parsed.summary,
+      ...(parsed.suggestions !== undefined ? { suggestions: parsed.suggestions } : {}),
+      findings: parsed.findings,
+    }),
   );
   return {
     checkpointId: parsed.checkpointId,
@@ -541,11 +553,14 @@ function buildTrustedSystemPrompt(instructions?: string): string {
 }
 
 const PHASE_RULES: Record<AdvisorReviewFocus, string> = {
-  standard: "Evaluate the completed response under the fixed rubric.",
+  standard:
+    "Evaluate the completed response for corrective findings. Do not emit late perspective suggestions after completion.",
   observation:
-    "Observation-only checkpoint: return pass with no findings and do not evaluate ordinary incompleteness.",
+    "Observation-only checkpoint: return pass with no findings and no suggestions; do not evaluate ordinary incompleteness.",
+  perspective:
+    "Perspective checkpoint: identify at most one materially useful angle the assistant has not already considered. Return suggest for a concrete alternative, investigation path, verification method, simplification, trade-off, or likely edge case. Return pass rather than repeating known reasoning or manufacturing a defect. Use revise only for a concrete issue already requiring correction.",
   trajectory:
-    "Trajectory checkpoint: only concrete wrong direction, unsafe action, contradiction, or repeated non-progress is actionable.",
+    "Trajectory checkpoint: only concrete wrong direction, unsafe action, contradiction, or repeated non-progress is corrective. If there is no corrective issue but one timely, materially different angle could prevent wasted work, return suggest; otherwise pass.",
   verification:
     "Evidence verification: check factual support, cited evidence, and validation claims in the completed response.",
   "blocker-verification":
@@ -585,7 +600,7 @@ function buildCheckpointFinalizationPrompt(request: AdvisorCheckpointRequest): s
     "Trusted correlated checkpoint finalization.",
     `Return exactly checkpointId ${JSON.stringify(request.checkpointId)} and processedThrough ${request.processedThrough}.`,
     `stateSummary must be at most ${MAX_ADVISOR_STATE_SUMMARY_CHARS} characters and must contain only compact conclusions/state, never raw thinking, transcript deltas, tool output, credentials, or copied files.`,
-    'Return exactly one JSON object with keys: {"checkpointId":"exact id","processedThrough":0,"stateSummary":"bounded state","verdict":"pass"|"revise","summary":"non-empty summary","findings":[...]}. Findings use the fixed review schema. Return pass with [] when there is no actionable finding.',
+    'Return exactly one JSON object with keys: {"checkpointId":"exact id","processedThrough":0,"stateSummary":"bounded state","verdict":"pass"|"suggest"|"revise","summary":"non-empty summary","suggestions":[...],"findings":[...]}. Suggestions and findings use the fixed schemas and must remain separate. Return pass with both arrays empty when there is no useful contribution.',
   ].join("\n\n");
 }
 

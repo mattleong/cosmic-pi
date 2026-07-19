@@ -499,6 +499,7 @@ describe("advisor commands", () => {
       outcomes: {
         pass: 3,
         findings: 1,
+        perspective: 0,
         advice: 0,
         guidance: 0,
         revision: 1,

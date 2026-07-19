@@ -71,7 +71,9 @@ export function createLedgerFingerprint(input: LedgerFingerprintInput): string {
 }
 
 export function summarizeAdvisorReview(review?: AdvisorReview): AdvisorDurableReviewSummary {
-  const summary = emptyReviewSummary(review?.verdict ?? "none");
+  // Perspective guidance is request-scoped and intentionally not restored as durable correction state.
+  const verdict = review?.verdict === "suggest" ? "pass" : (review?.verdict ?? "none");
+  const summary = emptyReviewSummary(verdict);
   for (const finding of review?.findings ?? []) {
     summary.severityCounts[finding.severity] += 1;
     summary.categoryCounts[finding.category] += 1;

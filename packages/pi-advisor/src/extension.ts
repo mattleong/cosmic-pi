@@ -28,6 +28,7 @@ import { safeAdvisorLabel } from "./advisor-label.ts";
 import { AdvisorFindingDedupe, type AdvisorFindingDedupeRollback } from "./dedupe.ts";
 import { gateAdvisorFindings } from "./finding-gates.ts";
 import { AdvisorFindingLifecycle } from "./finding-lifecycle.ts";
+import { AdvisorPerspectiveBudget } from "./perspective-budget.ts";
 import {
   AdvisorInterventionBudget,
   type AdvisorInterventionBudgetSnapshot,
@@ -44,6 +45,7 @@ import { ADVISOR_REVIEW_MESSAGE_TYPE, registerAdvisorReviewRenderer } from "./re
 import {
   AdvisorReviewParseError,
   buildAdvisorAdvice,
+  buildAdvisorPerspective,
   buildProgressSteer,
   buildRevisionSteer,
   canonicalAdvisorFindingFingerprint,
@@ -81,6 +83,7 @@ interface AdvisorCheckpointHandle {
 type ReviewSource =
   | "automatic-final"
   | "automatic-progress"
+  | "automatic-perspective"
   | "automatic-catch-up"
   | "next"
   | "last"
@@ -185,7 +188,9 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       | undefined;
     const findingDedupe = new AdvisorFindingDedupe();
     const findingLifecycle = new AdvisorFindingLifecycle();
+    const perspectiveBudget = new AdvisorPerspectiveBudget();
     const interventionBudget = new AdvisorInterventionBudget();
+    let perspectiveCheckpointUsed = false;
     const routingState = new AdvisorRoutingState();
     let requestSequence = 0;
     let pendingInterventionReceipt:
@@ -557,6 +562,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       const review: AdvisorReview = {
         verdict: checkpoint.verdict,
         summary: checkpoint.summary,
+        suggestions: checkpoint.suggestions ?? [],
         findings: checkpoint.findings,
       };
       const suppress = (lastAction: "suppressed" | "pass" = "suppressed"): "silent" => {
@@ -564,6 +570,40 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         metrics.lastAction = lastAction;
         return "silent";
       };
+      if (review.verdict === "suggest") {
+        metrics.suggest = incrementBounded(metrics.suggest);
+        if (
+          phase !== "progress" ||
+          source === "automatic-catch-up" ||
+          source === "last" ||
+          source === "verify"
+        ) {
+          return suppress();
+        }
+        const suggestion = perspectiveBudget.select(review.suggestions ?? []);
+        if (!suggestion) return suppress();
+        if (ctx.signal?.aborted || expectedCancellationEpoch !== cancellationEpoch) {
+          return discardAtDeliveryBoundary();
+        }
+        const perspectiveReview: AdvisorReview = {
+          verdict: "suggest",
+          summary: review.summary,
+          suggestions: [suggestion],
+          findings: [],
+        };
+        perspectiveBudget.commit(suggestion);
+        sendAdvisorPerspective(pi, config, perspectiveReview);
+        metrics.outcomes.perspective += 1;
+        metrics.perspectivesDelivered = incrementBounded(metrics.perspectivesDelivered);
+        metrics.lastAction = "perspective";
+        ingest({
+          type: "advisor_intervention",
+          findingIds: [],
+          action: "perspective",
+          requestSequence,
+        });
+        return "push-direct";
+      }
       if (review.verdict === "pass") {
         if (phase === "final") {
           findingLifecycle.reconcile([], {
@@ -1070,6 +1110,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           clearPendingRecovery();
           findingDedupe.reset();
           findingLifecycle.reset();
+          perspectiveBudget.reset();
+          perspectiveCheckpointUsed = false;
           interventionBudget.reset();
           latestStateSummary = "";
           latestDurableSummary = summarizeAdvisorReview();
@@ -1101,6 +1143,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       cancellationEpoch += 1;
       findingDedupe.reset();
       findingLifecycle.reset();
+      perspectiveBudget.reset();
+      perspectiveCheckpointUsed = false;
       interventionBudget.reset();
       pendingInterventionReceipt = undefined;
       requestSequence = 0;
@@ -1131,6 +1175,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       lastCandidate = undefined;
       findingDedupe.reset();
       findingLifecycle.reset();
+      perspectiveBudget.reset();
+      perspectiveCheckpointUsed = false;
       interventionBudget.reset();
       pendingInterventionReceipt = undefined;
       await startRuntime(ctx, "restore-branch");
@@ -1143,6 +1189,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       pendingInterventionReceipt = undefined;
       requestSequence += 1;
       interventionBudget.reset();
+      perspectiveBudget.reset();
+      perspectiveCheckpointUsed = false;
       findingDedupe.reset();
       emissionGuard.reset();
       cancellationEpoch += 1;
@@ -1439,13 +1487,26 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         recordSkip("unconfigured");
         return;
       }
+      const perspectiveCheckpoint =
+        classification.phase === "progress" && !perspectiveCheckpointUsed;
       const handle = requestCheckpoint({
         ctx,
-        focus: classification.phase === "progress" ? "observation" : "standard",
+        focus:
+          classification.phase === "progress"
+            ? perspectiveCheckpoint
+              ? "perspective"
+              : "observation"
+            : "standard",
         phase: classification.phase,
-        source: classification.phase === "progress" ? "automatic-catch-up" : "automatic-final",
+        source:
+          classification.phase === "progress"
+            ? perspectiveCheckpoint
+              ? "automatic-perspective"
+              : "automatic-catch-up"
+            : "automatic-final",
         requiresEnabled: true,
       });
+      if (handle && perspectiveCheckpoint) perspectiveCheckpointUsed = true;
       if (handle) await awaitCatchUp(handle, ctx);
     });
   };
@@ -1599,6 +1660,14 @@ function sendAdvisorAdvice(
   sendAdvisorMessage(pi, config, review, "advice", buildAdvisorAdvice);
 }
 
+function sendAdvisorPerspective(
+  pi: ExtensionAPI,
+  config: ResolvedAdvisorConfig,
+  review: AdvisorReview,
+): void {
+  sendAdvisorMessage(pi, config, review, "perspective", buildAdvisorPerspective);
+}
+
 function sendCorrection(
   pi: ExtensionAPI,
   config: ResolvedAdvisorConfig,
@@ -1625,7 +1694,7 @@ function sendAdvisorMessage(
   pi: ExtensionAPI,
   config: ResolvedAdvisorConfig,
   review: AdvisorReview,
-  action: "advice" | "guidance" | "recovery" | "revision",
+  action: "advice" | "guidance" | "perspective" | "recovery" | "revision",
   content: (review: AdvisorReview) => string,
   triggerTurn = false,
 ): void {

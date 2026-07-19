@@ -171,6 +171,26 @@ function pass(request: AdvisorCheckpointRequest): AdvisorCheckpoint {
   };
 }
 
+function suggest(
+  request: AdvisorCheckpointRequest,
+  fingerprint = "derive-state-from-queue",
+): AdvisorCheckpoint {
+  return {
+    ...pass(request),
+    verdict: "suggest",
+    summary: "A complementary approach may simplify the work.",
+    suggestions: [
+      {
+        fingerprint,
+        kind: "simplification",
+        suggestion: "Consider deriving the pending state from the existing queue.",
+        rationale: "This may avoid maintaining two synchronized sources of truth.",
+        relevance: "likely",
+      },
+    ],
+  };
+}
+
 function revise(
   request: AdvisorCheckpointRequest,
   severity: "blocker" | "concern" = "blocker",
@@ -324,10 +344,39 @@ describe("persistent extension cutover", () => {
     await tick();
     expect(settled).toBe(false);
     const current = value.runtimes[0]!;
-    expect(current.requests[0]?.focus).toBe("observation");
+    expect(current.requests[0]?.focus).toBe("perspective");
     current.pending[0]!.resolve(pass(current.requests[0]!));
     await turn;
     expect(settled).toBe(true);
+  });
+
+  test("delivers one early perspective without triggering a new turn", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    const progress = {
+      ...finalTurn(""),
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "read", arguments: { path: "src/a.ts" } }],
+        stopReason: "stop",
+      },
+    };
+
+    const turn = value.emitAwait("turn_end", progress);
+    await tick();
+    const current = value.runtimes[0]!;
+    expect(current.requests[0]?.focus).toBe("perspective");
+    current.pending[0]!.resolve(suggest(current.requests[0]!));
+    await turn;
+
+    expect(value.sendMessage).toHaveBeenCalledOnce();
+    expect(value.sendMessage.mock.lastCall?.[0]).toMatchObject({
+      details: { action: "perspective" },
+    });
+    expect(value.sendMessage.mock.lastCall?.[1]).toEqual({ deliverAs: "steer" });
+    expect(String(value.sendMessage.mock.lastCall?.[0]?.content)).toContain(
+      "optional perspective, not a correction",
+    );
   });
 
   test("tool-boundary catch-up is observation-only while a final blocker still delivers", async () => {
@@ -342,18 +391,24 @@ describe("persistent extension cutover", () => {
       },
     };
 
-    const progressTurn = value.emitAwait("turn_end", progress);
+    const perspectiveTurn = value.emitAwait("turn_end", progress);
     await tick();
     const current = value.runtimes[0]!;
-    current.pending[0]!.resolve(
-      revise(current.requests[0]!, "blocker", "The response is not finished yet."),
+    current.pending[0]!.resolve(pass(current.requests[0]!));
+    await perspectiveTurn;
+
+    const progressTurn = value.emitAwait("turn_end", progress);
+    await tick();
+    expect(current.requests[1]?.focus).toBe("observation");
+    current.pending[1]!.resolve(
+      revise(current.requests[1]!, "blocker", "The response is not finished yet."),
     );
     await progressTurn;
     expect(value.sendMessage).not.toHaveBeenCalled();
 
     const final = value.emitAwait("turn_end", finalTurn("finished answer"));
     await tick();
-    await resolveVerifiedBlocker(current, 1, "The finished answer has a material error.");
+    await resolveVerifiedBlocker(current, 2, "The finished answer has a material error.");
     await final;
     expect(value.sendMessage).toHaveBeenCalledOnce();
     expect(value.sendMessage.mock.lastCall?.[1]).toEqual({
