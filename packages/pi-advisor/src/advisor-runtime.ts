@@ -337,7 +337,7 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
       }
       return;
     }
-    if (event.type === "tool_execution_start") {
+    if (event.type === "turn_end" && event.toolResults.length > 0) {
       this.toolRounds += 1;
       if (this.toolRounds > MAX_ADVISOR_TOOL_ROUNDS) {
         this.invalidateForReprime("Advisor exceeded the read-only tool-round limit.");

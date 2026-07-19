@@ -5,6 +5,7 @@ import {
   MAX_ADVISOR_CHECKPOINT_CHARS,
   MAX_ADVISOR_CHECKPOINT_ID_CHARS,
   MAX_ADVISOR_STREAM_CHARS,
+  MAX_ADVISOR_TOOL_ROUNDS,
   NoDiscoveryAdvisorResourceLoader,
   parseAdvisorCheckpoint,
   type AdvisorCheckpointRequest,
@@ -528,6 +529,30 @@ describe("AdvisorRuntime", () => {
     await expect(pending).resolves.toMatchObject({ checkpointId: "tool-delta-stream" });
   });
 
+  test("counts a parallel tool batch as one read-only tool round", async () => {
+    const value = harness("stop", true);
+    await start(value.runtime);
+    const pending = value.runtime.checkpoint({
+      checkpointId: "parallel-tools",
+      processedThrough: 1,
+      observations: "batch",
+      focus: "standard",
+    });
+    await vi.waitFor(() => expect(value.session.isStreaming).toBe(true));
+    for (let index = 0; index < MAX_ADVISOR_TOOL_ROUNDS + 1; index += 1) {
+      value.emit({ type: "tool_execution_start", toolCallId: String(index), toolName: "read" });
+    }
+    value.emit({
+      type: "turn_end",
+      turnIndex: 1,
+      message: { role: "assistant", content: [], stopReason: "toolUse" },
+      toolResults: Array.from({ length: MAX_ADVISOR_TOOL_ROUNDS + 1 }, () => ({})),
+    });
+    value.releaseAnalysis();
+    await expect(pending).resolves.toMatchObject({ checkpointId: "parallel-tools" });
+    expect(value.session.abort).not.toHaveBeenCalled();
+  });
+
   test("aborts when the child exceeds its independent tool-round cap", async () => {
     const value = harness("stop", true);
     await start(value.runtime);
@@ -538,8 +563,13 @@ describe("AdvisorRuntime", () => {
       focus: "standard",
     });
     await vi.waitFor(() => expect(value.session.isStreaming).toBe(true));
-    for (let index = 0; index < 13; index += 1) {
-      value.emit({ type: "tool_execution_start", toolCallId: String(index), toolName: "read" });
+    for (let index = 0; index <= MAX_ADVISOR_TOOL_ROUNDS; index += 1) {
+      value.emit({
+        type: "turn_end",
+        turnIndex: index,
+        message: { role: "assistant", content: [], stopReason: "toolUse" },
+        toolResults: [{}],
+      });
     }
     value.releaseAnalysis();
     await expect(pending).rejects.toThrow(/tool-round|fresh context|stale/i);

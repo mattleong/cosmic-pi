@@ -213,6 +213,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     let latestStateSummary = "";
     let latestDurableSummary: AdvisorDurableReviewSummary = summarizeAdvisorReview();
     const reportedFailures = new Set<string>();
+    const reportedDiagnostics = new Set<string>();
     let statusSpinnerContext: ExtensionContext | undefined;
     let statusSpinnerDelay: ReturnType<typeof setTimeout> | undefined;
     let statusSpinnerFrame = 0;
@@ -450,7 +451,11 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
               : latestStateSummary,
           instructions: instructions.content,
           onUsage: (usage) => recordUsage(runtimeMetrics, usage, runtimeConfig),
-          onDiagnostic: (message) => ctx.ui.notify(message, "warning"),
+          onDiagnostic: (message) => {
+            if (reportedDiagnostics.has(message)) return;
+            reportedDiagnostics.add(message);
+            ctx.ui.notify(message, "warning");
+          },
         });
         if (startEpoch !== epoch) {
           await nextRuntime.dispose();
@@ -1153,6 +1158,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       latestStateSummary = "";
       latestDurableSummary = summarizeAdvisorReview();
       reportedFailures.clear();
+      reportedDiagnostics.clear();
       if (!config.configured) warnIfSetupRequired(ctx, config, () => undefined);
       await startRuntime(ctx, "restore-branch");
     });
