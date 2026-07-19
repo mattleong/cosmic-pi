@@ -6,7 +6,7 @@ import {
   type AdvisorFindingRecord,
 } from "./finding-lifecycle.ts";
 import {
-  MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST,
+  sanitizeInterventionBudgetSnapshot,
   type AdvisorInterventionBudgetSnapshot,
 } from "./intervention-budget.ts";
 import type { AdvisorFindingCategory, AdvisorReview, AdvisorSeverity } from "./review.ts";
@@ -105,7 +105,7 @@ export function createCheckpointLedger(input: {
       completedPrimaryTurns: Math.max(0, Math.floor(input.completedPrimaryTurns ?? 0)),
       immunityUntilCompletedTurn: Math.max(0, Math.floor(input.immunityUntilCompletedTurn ?? 0)),
       ...(input.interventionBudget
-        ? { interventionBudget: sanitizeInterventionBudget(input.interventionBudget) }
+        ? { interventionBudget: sanitizeInterventionBudgetSnapshot(input.interventionBudget) }
         : {}),
     },
     ...(input.findingLifecycle
@@ -176,7 +176,11 @@ export function parseLedger(value: unknown): AdvisorCheckpointLedger | undefined
       completedPrimaryTurns,
       immunityUntilCompletedTurn: value.routing.immunityUntilCompletedTurn,
       ...(isRecord(value.routing.interventionBudget)
-        ? { interventionBudget: sanitizeInterventionBudget(value.routing.interventionBudget) }
+        ? {
+            interventionBudget: sanitizeInterventionBudgetSnapshot(
+              value.routing.interventionBudget,
+            ),
+          }
         : {}),
     },
     ...(Array.isArray(value.findingLifecycle)
@@ -245,21 +249,6 @@ function sanitizeFindingLifecycle(values: readonly unknown[]): AdvisorFindingRec
     .flatMap((value): AdvisorFindingRecord[] =>
       isValidAdvisorFindingRecord(value) ? [{ ...value }] : [],
     );
-}
-
-function sanitizeInterventionBudget(
-  value: Partial<AdvisorInterventionBudgetSnapshot>,
-): AdvisorInterventionBudgetSnapshot {
-  return {
-    delivered:
-      typeof value.delivered === "number" && Number.isSafeInteger(value.delivered)
-        ? Math.max(0, Math.min(MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST, value.delivered))
-        : 0,
-    ...(value.highestSeverity === "concern" || value.highestSeverity === "blocker"
-      ? { highestSeverity: value.highestSeverity }
-      : {}),
-    correctionUsed: value.correctionUsed === true,
-  };
 }
 
 function isEmissionRecord(value: unknown): value is string {

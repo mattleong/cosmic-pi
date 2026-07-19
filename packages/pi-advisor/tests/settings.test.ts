@@ -28,6 +28,20 @@ function configAt(configPath: string): ResolvedAdvisorConfig {
   };
 }
 
+function zeroOutcomes(): AdvisorSessionMetrics["outcomes"] {
+  return {
+    pass: 0,
+    findings: 0,
+    advice: 0,
+    guidance: 0,
+    revision: 0,
+    recovery: 0,
+    suppressed: 0,
+    discarded: 0,
+    failures: 0,
+  };
+}
+
 function createCommands(
   initial: ResolvedAdvisorConfig,
   metrics: AdvisorSessionMetrics = {
@@ -36,6 +50,7 @@ function createCommands(
     revise: 0,
     failure: 0,
     discarded: 0,
+    outcomes: zeroOutcomes(),
   },
 ) {
   const commands = new Map<string, CommandHandler>();
@@ -394,6 +409,7 @@ describe("advisor commands", () => {
       revise: 1,
       failure: 1,
       discarded: 1,
+      outcomes: zeroOutcomes(),
       backgroundState: "reviewing",
       cacheReadTokens: 30,
       activeCatchUpWaits: 1,
@@ -571,6 +587,7 @@ describe("advisor commands", () => {
         revise: 0,
         failure: 0,
         discarded: 0,
+        outcomes: zeroOutcomes(),
         usageByModel: {
           secret: {
             provider: "anthropic-token=another-secret-value",
@@ -629,6 +646,7 @@ describe("advisor commands", () => {
         revise: 0,
         failure: 0,
         discarded: 0,
+        outcomes: zeroOutcomes(),
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
         cost: 0.01,

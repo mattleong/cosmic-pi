@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { redactSensitiveText } from "./observation-protocol.ts";
+import { safeAdvisorLabel } from "./advisor-label.ts";
 import { isRecord } from "./utils.ts";
 import {
   formatAdvisorReview,
@@ -51,7 +51,7 @@ export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
         const heading = theme.bold(theme.fg("warning", label));
         const model = theme.fg(
           "muted",
-          `${safeLabel(details.provider)}/${safeLabel(details.model)}`,
+          `${safeAdvisorLabel(details.provider)}/${safeAdvisorLabel(details.model)}`,
         );
         if (expanded) {
           return new Text(`${heading} ${model}\n${formatAdvisorReview(review)}`, 1, 0);
@@ -147,10 +147,6 @@ function normalizeReviewForDisplay(value: unknown): AdvisorReview | undefined {
     summary: clip(value.summary.trim(), MAX_ADVISOR_SUMMARY_CHARS),
     findings,
   };
-}
-
-function safeLabel(value: string): string {
-  return clip(redactSensitiveText(value), 256);
 }
 
 function clip(value: string, limit: number): string {

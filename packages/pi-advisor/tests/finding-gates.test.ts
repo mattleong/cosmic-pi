@@ -18,20 +18,18 @@ function finding(overrides: Partial<AdvisorFinding> = {}): AdvisorFinding {
 
 describe("advisor finding gates", () => {
   test("requires high confidence and direct evidence for blockers", () => {
-    expect(gateAdvisorFinding(finding()).effectiveSeverity).toBe("blocker");
-    expect(gateAdvisorFinding(finding({ confidence: "medium" })).effectiveSeverity).toBe("concern");
-    expect(gateAdvisorFinding(finding({ evidenceBasis: "inferred" })).effectiveSeverity).toBe(
+    expect(gateAdvisorFinding(finding()).finding.severity).toBe("blocker");
+    expect(gateAdvisorFinding(finding({ confidence: "medium" })).finding.severity).toBe("concern");
+    expect(gateAdvisorFinding(finding({ evidenceBasis: "inferred" })).finding.severity).toBe(
       "concern",
     );
   });
 
   test("treats missing confidence and evidence metadata conservatively", () => {
     const legacy = finding({ confidence: undefined, evidenceBasis: undefined });
-    expect(gateAdvisorFinding(legacy)).toMatchObject({
-      actionable: false,
-      effectiveSeverity: "nit",
-      reason: "low-confidence",
-    });
+    const decision = gateAdvisorFinding(legacy);
+    expect(decision).toMatchObject({ actionable: false, reason: "low-confidence" });
+    expect(decision.finding.severity).toBe("nit");
   });
 
   test("suppresses low-confidence or evidence-free findings", () => {

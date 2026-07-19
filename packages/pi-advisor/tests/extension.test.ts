@@ -1020,6 +1020,19 @@ describe("persistent extension cutover", () => {
     },
   );
 
+  const expectRedactedLabels = (value: ReturnType<typeof harness>): void => {
+    const details = value.sendMessage.mock.lastCall?.[0]?.details as {
+      provider: string;
+      model: string;
+    };
+    const persisted = JSON.stringify(details);
+
+    expect(details.provider.length).toBeLessThanOrEqual(256);
+    expect(details.model.length).toBeLessThanOrEqual(256);
+    expect(persisted).toContain("REDACTED");
+    expect(persisted).not.toMatch(/sk-abcdefghijklmnop|secret-value/);
+  };
+
   test("redacts and clips provider/model labels in advice message details", async () => {
     const value = harness({
       provider: "provider-api_key=sk-abcdefghijklmnop",
@@ -1038,16 +1051,7 @@ describe("persistent extension cutover", () => {
       revise(current.requests[manualIndex]!, "concern", "manual label issue"),
     );
     await tick();
-    const details = value.sendMessage.mock.lastCall?.[0]?.details as {
-      provider: string;
-      model: string;
-    };
-    const persisted = JSON.stringify(details);
-
-    expect(details.provider.length).toBeLessThanOrEqual(256);
-    expect(details.model.length).toBeLessThanOrEqual(256);
-    expect(persisted).toContain("REDACTED");
-    expect(persisted).not.toMatch(/sk-abcdefghijklmnop|secret-value/);
+    expectRedactedLabels(value);
   });
 
   test("redacts and clips provider/model labels in correction message details", async () => {
@@ -1063,16 +1067,7 @@ describe("persistent extension cutover", () => {
     const current = value.runtimes[0]!;
     current.pending[0]!.resolve(revise(current.requests[0]!, "concern", "correction label issue"));
     await tick();
-    const details = value.sendMessage.mock.lastCall?.[0]?.details as {
-      provider: string;
-      model: string;
-    };
-    const persisted = JSON.stringify(details);
-
-    expect(details.provider.length).toBeLessThanOrEqual(256);
-    expect(details.model.length).toBeLessThanOrEqual(256);
-    expect(persisted).toContain("REDACTED");
-    expect(persisted).not.toMatch(/sk-abcdefghijklmnop|secret-value/);
+    expectRedactedLabels(value);
   });
 
   test("idle automatic direct drop rolls back emission and dedupe across manual review and restore", async () => {

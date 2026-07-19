@@ -7,6 +7,20 @@ export interface AdvisorInterventionBudgetSnapshot {
   correctionUsed: boolean;
 }
 
+export function sanitizeInterventionBudgetSnapshot(
+  snapshot: Partial<AdvisorInterventionBudgetSnapshot> | undefined,
+): AdvisorInterventionBudgetSnapshot {
+  return {
+    delivered: Number.isSafeInteger(snapshot?.delivered)
+      ? Math.max(0, Math.min(MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST, Number(snapshot?.delivered)))
+      : 0,
+    ...(snapshot?.highestSeverity === "concern" || snapshot?.highestSeverity === "blocker"
+      ? { highestSeverity: snapshot.highestSeverity }
+      : {}),
+    correctionUsed: snapshot?.correctionUsed === true,
+  };
+}
+
 export class AdvisorInterventionBudget {
   #delivered = 0;
   #highestSeverity: "concern" | "blocker" | undefined;
@@ -41,18 +55,10 @@ export class AdvisorInterventionBudget {
   }
 
   restore(snapshot: Partial<AdvisorInterventionBudgetSnapshot> | undefined): void {
-    this.#delivered = Math.max(
-      0,
-      Math.min(
-        MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST,
-        Number.isSafeInteger(snapshot?.delivered) ? Number(snapshot?.delivered) : 0,
-      ),
-    );
-    this.#highestSeverity =
-      snapshot?.highestSeverity === "concern" || snapshot?.highestSeverity === "blocker"
-        ? snapshot.highestSeverity
-        : undefined;
-    this.#correctionUsed = snapshot?.correctionUsed === true;
+    const sanitized = sanitizeInterventionBudgetSnapshot(snapshot);
+    this.#delivered = sanitized.delivered;
+    this.#highestSeverity = sanitized.highestSeverity;
+    this.#correctionUsed = sanitized.correctionUsed;
   }
 
   reset(): void {

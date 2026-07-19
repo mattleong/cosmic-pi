@@ -18,12 +18,12 @@ export interface AdvisorFindingDedupeRollbackEntry {
   evicted: Array<{ key: string; severity: AdvisorSeverity }>;
 }
 
-/** Suppress equal/lower repeats while allowing a genuine severity escalation. */
 export interface AdvisorFindingDedupeRollback {
   scope: string;
   entries: AdvisorFindingDedupeRollbackEntry[];
 }
 
+/** Suppress equal/lower repeats while allowing a genuine severity escalation. */
 export class AdvisorFindingDedupe {
   readonly #capacity: number;
   readonly #seen = new Map<string, AdvisorSeverity>();

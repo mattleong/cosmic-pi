@@ -234,8 +234,7 @@ export class AdvisorObservationBuffer {
   private enforceBounds(): void {
     let chars = estimateChars(this.records);
     while (this.records.length > MAX_OBSERVATION_RECORDS || chars > MAX_OBSERVATION_CHARS) {
-      const removable = findRemovableObservation(this.records, this.protectedThrough);
-      const index = removable;
+      const index = findRemovableObservation(this.records, this.protectedThrough);
       // A frozen in-flight batch is bounded when captured and must survive until commit/reset.
       if (index < 0) break;
       const removed = this.records.splice(index, 1)[0];

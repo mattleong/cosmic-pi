@@ -2,7 +2,7 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { supportsFastModel } from "pi-better-openai/fast-models";
-import { redactSensitiveText } from "./observation-protocol.ts";
+import { safeAdvisorLabel } from "./advisor-label.ts";
 import {
   MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST,
   type AdvisorInterventionBudgetSnapshot,
@@ -118,7 +118,7 @@ export interface AdvisorSessionMetrics {
   latestDurationMs?: number;
   modelResponses?: number;
   outputTokens?: number;
-  outcomes?: AdvisorOutcomeMetrics;
+  outcomes: AdvisorOutcomeMetrics;
   blockerVerificationAttempts?: number;
   blockersVerified?: number;
   blockersRejected?: number;
@@ -501,17 +501,7 @@ async function showAdvisorUsage(
   const reviewTime = settled
     ? `${formatUsageDuration(totalDuration)} total · ${formatUsageDuration(totalDuration / settled)} average · ${formatUsageDuration(metrics.latestDurationMs ?? 0)} latest`
     : "not available";
-  const outcomes = metrics.outcomes ?? {
-    pass: metrics.pass,
-    findings: metrics.revise,
-    advice: 0,
-    guidance: 0,
-    revision: 0,
-    recovery: 0,
-    suppressed: 0,
-    discarded: metrics.discarded,
-    failures: metrics.failure,
-  };
+  const outcomes = metrics.outcomes;
   const evaluated = outcomes.pass + outcomes.findings;
   const delivered = outcomes.advice + outcomes.guidance + outcomes.revision + outcomes.recovery;
   const lines = [
@@ -552,7 +542,7 @@ async function showAdvisorUsage(
     for (const usage of modelUsage) {
       const responseLabel = usage.responses === 1 ? "response" : "responses";
       lines.push(
-        `  ${safeLabel(usage.provider)}/${safeLabel(usage.model)}: ${usage.responses.toLocaleString()} ${responseLabel} · ${usage.totalTokens.toLocaleString()} tokens · $${usage.cost.toFixed(6)}`,
+        `  ${safeAdvisorLabel(usage.provider)}/${safeAdvisorLabel(usage.model)}: ${usage.responses.toLocaleString()} ${responseLabel} · ${usage.totalTokens.toLocaleString()} tokens · $${usage.cost.toFixed(6)}`,
       );
     }
   }
@@ -652,11 +642,6 @@ function formatUsageDuration(milliseconds: number): string {
     : `${(milliseconds / 1_000).toFixed(1)}s`;
 }
 
-function safeLabel(value: string): string {
-  const redacted = redactSensitiveText(value);
-  return redacted.length <= 256 ? redacted : `${redacted.slice(0, 238)}[... truncated]`;
-}
-
 function formatGuidancePaths(paths: readonly string[] | undefined): string {
   return paths && paths.length > 0 ? paths.join(", ") : "none";
 }
@@ -667,7 +652,7 @@ function formatActiveTools(names: readonly string[] | undefined): string {
 
 function formatModel(config: Pick<ResolvedAdvisorConfig, "provider" | "model">): string {
   return config.provider && config.model
-    ? `${safeLabel(config.provider)}/${safeLabel(config.model)}`
+    ? `${safeAdvisorLabel(config.provider)}/${safeAdvisorLabel(config.model)}`
     : "not configured";
 }
 
