@@ -51,6 +51,9 @@ import {
 } from "./trajectory.ts";
 
 const STATUS_KEY = "pi-advisor";
+const STATUS_SPINNER_DELAY_MS = 200;
+const STATUS_SPINNER_INTERVAL_MS = 120;
+const STATUS_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 export const ADVISOR_CATCH_UP_TIMEOUT_MS = 30_000;
 type ReviewPhase = "final" | "progress";
 type CheckpointSettlement = "completed" | "discarded" | "failed";
@@ -102,10 +105,6 @@ export interface AdvisorExtensionDependencies {
 }
 
 export function createAdvisorExtension(dependencies: AdvisorExtensionDependencies = {}) {
-  return createPersistentAdvisorExtension(dependencies);
-}
-
-function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependencies) {
   const loadConfig = dependencies.loadConfig ?? loadAdvisorConfig;
   const logFailure = dependencies.logFailure ?? logAdvisorFailure;
   const createRuntime = dependencies.createRuntime ?? (() => new AdvisorRuntime());
@@ -163,6 +162,46 @@ function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependen
     let latestStateSummary = "";
     let latestDurableSummary: AdvisorDurableReviewSummary = summarizeAdvisorReview();
     const reportedFailures = new Set<string>();
+    let statusSpinnerContext: ExtensionContext | undefined;
+    let statusSpinnerDelay: ReturnType<typeof setTimeout> | undefined;
+    let statusSpinnerFrame = 0;
+    let statusSpinnerTimer: ReturnType<typeof setInterval> | undefined;
+
+    const stopStatusSpinner = (): void => {
+      if (statusSpinnerDelay) clearTimeout(statusSpinnerDelay);
+      if (statusSpinnerTimer) clearInterval(statusSpinnerTimer);
+      statusSpinnerContext = undefined;
+      statusSpinnerDelay = undefined;
+      statusSpinnerFrame = 0;
+      statusSpinnerTimer = undefined;
+    };
+
+    const setAdvisorStatus = (ctx: ExtensionContext, text?: string): void => {
+      stopStatusSpinner();
+      ctx.ui.setStatus(STATUS_KEY, text);
+    };
+
+    const renderReviewStatus = (): void => {
+      if (!statusSpinnerContext) return;
+      const frame = STATUS_SPINNER_FRAMES[statusSpinnerFrame] ?? STATUS_SPINNER_FRAMES[0];
+      statusSpinnerContext.ui.setStatus(STATUS_KEY, `${frame} advisor reviewing…`);
+    };
+
+    const startStatusSpinner = (ctx: ExtensionContext): void => {
+      stopStatusSpinner();
+      statusSpinnerContext = ctx;
+      statusSpinnerDelay = setTimeout(() => {
+        statusSpinnerDelay = undefined;
+        renderReviewStatus();
+        if (ctx.mode !== "tui") return;
+        statusSpinnerTimer = setInterval(() => {
+          statusSpinnerFrame = (statusSpinnerFrame + 1) % STATUS_SPINNER_FRAMES.length;
+          renderReviewStatus();
+        }, STATUS_SPINNER_INTERVAL_MS);
+        statusSpinnerTimer.unref();
+      }, STATUS_SPINNER_DELAY_MS);
+      statusSpinnerDelay.unref();
+    };
 
     const recordSkip = (reason: AdvisorSkipReason): void => {
       const skipped = metrics.skippedReviews ?? {};
@@ -234,6 +273,8 @@ function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependen
     };
 
     const stopRuntime = async (): Promise<void> => {
+      const statusContext = statusSpinnerContext;
+      if (statusContext) setAdvisorStatus(statusContext);
       clearPersistentTrajectory();
       clearPendingRecovery();
       const oldQueue = queue;
@@ -307,10 +348,9 @@ function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependen
         queue = new AdvisorReviewQueue(nextRuntime, {
           onCheckpointStart: () => {
             metrics.attempted += 1;
-            ctx.ui.setStatus(STATUS_KEY, "advisor: reviewing…");
+            startStatusSpinner(ctx);
           },
-          onCheckpointSettled: () =>
-            ctx.ui.setStatus(STATUS_KEY, paused ? "advisor: paused" : undefined),
+          onCheckpointSettled: () => setAdvisorStatus(ctx, paused ? "advisor: paused" : undefined),
           onRuntimeReset: () => {
             metrics.childResets = incrementBounded(metrics.childResets);
           },
@@ -486,7 +526,7 @@ function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependen
         metrics.lastAction = "recovery";
         ctx.abort();
       }
-      ctx.ui.setStatus(STATUS_KEY, undefined);
+      setAdvisorStatus(ctx);
       return route;
     };
 
@@ -686,7 +726,7 @@ function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependen
         persistCurrentLedger(ctx);
         ++epoch;
         void stopRuntime();
-        ctx.ui.setStatus(STATUS_KEY, "advisor: paused");
+        setAdvisorStatus(ctx, "advisor: paused");
       },
       resume: (ctx) => {
         paused = false;
@@ -984,7 +1024,7 @@ function createPersistentAdvisorExtension(dependencies: AdvisorExtensionDependen
       );
       routingState.armInterruption();
       persistLedger(parentAnchor(ctx), ctx);
-      ctx.ui.setStatus(STATUS_KEY, undefined);
+      setAdvisorStatus(ctx);
     });
 
     pi.on("turn_end", async (event, ctx) => {

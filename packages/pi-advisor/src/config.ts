@@ -100,12 +100,19 @@ export function normalizeAdvisorConfig(
   return normalized;
 }
 
-export function readRawAdvisorConfig(path = getAdvisorConfigPath()): Record<string, unknown> {
+function readExistingAdvisorConfig(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (!isRecord(parsed)) throw new Error(`Advisor config must contain a JSON object: ${path}`);
+  return parsed;
+}
+
+export function readRawAdvisorConfig(path = getAdvisorConfigPath()): Record<string, unknown> {
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    return isRecord(parsed) ? parsed : {};
-  } catch {
+    return readExistingAdvisorConfig(path);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[pi-advisor] Failed to read ${path}: ${message}`);
     return {};
   }
 }
@@ -164,7 +171,7 @@ export function writeAdvisorConfigPatch(
   patch: AdvisorConfigPatch,
   path = getAdvisorConfigPath(),
 ): ResolvedAdvisorConfig {
-  const raw = migrateLegacyReviewPolicy(readRawAdvisorConfig(path));
+  const raw = migrateLegacyReviewPolicy(readExistingAdvisorConfig(path));
   const next = patchAdvisorConfig(raw, patch);
   writeRawAdvisorConfig(next, path);
   return normalizeAdvisorConfig(next, path);

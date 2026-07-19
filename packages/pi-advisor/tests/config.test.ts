@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   DEFAULT_ADVISOR_CONFIG,
   MAX_CONTEXT_CHARS,
@@ -146,6 +146,7 @@ describe("advisor config", () => {
   });
 
   test("reads missing, malformed, and non-object files safely", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     withTempDir((tempDir) => {
       const missingPath = join(tempDir, "missing.json");
       const malformedPath = join(tempDir, "malformed.json");
@@ -161,6 +162,18 @@ describe("advisor config", () => {
         ...DEFAULT_ADVISOR_CONFIG,
         configured: false,
       });
+      expect(warn).toHaveBeenCalledTimes(2);
+    });
+    warn.mockRestore();
+  });
+
+  test("refuses to overwrite malformed config", () => {
+    withTempDir((tempDir) => {
+      const path = join(tempDir, "advisor.json");
+      writeFileSync(path, "{not-json", "utf8");
+
+      expect(() => writeAdvisorConfigPatch({ enabled: false }, path)).toThrow();
+      expect(readFileSync(path, "utf8")).toBe("{not-json");
     });
   });
 

@@ -9,7 +9,7 @@ import {
   COSMIC_UI_PROTOCOL_VERSION,
 } from "../src/protocol.ts";
 
-type Handler = (event: any, ctx: ExtensionContext) => void | Promise<void>;
+type Handler = (event: unknown, ctx: ExtensionContext) => void | Promise<void>;
 
 function harness(mode: "tui" | "rpc" = "tui") {
   const handlers = new Map<string, Handler[]>();
@@ -64,7 +64,7 @@ function harness(mode: "tui" | "rpc" = "tui") {
   return { pi, ctx, handlers, setFooter, exec };
 }
 
-async function emit(h: ReturnType<typeof harness>, name: string, event: any = {}) {
+async function emit(h: ReturnType<typeof harness>, name: string, event: unknown = {}) {
   for (const handler of h.handlers.get(name) ?? []) await handler(event, h.ctx);
 }
 

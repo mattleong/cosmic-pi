@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { configPaths, resolveConfig, updateFooterConfig } from "../src/config/store.ts";
 
 const dirs: string[] = [];
@@ -28,5 +28,22 @@ describe("Cosmic UI config", () => {
     expect(raw.custom).toBe(42);
     expect(raw.footer.future).toBe(true);
     expect(raw.footer.enabled).toBe(false);
+  });
+
+  test("warns about malformed config and refuses to overwrite it", () => {
+    const root = mkdtempSync(join(tmpdir(), "cosmic-ui-"));
+    dirs.push(root);
+    const cwd = join(root, "project");
+    const agent = join(root, "agent");
+    const paths = configPaths(cwd, agent);
+    mkdirSync(join(cwd, ".pi", "extensions"), { recursive: true });
+    writeFileSync(paths.project, "{not-json", "utf8");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const config = resolveConfig(cwd, agent);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(() => updateFooterConfig(cwd, config, { enabled: false }, agent)).toThrow();
+    expect(readFileSync(paths.project, "utf8")).toBe("{not-json");
+    warn.mockRestore();
   });
 });

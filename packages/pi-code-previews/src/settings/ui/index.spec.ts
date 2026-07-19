@@ -22,97 +22,35 @@ test("settings UI item values are handled by updateSetting", () => {
     [...CODE_PREVIEW_SETTING_KEYS, "resetToDefaults"].sort(),
   );
 
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "shikiTheme", "github-dark").shikiTheme,
-    "github-dark",
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "diffIntensity", "medium").diffIntensity,
-    "medium",
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "wordEmphasis", "smart").wordEmphasis,
-    "smart",
-  );
+  for (const [id, value, expected] of [
+    ["shikiTheme", "github-dark", "github-dark"],
+    ["diffIntensity", "medium", "medium"],
+    ["wordEmphasis", "smart", "smart"],
+    ["toolCallBackground", "off", "off"],
+    ["toolCallBackground", "border", "border"],
+    ["toolCallTiming", "off", false],
+    ["readContentPreview", "off", false],
+    ["readCollapsedLines", "20", 20],
+    ["writeContentPreview", "off", false],
+    ["writeCollapsedLines", "20", 20],
+    ["editDiffPreview", "off", false],
+    ["editCollapsedLines", "all", "all"],
+    ["grepResultPreview", "off", false],
+    ["grepCollapsedLines", "25", 25],
+    ["findResultPreview", "off", false],
+    ["lsResultPreview", "off", false],
+    ["pathListCollapsedLines", "40", 40],
+    ["readLineNumbers", "off", false],
+    ["pathIcons", "off", "off"],
+    ["bashResultPreview", "off", false],
+    ["bashWarnings", "off", false],
+    ["syntaxHighlighting", "off", false],
+    ["secretWarnings", "off", false],
+  ] as const) {
+    assert.equal(updateSetting(defaultCodePreviewSettings, id, value)[id], expected, id);
+  }
+
   assert.deepEqual(updateSetting(defaultCodePreviewSettings, "tools", "none").tools, []);
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "toolCallBackground", "off").toolCallBackground,
-    "off",
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "toolCallBackground", "border").toolCallBackground,
-    "border",
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "toolCallTiming", "off").toolCallTiming,
-    false,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "readContentPreview", "off").readContentPreview,
-    false,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "readCollapsedLines", "20").readCollapsedLines,
-    20,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "writeContentPreview", "off").writeContentPreview,
-    false,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "writeCollapsedLines", "20").writeCollapsedLines,
-    20,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "editDiffPreview", "off").editDiffPreview,
-    false,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "editCollapsedLines", "all").editCollapsedLines,
-    "all",
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "grepResultPreview", "off").grepResultPreview,
-    false,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "grepCollapsedLines", "25").grepCollapsedLines,
-    25,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "findResultPreview", "off").findResultPreview,
-    false,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "lsResultPreview", "off").lsResultPreview,
-    false,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "pathListCollapsedLines", "40")
-      .pathListCollapsedLines,
-    40,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "readLineNumbers", "off").readLineNumbers,
-    false,
-  );
-  assert.equal(updateSetting(defaultCodePreviewSettings, "pathIcons", "off").pathIcons, "off");
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "bashResultPreview", "off").bashResultPreview,
-    false,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "bashWarnings", "off").bashWarnings,
-    false,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "syntaxHighlighting", "off").syntaxHighlighting,
-    false,
-  );
-  assert.equal(
-    updateSetting(defaultCodePreviewSettings, "secretWarnings", "off").secretWarnings,
-    false,
-  );
   assert.deepEqual(
     updateSetting(
       { ...defaultCodePreviewSettings, readCollapsedLines: 21 },

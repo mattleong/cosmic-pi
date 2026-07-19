@@ -24,12 +24,19 @@ export function configPaths(cwd: string, agentDir = getAgentDir()) {
   };
 }
 
-export function readRawConfig(path: string): Record<string, unknown> {
+function readExistingConfig(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
+  const value = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (!isRecord(value)) throw new Error(`Cosmic UI config must contain a JSON object: ${path}`);
+  return value;
+}
+
+export function readRawConfig(path: string): Record<string, unknown> {
   try {
-    const value = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    return isRecord(value) ? value : {};
-  } catch {
+    return readExistingConfig(path);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[pi-cosmic-ui] Failed to read ${path}: ${message}`);
     return {};
   }
 }
@@ -87,7 +94,7 @@ export function updateFooterConfig(
   patch: Partial<ResolvedCosmicUiConfig["footer"]>,
   agentDir = getAgentDir(),
 ): ResolvedCosmicUiConfig {
-  const raw = readRawConfig(config.configPath);
+  const raw = readExistingConfig(config.configPath);
   const currentFooter = isRecord(raw.footer) ? raw.footer : {};
   writeRawConfig(config.configPath, { ...raw, footer: { ...currentFooter, ...patch } });
   return resolveConfig(cwd, agentDir);

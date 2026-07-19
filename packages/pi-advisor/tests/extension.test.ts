@@ -1253,6 +1253,38 @@ describe("persistent extension cutover", () => {
     expect(value.logFailure).toHaveBeenCalledTimes(2);
   });
 
+  test("shows a delayed animated status while a checkpoint is active", async () => {
+    vi.useFakeTimers();
+    try {
+      const value = harness();
+      await value.emit("session_start", { type: "session_start" });
+      await value.emit("turn_end", finalTurn("candidate"));
+      await vi.advanceTimersByTimeAsync(0);
+      const current = value.runtimes[0]!;
+      const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
+      const reviewStatuses = () =>
+        setStatus.mock.calls
+          .map((call) => call[1])
+          .filter((text): text is string => typeof text === "string" && text.includes("reviewing"));
+
+      expect(current.requests).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(199);
+      expect(reviewStatuses()).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      const firstFrame = reviewStatuses().at(-1);
+      expect(firstFrame).toMatch(/^⠋ advisor reviewing…$/);
+
+      await vi.advanceTimersByTimeAsync(120);
+      expect(reviewStatuses().at(-1)).not.toBe(firstFrame);
+
+      current.pending[0]!.resolve(pass(current.requests[0]!));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("status exposes attempts, pass outcomes and bounded queue metrics", async () => {
     const value = harness();
     await value.emit("session_start", { type: "session_start" });

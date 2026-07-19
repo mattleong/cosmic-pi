@@ -250,22 +250,14 @@ export default function cosmicUi(pi: ExtensionAPI): void {
   });
   pi.on("thinking_level_select", () => registry.requestRenderNow());
   pi.on("session_info_changed", () => registry.requestRenderNow());
-  pi.on("agent_start", () => {
+  const invalidateContextUsage = () => {
     footerComponent?.invalidateContextUsage();
     registry.requestRenderNow();
-  });
-  pi.on("message_start", () => {
-    footerComponent?.invalidateContextUsage();
-    registry.requestRenderNow();
-  });
-  pi.on("message_update", () => {
-    footerComponent?.invalidateContextUsage();
-    registry.requestRenderNow();
-  });
-  pi.on("message_end", () => {
-    footerComponent?.invalidateContextUsage();
-    registry.requestRenderNow();
-  });
+  };
+  pi.on("agent_start", invalidateContextUsage);
+  pi.on("message_start", invalidateContextUsage);
+  pi.on("message_update", invalidateContextUsage);
+  pi.on("message_end", invalidateContextUsage);
   pi.on("session_shutdown", (_event, ctx) => {
     stopGitPolling();
     if (installed && terminalUi(ctx)) ctx.ui.setFooter(undefined);

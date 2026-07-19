@@ -93,7 +93,11 @@ export class ToolPreviewSettingsSubmenu extends Container {
 
     this.addChild(new Text("Preview tools", 0, 0));
     this.addChild(
-      new Text("Toggle tool previews individually. Changes take effect after /reload.", 0, 0),
+      new Text(
+        "Toggle previews individually. Changes take effect after /reload; tools owned by another extension stay disabled.",
+        0,
+        0,
+      ),
     );
     this.addChild(new Spacer(1));
     this.addChild(this.settingsList);
@@ -121,17 +125,17 @@ function createToolToggleItems(
       return {
         id: toolToggleId(tool),
         label: `${tool} preview`,
-        description: `${tool} preview is disabled because ${owner} owns the ${tool} tool. Disable that extension or change package order to let pi-code-previews own it.`,
+        description: `${owner} owns this tool.`,
         currentValue: `disabled (${owner})`,
       };
     }
 
-    const statusText =
-      status?.state === "active" ? "currently active" : "takes effect after /reload";
+    const description =
+      status?.state === "active" ? "Currently active." : "Takes effect after /reload.";
     return {
       id: toolToggleId(tool),
       label: `${tool} preview`,
-      description: `${tool} preview registration (${statusText}). Tools already owned by another extension are disabled automatically.`,
+      description,
       currentValue: formatOnOff(enabledTools.has(tool)),
       values: [...ON_OFF_VALUES],
     };
