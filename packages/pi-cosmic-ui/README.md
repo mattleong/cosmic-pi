@@ -36,6 +36,7 @@ Run `/cosmic-ui` to configure footer visibility, density, and media placement. C
       "session",
       "metrics",
       "openai.usage",
+      "xai.usage",
       "extensions"
     ],
     "hidden": [],

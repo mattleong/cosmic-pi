@@ -20,6 +20,7 @@ import {
   renderContributionLine,
   renderLabeledContributionLine,
   renderOpenAIUsageLine,
+  renderXaiUsageLine,
 } from "./layout.ts";
 import type { FooterContributionRegistry } from "./registry.ts";
 
@@ -344,8 +345,15 @@ export function createFooterComponent(options: {
       const contextVisible = metrics.some((entry) => entry.id === "context");
       const sessionInfo = metrics.filter((entry) => entry.id !== "context");
       const details = text.filter((entry) => entry.region === "details");
-      const openAIUsage = details.find((entry) => entry.id === "openai.usage");
-      const otherDetails = details.filter((entry) => entry.id !== "openai.usage");
+      const providerUsageRenderers: Record<
+        string,
+        (text: string, width: number, theme: CosmicFooterTheme, compact: boolean) => string
+      > = {
+        "openai.usage": renderOpenAIUsageLine,
+        "xai.usage": renderXaiUsageLine,
+      };
+      const providerUsage = details.filter((entry) => entry.id in providerUsageRenderers);
+      const otherDetails = details.filter((entry) => !(entry.id in providerUsageRenderers));
       let lines: string[] = [];
       if (modelIdentity.length)
         lines.push(renderLabeledContributionLine("Model", modelIdentity, width, theme, compact));
@@ -359,15 +367,18 @@ export function createFooterComponent(options: {
             ? renderContextLine(currentContextUsage, sessionInfo, width, theme, compact)
             : renderContributionLine(sessionInfo, width, theme, compact),
         );
-      if (openAIUsage)
+      for (const usage of providerUsage) {
+        const render = providerUsageRenderers[usage.id];
+        if (!render) continue;
         lines.push(
-          renderOpenAIUsageLine(
-            compact && openAIUsage.compactText ? openAIUsage.compactText : openAIUsage.text,
+          render(
+            compact && usage.compactText ? usage.compactText : usage.text,
             width,
             theme,
             compact,
           ),
         );
+      }
       if (!compact) {
         for (const detail of otherDetails)
           lines.push(renderContributionLine([detail], width, theme, false));

@@ -92,33 +92,59 @@ export function renderContextLine(
   return alignSides(left, right, width);
 }
 
-export function renderOpenAIUsageLine(
+/** Match window labels used by provider usage status lines (OpenAI 5h/7d, xAI 7d/mo). */
+const PROVIDER_USAGE_WINDOW_PATTERN = /([A-Za-z0-9]+):\s*(\d+(?:\.\d+)?)%/g;
+
+export function renderProviderUsageLine(
+  providerLabel: string,
   text: string,
   width: number,
   theme: CosmicFooterTheme,
   compact: boolean,
 ): string {
   const body = text.replace(/^Usage:\s*/i, "");
-  const pattern = /(5h|7d):\s*(\d+(?:\.\d+)?)%/gi;
   const cells = compact ? 6 : 10;
-  const pieces = [footerLabel("OpenAI", theme)];
+  const pieces = [footerLabel(providerLabel, theme)];
   let cursor = 0;
   let matched = false;
-  for (const match of body.matchAll(pattern)) {
+  for (const match of body.matchAll(PROVIDER_USAGE_WINDOW_PATTERN)) {
     matched = true;
     const index = match.index ?? 0;
     if (index > cursor) pieces.push(theme.fg("syntaxOperator", body.slice(cursor, index)));
     const percent = Number(match[2]);
     const color = remainingCapacityTone(percent);
-    const labelColor = color;
-    pieces.push(theme.fg(labelColor, `${match[1]?.toLowerCase()} `));
+    pieces.push(theme.fg(color, `${match[1]?.toLowerCase()} `));
     pieces.push(progressBar(percent, cells, theme, color));
     pieces.push(theme.fg(color, ` ${Math.round(percent)}%`));
     cursor = index + match[0].length;
   }
-  if (!matched) return truncateToWidth(theme.fg("mdLink", `OpenAI  ${body}`), width, "");
+  if (!matched) {
+    return truncateToWidth(
+      theme.fg("mdLink", `${providerLabel.padEnd(FOOTER_LABEL_WIDTH)}${body}`),
+      width,
+      "",
+    );
+  }
   if (cursor < body.length) pieces.push(theme.fg("syntaxOperator", body.slice(cursor)));
   return truncateToWidth(pieces.join(""), width, "");
+}
+
+export function renderOpenAIUsageLine(
+  text: string,
+  width: number,
+  theme: CosmicFooterTheme,
+  compact: boolean,
+): string {
+  return renderProviderUsageLine("OpenAI", text, width, theme, compact);
+}
+
+export function renderXaiUsageLine(
+  text: string,
+  width: number,
+  theme: CosmicFooterTheme,
+  compact: boolean,
+): string {
+  return renderProviderUsageLine("xAI", text, width, theme, compact);
 }
 
 function contributionColor(contribution: CosmicFooterTextContribution): string {

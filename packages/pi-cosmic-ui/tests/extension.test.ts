@@ -96,6 +96,16 @@ describe("Cosmic UI extension", () => {
     });
     h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
       version: COSMIC_UI_PROTOCOL_VERSION,
+      owner: "pi-better-xai",
+      contribution: {
+        kind: "text",
+        id: "xai.usage",
+        region: "details",
+        text: "Usage: 7d: 82% | mo: 83%",
+      },
+    });
+    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
+      version: COSMIC_UI_PROTOCOL_VERSION,
       owner: "pi-better-openai",
       contribution: {
         kind: "text",
@@ -136,6 +146,8 @@ describe("Cosmic UI extension", () => {
     expect(renderedLines[1]).toContain("/tmp/project");
     expect(rendered).toContain("Ctx");
     expect(rendered).toContain("OpenAI");
+    expect(rendered).toContain("xAI");
+    expect(rendered).toContain("mo");
     expect(rendered).toContain("main");
     expect(rendered).toContain("PR #42");
     expect(renderedLines[1]).toContain("main");

@@ -414,6 +414,7 @@ describe("advisor commands", () => {
       processedSequence: 12,
       queuedReviews: 1,
       sequence: 19,
+      settledReviews: 4,
       suppressedFindings: 2,
       totalTokens: 190,
     });
@@ -431,6 +432,7 @@ describe("advisor commands", () => {
     const concise = String(notify.mock.calls[0]?.[0]);
     expect(concise).toContain("Advisor: on · Guardrail · openai/reviewer");
     expect(concise).toContain("Session: reviewing");
+    expect(concise).toContain("Last advisor action: revision");
     expect(concise).not.toContain("Advisor tokens:");
 
     notify.mockClear();
@@ -456,9 +458,9 @@ describe("advisor commands", () => {
     expect(output).toContain("Child resets/reprimes: 4");
     expect(output).toContain("Active Advisor tools: read, grep, find, ls");
     expect(output).toContain("Session review attempts: 5");
-    expect(output).toContain(
-      "Session review outcomes: pass 1, revise 1, failure 1, discarded 1, in progress 1",
-    );
+    expect(output).toContain("Session reviews: settled 4, in progress 1");
+    expect(output).toContain("Session review results: pass 1, revise 1, discarded 1");
+    expect(output).toContain("Operational failures: 1");
     expect(output).toContain(configPath);
     expect(output).not.toMatch(/api[_-]?key|secret/i);
   });
@@ -485,7 +487,7 @@ describe("advisor commands", () => {
       latestDurationMs: 1_200,
       modelResponses: 6,
       outputTokens: 200,
-      timedReviews: 4,
+      settledReviews: 4,
       totalDurationMs: 10_000,
       totalTokens: 1_540,
       usageByModel: {
@@ -532,5 +534,72 @@ describe("advisor commands", () => {
     expect(output).toContain("Review time: 10.0s total · 2.5s average · 1.2s latest");
     expect(output).toContain("openai/reviewer: 5 responses · 1,420 tokens · $0.010000");
     expect(output).toContain("anthropic/backup: 1 response · 120 tokens · $0.002345");
+  });
+
+  test("renders zero session usage without a model breakdown", async () => {
+    const harness = createCommands(configAt(tempConfigPath()));
+    const notify = vi.fn();
+    const ctx = {
+      ui: { notify },
+      modelRegistry: { find: () => undefined },
+    } as unknown as ExtensionCommandContext;
+
+    await harness.commands.get("advisor-usage")?.("", ctx);
+    const output = String(notify.mock.calls[0]?.[0]);
+    expect(output).toContain("Model responses: 0");
+    expect(output).toContain("Reviews: 0 attempted · 0 settled · 0 in progress");
+    expect(output).toContain("Review time: not available");
+    expect(output).not.toContain("\nModels\n");
+  });
+
+  test("attributes single-model historical usage after the configured model changes", async () => {
+    const configPath = tempConfigPath();
+    const harness = createCommands(
+      {
+        ...configAt(configPath),
+        provider: "openai",
+        model: "new-reviewer",
+        configured: true,
+      },
+      {
+        attempted: 1,
+        pass: 1,
+        revise: 0,
+        failure: 0,
+        discarded: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        cost: 0.01,
+        inputTokens: 100,
+        modelResponses: 1,
+        outputTokens: 20,
+        settledReviews: 1,
+        totalTokens: 120,
+        usageByModel: {
+          historical: {
+            provider: "anthropic",
+            model: "old-reviewer",
+            responses: 1,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            cost: 0.01,
+            inputTokens: 100,
+            outputTokens: 20,
+            totalTokens: 120,
+          },
+        },
+      },
+    );
+    const notify = vi.fn();
+    const ctx = {
+      ui: { notify },
+      modelRegistry: { find: () => ({ provider: "openai", id: "new-reviewer" }) },
+    } as unknown as ExtensionCommandContext;
+
+    await harness.commands.get("advisor-usage")?.("", ctx);
+    const output = String(notify.mock.calls[0]?.[0]);
+    expect(output).toContain("Current model: openai/new-reviewer");
+    expect(output).toContain("Models");
+    expect(output).toContain("anthropic/old-reviewer: 1 response · 120 tokens · $0.010000");
   });
 });

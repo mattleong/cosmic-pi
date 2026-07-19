@@ -20,6 +20,7 @@ const VISIBILITY_IDS = [
   "session",
   "metrics",
   "openai.usage",
+  "xai.usage",
   "extensions",
 ] as const;
 

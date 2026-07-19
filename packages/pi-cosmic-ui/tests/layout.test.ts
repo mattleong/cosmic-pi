@@ -5,6 +5,7 @@ import {
   renderContextLine,
   renderContributionLine,
   renderOpenAIUsageLine,
+  renderXaiUsageLine,
 } from "../src/footer/layout.ts";
 import { FooterContributionRegistry } from "../src/footer/registry.ts";
 
@@ -53,6 +54,7 @@ describe("responsive footer layout", () => {
       false,
     );
     const usage = renderOpenAIUsageLine("Usage: 5h: 90% | 7d: 51%", 80, theme, false);
+    const xaiUsage = renderXaiUsageLine("Usage: 7d: 82% | mo: 83%", 80, theme, false);
 
     expect(visibleWidth(context)).toBeLessThanOrEqual(80);
     expect(context).toContain("Ctx");
@@ -62,6 +64,11 @@ describe("responsive footer layout", () => {
     expect(usage).toContain("OpenAI");
     expect(usage).toContain("5h");
     expect(usage).toContain("█");
+    expect(visibleWidth(xaiUsage)).toBeLessThanOrEqual(80);
+    expect(xaiUsage).toContain("xAI");
+    expect(xaiUsage).toContain("7d");
+    expect(xaiUsage).toContain("mo");
+    expect(xaiUsage).toContain("█");
   });
 
   test("colors context consumption green through 50% and orange through 75%", () => {
@@ -77,6 +84,7 @@ describe("responsive footer layout", () => {
         false,
       );
     renderOpenAIUsageLine("Usage: 5h: 75% | 7d: 25%", 80, thresholdTheme, false);
+    renderXaiUsageLine("Usage: 7d: 75% | mo: 25%", 80, thresholdTheme, false);
 
     expect(fg.mock.calls).toContainEqual(["error", " 76% · 76k/100k"]);
     expect(fg.mock.calls).toContainEqual(["warning", " 75% · 75k/100k"]);
@@ -86,6 +94,7 @@ describe("responsive footer layout", () => {
     expect(fg.mock.calls).toContainEqual(["success", " 75%"]);
     expect(fg.mock.calls).toContainEqual(["warning", "7d "]);
     expect(fg.mock.calls).toContainEqual(["warning", " 25%"]);
+    expect(fg.mock.calls).toContainEqual(["warning", "mo "]);
   });
 
   test("uses a varied named theme palette without dim or white footer colors", () => {

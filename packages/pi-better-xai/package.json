@@ -1,0 +1,72 @@
+{
+  "name": "pi-better-xai",
+  "version": "0.2.0",
+  "description": "Personal pi extension that adds xAI/Grok subscription usage visibility and footer polish.",
+  "keywords": [
+    "footer",
+    "grok",
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "subscription",
+    "usage",
+    "xai"
+  ],
+  "homepage": "https://github.com/mattleong/cosmic-pi/tree/main/packages/pi-better-xai#readme",
+  "bugs": {
+    "url": "https://github.com/mattleong/cosmic-pi/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mattleong/cosmic-pi.git",
+    "directory": "packages/pi-better-xai"
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./ui": "./src/ui/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "validate": "pnpm check && pnpm test",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --deny-warnings .",
+    "lint:fix": "oxlint --fix .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm validate",
+    "pack:dry": "pnpm pack --dry-run"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.8",
+    "@earendil-works/pi-tui": "0.80.8",
+    "@types/node": "~22.19.0",
+    "oxfmt": "^0.47.0",
+    "oxlint": "^1.62.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

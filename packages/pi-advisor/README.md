@@ -82,9 +82,12 @@ Read-only does not mean data-free: files under the project root that the Advisor
 /advisor off
 /advisor settings
 /advisor status --verbose
+/advisor-usage
 ```
 
 `verify-last` requests an evidence-focused review and may use the same project-confined read-only tools. `/advisor-settings` is a compatibility shortcut for the settings dashboard. The dashboard shows every setting in one flat list and persists each change immediately; there is no Apply step or nested Advanced section.
+
+`/advisor-usage` reports provider-recorded model responses, tokens, cache usage, cost, review timing, and per-model attribution for the current session. Its counters reset on session start, but not on compaction or branch changes. It does not include parent-agent usage or estimate unreported costs.
 
 Verbose status reports persistent/in-memory behavior, fixed immunity, active safe tool names, observation backlog, processed/ingested sequence, pending checkpoints, catch-up waits/timeouts/failures/cancellations, child resets/re-primes, guidance, usage totals, and bounded failure classes. It never displays transcript text, thinking, tool evidence, auth values, or credentials.
 

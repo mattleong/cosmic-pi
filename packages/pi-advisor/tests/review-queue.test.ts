@@ -8,10 +8,12 @@ import { AdvisorReviewQueue } from "../src/review-queue.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
 function result(request: AdvisorCheckpointRequest): AdvisorCheckpoint {
@@ -255,6 +257,33 @@ describe("AdvisorReviewQueue", () => {
       queue.checkpoint({ checkpointId: "small", focus: "standard", parentTurnId: 2 }),
     ).resolves.toMatchObject({ checkpointId: "small" });
     expect(harness.runtime.reprime).toHaveBeenCalledTimes(2);
+  });
+
+  test("disposal prevents a rejected checkpoint from re-priming or retrying", async () => {
+    const harness = runtimeHarness();
+    const failure = deferred<AdvisorCheckpoint>();
+    (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(
+      () => failure.promise,
+    );
+    const queue = new AdvisorReviewQueue(harness.runtime, {
+      getReprimeState: () => ({ seed: "obsolete cursor", stateSummary: "obsolete state" }),
+    });
+    queue.ingest(1, { type: "user", text: "old request" });
+    const checkpoint = queue.checkpoint({
+      checkpointId: "obsolete",
+      focus: "standard",
+      parentTurnId: 1,
+    });
+    const rejection = expect(checkpoint).rejects.toThrow(/disposed|stale/);
+    await tick();
+
+    await queue.dispose();
+    failure.reject(new Error("context overflow"));
+    await rejection;
+    await tick();
+
+    expect(harness.runtime.checkpoint).toHaveBeenCalledOnce();
+    expect(harness.runtime.reprime).not.toHaveBeenCalled();
   });
 
   test("hard reset aborts and rejects stale checkpoint work", async () => {

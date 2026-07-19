@@ -46,6 +46,7 @@ function harness(
   overrides: Partial<ResolvedAdvisorConfig> = {},
   options: {
     runtimeStartError?: Error;
+    runtimeStartPromises?: Array<Promise<void> | undefined>;
     catchUpTimeoutMs?: number;
     branch?: Array<Record<string, unknown>>;
   } = {},
@@ -61,12 +62,14 @@ function harness(
     pending: Array<ReturnType<typeof deferred<AdvisorCheckpoint>>>;
   }> = [];
   const createRuntime = () => {
+    const runtimeIndex = runtimes.length;
     const requests: AdvisorCheckpointRequest[] = [];
     const pending: Array<ReturnType<typeof deferred<AdvisorCheckpoint>>> = [];
     const driver: AdvisorRuntimeDriver = {
       activeToolNames: ["read", "grep", "find", "ls"],
       start: vi.fn(async () => {
         if (options.runtimeStartError) throw options.runtimeStartError;
+        await options.runtimeStartPromises?.[runtimeIndex];
       }),
       checkpoint: vi.fn((request: AdvisorCheckpointRequest) => {
         requests.push(request);
@@ -515,6 +518,10 @@ describe("persistent extension cutover", () => {
     expect(value.sendMessage).not.toHaveBeenCalled();
     expect(value.ctx.abort).not.toHaveBeenCalled();
     expect(value.appended).toHaveLength(0);
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    const usage = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
+    expect(usage).toContain("Reviews: 1 attempted · 1 settled · 0 in progress");
+    expect(usage).toContain("Operational failures: 1");
   });
 
   test("suppresses duplicate findings within one parent-turn scope", async () => {
@@ -531,6 +538,10 @@ describe("persistent extension cutover", () => {
     current.pending[1]?.resolve(revise(current.requests[1]));
     await tick();
     expect(value.sendMessage).toHaveBeenCalledTimes(1);
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
+      "Reviews: 2 attempted · 2 settled · 0 in progress",
+    );
   });
 
   test("manual once, review-last, pause, resume and cancel commands remain registered", async () => {
@@ -553,6 +564,18 @@ describe("persistent extension cutover", () => {
     await tick();
     expect(value.runtimes.at(-1)?.requests).toHaveLength(1);
     await command.handler("cancel", value.ctx as never);
+  });
+
+  test("review-last warns only when no completed response exists", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+
+    await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
+
+    expect(value.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "No completed response is available to review.",
+      "warning",
+    );
   });
 
   test("does not recursively observe an advisor review custom message as genuine user work", async () => {
@@ -1292,12 +1315,532 @@ describe("persistent extension cutover", () => {
     }
   });
 
+  test("does not show a late spinner when a checkpoint settles within the delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const value = harness();
+      await value.emit("session_start", { type: "session_start" });
+      await value.emit("turn_end", finalTurn("candidate"));
+      await vi.advanceTimersByTimeAsync(0);
+      const current = value.runtimes[0]!;
+      const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
+
+      current.pending[0]!.resolve(pass(current.requests[0]!));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(setStatus.mock.calls.some((call) => String(call[1]).includes("reviewing"))).toBe(
+        false,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a completed checkpoint cannot clear the next queued checkpoint spinner", async () => {
+    vi.useFakeTimers();
+    try {
+      const value = harness();
+      await value.emit("session_start", { type: "session_start" });
+      await value.emit("turn_end", finalTurn("candidate"));
+      await vi.advanceTimersByTimeAsync(0);
+      const current = value.runtimes[0]!;
+      await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
+      await vi.advanceTimersByTimeAsync(200);
+
+      const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
+      setStatus.mockClear();
+      current.pending[0]!.resolve(revise(current.requests[0]!, "concern", "first review"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.requests).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(setStatus).toHaveBeenCalledWith(
+        "pi-advisor",
+        expect.stringMatching(/^⠋ advisor reviewing…$/),
+      );
+
+      current.pending[1]!.resolve(pass(current.requests[1]!));
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("delayed recovery cannot clear a newer checkpoint spinner", async () => {
+    vi.useFakeTimers();
+    try {
+      const value = harness();
+      (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+      await value.emit("session_start", { type: "session_start" });
+      await value.emit("turn_end", finalTurn("completed candidate"));
+      await vi.advanceTimersByTimeAsync(0);
+      const current = value.runtimes[0]!;
+      current.pending[0]!.resolve(pass(current.requests[0]!));
+      await vi.advanceTimersByTimeAsync(0);
+
+      await value.emit("turn_start", { type: "turn_start", turnIndex: 2 });
+      await value.emit("message_update", {
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "thinking_delta",
+          delta: "repeat-this-unit".repeat(12),
+        },
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      current.pending[1]!.resolve(revise(current.requests[1]!));
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.runAllTicks();
+      expect(value.ctx.abort).toHaveBeenCalledOnce();
+
+      await value.emit("turn_end", {
+        ...finalTurn(""),
+        turnIndex: 2,
+        message: { role: "assistant", content: [], stopReason: "aborted" },
+      });
+      await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
+      await vi.advanceTimersByTimeAsync(200);
+      const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
+      expect(setStatus).toHaveBeenLastCalledWith(
+        "pi-advisor",
+        expect.stringMatching(/^⠋ advisor reviewing…$/),
+      );
+
+      setStatus.mockClear();
+      (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      await value.emit("agent_settled", { type: "agent_settled" });
+      expect(setStatus).not.toHaveBeenCalled();
+
+      current.pending[2]!.resolve(pass(current.requests[2]!));
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("new sessions ignore late callbacks without clearing current spinner", async () => {
+    vi.useFakeTimers();
+    try {
+      const value = harness();
+      await value.emit("session_start", { type: "session_start" });
+      await value.emit("turn_end", finalTurn("old candidate"));
+      await vi.advanceTimersByTimeAsync(0);
+      const old = value.runtimes[0]!;
+      const oldStart = (old.driver.start as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+        | AdvisorRuntimeStartOptions
+        | undefined;
+
+      await value.emit("session_start", { type: "session_start" });
+      await value.emit("turn_end", finalTurn("new candidate"));
+      await vi.advanceTimersByTimeAsync(200);
+      const current = value.runtimes.at(-1)!;
+      const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
+      expect(setStatus).toHaveBeenLastCalledWith(
+        "pi-advisor",
+        expect.stringMatching(/^⠋ advisor reviewing…$/),
+      );
+
+      setStatus.mockClear();
+      oldStart?.onUsage?.({
+        cacheReadTokens: 3,
+        cacheWriteTokens: 4,
+        cost: 0.5,
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 22,
+      });
+      old.pending[0]!.reject(new Error("late old-session failure"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(setStatus).not.toHaveBeenCalledWith("pi-advisor", undefined);
+
+      await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+      const usage = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
+      expect(usage).toContain("Model responses: 0");
+      expect(usage).toContain("Reviews: 1 attempted · 0 settled · 1 in progress");
+      expect(usage).toContain("Operational failures: 0");
+
+      current.pending[0]!.resolve(pass(current.requests[0]!));
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a session reset discards a request awaiting cursor restart", async () => {
+    const restart = deferred<void>();
+    const value = harness({}, { runtimeStartPromises: [undefined, restart.promise, undefined] });
+    await value.emit("session_start", { type: "session_start" });
+    value.branch.splice(0, value.branch.length, {
+      id: "new-anchor",
+      type: "message",
+      parentId: null,
+      timestamp: "later",
+      message: { role: "user", content: "new branch" },
+    });
+
+    await value.emit("turn_end", finalTurn("stale candidate"));
+    await tick();
+    expect(value.runtimes).toHaveLength(2);
+    await value.emit("session_start", { type: "session_start" });
+    expect(value.runtimes).toHaveLength(3);
+
+    restart.resolve();
+    await tick();
+    const current = value.runtimes[2]!;
+    expect(current.requests).toHaveLength(0);
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
+      "Reviews: 0 attempted · 0 settled · 0 in progress",
+    );
+
+    await value.emit("turn_end", finalTurn("current candidate"));
+    await tick();
+    expect(current.requests).toHaveLength(1);
+    current.pending[0]!.resolve(pass(current.requests[0]!));
+    await tick();
+  });
+
+  test("a tree restart discards a request awaiting an older cursor restart", async () => {
+    const restart = deferred<void>();
+    const value = harness({}, { runtimeStartPromises: [undefined, restart.promise, undefined] });
+    await value.emit("session_start", { type: "session_start" });
+    value.branch.splice(0, value.branch.length, {
+      id: "new-anchor",
+      type: "message",
+      parentId: null,
+      timestamp: "later",
+      message: { role: "user", content: "new branch" },
+    });
+
+    await value.emit("turn_end", finalTurn("stale candidate"));
+    await tick();
+    expect(value.runtimes).toHaveLength(2);
+    await value.emit("session_tree", { type: "session_tree" });
+    expect(value.runtimes).toHaveLength(3);
+
+    restart.resolve();
+    await tick();
+    expect(value.runtimes[2]!.requests).toHaveLength(0);
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
+      "Reviews: 0 attempted · 0 settled · 0 in progress",
+    );
+  });
+
+  test("invalidated trajectory does not submit after a cursor restart", async () => {
+    const restart = deferred<void>();
+    const value = harness({}, { runtimeStartPromises: [undefined, restart.promise] });
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_start", { type: "turn_start", turnIndex: 1 });
+    value.branch.splice(0, value.branch.length, {
+      id: "new-anchor",
+      type: "message",
+      parentId: null,
+      timestamp: "now",
+      message: { role: "user", content: "new branch" },
+    });
+
+    await emitToolLoop(value, "restart-invalidates-trajectory");
+    await tick();
+    expect(value.runtimes).toHaveLength(2);
+    restart.resolve();
+    await tick();
+
+    expect(value.runtimes[1]!.requests).toHaveLength(0);
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
+      "Reviews: 0 attempted · 0 settled · 0 in progress",
+    );
+  });
+
+  test("review-last startup cannot cross into a new session", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-advisor-review-last-race-"));
+    try {
+      const configPath = join(directory, "pi-advisor.json");
+      writeFileSync(configPath, JSON.stringify({ enabled: true, provider: "p", model: "m" }));
+      const restart = deferred<void>();
+      const value = harness(
+        { configPath },
+        { runtimeStartPromises: [undefined, restart.promise, undefined] },
+      );
+      await value.emit("session_start", { type: "session_start" });
+      await value.emit("turn_end", finalTurn("candidate"));
+      await tick();
+      const initial = value.runtimes[0]!;
+      initial.pending[0]!.resolve(pass(initial.requests[0]!));
+      await tick();
+      const command = value.commands.get("advisor")!;
+      await command.handler("off", value.ctx as never);
+      await tick();
+
+      const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
+      notify.mockClear();
+      const review = command.handler("review-last", value.ctx as never);
+      await tick();
+      expect(value.runtimes).toHaveLength(2);
+      await value.emit("session_start", { type: "session_start" });
+      expect(value.runtimes).toHaveLength(3);
+      restart.resolve();
+      await expect(review).resolves.toBeUndefined();
+      await tick();
+      expect(value.runtimes[2]!.requests).toHaveLength(0);
+      expect(notify).not.toHaveBeenCalledWith(
+        "No completed response is available to review.",
+        "warning",
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("review-last startup cannot cross a tree restart", async () => {
+    const restart = deferred<void>();
+    const value = harness({}, { runtimeStartPromises: [undefined, restart.promise, undefined] });
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const initial = value.runtimes[0]!;
+    initial.pending[0]!.resolve(pass(initial.requests[0]!));
+    await tick();
+    await value.emit("session_shutdown", { type: "session_shutdown" });
+    const command = value.commands.get("advisor")!;
+    const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
+    notify.mockClear();
+
+    const review = command.handler("review-last", value.ctx as never);
+    await tick();
+    expect(value.runtimes).toHaveLength(2);
+    await value.emit("session_tree", { type: "session_tree" });
+    expect(value.runtimes).toHaveLength(3);
+    restart.resolve();
+    await review;
+    await tick();
+
+    expect(value.runtimes[2]!.requests).toHaveLength(0);
+    expect(notify).not.toHaveBeenCalledWith(
+      "No completed response is available to review.",
+      "warning",
+    );
+  });
+
+  test("once startup cannot cross into a new session", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-advisor-once-race-"));
+    try {
+      const configPath = join(directory, "pi-advisor.json");
+      writeFileSync(configPath, JSON.stringify({ enabled: true, provider: "p", model: "m" }));
+      const restart = deferred<void>();
+      const value = harness(
+        { configPath },
+        { runtimeStartPromises: [undefined, restart.promise, undefined] },
+      );
+      await value.emit("session_start", { type: "session_start" });
+      const command = value.commands.get("advisor")!;
+      await command.handler("off", value.ctx as never);
+      await tick();
+      await command.handler("once", value.ctx as never);
+
+      const turn = value.emitAwait("turn_end", finalTurn("stale once candidate"));
+      await tick();
+      expect(value.runtimes).toHaveLength(2);
+      await value.emit("session_start", { type: "session_start" });
+      expect(value.runtimes).toHaveLength(3);
+      restart.resolve();
+      await turn;
+      await tick();
+      expect(value.runtimes[2]!.requests).toHaveLength(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("once startup cannot cross a tree restart", async () => {
+    const restart = deferred<void>();
+    const value = harness({}, { runtimeStartPromises: [undefined, restart.promise, undefined] });
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("session_shutdown", { type: "session_shutdown" });
+    const command = value.commands.get("advisor")!;
+    await command.handler("once", value.ctx as never);
+
+    const turn = value.emitAwait("turn_end", finalTurn("stale once candidate"));
+    await tick();
+    expect(value.runtimes).toHaveLength(2);
+    await value.emit("session_tree", { type: "session_tree" });
+    expect(value.runtimes).toHaveLength(3);
+
+    restart.resolve();
+    await turn;
+    await tick();
+    expect(value.runtimes[2]!.requests).toHaveLength(0);
+  });
+
+  test("cancel stops once while its runtime is starting", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-advisor-once-cancel-"));
+    try {
+      const configPath = join(directory, "pi-advisor.json");
+      writeFileSync(configPath, JSON.stringify({ enabled: true, provider: "p", model: "m" }));
+      const restart = deferred<void>();
+      const value = harness({ configPath }, { runtimeStartPromises: [undefined, restart.promise] });
+      await value.emit("session_start", { type: "session_start" });
+      const command = value.commands.get("advisor")!;
+      await command.handler("off", value.ctx as never);
+      await tick();
+      await command.handler("once", value.ctx as never);
+      const turn = value.emitAwait("turn_end", finalTurn("cancelled once candidate"));
+      await tick();
+      expect(value.runtimes).toHaveLength(2);
+      const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
+      notify.mockClear();
+
+      await command.handler("cancel", value.ctx as never);
+      expect(notify).toHaveBeenLastCalledWith("Cancelled pending advisor work.", "info");
+      restart.resolve();
+      await turn;
+      await tick();
+      expect(value.runtimes[1]!.requests).toHaveLength(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("cancel stops review-last while its runtime is starting", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-advisor-review-last-cancel-"));
+    try {
+      const configPath = join(directory, "pi-advisor.json");
+      writeFileSync(configPath, JSON.stringify({ enabled: true, provider: "p", model: "m" }));
+      const restart = deferred<void>();
+      const value = harness({ configPath }, { runtimeStartPromises: [undefined, restart.promise] });
+      await value.emit("session_start", { type: "session_start" });
+      await value.emit("turn_end", finalTurn("candidate"));
+      await tick();
+      const initial = value.runtimes[0]!;
+      initial.pending[0]!.resolve(pass(initial.requests[0]!));
+      await tick();
+      const command = value.commands.get("advisor")!;
+      await command.handler("off", value.ctx as never);
+      await tick();
+
+      const review = command.handler("review-last", value.ctx as never);
+      await tick();
+      expect(value.runtimes).toHaveLength(2);
+      const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
+      notify.mockClear();
+      await command.handler("cancel", value.ctx as never);
+      expect(notify).toHaveBeenLastCalledWith("Cancelled pending advisor work.", "info");
+
+      restart.resolve();
+      await review;
+      await tick();
+      expect(value.runtimes[1]!.requests).toHaveLength(0);
+      expect(notify).not.toHaveBeenCalledWith(
+        "No completed response is available to review.",
+        "warning",
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("cancel recognizes a requested next review before it starts", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    const command = value.commands.get("advisor")!;
+    await command.handler("once", value.ctx as never);
+    const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
+    notify.mockClear();
+
+    await command.handler("cancel", value.ctx as never);
+    expect(notify).toHaveBeenLastCalledWith("Cancelled pending advisor work.", "info");
+  });
+
+  test("cancel recognizes pending recovery after its checkpoint settles", async () => {
+    const value = harness();
+    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_start", { type: "turn_start", turnIndex: 1 });
+    await emitToolLoop(value, "cancel-recovery");
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(revise(current.requests[0]!, "blocker", "pending recovery"));
+    await tick();
+    const command = value.commands.get("advisor")!;
+    const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
+    notify.mockClear();
+
+    await command.handler("cancel", value.ctx as never);
+    expect(notify).toHaveBeenLastCalledWith("Cancelled pending advisor work.", "info");
+  });
+
+  test("cancel recognizes an active manual review with no observation backlog", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(pass(current.requests[0]!));
+    await tick();
+
+    const command = value.commands.get("advisor")!;
+    await command.handler("review-last", value.ctx as never);
+    await tick();
+    const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
+    notify.mockClear();
+    await command.handler("cancel", value.ctx as never);
+    expect(notify).toHaveBeenLastCalledWith("Cancelled pending advisor work.", "info");
+  });
+
+  test("cancelled queued checkpoints keep attempted and settled usage coherent", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
+    await tick();
+    await value.commands.get("advisor")!.handler("cancel", value.ctx as never);
+    await tick();
+
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    const usage = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
+    expect(usage).toContain("Reviews: 2 attempted · 2 settled · 0 in progress");
+    expect(usage).toContain("Review results: pass 0 · revise 0 · discarded 2");
+    expect(usage).toContain("Operational failures: 0");
+    await value.commands.get("advisor-status")!.handler("--verbose", value.ctx as never);
+    expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
+      "timeouts 0, failures 0",
+    );
+  });
+
+  test("bounded queue eviction preserves attempted and settled accounting", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(pass(current.requests[0]!));
+    await tick();
+
+    const command = value.commands.get("advisor")!;
+    for (let index = 0; index < 18; index += 1) {
+      await command.handler("review-last", value.ctx as never);
+    }
+    await tick();
+    await command.handler("cancel", value.ctx as never);
+    await tick();
+
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    const usage = String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0]);
+    expect(usage).toContain("Reviews: 19 attempted · 19 settled · 0 in progress");
+    expect(usage).toContain("Review results: pass 1 · revise 0 · discarded 17");
+    expect(usage).toContain("Operational failures: 1");
+  });
+
   test("status exposes attempts, pass outcomes and bounded queue metrics", async () => {
     const value = harness();
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("candidate"));
     await tick();
     const current = value.runtimes[0]!;
+    await value.commands.get("advisor-status")!.handler("", value.ctx as never);
+    expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
+      "Session: reviewing",
+    );
     current.pending[0]!.resolve(pass(current.requests[0]!));
     await tick();
     await value.commands.get("advisor-status")!.handler("--verbose", value.ctx as never);

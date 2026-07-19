@@ -41,11 +41,16 @@ export interface AdvisorConfigState {
   update(config: ResolvedAdvisorConfig): void;
 }
 
+export type AdvisorReviewRequestResult = "started" | "unavailable" | "cancelled";
+
 export interface AdvisorCommandActions {
   cancel(ctx: ExtensionCommandContext): boolean;
   pause(ctx: ExtensionCommandContext): void;
   resume(ctx: ExtensionCommandContext): void;
-  reviewLast(ctx: ExtensionCommandContext, focus: AdvisorReviewFocus): boolean | Promise<boolean>;
+  reviewLast(
+    ctx: ExtensionCommandContext,
+    focus: AdvisorReviewFocus,
+  ): AdvisorReviewRequestResult | Promise<AdvisorReviewRequestResult>;
   reviewNext(ctx: ExtensionCommandContext): void;
 }
 
@@ -102,7 +107,7 @@ export interface AdvisorSessionMetrics {
   reviewNext?: boolean;
   sequence?: number;
   suppressedFindings?: number;
-  timedReviews?: number;
+  settledReviews?: number;
   totalDurationMs?: number;
   totalTokens?: number;
   usageByModel?: Record<string, AdvisorModelUsage>;
@@ -170,9 +175,10 @@ async function handleAdvisorCommand(
   }
   if (command === "review-last" || command === "verify-last") {
     const focus = command === "verify-last" ? "verification" : "standard";
-    if (!(await actions.reviewLast(ctx, focus))) {
+    const result = await actions.reviewLast(ctx, focus);
+    if (result === "unavailable") {
       ctx.ui.notify("No completed response is available to review.", "warning");
-    } else {
+    } else if (result === "started") {
       ctx.ui.notify(
         focus === "verification"
           ? "Started an evidence-focused transcript review of the last response."
@@ -194,9 +200,7 @@ async function handleAdvisorCommand(
   }
   if (command === "cancel") {
     ctx.ui.notify(
-      actions.cancel(ctx)
-        ? "Cancelled the current advisor review."
-        : "No advisor review is active.",
+      actions.cancel(ctx) ? "Cancelled pending advisor work." : "No advisor review is active.",
       "info",
     );
     return;
@@ -466,7 +470,7 @@ async function showAdvisorUsage(
   const reasoning = model ? clampThinkingLevel(model, config.thinkingLevel) : config.thinkingLevel;
   const mode =
     config.fastMode && supportsFastModel(config.provider, config.model) ? "fast" : "standard";
-  const settled = metrics.timedReviews ?? 0;
+  const settled = metrics.settledReviews ?? 0;
   const inProgress = Math.max(0, metrics.attempted - settled);
   const totalDuration = metrics.totalDurationMs ?? 0;
   const reviewTime = settled
@@ -478,7 +482,8 @@ async function showAdvisorUsage(
     `Current model: ${formatModel(config)} · ${reasoning} · ${mode}`,
     `Model responses: ${(metrics.modelResponses ?? 0).toLocaleString()}`,
     `Reviews: ${metrics.attempted.toLocaleString()} attempted · ${settled.toLocaleString()} settled · ${inProgress.toLocaleString()} in progress`,
-    `Outcomes: pass ${metrics.pass.toLocaleString()} · revise ${metrics.revise.toLocaleString()} · failed ${metrics.failure.toLocaleString()} · discarded ${metrics.discarded.toLocaleString()}`,
+    `Review results: pass ${metrics.pass.toLocaleString()} · revise ${metrics.revise.toLocaleString()} · discarded ${metrics.discarded.toLocaleString()}`,
+    `Operational failures: ${metrics.failure.toLocaleString()}`,
     "",
     "Tokens",
     `  Input:        ${(metrics.inputTokens ?? 0).toLocaleString()}`,
@@ -494,7 +499,7 @@ async function showAdvisorUsage(
   const modelUsage = Object.values(metrics.usageByModel ?? {}).sort(
     (left, right) => right.totalTokens - left.totalTokens,
   );
-  if (modelUsage.length > 1) {
+  if (modelUsage.length > 0) {
     lines.push("", "Models");
     for (const usage of modelUsage) {
       const responseLabel = usage.responses === 1 ? "response" : "responses";
@@ -527,13 +532,13 @@ async function showAdvisorStatus(
     `Advisor: ${config.enabled ? "on" : "off"} · ${formatPolicy(config.reviewPolicy)} · ${formatModel(config)}`,
     `Session: ${sessionState}`,
     `Model access: ${model && credentials ? "ready" : model ? "credentials required" : "model unavailable"}`,
-    `Last review: ${formatLastReview(metrics)}`,
+    `Last advisor action: ${formatLastReview(metrics)}`,
     "Per-turn catch-up: fail open within 30s · tools: project-confined read/grep/find/ls",
   ];
 
   if (verbose) {
-    const completed = metrics.pass + metrics.revise + metrics.failure + metrics.discarded;
-    const inProgress = Math.max(0, metrics.attempted - completed);
+    const settled = metrics.settledReviews ?? 0;
+    const inProgress = Math.max(0, metrics.attempted - settled);
     lines.push(
       "",
       `Configuration: ${config.configured ? "configured" : "model required"}`,
@@ -560,7 +565,9 @@ async function showAdvisorStatus(
       `Timeout: ${config.timeoutMs.toLocaleString()} ms`,
       `Context cap: ${config.maxContextChars.toLocaleString()} characters`,
       `Session review attempts: ${metrics.attempted}`,
-      `Session review outcomes: pass ${metrics.pass}, revise ${metrics.revise}, failure ${metrics.failure}, discarded ${metrics.discarded}, in progress ${inProgress}`,
+      `Session reviews: settled ${settled}, in progress ${inProgress}`,
+      `Session review results: pass ${metrics.pass}, revise ${metrics.revise}, discarded ${metrics.discarded}`,
+      `Operational failures: ${metrics.failure}`,
       `Failure log: ${getAdvisorFailureLogPath(config.configPath)}`,
       `Settings file: ${config.configPath}`,
     );
@@ -629,7 +636,7 @@ const NOOP_COMMAND_ACTIONS: AdvisorCommandActions = {
   cancel: () => false,
   pause: () => {},
   resume: () => {},
-  reviewLast: () => false,
+  reviewLast: () => "unavailable",
   reviewNext: () => {},
 };
 

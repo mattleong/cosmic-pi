@@ -85,6 +85,10 @@ export class AdvisorReviewQueue {
     return this.waiters.length + (this.activeWaiter ? 1 : 0);
   }
 
+  get hasActiveCheckpoint(): boolean {
+    return Boolean(this.activeWaiter);
+  }
+
   get activeToolNames(): readonly string[] {
     return this.runtime.activeToolNames;
   }
@@ -163,7 +167,7 @@ export class AdvisorReviewQueue {
           focus: waiter.request.focus,
         };
         try {
-          const result = await this.checkpointWithBoundedRecovery(runtimeRequest);
+          const result = await this.checkpointWithBoundedRecovery(runtimeRequest, waiter.epoch);
           if (waiter.epoch !== this.epoch || this.disposed) {
             waiter.reject(new Error("Advisor checkpoint completed for a stale queue epoch."));
             continue;
@@ -198,17 +202,22 @@ export class AdvisorReviewQueue {
 
   private async checkpointWithBoundedRecovery(
     request: AdvisorCheckpointRequest,
+    expectedEpoch: number,
   ): Promise<AdvisorCheckpoint> {
     let retried = false;
     while (true) {
+      this.assertRecoveryCurrent(expectedEpoch);
       try {
         return await this.runtime.checkpoint(request);
       } catch (error) {
+        this.assertRecoveryCurrent(expectedEpoch);
         if (!isReprimeRequired(error)) throw error;
         const state = this.options.getReprimeState?.();
         if (!state) throw error;
         this.options.onRuntimeReset?.(error instanceof Error ? error.message : String(error));
+        this.assertRecoveryCurrent(expectedEpoch);
         await this.runtime.reprime(state.seed, state.stateSummary);
+        this.assertRecoveryCurrent(expectedEpoch);
         if (retried) {
           throw new AdvisorBatchDroppedError(
             "Advisor batch failed again after one fresh-context retry and was dropped.",
@@ -216,6 +225,12 @@ export class AdvisorReviewQueue {
         }
         retried = true;
       }
+    }
+  }
+
+  private assertRecoveryCurrent(expectedEpoch: number): void {
+    if (this.disposed || expectedEpoch !== this.epoch) {
+      throw new Error("Advisor checkpoint recovery became stale.");
     }
   }
 

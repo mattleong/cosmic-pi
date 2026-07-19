@@ -127,6 +127,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     let instructions: LoadedAdvisorInstructions = { paths: [] };
     let paused = false;
     let reviewNext = false;
+    let pendingExplicitStart: number | undefined;
+    let explicitStartSequence = 0;
     let lastCandidate: LastCandidate | undefined;
     let started = false;
     let childStartedOnce = false;
@@ -165,6 +167,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     let statusSpinnerContext: ExtensionContext | undefined;
     let statusSpinnerDelay: ReturnType<typeof setTimeout> | undefined;
     let statusSpinnerFrame = 0;
+    let statusSpinnerOwner: string | undefined;
     let statusSpinnerTimer: ReturnType<typeof setInterval> | undefined;
 
     const stopStatusSpinner = (): void => {
@@ -173,6 +176,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       statusSpinnerContext = undefined;
       statusSpinnerDelay = undefined;
       statusSpinnerFrame = 0;
+      statusSpinnerOwner = undefined;
       statusSpinnerTimer = undefined;
     };
 
@@ -187,9 +191,10 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       statusSpinnerContext.ui.setStatus(STATUS_KEY, `${frame} advisor reviewing…`);
     };
 
-    const startStatusSpinner = (ctx: ExtensionContext): void => {
+    const startStatusSpinner = (ctx: ExtensionContext, owner: string): void => {
       stopStatusSpinner();
       statusSpinnerContext = ctx;
+      statusSpinnerOwner = owner;
       statusSpinnerDelay = setTimeout(() => {
         statusSpinnerDelay = undefined;
         renderReviewStatus();
@@ -203,6 +208,11 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       statusSpinnerDelay.unref();
     };
 
+    const settleStatusSpinner = (ctx: ExtensionContext, owner: string): void => {
+      if (statusSpinnerOwner !== owner) return;
+      setAdvisorStatus(ctx, paused ? "advisor: paused" : undefined);
+    };
+
     const recordSkip = (reason: AdvisorSkipReason): void => {
       const skipped = metrics.skippedReviews ?? {};
       skipped[reason] = incrementBounded(skipped[reason]);
@@ -210,23 +220,24 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     };
 
     const recordUsage = (
+      target: AdvisorSessionMetrics,
       usage: AdvisorUsageTelemetry,
       runtimeConfig: ResolvedAdvisorConfig,
     ): void => {
-      metrics.cacheReadTokens = (metrics.cacheReadTokens ?? 0) + usage.cacheReadTokens;
-      metrics.cacheWriteTokens = (metrics.cacheWriteTokens ?? 0) + usage.cacheWriteTokens;
-      metrics.cost = (metrics.cost ?? 0) + usage.cost;
-      metrics.inputTokens = (metrics.inputTokens ?? 0) + usage.inputTokens;
-      metrics.modelResponses = incrementBounded(metrics.modelResponses);
-      metrics.outputTokens = (metrics.outputTokens ?? 0) + usage.outputTokens;
-      metrics.totalTokens = (metrics.totalTokens ?? 0) + usage.totalTokens;
+      target.cacheReadTokens = (target.cacheReadTokens ?? 0) + usage.cacheReadTokens;
+      target.cacheWriteTokens = (target.cacheWriteTokens ?? 0) + usage.cacheWriteTokens;
+      target.cost = (target.cost ?? 0) + usage.cost;
+      target.inputTokens = (target.inputTokens ?? 0) + usage.inputTokens;
+      target.modelResponses = incrementBounded(target.modelResponses);
+      target.outputTokens = (target.outputTokens ?? 0) + usage.outputTokens;
+      target.totalTokens = (target.totalTokens ?? 0) + usage.totalTokens;
 
       const provider = runtimeConfig.provider ?? "unknown";
       const model = runtimeConfig.model ?? "unknown";
       const key = JSON.stringify([provider, model]);
-      const previous = metrics.usageByModel?.[key];
-      metrics.usageByModel ??= {};
-      metrics.usageByModel[key] = {
+      const previous = target.usageByModel?.[key];
+      target.usageByModel ??= {};
+      target.usageByModel[key] = {
         provider,
         model,
         responses: incrementBounded(previous?.responses),
@@ -239,11 +250,11 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       };
     };
 
-    const recordReviewDuration = (startedAt: number): void => {
+    const recordReviewDuration = (target: AdvisorSessionMetrics, startedAt: number): void => {
       const duration = Math.max(0, Date.now() - startedAt);
-      metrics.latestDurationMs = duration;
-      metrics.timedReviews = incrementBounded(metrics.timedReviews);
-      metrics.totalDurationMs = (metrics.totalDurationMs ?? 0) + duration;
+      target.latestDurationMs = duration;
+      target.settledReviews = incrementBounded(target.settledReviews);
+      target.totalDurationMs = (target.totalDurationMs ?? 0) + duration;
     };
 
     const activeSeed = (ctx: ExtensionContext): string =>
@@ -319,7 +330,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       ctx: ExtensionContext,
       restoration: "preserve-live" | "restore-branch" = "preserve-live",
       allowDisabled = false,
-    ): Promise<void> => {
+    ): Promise<number | undefined> => {
       const startEpoch = ++epoch;
       await stopRuntime();
       if (
@@ -329,6 +340,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         !config.configured
       )
         return;
+      const runtimeMetrics = metrics;
       const nextRuntime = createRuntime();
       runtime = nextRuntime;
       const branch =
@@ -364,41 +376,64 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
               ? renderDurableReviewSummary(ledger.reviewSummary)
               : latestStateSummary,
           instructions: instructions.content,
-          onUsage: (usage) => recordUsage(usage, runtimeConfig),
+          onUsage: (usage) => recordUsage(runtimeMetrics, usage, runtimeConfig),
           onDiagnostic: (message) => ctx.ui.notify(message, "warning"),
         });
         if (startEpoch !== epoch) {
           await nextRuntime.dispose();
           return;
         }
-        if (childStartedOnce) metrics.childResets = incrementBounded(metrics.childResets);
+        if (childStartedOnce)
+          runtimeMetrics.childResets = incrementBounded(runtimeMetrics.childResets);
         childStartedOnce = true;
         runtimeCursor = { anchor: parentAnchor(ctx), fingerprint: fingerprint(ctx) };
         queue = new AdvisorReviewQueue(nextRuntime, {
-          onCheckpointStart: () => {
-            metrics.attempted += 1;
-            startStatusSpinner(ctx);
-          },
-          onCheckpointSettled: () => setAdvisorStatus(ctx, paused ? "advisor: paused" : undefined),
+          onCheckpointStart: (request) => startStatusSpinner(ctx, request.checkpointId),
+          onCheckpointSettled: (request) => settleStatusSpinner(ctx, request.checkpointId),
           onRuntimeReset: () => {
-            metrics.childResets = incrementBounded(metrics.childResets);
+            runtimeMetrics.childResets = incrementBounded(runtimeMetrics.childResets);
           },
           getReprimeState: () => ({ seed: activeSeed(ctx), stateSummary: latestStateSummary }),
         });
         started = true;
+        return startEpoch;
       } catch (error) {
         if (startEpoch !== epoch) return;
-        metrics.failure += 1;
-        metrics.lastAction = "failure";
+        runtimeMetrics.failure += 1;
+        runtimeMetrics.lastAction = "failure";
         const kind = classifyFailure(error);
-        metrics.lastFailureKind = kind;
+        runtimeMetrics.lastFailureKind = kind;
         if (!reportedFailures.has(kind)) {
           reportedFailures.add(kind);
           ctx.ui.notify(`Advisor ${kind} failure; primary work remains unaffected.`, "warning");
         }
         await nextRuntime.dispose().catch(() => undefined);
         if (runtime === nextRuntime) runtime = undefined;
+        return undefined;
       }
+    };
+
+    const runWithExplicitRuntime = async <T>(
+      ctx: ExtensionContext,
+      action: () => T,
+    ): Promise<T | undefined> => {
+      const owner = ++explicitStartSequence;
+      const sessionMetrics = metrics;
+      const expectedCancellationEpoch = cancellationEpoch;
+      pendingExplicitStart = owner;
+      const runtimeEpoch = started ? epoch : await startRuntime(ctx, "preserve-live", true);
+      if (
+        pendingExplicitStart !== owner ||
+        runtimeEpoch === undefined ||
+        runtimeEpoch !== epoch ||
+        metrics !== sessionMetrics ||
+        cancellationEpoch !== expectedCancellationEpoch
+      ) {
+        if (pendingExplicitStart === owner) pendingExplicitStart = undefined;
+        return undefined;
+      }
+      pendingExplicitStart = undefined;
+      return action();
     };
 
     const persistLedger = (anchor: string | null, ctx: ExtensionContext): void => {
@@ -555,7 +590,6 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         metrics.lastAction = "recovery";
         ctx.abort();
       }
-      setAdvisorStatus(ctx);
       return route;
     };
 
@@ -575,12 +609,13 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       let requestEpoch = epoch;
       let requestCancellationEpoch = cancellationEpoch;
       let activeQueue: AdvisorReviewQueue | undefined;
+      const requestMetrics = metrics;
       const startedAt = Date.now();
       let durationRecorded = false;
       const finishReviewDuration = () => {
         if (durationRecorded) return;
         durationRecorded = true;
-        recordReviewDuration(startedAt);
+        recordReviewDuration(requestMetrics, startedAt);
       };
       const settlement: Promise<CheckpointSettlement> = (async () => {
         const cursorMismatch =
@@ -590,9 +625,17 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         if (cursorMismatch) {
           // One bounded restart remains part of this same checkpoint settlement,
           // so turn_end's hard catch-up barrier covers both re-seed and review.
-          await startRuntime(options.ctx, "restore-branch", !options.requiresEnabled);
+          const restartEpoch = await startRuntime(
+            options.ctx,
+            "restore-branch",
+            !options.requiresEnabled,
+          );
+          if (restartEpoch === undefined || restartEpoch !== epoch) return "discarded";
         }
-        if (!validForDelivery || !queue || !started || !runtimeCursor) return "discarded";
+        if (!validForDelivery || metrics !== requestMetrics || !queue || !started || !runtimeCursor)
+          return "discarded";
+        if (options.trajectoryId !== undefined && activeTrajectory?.id !== options.trajectoryId)
+          return "discarded";
 
         activeQueue = queue;
         requestEpoch = epoch;
@@ -603,6 +646,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         const anchor = parentAnchor(options.ctx);
         const id = `advisor-${requestEpoch}-${++checkpointId}`;
         const scope = `${requestSessionId ?? requestEpoch}:${runtimeCursor.anchor ?? "root"}`;
+        requestMetrics.attempted += 1;
         const checkpoint = await activeQueue.checkpoint({
           checkpointId: id,
           focus: options.focus,
@@ -620,13 +664,13 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           options.ctx.hasPendingMessages() ||
           !branchContains(options.ctx, anchor)
         ) {
-          metrics.discarded += 1;
-          metrics.lastAction = "discarded";
+          requestMetrics.discarded += 1;
+          requestMetrics.lastAction = "discarded";
           return "discarded";
         }
         if (options.trajectoryId !== undefined && activeTrajectory?.id !== options.trajectoryId) {
-          metrics.discarded += 1;
-          metrics.lastAction = "discarded";
+          requestMetrics.discarded += 1;
+          requestMetrics.lastAction = "discarded";
           return "discarded";
         }
 
@@ -647,16 +691,16 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       })().catch((error): CheckpointSettlement => {
         finishReviewDuration();
         if (requestEpoch !== epoch || !validForDelivery) {
-          metrics.discarded += 1;
-          return "failed";
+          requestMetrics.discarded += 1;
+          return "discarded";
         }
-        metrics.failure += 1;
-        metrics.lastAction = "failure";
+        requestMetrics.failure += 1;
+        requestMetrics.lastAction = "failure";
         const kind = classifyFailure(error);
-        metrics.lastFailureKind = kind;
+        requestMetrics.lastFailureKind = kind;
         logFailure(config.configPath, {
           contextChars: activeQueue?.backlog ?? 0,
-          durationMs: metrics.latestDurationMs ?? 0,
+          durationMs: requestMetrics.latestDurationMs ?? 0,
           error,
           model: config.model,
           provider: config.provider,
@@ -684,8 +728,9 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       handle: AdvisorCheckpointHandle,
       ctx: ExtensionContext,
     ): Promise<void> => {
-      metrics.catchUpWaits = incrementBounded(metrics.catchUpWaits);
-      metrics.activeCatchUpWaits = incrementBounded(metrics.activeCatchUpWaits);
+      const catchUpMetrics = metrics;
+      catchUpMetrics.catchUpWaits = incrementBounded(catchUpMetrics.catchUpWaits);
+      catchUpMetrics.activeCatchUpWaits = incrementBounded(catchUpMetrics.activeCatchUpWaits);
       const signal = ctx.signal;
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let onAbort: (() => void) | undefined;
@@ -706,7 +751,9 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           routingState.latchCancellation();
           clearPendingRecovery();
           persistCurrentLedger(ctx);
-          metrics.catchUpCancellations = incrementBounded(metrics.catchUpCancellations);
+          catchUpMetrics.catchUpCancellations = incrementBounded(
+            catchUpMetrics.catchUpCancellations,
+          );
           resolve("cancelled");
         };
         if (signal.aborted) onAbort();
@@ -720,14 +767,17 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         ]);
         if (outcome === "timeout") {
           handle.invalidate();
-          metrics.catchUpTimeouts = incrementBounded(metrics.catchUpTimeouts);
+          catchUpMetrics.catchUpTimeouts = incrementBounded(catchUpMetrics.catchUpTimeouts);
         } else if (outcome === "failed") {
-          metrics.catchUpFailures = incrementBounded(metrics.catchUpFailures);
+          catchUpMetrics.catchUpFailures = incrementBounded(catchUpMetrics.catchUpFailures);
         }
       } finally {
         if (timeout) clearTimeout(timeout);
         if (signal && onAbort) signal.removeEventListener("abort", onAbort);
-        metrics.activeCatchUpWaits = Math.max(0, (metrics.activeCatchUpWaits ?? 1) - 1);
+        catchUpMetrics.activeCatchUpWaits = Math.max(
+          0,
+          (catchUpMetrics.activeCatchUpWaits ?? 1) - 1,
+        );
       }
     };
 
@@ -741,20 +791,32 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
 
     const commandActions: AdvisorCommandActions = {
       cancel: (ctx) => {
+        const hadRequestedReview = reviewNext;
+        const hadExplicitStart = pendingExplicitStart !== undefined;
+        const hadRecovery = Boolean(pendingPersistentRecovery);
         reviewNext = false;
+        pendingExplicitStart = undefined;
         clearPendingRecovery();
         routingState.latchCancellation();
         cancellationEpoch += 1;
         persistCurrentLedger(ctx);
-        const hadWork = Boolean(
-          queue && (queue.backlog > 0 || queue.processedThrough < queue.sequence),
-        );
+        const hadWork =
+          hadRequestedReview ||
+          hadExplicitStart ||
+          hadRecovery ||
+          Boolean(
+            queue &&
+            (queue.pendingCheckpoints > 0 ||
+              queue.backlog > 0 ||
+              queue.processedThrough < queue.sequence),
+          );
         void startRuntime(ctx);
         return hadWork;
       },
       pause: (ctx) => {
         paused = true;
         reviewNext = false;
+        pendingExplicitStart = undefined;
         clearPendingRecovery();
         routingState.latchCancellation();
         cancellationEpoch += 1;
@@ -768,16 +830,19 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         void startRuntime(ctx);
       },
       reviewLast: async (ctx, focus) => {
-        if (!lastCandidate) return false;
-        if (!started) await startRuntime(ctx, "preserve-live", true);
-        const handle = requestCheckpoint({
-          ctx,
-          focus,
-          phase: "final",
-          source: focus === "verification" ? "verify" : "last",
-          requiresEnabled: false,
+        const candidate = lastCandidate;
+        if (!candidate) return "unavailable";
+        const handle = await runWithExplicitRuntime(ctx, () => {
+          if (lastCandidate !== candidate) return undefined;
+          return requestCheckpoint({
+            ctx,
+            focus,
+            phase: "final",
+            source: focus === "verification" ? "verify" : "last",
+            requiresEnabled: false,
+          });
         });
-        return Boolean(handle);
+        return handle ? "started" : "cancelled";
       },
       reviewNext: () => {
         reviewNext = true;
@@ -793,7 +858,11 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           ...metrics,
           activeToolNames: queue?.activeToolNames ?? [],
           backlog: queue?.backlog ?? 0,
-          backgroundState: queue ? (queue.pendingCheckpoints > 0 ? "queued" : "idle") : "idle",
+          backgroundState: queue?.hasActiveCheckpoint
+            ? "reviewing"
+            : queue && queue.pendingCheckpoints > 0
+              ? "queued"
+              : "idle",
           childResets: metrics.childResets ?? 0,
           guidancePaths: instructions.paths,
           hasLastCandidate: Boolean(lastCandidate),
@@ -815,6 +884,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           }
           findingDedupe.reset();
           emissionGuard.reset();
+          pendingExplicitStart = undefined;
           clearPendingRecovery();
           cancellationEpoch += 1;
           if (activeContext) void startRuntime(activeContext);
@@ -832,6 +902,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       instructions = loadAdvisorInstructions(config.configPath, ctx.cwd, ctx.isProjectTrusted());
       paused = false;
       reviewNext = false;
+      pendingExplicitStart = undefined;
       lastCandidate = undefined;
       parentTurnId = 0;
       checkpointId = 0;
@@ -848,16 +919,19 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
 
     pi.on("session_shutdown", async () => {
       ++epoch;
+      pendingExplicitStart = undefined;
       activeContext = undefined;
       await stopRuntime();
     });
 
     pi.on("session_compact", async (_event, ctx) => {
       ingest({ type: "compaction", marker: "Parent context was compacted." });
+      pendingExplicitStart = undefined;
       await startRuntime(ctx);
     });
     pi.on("session_tree", async (_event, ctx) => {
       ingest({ type: "tree", marker: "Parent active branch changed." });
+      pendingExplicitStart = undefined;
       lastCandidate = undefined;
       findingDedupe.reset();
       await startRuntime(ctx, "restore-branch");
@@ -1059,7 +1133,6 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       );
       routingState.armInterruption();
       persistLedger(parentAnchor(ctx), ctx);
-      setAdvisorStatus(ctx);
     });
 
     pi.on("turn_end", async (event, ctx) => {
@@ -1111,7 +1184,17 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       const explicitlyRequested = classification.phase === "final" && reviewNext;
       if (explicitlyRequested) {
         reviewNext = false;
-        if (!started) await startRuntime(ctx, "preserve-live", true);
+        const handle = await runWithExplicitRuntime(ctx, () =>
+          requestCheckpoint({
+            ctx,
+            focus: "standard",
+            phase: "final",
+            source: "next",
+            requiresEnabled: false,
+          }),
+        );
+        if (handle) await awaitCatchUp(handle, ctx);
+        return;
       }
       if (!explicitlyRequested && !config.enabled) {
         recordSkip("disabled");
@@ -1129,12 +1212,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         ctx,
         focus: classification.phase === "progress" ? "trajectory" : "standard",
         phase: classification.phase,
-        source: explicitlyRequested
-          ? "next"
-          : classification.phase === "progress"
-            ? "automatic-progress"
-            : "automatic-final",
-        requiresEnabled: !explicitlyRequested,
+        source: classification.phase === "progress" ? "automatic-progress" : "automatic-final",
+        requiresEnabled: true,
       });
       if (handle) await awaitCatchUp(handle, ctx);
     });
@@ -1197,7 +1276,7 @@ function emptySessionMetrics(): AdvisorSessionMetrics {
     revise: 0,
     skippedReviews: {},
     suppressedFindings: 0,
-    timedReviews: 0,
+    settledReviews: 0,
     totalDurationMs: 0,
     totalTokens: 0,
     usageByModel: {},
