@@ -1,6 +1,11 @@
 packages:
   - packages/*
 
+catalog:
+  "@effect/platform-node": 4.0.0-beta.99
+  "@effect/vitest": 4.0.0-beta.99
+  effect: 4.0.0-beta.99
+
 engineStrict: true
 strictPeerDependencies: true
 

@@ -15,23 +15,35 @@
   "type": "module",
   "scripts": {
     "build": "pnpm -r --if-present build",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "check": "pnpm typecheck && pnpm effect:lsp:verify && pnpm lint && pnpm format:check && pnpm architecture:check",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint --deny-warnings scripts && pnpm -r lint",
     "lint:fix": "oxlint --fix scripts && pnpm -r lint:fix",
     "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck",
-    "validate": "pnpm version:check && pnpm check && pnpm test && pnpm build",
+    "typecheck": "pnpm effect:lsp:patch && pnpm -r typecheck",
+    "effect:lsp:patch": "effect-language-service patch",
+    "effect:lsp:check": "effect-language-service check",
+    "effect:lsp:verify": "node scripts/verify-effect-lsp.mjs",
+    "effect:diagnostics": "effect-language-service diagnostics --project packages/pi-cosmic-core/tsconfig.json",
+    "architecture:check": "node scripts/check-effect-architecture.mjs",
+    "pack:smoke": "node scripts/verify-packed-core.mjs",
+    "prepare": "effect-language-service patch",
+    "validate": "pnpm version:check && pnpm check && pnpm test && pnpm build && pnpm pack:smoke",
     "version:check": "node scripts/check-versions.mjs",
     "version:set": "node scripts/set-version.mjs"
   },
   "devDependencies": {
+    "@effect/language-service": "0.87.0",
+    "@effect/vitest": "catalog:",
+    "@types/node": "~22.19.0",
+    "effect": "catalog:",
     "oxfmt": "^0.47.0",
-    "oxlint": "^1.62.0"
+    "oxlint": "^1.62.0",
+    "typescript": "6.0.3"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "packageManager": "pnpm@10.33.0"
 }

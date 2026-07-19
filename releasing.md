@@ -1,6 +1,6 @@
 # Releasing cosmic-pi
 
-All workspace packages use the same version. The public `pi-better-openai`, `pi-code-previews`, and `pi-cosmic-ui` packages are published together; private `pi-advisor` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm.
+All workspace packages use the same version. The public `pi-better-openai`, `pi-better-xai`, `pi-code-previews`, `pi-cosmic-core`, and `pi-cosmic-ui` packages are published together; private `pi-advisor` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm.
 
 ## One-time setup
 
@@ -9,7 +9,9 @@ Before the first release:
 1. Create and push the `mattleong/cosmic-pi` GitHub repository.
 2. On npm, configure trusted publishing for every public package:
    - `pi-better-openai`
+   - `pi-better-xai`
    - `pi-code-previews`
+   - `pi-cosmic-core`
    - `pi-cosmic-ui`
 3. For each npm package, set the trusted publisher to:
    - **Organization or user:** `mattleong`
@@ -30,7 +32,7 @@ pnpm install --frozen-lockfile
 pnpm validate
 ```
 
-Choose a stable version that is newer than every version already published for either public npm package. npm versions are immutable and cannot be overwritten.
+Choose a stable version that is newer than every version already published for any public npm package. npm versions are immutable and cannot be overwritten.
 
 Update every workspace package to the new version:
 
@@ -81,11 +83,13 @@ Watch the **Publish npm packages** workflow in GitHub Actions. After it succeeds
 
 ```bash
 npm view pi-better-openai version
+npm view pi-better-xai version
 npm view pi-code-previews version
+npm view pi-cosmic-core version
 npm view pi-cosmic-ui version
 ```
 
-All three commands should report the release version. npm provenance should also appear on each package version page.
+All five commands should report the release version. npm provenance should also appear on each package version page.
 
 ## Retry a failed release
 

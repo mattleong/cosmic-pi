@@ -8,11 +8,12 @@ A pnpm workspace for pi extensions.
 - [`pi-better-openai`](packages/pi-better-openai) — fast mode, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
 - [`pi-better-xai`](packages/pi-better-xai) — xAI/Grok subscription usage visibility and Cosmic UI footer polish.
 - [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted previews for pi's built-in tool calls.
+- [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements, beginning with the footer and information area.
 
 ## Requirements
 
-- Node.js 22.19.0 or newer
+- Node.js 22.22.2+, 24.15.0+, or 26+
 - pnpm 10.33.0 (declared in `packageManager`)
 
 ## Install
@@ -39,8 +40,11 @@ pi install "$PWD/packages/pi-advisor"
 
 ```bash
 pnpm install
+pnpm effect:lsp:verify
 pnpm validate
 ```
+
+The workspace uses the Effect language service and an architecture migration ratchet. Editors must use the workspace TypeScript installation. See [`docs/architecture/effect-v4.md`](docs/architecture/effect-v4.md) for the Effect v4 conventions.
 
 Run a command for one package with a filter:
 

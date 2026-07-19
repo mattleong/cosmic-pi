@@ -1,0 +1,53 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "exactOptionalPropertyTypes": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnostics": true,
+        "refactors": true,
+        "diagnosticsName": true,
+        "includeSuggestionsInTsc": true,
+        "ignoreEffectWarningsInTscExitCode": false,
+        "ignoreEffectErrorsInTscExitCode": false,
+        "ignoreEffectSuggestionsInTscExitCode": true,
+        "excludeExternalLibrariesWhenSkipLibCheck": true,
+        "namespaceImportPackages": ["effect", "@effect/*"],
+        "diagnosticSeverity": {
+          "anyUnknownInErrorContext": "error",
+          "asyncFunction": "error",
+          "cryptoRandomUUID": "error",
+          "cryptoRandomUUIDInEffect": "error",
+          "deterministicKeys": "error",
+          "duplicatePackage": "error",
+          "extendsNativeError": "error",
+          "globalConsole": "error",
+          "globalConsoleInEffect": "error",
+          "globalDate": "error",
+          "globalDateInEffect": "error",
+          "globalFetch": "error",
+          "globalFetchInEffect": "error",
+          "globalRandom": "error",
+          "globalRandomInEffect": "error",
+          "globalTimers": "error",
+          "globalTimersInEffect": "error",
+          "importFromBarrel": "error",
+          "layerMergeAllWithDependencies": "error",
+          "leakingRequirements": "error",
+          "multipleEffectProvide": "error",
+          "newPromise": "error",
+          "nodeBuiltinImport": "error",
+          "outdatedApi": "error",
+          "preferSchemaOverJson": "error",
+          "processEnv": "error",
+          "processEnvInEffect": "error",
+          "serviceNotAsClass": "error",
+          "strictEffectProvide": "error",
+          "unknownInEffectCatch": "error",
+          "unsafeEffectTypeAssertion": "error"
+        }
+      }
+    ]
+  }
+}

@@ -54,7 +54,6 @@
     "@types/node": "~22.19.0",
     "oxfmt": "^0.47.0",
     "oxlint": "^1.62.0",
-    "typescript": "^6.0.3",
     "vitest": "^4.1.5"
   },
   "peerDependencies": {
@@ -62,7 +61,7 @@
     "@earendil-works/pi-tui": "*"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "pi": {
     "extensions": [

@@ -4,7 +4,7 @@ A pi extension for OpenAI subscription workflows: fast mode, usage visibility, r
 
 ## Install
 
-Requires Node.js 22.19.0 or newer.
+Requires Node.js 22.22.2+, 24.15.0+, or 26+.
 
 ```bash
 pi install npm:pi-better-openai

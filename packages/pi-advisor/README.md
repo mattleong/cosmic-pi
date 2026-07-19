@@ -4,7 +4,7 @@ A private pi extension that keeps one dedicated Advisor model alongside the main
 
 ## Install
 
-Requires Node.js 22.19.0 or newer and Pi 0.80.8. pi-advisor is local-only and is not published to npm.
+Requires Node.js 22.22.2+, 24.15.0+, or 26+, and Pi 0.80.8. pi-advisor is local-only and is not published to npm.
 
 ```bash
 git clone https://github.com/mattleong/cosmic-pi.git

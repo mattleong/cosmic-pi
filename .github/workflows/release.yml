@@ -61,7 +61,15 @@ jobs:
       - name: Publish unpublished public packages
         run: |
           set -euo pipefail
+          # Publish the shared runtime before extension packages that depend on it.
+          package_dirs=(packages/pi-cosmic-core)
           for package_dir in packages/*; do
+            if [ "$package_dir" != "packages/pi-cosmic-core" ]; then
+              package_dirs+=("$package_dir")
+            fi
+          done
+
+          for package_dir in "${package_dirs[@]}"; do
             PACKAGE_NAME="$(node -p "require('./$package_dir/package.json').name")"
             PACKAGE_VERSION="$(node -p "require('./$package_dir/package.json').version")"
             PACKAGE_PRIVATE="$(node -p "require('./$package_dir/package.json').private === true")"
