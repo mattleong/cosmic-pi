@@ -1,15 +1,23 @@
-/**
- * Better xAI for pi.
- *
- * Shows SuperGrok / X Premium subscription usage windows in the footer,
- * matching Better OpenAI's usage presentation when Cosmic UI is present.
- */
+/** Better xAI for pi, implemented as an Effect-managed session runtime. */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type ResolvedConfig, resolveConfig } from "./config.ts";
-import { createFooterController, type FooterController } from "./footer/controller.ts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as MutableRef from "effect/MutableRef";
+import { nodePlatformLayer } from "pi-cosmic-core";
+import { makeXaiRuntime } from "./boundary/runtime.ts";
+import type { ResolvedConfig } from "./config.ts";
+import { createFooterController } from "./footer/controller.ts";
 import { registerSettingsController } from "./settings/controller.ts";
-import { createCosmicUiAdapter, type CosmicUiAdapter } from "./ui/cosmic-adapter.ts";
-import { UsageController } from "./usage-controller.ts";
+import { createCosmicUiAdapter } from "./ui/cosmic-adapter.ts";
+import {
+  XaiBoundaryError,
+  XaiUsageService,
+  formatDebug,
+  makeProjection,
+  resetProjection,
+  synchronizeProjectionContext,
+  type XaiProjection,
+} from "./usage-controller.ts";
 
 const XAI_STATUS_COMMAND = "xai-usage";
 
@@ -17,78 +25,148 @@ function hasTerminalUI(ctx: ExtensionContext): boolean {
   return ctx.mode === "tui" || (ctx.mode === undefined && ctx.hasUI);
 }
 
-export default function betterXai(pi: ExtensionAPI): void {
-  let cachedConfig: ResolvedConfig | undefined;
-  let footerController: FooterController;
-  let cosmicUiAdapter: CosmicUiAdapter;
-
-  function updateFooter(ctx: ExtensionContext): void {
-    if (cosmicUiAdapter?.active) cosmicUiAdapter.update(ctx, config(ctx));
-    else footerController.update(ctx);
-  }
-
-  const usageController = new UsageController(config, updateFooter);
-  footerController = createFooterController({
-    config,
-    usageController,
-    hasTerminalUI,
+function requiredConfig(projection: MutableRef.MutableRef<XaiProjection>): ResolvedConfig {
+  const config = MutableRef.get(projection).config;
+  if (config) return config;
+  throw new XaiBoundaryError({
+    operation: "config",
+    message: "Better xAI session has not started.",
   });
-  cosmicUiAdapter = createCosmicUiAdapter({ pi, usageController });
+}
 
-  function refresh(ctx: ExtensionContext): ResolvedConfig {
-    cachedConfig = resolveConfig(ctx.cwd || process.cwd());
-    return cachedConfig;
-  }
+export default function betterXai(pi: ExtensionAPI): void {
+  const projection = makeProjection();
+  let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
+  let footerController: ReturnType<typeof createFooterController>;
+  const cosmicUiAdapter = createCosmicUiAdapter({ pi, projection });
 
-  function config(ctx: ExtensionContext): ResolvedConfig {
-    return cachedConfig ?? refresh(ctx);
-  }
+  const config = (_ctx: ExtensionContext) => requiredConfig(projection);
+  const updateFooter = (fallback: ExtensionContext) => {
+    const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
+    const cfg = MutableRef.get(projection).config;
+    if (!cfg) return;
+    if (cosmicUiAdapter.active) cosmicUiAdapter.update(ctx, cfg);
+    else footerController.update(ctx);
+  };
 
-  function formatDebugStatus(ctx: ExtensionContext): string {
-    const cfg = config(ctx);
-    return [
-      usageController.formatDebug(ctx),
-      "",
-      `Footer mode: ${cfg.footer.mode}`,
-      `Config: ${cfg.configPath}`,
-    ].join("\n");
-  }
+  footerController = createFooterController({ config, projection, hasTerminalUI });
+
+  let sessionGeneration = 0;
+  const makeRuntime = (
+    ctx: ExtensionContext,
+    context: MutableRef.MutableRef<ExtensionContext>,
+    generation: number,
+  ) => {
+    const applicationLayer = XaiUsageService.layer({
+      context,
+      cwd: ctx.cwd,
+      projection,
+      onChange: () => {
+        if (generation === sessionGeneration) updateFooter(MutableRef.get(context));
+      },
+    }).pipe(Layer.provide(nodePlatformLayer));
+    return makeXaiRuntime(pi, applicationLayer);
+  };
+  let runtime: ReturnType<typeof makeRuntime> | undefined;
+  let lifecycle = Promise.resolve();
+
+  const run = <A, E>(
+    effect: Effect.Effect<A, E, XaiUsageService>,
+    signal?: AbortSignal,
+  ): Promise<A> => {
+    if (runtime) return runtime.run(effect, signal);
+    return Promise.reject(
+      new XaiBoundaryError({
+        operation: "runtime",
+        message: "Better xAI session has not started.",
+      }),
+    );
+  };
 
   pi.registerCommand(XAI_STATUS_COMMAND, {
     description: "Show xAI subscription usage status",
-    handler: async (_args, ctx) => {
-      await usageController.refresh(ctx, { notify: true, force: true });
-    },
+    handler: (_args, ctx) =>
+      run(
+        XaiUsageService.use((service) => service.refresh({ notify: true, force: true })),
+        ctx.signal,
+      ).catch(() => ctx.ui.notify("xAI usage is unavailable.", "warning")),
   });
 
   registerSettingsController(pi, {
     config,
-    refresh,
     updateFooter,
-    formatDebugStatus,
-    usageController,
+    formatDebugStatus: (ctx) => formatDebug(projection, ctx),
+    run,
   });
 
   pi.on("session_start", (_event, ctx) => {
-    refresh(ctx);
-    if (hasTerminalUI(ctx)) cosmicUiAdapter.detectHost();
-    else cosmicUiAdapter.shutdown();
-    updateFooter(ctx);
-    usageController.start(ctx);
+    const generation = ++sessionGeneration;
+    cosmicUiAdapter.shutdown();
+    lifecycle = lifecycle
+      .catch(() => undefined)
+      .then(() => {
+        const previous = runtime;
+        runtime = undefined;
+        currentContext = undefined;
+        return previous?.dispose();
+      })
+      .then(() => {
+        if (generation !== sessionGeneration) return;
+        resetProjection(projection);
+        const context = MutableRef.make(ctx);
+        currentContext = context;
+        const next = makeRuntime(ctx, context, generation);
+        runtime = next;
+        return next
+          .run(
+            XaiUsageService.use(() => Effect.void),
+            ctx.signal,
+          )
+          .then(() => {
+            if (generation !== sessionGeneration) return;
+            if (hasTerminalUI(ctx)) cosmicUiAdapter.detectHost();
+            else cosmicUiAdapter.shutdown();
+            updateFooter(ctx);
+          });
+      })
+      .catch(() => {
+        if (generation === sessionGeneration)
+          ctx.ui.notify("Better xAI failed to start.", "warning");
+      });
+    return lifecycle;
   });
 
   pi.on("turn_end", (_event, ctx) => {
+    if (currentContext) MutableRef.set(currentContext, ctx);
     updateFooter(ctx);
-    void usageController.refresh(ctx);
+    runtime?.fork(
+      XaiUsageService.use((service) => service.refresh()),
+      ctx.signal,
+    );
   });
 
   pi.on("model_select", (_event, ctx) => {
+    if (currentContext) MutableRef.set(currentContext, ctx);
+    synchronizeProjectionContext(projection, ctx, { clearUsage: true });
     updateFooter(ctx);
-    void usageController.refresh(ctx, { force: true });
+    runtime?.fork(
+      XaiUsageService.use((service) => service.refresh({ force: true })),
+      ctx.signal,
+    );
   });
 
   pi.on("session_shutdown", () => {
+    ++sessionGeneration;
     cosmicUiAdapter.shutdown();
-    usageController.shutdown();
+    lifecycle = lifecycle
+      .catch(() => undefined)
+      .then(() => {
+        const current = runtime;
+        runtime = undefined;
+        currentContext = undefined;
+        return current?.dispose();
+      })
+      .then(() => resetProjection(projection));
+    return lifecycle;
   });
 }

@@ -2,7 +2,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedConfig } from "../config.ts";
 import { truncateToWidth } from "../format.ts";
 import { STATUS_KEY } from "../identity.ts";
-import type { UsageController } from "../usage-controller.ts";
+import type * as MutableRef from "effect/MutableRef";
+import { visibleStatusLine, type XaiProjection } from "../usage-controller.ts";
 
 export interface FooterController {
   update(ctx: ExtensionContext): void;
@@ -10,13 +11,14 @@ export interface FooterController {
 
 export function createFooterController(deps: {
   config(ctx: ExtensionContext): ResolvedConfig;
-  usageController: UsageController;
+  projection: MutableRef.MutableRef<XaiProjection>;
   hasTerminalUI(ctx: ExtensionContext): boolean;
 }): FooterController {
-  const { config, usageController, hasTerminalUI } = deps;
+  const { config, projection, hasTerminalUI } = deps;
   let footerInstalled = false;
   let requestFooterRender: (() => void) | undefined;
   let statusInstalled = false;
+  let currentContext: ExtensionContext | undefined;
 
   function installFooter(ctx: ExtensionContext): void {
     if (footerInstalled) {
@@ -33,9 +35,12 @@ export function createFooterController(deps: {
         },
         invalidate() {},
         render(width: number): string[] {
-          const cfg = config(ctx);
-          const usingSubscription = ctx.model ? ctx.modelRegistry.isUsingOAuth(ctx.model) : false;
-          const usageStatusLine = usageController.statusLine(ctx, cfg, usingSubscription);
+          const renderContext = currentContext ?? ctx;
+          const usageStatusLine = visibleStatusLine(
+            renderContext,
+            config(renderContext),
+            projection,
+          );
           if (!usageStatusLine) return [];
           return [truncateToWidth(theme.fg("dim", usageStatusLine), width, theme.fg("dim", "..."))];
         },
@@ -57,13 +62,15 @@ export function createFooterController(deps: {
   }
 
   function updateFooter(ctx: ExtensionContext): void {
+    currentContext = ctx;
     const cfg = config(ctx);
+    const line = visibleStatusLine(ctx, cfg, projection);
     if (!hasTerminalUI(ctx)) {
       if (cfg.footer.mode === "off") {
         setStatus(ctx, undefined);
         return;
       }
-      setStatus(ctx, usageController.statusLine(ctx, cfg) || undefined);
+      setStatus(ctx, line);
       return;
     }
 
@@ -79,7 +86,7 @@ export function createFooterController(deps: {
       return;
     }
 
-    setStatus(ctx, usageController.statusLine(ctx, cfg) || undefined);
+    setStatus(ctx, line);
   }
 
   return { update: updateFooter };

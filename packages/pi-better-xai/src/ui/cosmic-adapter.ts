@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedConfig } from "../config.ts";
-import type { UsageController } from "../usage-controller.ts";
+import type * as MutableRef from "effect/MutableRef";
+import type { XaiProjection } from "../usage-controller.ts";
 import { xaiUsageFooterPrimitive, xaiUsageUiState } from "./primitives.ts";
 import {
   COSMIC_UI_FOOTER_REMOVE,
@@ -21,9 +22,9 @@ export interface CosmicUiAdapter {
 
 export function createCosmicUiAdapter(options: {
   pi: ExtensionAPI;
-  usageController: UsageController;
+  projection: MutableRef.MutableRef<XaiProjection>;
 }): CosmicUiAdapter {
-  const { pi, usageController } = options;
+  const { pi, projection } = options;
   const events = (pi as ExtensionAPI & { events?: ExtensionAPI["events"] }).events;
   let hostActive = false;
 
@@ -58,7 +59,7 @@ export function createCosmicUiAdapter(options: {
     },
     update(ctx, cfg) {
       if (!hostActive) return;
-      const usage = xaiUsageFooterPrimitive(xaiUsageUiState(ctx, cfg, usageController));
+      const usage = xaiUsageFooterPrimitive(xaiUsageUiState(ctx, cfg, projection));
       if (usage) upsert(usage);
       else remove("xai.usage");
     },

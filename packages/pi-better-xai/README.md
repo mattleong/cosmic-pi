@@ -59,6 +59,14 @@ Stored at `~/.pi/agent/extensions/pi-better-xai.json` (or project `.pi/extension
 | `usage.showResetTimes`               | `true`    | Include reset countdowns                               |
 | `footer.mode`                        | `replace` | Standalone fallback only: `replace` / `status` / `off` |
 
+## Effect runtime
+
+Better xAI now runs each started Pi session through an Effect v4 managed runtime. Configuration, credential refresh, HTTP decoding, polling, cancellation, and shutdown are typed and scoped. Billing and OAuth payloads are decoded with Effect Schema; malformed monthly responses fail the refresh, while unavailable or malformed weekly responses degrade to monthly-only usage.
+
+Configuration updates preserve unknown fields. Malformed known fields fall back to documented defaults. The minimum refresh interval remains 5 seconds.
+
+The package has runtime dependencies on the exact workspace Effect v4 beta and `pi-cosmic-core`. These versions are intentionally synchronized by the cosmic-pi release process.
+
 ## Caveats
 
 - Billing endpoints are first-party xAI infrastructure (`*.grok.com`) but are **not** a documented public API. They can change without notice.

@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedConfig } from "../config.ts";
-import type { UsageController } from "../usage-controller.ts";
+import * as MutableRef from "effect/MutableRef";
+import { visibleStatusLine, type XaiProjection } from "../usage-controller.ts";
 import type { FooterTextPrimitive } from "./protocol.ts";
 
 export interface XaiUsageUiState {
@@ -12,10 +13,10 @@ export interface XaiUsageUiState {
 export function xaiUsageUiState(
   ctx: ExtensionContext,
   cfg: ResolvedConfig,
-  controller: UsageController,
+  projection: MutableRef.MutableRef<XaiProjection>,
 ): XaiUsageUiState {
-  const text = controller.statusLine(ctx, cfg);
-  return { visible: Boolean(text), text };
+  const text = visibleStatusLine(ctx, cfg, projection);
+  return text ? { visible: true, text } : { visible: false };
 }
 
 export function xaiUsageFooterPrimitive(state: XaiUsageUiState): FooterTextPrimitive | undefined {

@@ -1,9 +1,26 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ResolvedConfig } from "./config.ts";
+import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as MutableRef from "effect/MutableRef";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
+import { JsonDocumentStore, JsonHttpClient } from "pi-cosmic-core";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import { readXaiAuth } from "./auth.ts";
 import {
-  AUTH_FILE,
+  applySettingToRawConfig,
+  readRawConfig,
+  resolveConfig,
+  writeConfig,
+  type ResolvedConfig,
+  type XaiConfigError,
+} from "./config.ts";
+import {
   BILLING_BASE_URL,
   type UsageSnapshot,
   formatResetCountdown,
@@ -11,6 +28,41 @@ import {
   formatUsageSnapshot,
   requestXaiUsage,
 } from "./usage.ts";
+
+export interface XaiProjection {
+  readonly config: ResolvedConfig | undefined;
+  readonly eligible: boolean;
+  readonly snapshot: UsageSnapshot | undefined;
+  readonly statusLine: string | undefined;
+  readonly statusText: string;
+  readonly error: string | undefined;
+  readonly lastFetchAt: number | undefined;
+  readonly updatedAt: number | undefined;
+  readonly authPath: string | undefined;
+  readonly authFound: boolean;
+  readonly teamId: string | undefined;
+}
+
+const initialProjection = (): XaiProjection => ({
+  config: undefined,
+  eligible: false,
+  snapshot: undefined,
+  statusLine: undefined,
+  statusText: "Usage unavailable.",
+  error: undefined,
+  lastFetchAt: undefined,
+  updatedAt: undefined,
+  authPath: undefined,
+  authFound: false,
+  teamId: undefined,
+});
+
+export const makeProjection = (): MutableRef.MutableRef<XaiProjection> =>
+  MutableRef.make(initialProjection());
+
+export function resetProjection(projection: MutableRef.MutableRef<XaiProjection>): void {
+  MutableRef.set(projection, initialProjection());
+}
 
 export function isXaiSubscriptionModel(
   ctx: ExtensionContext,
@@ -25,268 +77,373 @@ export function isXaiSubscriptionModel(
   );
 }
 
-const STALE_EXTENSION_CONTEXT_MESSAGE = "This extension ctx is stale";
-
-function isStaleExtensionContextError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes(STALE_EXTENSION_CONTEXT_MESSAGE);
+export function synchronizeProjectionContext(
+  projection: MutableRef.MutableRef<XaiProjection>,
+  ctx: ExtensionContext,
+  options: { readonly clearUsage?: boolean } = {},
+): void {
+  const state = MutableRef.get(projection);
+  const eligible = state.config ? isXaiSubscriptionModel(ctx, state.config) : false;
+  const statusText = eligible
+    ? "Usage unavailable."
+    : "Usage hidden: current model is not an xAI subscription model.";
+  MutableRef.set(projection, {
+    ...state,
+    eligible,
+    ...(options.clearUsage
+      ? {
+          snapshot: undefined,
+          statusLine: undefined,
+          error: undefined,
+          updatedAt: undefined,
+          statusText,
+        }
+      : !eligible
+        ? { statusLine: undefined, error: undefined, statusText }
+        : {}),
+  });
 }
 
-type UsageRefreshOptions = { notify?: boolean; force?: boolean };
+export function visibleStatusLine(
+  ctx: ExtensionContext,
+  cfg: ResolvedConfig,
+  projection: MutableRef.MutableRef<XaiProjection>,
+): string | undefined {
+  if (!cfg.usage.enabled || !isXaiSubscriptionModel(ctx, cfg)) return undefined;
+  return MutableRef.get(projection).statusLine;
+}
 
-type QueuedUsageRefresh = {
-  ctx: ExtensionContext;
-  generation: number;
-  notify?: boolean;
-  force?: boolean;
-};
+export class XaiBoundaryError extends Schema.TaggedErrorClass<XaiBoundaryError>()(
+  "XaiBoundaryError",
+  { operation: Schema.String, message: Schema.String },
+) {}
 
-export class UsageController {
-  private usageSnapshot: UsageSnapshot | undefined;
-  private usageUpdatedAt: number | undefined;
-  private usageError: string | undefined;
-  private usageLastFetchAt: number | undefined;
-  private usageTimer: ReturnType<typeof setInterval> | undefined;
-  private usageRefreshInFlight = false;
-  private queuedUsageRefresh: QueuedUsageRefresh | undefined;
-  private shuttingDown = false;
-  private usageAbortController: AbortController | undefined;
-  private sessionAbortSignal: AbortSignal | undefined;
-  private sessionAbortHandler: (() => void) | undefined;
-  private sessionGeneration = 0;
-  private readonly getConfig: (ctx: ExtensionContext) => ResolvedConfig;
-  private readonly updateFooter: (ctx: ExtensionContext) => void;
+export interface RefreshOptions {
+  readonly notify?: boolean;
+  readonly force?: boolean;
+}
 
-  constructor(
-    getConfig: (ctx: ExtensionContext) => ResolvedConfig,
-    updateFooter: (ctx: ExtensionContext) => void,
-  ) {
-    this.getConfig = getConfig;
-    this.updateFooter = updateFooter;
-  }
+export interface XaiUsageServiceShape {
+  readonly projection: MutableRef.MutableRef<XaiProjection>;
+  readonly refresh: (options?: RefreshOptions) => Effect.Effect<void>;
+  readonly updateSetting: (id: string, value: string) => Effect.Effect<void, XaiConfigError>;
+}
 
-  get snapshot(): UsageSnapshot | undefined {
-    return this.usageSnapshot;
-  }
+interface RefreshCoordinator {
+  readonly active: Deferred.Deferred<void> | undefined;
+  readonly queued: RefreshOptions | undefined;
+  readonly acceptingFollowUp: boolean;
+}
 
-  statusLine(
-    ctx: ExtensionContext,
-    cfg = this.getConfig(ctx),
-    isUsingOAuth?: boolean,
-  ): string | undefined {
-    return this.usageSnapshot &&
-      !this.usageError &&
-      cfg.usage.enabled &&
-      isXaiSubscriptionModel(ctx, cfg, isUsingOAuth)
-      ? formatUsageSnapshot(this.usageSnapshot, cfg.usage)
-      : undefined;
-  }
+const mergeRefreshOptions = (
+  current: RefreshOptions | undefined,
+  next: RefreshOptions,
+): RefreshOptions => ({
+  notify: current?.notify === true || next.notify === true,
+  force: current?.force === true || next.force === true,
+});
 
-  formatStatus(ctx: ExtensionContext): string {
-    const cfg = this.getConfig(ctx);
-    if (!cfg.usage.enabled) return "Usage display is disabled.";
-    if (!isXaiSubscriptionModel(ctx, cfg))
-      return "Usage hidden: current model is not an xAI subscription model.";
-    if (this.usageError) return `Usage unavailable: ${this.usageError}`;
-    if (!this.usageSnapshot) return "Usage unavailable.";
-    const stale =
-      this.usageUpdatedAt && Date.now() - this.usageUpdatedAt > cfg.usage.refreshIntervalMs * 2
-        ? ` | stale ${formatResetCountdown((Date.now() - this.usageUpdatedAt) / 1000)}`
-        : "";
-    return `${formatUsageDetails(this.usageSnapshot)}${stale}`;
-  }
+export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageServiceShape>()(
+  "pi-better-xai/usage-controller/XaiUsageService",
+) {
+  static layer(options: {
+    readonly context: MutableRef.MutableRef<ExtensionContext>;
+    readonly cwd: string;
+    readonly projection: MutableRef.MutableRef<XaiProjection>;
+    readonly onChange: () => void;
+    readonly startPolling?: boolean;
+    readonly agentDir?: string;
+  }) {
+    return Layer.effect(
+      this,
+      Effect.gen(function* () {
+        const { context, cwd, projection, onChange } = options;
+        const path = yield* Path.Path;
+        const agentDir = options.agentDir ?? (yield* Effect.sync(() => getAgentDir()));
+        const authPath = path.join(agentDir, "auth.json");
+        const coordinatorLock = yield* Semaphore.make(1);
+        const coordinator = MutableRef.make<RefreshCoordinator>({
+          active: undefined,
+          queued: undefined,
+          acceptingFollowUp: false,
+        });
+        const dependencies = yield* Effect.context<
+          Path.Path | JsonDocumentStore | JsonHttpClient
+        >();
+        const config = yield* resolveConfig(cwd, agentDir);
+        MutableRef.set(projection, {
+          ...MutableRef.get(projection),
+          config,
+          statusText: "Usage unavailable.",
+          authPath,
+        });
+        synchronizeProjectionContext(projection, MutableRef.get(context));
 
-  formatDebug(ctx: ExtensionContext): string {
-    const cfg = this.getConfig(ctx);
-    const auth = readXaiAuth();
-    return [
-      `Usage enabled: ${cfg.usage.enabled}`,
-      `Current model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none"}`,
-      `Current model eligible: ${isXaiSubscriptionModel(ctx, cfg)}`,
-      `Requires subscription model: ${cfg.usage.showOnlyOnSubscriptionModels}`,
-      `Auth: ${auth ? "found" : "missing"}`,
-      `Team ID: ${maskIdentifier(auth?.teamId) ?? "none"}`,
-      `Last fetch: ${this.usageLastFetchAt ? new Date(this.usageLastFetchAt).toLocaleTimeString() : "never"}`,
-      `Last successful update: ${this.usageUpdatedAt ? new Date(this.usageUpdatedAt).toLocaleTimeString() : "never"}`,
-      `Last error: ${this.usageError ?? "none"}`,
-      `Refresh interval: ${cfg.usage.refreshIntervalMs}ms`,
-      `Endpoint: ${BILLING_BASE_URL}/billing*`,
-      `Auth file: ${AUTH_FILE}`,
-    ].join("\n");
-  }
+        const notifyChanged = Effect.fn("XaiUsageService.notifyChanged")(function* () {
+          yield* Effect.try({
+            try: onChange,
+            catch: () =>
+              new XaiBoundaryError({
+                operation: "render",
+                message: "Unable to update Better xAI UI.",
+              }),
+          }).pipe(Effect.catch(() => Effect.void));
+        });
 
-  private isGenerationCurrent(generation: number): boolean {
-    return !this.shuttingDown && generation === this.sessionGeneration;
-  }
+        const notifyUser = Effect.fn("XaiUsageService.notifyUser")(function* (
+          message: string,
+          level: "info" | "warning",
+        ) {
+          const ctx = MutableRef.get(context);
+          yield* Effect.try({
+            try: () => ctx.ui.notify(message, level),
+            catch: () =>
+              new XaiBoundaryError({
+                operation: "notify",
+                message: "Unable to notify Better xAI status.",
+              }),
+          }).pipe(Effect.catch(() => Effect.void));
+        });
 
-  private deactivateGeneration(generation: number): void {
-    if (generation !== this.sessionGeneration) return;
-    this.shuttingDown = true;
-    this.sessionGeneration++;
-    this.queuedUsageRefresh = undefined;
-    this.usageAbortController?.abort();
-    this.usageAbortController = undefined;
-    this.stopTimer();
-  }
+        const refreshOnce = Effect.fn("XaiUsageService.refreshOnce")(function* (
+          refreshOptions: RefreshOptions,
+        ) {
+          const ctx = MutableRef.get(context);
+          const current = MutableRef.get(projection);
+          const cfg = current.config;
+          if (!cfg) return;
+          const now = yield* Clock.currentTimeMillis;
+          if (!cfg.usage.enabled) {
+            MutableRef.set(projection, {
+              ...current,
+              eligible: false,
+              snapshot: undefined,
+              statusLine: undefined,
+              error: undefined,
+              statusText: "Usage display is disabled.",
+            });
+            yield* notifyChanged();
+            if (refreshOptions.notify) yield* notifyUser("Usage display is disabled.", "warning");
+            return;
+          }
+          if (!isXaiSubscriptionModel(ctx, cfg)) {
+            const statusText = "Usage hidden: current model is not an xAI subscription model.";
+            MutableRef.set(projection, {
+              ...current,
+              eligible: false,
+              snapshot: undefined,
+              statusLine: undefined,
+              error: undefined,
+              statusText,
+            });
+            yield* notifyChanged();
+            if (refreshOptions.notify) yield* notifyUser(statusText, "warning");
+            return;
+          }
+          if (
+            !refreshOptions.force &&
+            !refreshOptions.notify &&
+            current.lastFetchAt !== undefined &&
+            now - current.lastFetchAt < cfg.usage.refreshIntervalMs
+          ) {
+            return;
+          }
 
-  private handleStaleContextError(error: unknown, generation: number): boolean {
-    if (!isStaleExtensionContextError(error)) return false;
-    this.deactivateGeneration(generation);
-    return true;
-  }
-
-  async refresh(
-    ctx: ExtensionContext,
-    options?: UsageRefreshOptions,
-    generation = this.sessionGeneration,
-  ): Promise<void> {
-    if (!this.isGenerationCurrent(generation)) return;
-
-    try {
-      if (!ctx.hasUI) return;
-    } catch (error) {
-      this.handleStaleContextError(error, generation);
-      return;
-    }
-
-    if (this.usageRefreshInFlight) {
-      const queued =
-        this.queuedUsageRefresh?.generation === generation ? this.queuedUsageRefresh : undefined;
-      this.queuedUsageRefresh = {
-        ctx,
-        generation,
-        notify: queued?.notify || options?.notify,
-        force: queued?.force || options?.force,
-      };
-      return;
-    }
-
-    this.usageRefreshInFlight = true;
-    try {
-      const cfg = this.getConfig(ctx);
-      if (!this.isGenerationCurrent(generation)) return;
-
-      if (!cfg.usage.enabled) {
-        this.usageSnapshot = undefined;
-        this.usageError = "Usage display is disabled.";
-        this.updateFooter(ctx);
-        if (options?.notify) ctx.ui.notify(this.formatStatus(ctx), "warning");
-        return;
-      }
-      if (!isXaiSubscriptionModel(ctx, cfg)) {
-        this.updateFooter(ctx);
-        if (options?.notify) ctx.ui.notify(this.formatStatus(ctx), "warning");
-        return;
-      }
-      const shouldThrottle =
-        !options?.force &&
-        !options?.notify &&
-        this.usageLastFetchAt !== undefined &&
-        Date.now() - this.usageLastFetchAt < cfg.usage.refreshIntervalMs;
-      if (shouldThrottle) return;
-      this.usageLastFetchAt = Date.now();
-      this.usageAbortController = new AbortController();
-      const timeoutSignal = AbortSignal.timeout(10_000);
-      const signal = ctx.signal
-        ? AbortSignal.any([ctx.signal, timeoutSignal, this.usageAbortController.signal])
-        : AbortSignal.any([timeoutSignal, this.usageAbortController.signal]);
-      const snapshot = await requestXaiUsage(ctx, signal);
-      if (!this.isGenerationCurrent(generation)) return;
-
-      this.usageSnapshot = snapshot;
-      this.usageUpdatedAt = snapshot ? Date.now() : undefined;
-      this.usageError = snapshot
-        ? undefined
-        : `Missing xAI OAuth credentials in ${AUTH_FILE}. Run /login xai.`;
-      this.updateFooter(ctx);
-      if (options?.notify)
-        ctx.ui.notify(this.formatStatus(ctx), this.usageSnapshot ? "info" : "warning");
-    } catch (error) {
-      if (this.handleStaleContextError(error, generation) || !this.isGenerationCurrent(generation))
-        return;
-      this.usageError = sanitizeDiagnosticError(
-        error instanceof Error ? error.message : String(error),
-      );
-      try {
-        this.updateFooter(ctx);
-        if (options?.notify) ctx.ui.notify(this.formatStatus(ctx), "warning");
-      } catch (secondaryError) {
-        if (!this.handleStaleContextError(secondaryError, generation)) {
-          this.usageError = sanitizeDiagnosticError(
-            secondaryError instanceof Error ? secondaryError.message : String(secondaryError),
+          MutableRef.set(projection, {
+            ...current,
+            eligible: true,
+            error: undefined,
+            lastFetchAt: now,
+          });
+          const snapshot = yield* requestXaiUsage(authPath, ctx).pipe(
+            Effect.timeout("10 seconds"),
+            Effect.catch((error) => {
+              const message = sanitizeDiagnosticError(error.message);
+              const failed = MutableRef.get(projection);
+              MutableRef.set(projection, {
+                ...failed,
+                statusLine: undefined,
+                error: message,
+                statusText: `Usage unavailable: ${message}`,
+              });
+              return Effect.void;
+            }),
           );
+          const auth = yield* readXaiAuth(authPath);
+          const refreshedAt = yield* Clock.currentTimeMillis;
+          const next = MutableRef.get(projection);
+          if (snapshot) {
+            const statusLine = formatUsageSnapshot(snapshot, cfg.usage, refreshedAt);
+            MutableRef.set(projection, {
+              ...next,
+              eligible: true,
+              snapshot,
+              statusLine,
+              statusText: formatUsageDetails(snapshot, refreshedAt),
+              error: undefined,
+              updatedAt: refreshedAt,
+              authFound: auth !== undefined,
+              teamId: auth?.teamId,
+            });
+          } else if (!MutableRef.get(projection).error) {
+            const missing = `Missing xAI OAuth credentials in ${authPath}. Run /login xai.`;
+            MutableRef.set(projection, {
+              ...next,
+              eligible: true,
+              snapshot: undefined,
+              statusLine: undefined,
+              error: missing,
+              statusText: `Usage unavailable: ${missing}`,
+              authFound: auth !== undefined,
+              teamId: auth?.teamId,
+            });
+          }
+          yield* notifyChanged();
+          if (refreshOptions.notify) {
+            const latest = MutableRef.get(projection);
+            yield* notifyUser(latest.statusText, latest.snapshot ? "info" : "warning");
+          }
+        });
+
+        const refresh = (refreshOptions: RefreshOptions = {}) =>
+          Effect.gen(function* () {
+            const registration = yield* coordinatorLock.withPermits(1)(
+              Effect.gen(function* () {
+                const state = MutableRef.get(coordinator);
+                if (state.active) {
+                  if (state.acceptingFollowUp) {
+                    MutableRef.set(coordinator, {
+                      ...state,
+                      queued: mergeRefreshOptions(state.queued, refreshOptions),
+                    });
+                  }
+                  return { owner: false as const, done: state.active };
+                }
+                const done = yield* Deferred.make<void>();
+                MutableRef.set(coordinator, {
+                  active: done,
+                  queued: undefined,
+                  acceptingFollowUp: true,
+                });
+                return { owner: true as const, done };
+              }),
+            );
+            if (!registration.owner) return yield* Deferred.await(registration.done);
+
+            const run = Effect.gen(function* () {
+              yield* refreshOnce(refreshOptions);
+              const followUp = yield* coordinatorLock.withPermits(1)(
+                Effect.sync(() => {
+                  const state = MutableRef.get(coordinator);
+                  const queued = state.queued;
+                  MutableRef.set(coordinator, {
+                    ...state,
+                    queued: undefined,
+                    acceptingFollowUp: false,
+                  });
+                  return queued;
+                }),
+              );
+              if (followUp) yield* refreshOnce(followUp);
+            }).pipe(
+              Effect.ensuring(
+                coordinatorLock
+                  .withPermits(1)(
+                    Effect.sync(() => {
+                      const state = MutableRef.get(coordinator);
+                      if (state.active === registration.done) {
+                        MutableRef.set(coordinator, {
+                          active: undefined,
+                          queued: undefined,
+                          acceptingFollowUp: false,
+                        });
+                      }
+                    }),
+                  )
+                  .pipe(
+                    Effect.andThen(Deferred.succeed(registration.done, undefined)),
+                    Effect.asVoid,
+                  ),
+              ),
+            );
+            yield* run;
+          }).pipe(Effect.provideContext(dependencies));
+
+        const updateSettingWithRequirements = Effect.fn("XaiUsageService.updateSetting")(function* (
+          id: string,
+          value: string,
+        ) {
+          const current = MutableRef.get(projection);
+          if (!current.config) return;
+          const raw = yield* readRawConfig(current.config.configPath);
+          const nextRaw = applySettingToRawConfig(raw, id, value);
+          yield* writeConfig(current.config.configPath, nextRaw);
+          const nextConfig = yield* resolveConfig(cwd, agentDir);
+          MutableRef.set(projection, { ...MutableRef.get(projection), config: nextConfig });
+          synchronizeProjectionContext(projection, MutableRef.get(context), { clearUsage: true });
+          yield* refresh({ force: true });
+        });
+        const updateSetting = (id: string, value: string) =>
+          updateSettingWithRequirements(id, value).pipe(Effect.provideContext(dependencies));
+
+        if (options.startPolling !== false) {
+          yield* Effect.gen(function* () {
+            yield* refresh({ force: true });
+            while (true) {
+              const interval = MutableRef.get(projection).config?.usage.refreshIntervalMs ?? 60_000;
+              yield* Effect.sleep(interval);
+              yield* refresh();
+            }
+          }).pipe(Effect.forkScoped);
         }
-      }
-    } finally {
-      this.usageAbortController = undefined;
-      this.usageRefreshInFlight = false;
-      const next = this.queuedUsageRefresh;
-      this.queuedUsageRefresh = undefined;
-      if (next && !this.shuttingDown && next.generation === this.sessionGeneration) {
-        void this.refresh(next.ctx, { notify: next.notify, force: next.force }, next.generation);
-      }
-    }
-  }
 
-  private stopTimer(): void {
-    if (this.usageTimer) clearInterval(this.usageTimer);
-    this.usageTimer = undefined;
-    if (this.sessionAbortSignal && this.sessionAbortHandler) {
-      this.sessionAbortSignal.removeEventListener("abort", this.sessionAbortHandler);
-    }
-    this.sessionAbortSignal = undefined;
-    this.sessionAbortHandler = undefined;
+        return XaiUsageService.of({ projection, refresh, updateSetting });
+      }),
+    );
   }
+}
 
-  start(ctx: ExtensionContext): void {
-    this.usageAbortController?.abort();
-    this.queuedUsageRefresh = undefined;
-    this.stopTimer();
-    const generation = ++this.sessionGeneration;
-    this.shuttingDown = false;
+export function statusLine(projection: MutableRef.MutableRef<XaiProjection>): string | undefined {
+  return MutableRef.get(projection).statusLine;
+}
 
-    const cfg = this.getConfig(ctx);
-    if (!cfg.usage.enabled) return;
-    const sessionSignal = ctx.signal;
-    if (sessionSignal?.aborted) {
-      this.deactivateGeneration(generation);
-      return;
-    }
-    this.sessionAbortSignal = sessionSignal;
-    this.sessionAbortHandler = () => {
-      this.deactivateGeneration(generation);
-    };
-    sessionSignal?.addEventListener("abort", this.sessionAbortHandler, { once: true });
-    void this.refresh(ctx, { force: true }, generation);
-    this.usageTimer = setInterval(() => {
-      if (!this.isGenerationCurrent(generation)) return;
-      if (sessionSignal?.aborted) {
-        this.deactivateGeneration(generation);
-        return;
-      }
-      void this.refresh(ctx, undefined, generation);
-    }, cfg.usage.refreshIntervalMs);
-    this.usageTimer.unref?.();
-  }
+export function formatStatus(
+  projection: MutableRef.MutableRef<XaiProjection>,
+  now: number,
+): string {
+  const state = MutableRef.get(projection);
+  if (!state.config?.usage.enabled) return "Usage display is disabled.";
+  if (!state.eligible) return "Usage hidden: current model is not an xAI subscription model.";
+  if (state.error) return `Usage unavailable: ${state.error}`;
+  if (!state.snapshot) return state.statusText;
+  const stale =
+    state.updatedAt !== undefined &&
+    now - state.updatedAt > state.config.usage.refreshIntervalMs * 2
+      ? ` | stale ${formatResetCountdown((now - state.updatedAt) / 1000)}`
+      : "";
+  return `${formatUsageDetails(state.snapshot, now)}${stale}`;
+}
 
-  restartAfterSettingsChange(ctx: ExtensionContext, cfg: ResolvedConfig): void {
-    this.usageAbortController?.abort();
-    this.queuedUsageRefresh = undefined;
-    this.stopTimer();
-    this.sessionGeneration++;
-    this.shuttingDown = false;
-    if (cfg.usage.enabled) this.start(ctx);
-    else {
-      this.usageSnapshot = undefined;
-      this.usageError = "Usage display is disabled.";
-    }
-  }
-
-  shutdown(): void {
-    this.shuttingDown = true;
-    this.sessionGeneration++;
-    this.queuedUsageRefresh = undefined;
-    this.usageAbortController?.abort();
-    this.usageAbortController = undefined;
-    this.stopTimer();
-  }
+export function formatDebug(
+  projection: MutableRef.MutableRef<XaiProjection>,
+  ctx: ExtensionContext,
+): string {
+  const state = MutableRef.get(projection);
+  const cfg = state.config;
+  const formatTime = (value: number | undefined) =>
+    value === undefined ? "never" : DateTime.formatLocal(DateTime.makeUnsafe(value));
+  return [
+    `Usage enabled: ${cfg?.usage.enabled ?? false}`,
+    `Current model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none"}`,
+    `Current model eligible: ${cfg ? isXaiSubscriptionModel(ctx, cfg) : false}`,
+    `Requires subscription model: ${cfg?.usage.showOnlyOnSubscriptionModels ?? true}`,
+    `Auth: ${state.authFound ? "found" : "missing"}`,
+    `Team ID: ${maskIdentifier(state.teamId) ?? "none"}`,
+    `Last fetch: ${formatTime(state.lastFetchAt)}`,
+    `Last successful update: ${formatTime(state.updatedAt)}`,
+    `Last error: ${state.error ?? "none"}`,
+    `Refresh interval: ${cfg?.usage.refreshIntervalMs ?? 60_000}ms`,
+    `Endpoint: ${BILLING_BASE_URL}/billing*`,
+    `Auth file: ${state.authPath ?? "unknown"}`,
+  ].join("\n");
 }

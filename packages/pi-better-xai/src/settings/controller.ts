@@ -1,28 +1,23 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-  SETTINGS_OPTION_DESCRIPTORS,
-  applySettingToRawConfig,
-  readRawConfig,
-  writeConfig,
-  type ResolvedConfig,
-} from "../config.ts";
-import type { UsageController } from "../usage-controller.ts";
+import * as Effect from "effect/Effect";
+import { SETTINGS_OPTION_DESCRIPTORS, type ResolvedConfig } from "../config.ts";
+import { XaiUsageService } from "../usage-controller.ts";
 
 export function registerSettingsController(
   pi: ExtensionAPI,
   options: {
     config(ctx: ExtensionContext): ResolvedConfig;
-    refresh(ctx: ExtensionContext): ResolvedConfig;
     updateFooter(ctx: ExtensionContext): void;
     formatDebugStatus(ctx: ExtensionContext): string;
-    usageController: UsageController;
+    run<A, E>(effect: Effect.Effect<A, E, XaiUsageService>, signal?: AbortSignal): Promise<A>;
   },
 ): void {
-  const { config, refresh, updateFooter, formatDebugStatus, usageController } = options;
+  const { config, updateFooter, formatDebugStatus, run } = options;
+  const done = (signal?: AbortSignal) => run(Effect.void, signal);
 
   pi.registerCommand("xai-settings", {
     description: "Configure Better xAI usage display",
-    handler: async (args, ctx) => {
+    handler: (args, ctx) => {
       const trimmed = args.trim();
       if (!trimmed || trimmed === "help") {
         const cfg = config(ctx);
@@ -43,40 +38,45 @@ export function registerSettingsController(
           "  /xai-settings usage.showResetTimes true",
         ];
         ctx.ui.notify(lines.join("\n"), "info");
-        return;
+        return done(ctx.signal);
       }
 
       if (trimmed === "diagnostics" || trimmed === "debug") {
         ctx.ui.notify(formatDebugStatus(ctx), "info");
-        return;
+        return done(ctx.signal);
       }
 
       const [id, ...valueParts] = trimmed.split(/\s+/);
       const value = valueParts.join(" ").trim();
       if (!id || !value) {
         ctx.ui.notify("Usage: /xai-settings <id> <value>", "error");
-        return;
+        return done(ctx.signal);
       }
       const descriptor = SETTINGS_OPTION_DESCRIPTORS.find((entry) => entry.id === id);
       if (!descriptor) {
         ctx.ui.notify(`Unknown setting: ${id}`, "error");
-        return;
+        return done(ctx.signal);
       }
       if (descriptor.values && !(descriptor.values as readonly string[]).includes(value)) {
         ctx.ui.notify(
           `Invalid value for ${id}. Expected one of: ${descriptor.values.join(", ")}`,
           "error",
         );
-        return;
+        return done(ctx.signal);
       }
 
-      const current = config(ctx);
-      const nextRaw = applySettingToRawConfig(readRawConfig(current.configPath), id, value);
-      writeConfig(current.configPath, nextRaw);
-      const next = refresh(ctx);
-      usageController.restartAfterSettingsChange(ctx, next);
-      updateFooter(ctx);
-      ctx.ui.notify(`${id} = ${descriptor.currentValue(next)}`, "info");
+      return run(
+        XaiUsageService.use((service) => service.updateSetting(id, value)).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              updateFooter(ctx);
+              ctx.ui.notify(`${id} = ${descriptor.currentValue(config(ctx))}`, "info");
+            }),
+          ),
+          Effect.catch((error) => Effect.sync(() => ctx.ui.notify(error.message, "error"))),
+        ),
+        ctx.signal,
+      );
     },
   });
 }

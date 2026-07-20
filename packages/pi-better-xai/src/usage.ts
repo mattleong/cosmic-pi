@@ -1,58 +1,56 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { AUTH_FILE, getXaiCredentials } from "./auth.ts";
-import { isRecord } from "./utils.ts";
-
-export { AUTH_FILE };
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { JsonHttpClient } from "pi-cosmic-core";
+import { getXaiCredentials } from "./auth.ts";
 
 export const BILLING_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 export const MONTHLY_BILLING_URL = `${BILLING_BASE_URL}/billing`;
 export const WEEKLY_BILLING_URL = `${BILLING_BASE_URL}/billing?format=credits`;
 
-export type UsageSnapshot = {
-  capturedAt: number;
-  weeklyUsedPercent: number | null;
-  weeklyLeftPercent: number | null;
-  weeklyResetInSeconds: number | null;
-  monthlyUsed: number | null;
-  monthlyLimit: number | null;
-  monthlyUsedPercent: number | null;
-  monthlyLeftPercent: number | null;
-  monthlyResetInSeconds: number | null;
-  onDemandCap: number | null;
-  onDemandUsed: number | null;
-  isLimited: boolean;
-};
+const MoneySchema = Schema.Struct({ val: Schema.Number });
+const MonthlyBillingSchema = Schema.Struct({
+  config: Schema.Struct({
+    monthlyLimit: Schema.optional(MoneySchema),
+    used: Schema.optional(MoneySchema),
+    onDemandCap: Schema.optional(MoneySchema),
+    billingPeriodEnd: Schema.optional(Schema.String),
+  }),
+});
+const WeeklyBillingSchema = Schema.Struct({
+  config: Schema.Struct({
+    currentPeriod: Schema.optional(
+      Schema.Struct({
+        end: Schema.optional(Schema.String),
+      }),
+    ),
+    creditUsagePercent: Schema.optional(Schema.Number),
+    onDemandUsed: Schema.optional(MoneySchema),
+    billingPeriodEnd: Schema.optional(Schema.String),
+  }),
+});
 
-type ResetClockFormatters = {
-  time: Intl.DateTimeFormat;
-  weekday: Intl.DateTimeFormat;
-  date: Intl.DateTimeFormat;
-};
-const RESET_CLOCK_FORMATTER_CACHE_LIMIT = 4;
-const resetClockFormatters = new Map<string, ResetClockFormatters>();
+export class XaiUsageError extends Schema.TaggedErrorClass<XaiUsageError>()("XaiUsageError", {
+  operation: Schema.String,
+  message: Schema.String,
+}) {}
 
-function currentTimeZoneKey(date: Date): string {
-  const zoneLabel = /\(([^)]+)\)$/.exec(date.toString())?.[1] ?? "";
-  return `${process.env.TZ ?? ""}:${date.getTimezoneOffset()}:${zoneLabel}`;
-}
-
-function getResetClockFormatters(now: Date, reset: Date): ResetClockFormatters {
-  const timeZoneKey = `${currentTimeZoneKey(now)}:${reset.getTimezoneOffset()}`;
-  let formatters = resetClockFormatters.get(timeZoneKey);
-  if (!formatters) {
-    formatters = {
-      time: new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }),
-      weekday: new Intl.DateTimeFormat(undefined, { weekday: "short" }),
-      date: new Intl.DateTimeFormat(undefined, { month: "numeric", day: "numeric" }),
-    };
-    resetClockFormatters.set(timeZoneKey, formatters);
-    while (resetClockFormatters.size > RESET_CLOCK_FORMATTER_CACHE_LIMIT) {
-      const oldestKey = resetClockFormatters.keys().next().value;
-      if (oldestKey === undefined) break;
-      resetClockFormatters.delete(oldestKey);
-    }
-  }
-  return formatters;
+export interface UsageSnapshot {
+  readonly capturedAt: number;
+  readonly weeklyUsedPercent: number | null;
+  readonly weeklyLeftPercent: number | null;
+  readonly weeklyResetInSeconds: number | null;
+  readonly monthlyUsed: number | null;
+  readonly monthlyLimit: number | null;
+  readonly monthlyUsedPercent: number | null;
+  readonly monthlyLeftPercent: number | null;
+  readonly monthlyResetInSeconds: number | null;
+  readonly onDemandCap: number | null;
+  readonly onDemandUsed: number | null;
+  readonly isLimited: boolean;
 }
 
 function clampPercent(value: number): number {
@@ -64,18 +62,11 @@ function usedToLeftPercent(value: number | null | undefined): number | null {
   return clampPercent(100 - value);
 }
 
-function nestedNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (!isRecord(value)) return null;
-  const nested = value.val;
-  return typeof nested === "number" && Number.isFinite(nested) ? nested : null;
-}
-
-function parseIsoToSecondsFromNow(value: unknown, now: number): number | null {
-  if (typeof value !== "string" || !value.trim()) return null;
-  const resetAt = Date.parse(value);
-  if (!Number.isFinite(resetAt)) return null;
-  return Math.max(0, (resetAt - now) / 1000);
+function parseIsoToSecondsFromNow(value: string | undefined, now: number): number | null {
+  if (!value?.trim()) return null;
+  const parsed = DateTime.make(value);
+  if (Option.isNone(parsed)) return null;
+  return Math.max(0, (DateTime.toEpochMillis(parsed.value) - now) / 1000);
 }
 
 export function formatResetCountdown(seconds: number | null): string | null {
@@ -93,26 +84,35 @@ export function formatResetCountdown(seconds: number | null): string | null {
 
 function formatResetClock(
   seconds: number | null,
-  options?: { includeDate?: boolean },
-  now = Date.now(),
+  options: { readonly includeDate?: boolean } | undefined,
+  now: number,
 ): string | null {
   if (typeof seconds !== "number" || !Number.isFinite(seconds)) return null;
-  const resetDate = new Date(now + seconds * 1000);
-  const currentDate = new Date(now);
-  const formatters = getResetClockFormatters(currentDate, resetDate);
-  const time = formatters.time.format(resetDate);
-  if (!options?.includeDate && resetDate.toDateString() === currentDate.toDateString()) return time;
-  const weekday = formatters.weekday.format(resetDate);
+  const reset = DateTime.makeUnsafe(now + seconds * 1000);
+  const current = DateTime.makeUnsafe(now);
+  const time = DateTime.formatLocal(reset, { hour: "numeric", minute: "2-digit" });
+  const resetDay = DateTime.formatLocal(reset, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const currentDay = DateTime.formatLocal(current, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  if (!options?.includeDate && resetDay === currentDay) return time;
+  const weekday = DateTime.formatLocal(reset, { weekday: "short" });
   if (!options?.includeDate) return `${weekday} ${time}`;
-  const date = formatters.date.format(resetDate);
+  const date = DateTime.formatLocal(reset, { month: "numeric", day: "numeric" });
   return `${weekday} ${date} ${time}`;
 }
 
 function formatCompactReset(
   label: string,
   seconds: number | null,
-  options?: { includeDate?: boolean },
-  now = Date.now(),
+  options: { readonly includeDate?: boolean } | undefined,
+  now: number,
 ): string | null {
   const countdown = formatResetCountdown(seconds);
   const clock = formatResetClock(seconds, options, now);
@@ -121,7 +121,7 @@ function formatCompactReset(
 
 export function parseMonthlyBilling(
   payload: unknown,
-  now = Date.now(),
+  now: number,
 ): Pick<
   UsageSnapshot,
   | "monthlyUsed"
@@ -131,59 +131,52 @@ export function parseMonthlyBilling(
   | "monthlyResetInSeconds"
   | "onDemandCap"
 > {
-  const root = isRecord(payload) ? payload : null;
-  const config = isRecord(root?.config) ? root.config : null;
-  const monthlyUsed = nestedNumber(config?.used);
-  const monthlyLimit = nestedNumber(config?.monthlyLimit);
-  const onDemandCap = nestedNumber(config?.onDemandCap);
-  let monthlyUsedPercent: number | null = null;
-  if (typeof monthlyUsed === "number" && typeof monthlyLimit === "number" && monthlyLimit > 0) {
-    monthlyUsedPercent = clampPercent((monthlyUsed / monthlyLimit) * 100);
-  }
+  const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(MonthlyBillingSchema)(payload));
+  const monthlyUsed = decoded?.config.used?.val ?? null;
+  const monthlyLimit = decoded?.config.monthlyLimit?.val ?? null;
+  const onDemandCap = decoded?.config.onDemandCap?.val ?? null;
+  const monthlyUsedPercent =
+    monthlyUsed !== null && monthlyLimit !== null && monthlyLimit > 0
+      ? clampPercent((monthlyUsed / monthlyLimit) * 100)
+      : null;
   return {
     monthlyUsed,
     monthlyLimit,
     monthlyUsedPercent,
     monthlyLeftPercent: usedToLeftPercent(monthlyUsedPercent),
-    monthlyResetInSeconds: parseIsoToSecondsFromNow(config?.billingPeriodEnd, now),
+    monthlyResetInSeconds: parseIsoToSecondsFromNow(decoded?.config.billingPeriodEnd, now),
     onDemandCap,
   };
 }
 
 export function parseWeeklyBilling(
   payload: unknown,
-  now = Date.now(),
+  now: number,
 ): Pick<
   UsageSnapshot,
   "weeklyUsedPercent" | "weeklyLeftPercent" | "weeklyResetInSeconds" | "onDemandUsed"
 > {
-  const root = isRecord(payload) ? payload : null;
-  const config = isRecord(root?.config) ? root.config : null;
-  const rawPercent = config?.creditUsagePercent;
-  // Fresh weekly periods may omit the percent; treat as 0% used.
+  const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(WeeklyBillingSchema)(payload));
+  const config = decoded?.config;
   const weeklyUsedPercent =
-    typeof rawPercent === "number" && Number.isFinite(rawPercent)
-      ? clampPercent(rawPercent)
+    typeof config?.creditUsagePercent === "number"
+      ? clampPercent(config.creditUsagePercent)
       : config
         ? 0
         : null;
-  const period = isRecord(config?.currentPeriod) ? config.currentPeriod : null;
-  const resetIso =
-    (typeof config?.billingPeriodEnd === "string" && config.billingPeriodEnd) ||
-    (typeof period?.end === "string" && period.end) ||
-    null;
+  const resetIso = config?.billingPeriodEnd ?? config?.currentPeriod?.end;
   return {
     weeklyUsedPercent,
     weeklyLeftPercent: usedToLeftPercent(weeklyUsedPercent),
     weeklyResetInSeconds: parseIsoToSecondsFromNow(resetIso, now),
-    onDemandUsed: nestedNumber(config?.onDemandUsed),
+    onDemandUsed: config?.onDemandUsed?.val ?? null,
   };
 }
 
 export function parseUsageSnapshot(
   monthlyPayload: unknown,
   weeklyPayload: unknown | null | undefined,
-  now = Date.now(),
+  now: number,
 ): UsageSnapshot {
   const monthly = parseMonthlyBilling(monthlyPayload, now);
   const weekly =
@@ -195,17 +188,16 @@ export function parseUsageSnapshot(
           onDemandUsed: null,
         }
       : parseWeeklyBilling(weeklyPayload, now);
-  const isLimited =
-    (weekly.weeklyUsedPercent !== null && weekly.weeklyUsedPercent >= 100) ||
-    (monthly.monthlyUsed !== null &&
-      monthly.monthlyLimit !== null &&
-      monthly.monthlyUsed >= monthly.monthlyLimit);
   return {
     capturedAt: now,
     ...weekly,
     ...monthly,
     onDemandUsed: weekly.onDemandUsed ?? null,
-    isLimited,
+    isLimited:
+      (weekly.weeklyUsedPercent !== null && weekly.weeklyUsedPercent >= 100) ||
+      (monthly.monthlyUsed !== null &&
+        monthly.monthlyLimit !== null &&
+        monthly.monthlyUsed >= monthly.monthlyLimit),
   };
 }
 
@@ -225,14 +217,12 @@ function remainingResetSeconds(
 
 export function formatUsageSnapshot(
   snapshot: UsageSnapshot,
-  options: { showResetTimes: boolean },
-  now = Date.now(),
+  options: { readonly showResetTimes: boolean },
+  now: number,
 ): string {
   const hasWeekly = snapshot.weeklyLeftPercent !== null || snapshot.weeklyResetInSeconds !== null;
   const hasMonthly =
     snapshot.monthlyLeftPercent !== null || snapshot.monthlyResetInSeconds !== null;
-  // Match OpenAI footer shape so cosmic-ui can render progress bars:
-  // "Usage: 7d: 82% | mo: 83% | 7d ↺ … | mo ↺ …"
   const windows = [
     hasWeekly ? `7d: ${formatPercent(snapshot.weeklyLeftPercent)}` : null,
     hasMonthly ? `mo: ${formatPercent(snapshot.monthlyLeftPercent)}` : null,
@@ -260,7 +250,7 @@ export function formatUsageSnapshot(
   return `Usage: ${windows.length ? windows.join(" | ") : "--"}${resets.length ? ` | ${resets.join(" | ")}` : ""}`;
 }
 
-export function formatUsageDetails(snapshot: UsageSnapshot, now = Date.now()): string {
+export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string {
   const weeklyUsed =
     snapshot.weeklyUsedPercent === null ? "--" : `${Math.round(snapshot.weeklyUsedPercent)}% used`;
   const weeklyLeft = formatPercent(snapshot.weeklyLeftPercent);
@@ -294,38 +284,63 @@ export function formatUsageDetails(snapshot: UsageSnapshot, now = Date.now()): s
   ].join("\n");
 }
 
-async function fetchJson(
+const fetchBilling = Effect.fn("XaiUsage.fetchBilling")(function* (
   url: string,
   accessToken: string,
-  signal?: AbortSignal,
-): Promise<{ ok: true; payload: unknown } | { ok: false; status: number }> {
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: "application/json",
-    },
-    signal,
-  });
-  if (!response.ok) return { ok: false, status: response.status };
-  return { ok: true, payload: await response.json() };
-}
+) {
+  const http = yield* JsonHttpClient;
+  return yield* http
+    .request({
+      url,
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    })
+    .pipe(
+      Effect.mapError(
+        () =>
+          new XaiUsageError({
+            operation: "request",
+            message: "xAI billing request failed.",
+          }),
+      ),
+    );
+});
 
-export async function requestXaiUsage(
-  ctx?: Pick<ExtensionContext, "modelRegistry">,
-  signal?: AbortSignal,
-  now = Date.now(),
-): Promise<UsageSnapshot | undefined> {
-  const credentials = await getXaiCredentials(ctx, signal, now);
+export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (
+  authPath: string,
+  ctx: Pick<ExtensionContext, "modelRegistry">,
+) {
+  const credentials = yield* getXaiCredentials(authPath, ctx);
   if (!credentials) return undefined;
-
-  const [monthly, weekly] = await Promise.all([
-    fetchJson(MONTHLY_BILLING_URL, credentials.accessToken, signal),
-    fetchJson(WEEKLY_BILLING_URL, credentials.accessToken, signal).catch(() => ({
-      ok: false as const,
-      status: 0,
-    })),
-  ]);
-  if (!monthly.ok) throw new Error(`xAI monthly billing request failed (HTTP ${monthly.status})`);
-  const weeklyPayload = weekly.ok ? weekly.payload : null;
-  return parseUsageSnapshot(monthly.payload, weeklyPayload, now);
-}
+  const [monthly, weekly] = yield* Effect.all(
+    [
+      fetchBilling(MONTHLY_BILLING_URL, credentials.accessToken),
+      fetchBilling(WEEKLY_BILLING_URL, credentials.accessToken).pipe(
+        Effect.catch(() => Effect.void),
+      ),
+    ] as const,
+    { concurrency: "unbounded" },
+  );
+  if (monthly.status < 200 || monthly.status >= 300) {
+    return yield* new XaiUsageError({
+      operation: "monthly",
+      message: `xAI monthly billing request failed (HTTP ${monthly.status}).`,
+    });
+  }
+  const decodedMonthly = yield* Schema.decodeUnknownEffect(MonthlyBillingSchema)(monthly.body).pipe(
+    Effect.mapError(
+      () =>
+        new XaiUsageError({
+          operation: "monthly-decode",
+          message: "xAI monthly billing response was malformed.",
+        }),
+    ),
+  );
+  const decodedWeekly =
+    weekly && weekly.status >= 200 && weekly.status < 300
+      ? yield* Schema.decodeUnknownEffect(WeeklyBillingSchema)(weekly.body).pipe(
+          Effect.catch(() => Effect.void),
+        )
+      : undefined;
+  const now = yield* Clock.currentTimeMillis;
+  return parseUsageSnapshot(decodedMonthly, decodedWeekly, now);
+});
