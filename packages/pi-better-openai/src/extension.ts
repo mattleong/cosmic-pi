@@ -36,6 +36,15 @@ const COMMAND = "fast";
 const OPENAI_STATUS_COMMAND = "openai-usage";
 const FLAG = "fast";
 const SERVICE_TIER = FAST_SERVICE_TIER;
+
+export interface BetterOpenAIExtensionDependencies {
+  readonly startupEffect: (generation: number) => Effect.Effect<void, never, OpenAIUsageService>;
+}
+
+const defaultDependencies: BetterOpenAIExtensionDependencies = {
+  startupEffect: () => OpenAIUsageService.use(() => Effect.void),
+};
+
 const hasTerminalUI = (ctx: ExtensionContext) =>
   ctx.mode === "tui" || (ctx.mode === undefined && ctx.hasUI);
 const requiredConfig = (projection: MutableRef.MutableRef<OpenAIProjection>): ResolvedConfig => {
@@ -48,6 +57,14 @@ const requiredConfig = (projection: MutableRef.MutableRef<OpenAIProjection>): Re
 };
 
 export default function betterOpenAI(pi: ExtensionAPI): void {
+  betterOpenAIWithDependencies(pi, defaultDependencies);
+}
+
+/** Internal seam for deterministic lifecycle/finalizer tests. */
+export function betterOpenAIWithDependencies(
+  pi: ExtensionAPI,
+  dependencies: BetterOpenAIExtensionDependencies,
+): void {
   const projection = makeProjection();
   const fastController = new FastController(SERVICE_TIER);
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
@@ -92,8 +109,27 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     );
     return makeOpenAIRuntime(pi, Layer.merge(usage, image).pipe(Layer.provide(nodePlatformLayer)));
   };
-  let runtime: ReturnType<typeof makeRuntime> | undefined;
+  type OpenAIRuntime = ReturnType<typeof makeRuntime>;
+  let runtime: OpenAIRuntime | undefined;
   let removeRuntimeAbortListener: (() => void) | undefined;
+  const clearRuntimeAbortListener = () => {
+    const remove = removeRuntimeAbortListener;
+    removeRuntimeAbortListener = undefined;
+    try {
+      remove?.();
+    } catch {
+      // A malformed session signal cannot block runtime disposal.
+    }
+  };
+  const disposals = new WeakMap<OpenAIRuntime, Promise<void>>();
+  const disposeNow = (target: OpenAIRuntime | undefined): Promise<void> => {
+    if (!target) return Promise.resolve();
+    const existing = disposals.get(target);
+    if (existing) return existing;
+    const disposal = target.dispose().catch(() => undefined);
+    disposals.set(target, disposal);
+    return disposal;
+  };
   let lifecycle = Promise.resolve();
   const run = <A, E>(
     effect: Effect.Effect<A, E, OpenAIUsageService | OpenAIImageService>,
@@ -175,17 +211,16 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     const session = ++generation;
+    const previous = runtime;
+    runtime = undefined;
+    currentContext = undefined;
+    clearRuntimeAbortListener();
+    const previousDisposal = disposeNow(previous);
     cosmicUiAdapter.shutdown();
+
     lifecycle = lifecycle
       .catch(() => undefined)
-      .then(() => {
-        const previous = runtime;
-        removeRuntimeAbortListener?.();
-        removeRuntimeAbortListener = undefined;
-        runtime = undefined;
-        currentContext = undefined;
-        return previous?.dispose();
-      })
+      .then(() => previousDisposal)
       .then(() => {
         if (session !== generation) return;
         resetProjection(projection);
@@ -197,59 +232,72 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
         runtime = next;
         const abort = () => {
           if (session !== generation || runtime !== next) return;
-          ++generation;
+          const abortedSession = ++generation;
+          runtime = undefined;
+          currentContext = undefined;
+          clearRuntimeAbortListener();
+          const disposal = disposeNow(next);
+          cosmicUiAdapter.shutdown();
           lifecycle = lifecycle
             .catch(() => undefined)
+            .then(() => disposal)
             .then(() => {
-              removeRuntimeAbortListener?.();
-              removeRuntimeAbortListener = undefined;
-              if (runtime === next) {
-                runtime = undefined;
-                currentContext = undefined;
-              }
-              return next.dispose();
-            })
-            .then(() => resetProjection(projection));
+              if (abortedSession === generation && !runtime) resetProjection(projection);
+            });
+          return disposal;
         };
         ctx.signal?.addEventListener("abort", abort, { once: true });
         removeRuntimeAbortListener = () => ctx.signal?.removeEventListener("abort", abort);
-        return next
-          .run(
-            OpenAIUsageService.use(() => Effect.void),
-            ctx.signal,
-          )
-          .then(() => {
-            if (session !== generation) return;
-            const cfg = config(ctx);
-            fastController.initializeForSession(ctx, cfg, pi.getFlag(FLAG) === true);
-            if (hasTerminalUI(ctx)) cosmicUiAdapter.detectHost();
-            else cosmicUiAdapter.shutdown();
-            footerController.refreshTotals(ctx);
-            updateFooter(ctx);
-            if (fastController.desiredActive && !fastController.active)
-              ctx.ui.notify(fastController.unsupportedRequestMessage(ctx), "warning");
-            if (fastController.active) ctx.ui.notify(fastController.stateText(ctx), "info");
-            return next.run(
-              OpenAIUsageService.use((service) =>
-                service.persistFast(fastController.active, fastController.desiredActive),
-              ),
-              ctx.signal,
-            );
+        if (ctx.signal?.aborted) {
+          runtime = undefined;
+          currentContext = undefined;
+          clearRuntimeAbortListener();
+          const disposal = disposeNow(next);
+          cosmicUiAdapter.shutdown();
+          try {
+            ctx.ui.notify("Better OpenAI failed to start.", "warning");
+          } catch {
+            // Host notification failures do not prevent runtime cleanup.
+          }
+          return disposal.then(() => {
+            if (session === generation && !runtime) resetProjection(projection);
           });
+        }
+        return next.run(dependencies.startupEffect(session), ctx.signal).then(() => {
+          if (session !== generation || runtime !== next) return;
+          const cfg = config(ctx);
+          fastController.initializeForSession(ctx, cfg, pi.getFlag(FLAG) === true);
+          if (hasTerminalUI(ctx)) cosmicUiAdapter.detectHost();
+          else cosmicUiAdapter.shutdown();
+          footerController.refreshTotals(ctx);
+          updateFooter(ctx);
+          if (fastController.desiredActive && !fastController.active)
+            ctx.ui.notify(fastController.unsupportedRequestMessage(ctx), "warning");
+          if (fastController.active) ctx.ui.notify(fastController.stateText(ctx), "info");
+          return next.run(
+            OpenAIUsageService.use((service) =>
+              service.persistFast(fastController.active, fastController.desiredActive),
+            ),
+            ctx.signal,
+          );
+        });
       })
       .catch(() => {
         if (session !== generation) return;
         const failed = runtime;
-        removeRuntimeAbortListener?.();
-        removeRuntimeAbortListener = undefined;
         runtime = undefined;
         currentContext = undefined;
-        return (failed?.dispose() ?? Promise.resolve())
-          .catch(() => undefined)
-          .then(() => {
-            resetProjection(projection);
-            ctx.ui.notify("Better OpenAI failed to start.", "warning");
-          });
+        clearRuntimeAbortListener();
+        const disposal = disposeNow(failed);
+        cosmicUiAdapter.shutdown();
+        try {
+          ctx.ui.notify("Better OpenAI failed to start.", "warning");
+        } catch {
+          // Host notification failures do not prevent runtime cleanup.
+        }
+        return disposal.then(() => {
+          if (session === generation && !runtime) resetProjection(projection);
+        });
       });
     return lifecycle;
   });
@@ -304,21 +352,21 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
     );
   });
   pi.on("session_shutdown", () => {
-    ++generation;
+    const shutdownSession = ++generation;
+    const current = runtime;
+    runtime = undefined;
+    currentContext = undefined;
+    clearRuntimeAbortListener();
+    const disposal = disposeNow(current);
     cosmicUiAdapter.shutdown();
     footerController.invalidateContextUsage();
     footerController.invalidateSessionName();
     lifecycle = lifecycle
       .catch(() => undefined)
+      .then(() => disposal)
       .then(() => {
-        const current = runtime;
-        removeRuntimeAbortListener?.();
-        removeRuntimeAbortListener = undefined;
-        runtime = undefined;
-        currentContext = undefined;
-        return current?.dispose();
-      })
-      .then(() => resetProjection(projection));
+        if (shutdownSession === generation && !runtime) resetProjection(projection);
+      });
     return lifecycle;
   });
   pi.on("before_provider_request", (event, ctx) => {

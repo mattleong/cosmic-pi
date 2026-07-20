@@ -1,13 +1,17 @@
 // @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import betterOpenAI from "../src/extension.ts";
+import betterOpenAI, {
+  betterOpenAIWithDependencies,
+  type BetterOpenAIExtensionDependencies,
+} from "../src/extension.ts";
 
 type Handler = (event: any, ctx: ExtensionContext) => unknown;
 type Command = (args: string, ctx: ExtensionContext) => unknown;
@@ -18,7 +22,7 @@ afterEach(() => {
   delete process.env.PI_CODING_AGENT_DIR;
 });
 
-function harness() {
+function harness(dependencies?: BetterOpenAIExtensionDependencies) {
   const cwd = mkdtempSync(join(tmpdir(), "openai-extension-"));
   const agentDir = mkdtempSync(join(tmpdir(), "openai-agent-"));
   directories.push(cwd, agentDir);
@@ -71,11 +75,25 @@ function harness() {
     },
     getContextUsage: () => ({ contextWindow: 100, percent: 1 }),
   } as unknown as ExtensionContext;
-  betterOpenAI(pi);
+  if (dependencies) betterOpenAIWithDependencies(pi, dependencies);
+  else betterOpenAI(pi);
   const emit = async (name: string, event: any = {}, useCtx = ctx) => {
     for (const handler of handlers.get(name) ?? []) await handler(event, useCtx);
   };
   return { ctx, handlers, commands, tool, pi, emit };
+}
+
+function stalledStartup() {
+  let signalStarted: (() => void) | undefined;
+  let interruptions = 0;
+  const started = new Promise<void>((resolve) => {
+    signalStarted = resolve;
+  });
+  const effect = Effect.sync(() => signalStarted?.()).pipe(
+    Effect.andThen(Effect.never),
+    Effect.ensuring(Effect.sync(() => void interruptions++)),
+  );
+  return { effect, started, interruptions: () => interruptions };
 }
 
 describe("Better OpenAI session boundary", () => {
@@ -108,17 +126,58 @@ describe("Better OpenAI session boundary", () => {
     await h.emit("session_shutdown");
   });
 
-  test("disposes the session runtime when its host signal aborts", async () => {
-    const h = harness();
+  test("replacement immediately interrupts a stalled session startup", async () => {
+    const stalled = stalledStartup();
+    const h = harness({
+      startupEffect: (generation) => (generation === 1 ? stalled.effect : Effect.void),
+    });
+    const first = h.emit("session_start");
+    await stalled.started;
+
+    const second = h.emit("session_start");
+    await Promise.all([first, second]);
+
+    expect(stalled.interruptions()).toBe(1);
+    expect(h.ctx.ui.notify).not.toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
+    await h.commands.get("openai-usage")?.("", h.ctx);
+    expect(h.ctx.ui.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
+    await h.emit("session_shutdown");
+  });
+
+  test("host abort immediately interrupts a stalled startup and removes its listener", async () => {
+    const stalled = stalledStartup();
     const controller = new AbortController();
+    const addEventListener = vi.spyOn(controller.signal, "addEventListener");
+    const removeEventListener = vi.spyOn(controller.signal, "removeEventListener");
+    const h = harness({ startupEffect: () => stalled.effect });
     h.ctx.signal = controller.signal;
-    await h.emit("session_start");
+    const startup = h.emit("session_start");
+    await stalled.started;
+    const hostAbortListener = addEventListener.mock.calls[0]?.[1];
+
     controller.abort(new Error("session replaced"));
-    await nextTurn();
+    await startup;
+
+    expect(stalled.interruptions()).toBe(1);
+    expect(hostAbortListener).toBeTypeOf("function");
+    expect(removeEventListener).toHaveBeenCalledWith("abort", hostAbortListener);
+    expect(h.ctx.ui.notify).not.toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
     await expect(
       h.tool.execute("call", { prompt: "x" }, undefined, undefined, h.ctx),
     ).rejects.toThrow("has not started");
-    await h.emit("session_shutdown");
+  });
+
+  test("shutdown immediately interrupts a stalled session startup", async () => {
+    const stalled = stalledStartup();
+    const h = harness({ startupEffect: () => stalled.effect });
+    const startup = h.emit("session_start");
+    await stalled.started;
+
+    const shutdown = h.emit("session_shutdown");
+    await Promise.all([startup, shutdown]);
+
+    expect(stalled.interruptions()).toBe(1);
+    expect(h.ctx.ui.notify).not.toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
   });
 
   test("disposes and clears a runtime when startup is already aborted", async () => {
