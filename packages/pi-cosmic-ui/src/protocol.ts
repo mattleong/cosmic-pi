@@ -1,3 +1,6 @@
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
 export const COSMIC_UI_PROTOCOL_VERSION = 1 as const;
 export const COSMIC_UI_HOST_QUERY = "cosmic-ui:v1:host:query";
 export const COSMIC_UI_FOOTER_UPSERT = "cosmic-ui:v1:footer:upsert";
@@ -16,13 +19,11 @@ export type CosmicFooterPlacement =
 export interface CosmicFooterTheme {
   fg(color: string, value: string): string;
 }
-
 export interface CosmicFooterSurfaceRenderOptions {
   width: number;
   placement: CosmicFooterPlacement;
   theme: CosmicFooterTheme;
 }
-
 export interface CosmicFooterTextContribution {
   kind: "text";
   id: string;
@@ -34,7 +35,6 @@ export interface CosmicFooterTextContribution {
   priority?: number;
   order?: number;
 }
-
 export interface CosmicFooterSurfaceContribution {
   kind: "surface";
   id: string;
@@ -47,125 +47,117 @@ export interface CosmicFooterSurfaceContribution {
   invalidate?(): void;
   dispose?(): void;
 }
-
 export type CosmicFooterContribution =
   | CosmicFooterTextContribution
   | CosmicFooterSurfaceContribution;
-
 export interface CosmicUiHostQuery {
   version: typeof COSMIC_UI_PROTOCOL_VERSION;
   respond(): void;
 }
-
 export interface CosmicFooterUpsertEvent {
   version: typeof COSMIC_UI_PROTOCOL_VERSION;
   owner: string;
   contribution: CosmicFooterContribution;
 }
-
 export interface CosmicFooterRemoveEvent {
   version: typeof COSMIC_UI_PROTOCOL_VERSION;
   owner: string;
   id?: string;
 }
-
 export interface CosmicFooterInvalidateEvent {
   version: typeof COSMIC_UI_PROTOCOL_VERSION;
   owner?: string;
   id?: string;
 }
 
-export function isCosmicUiHostQuery(value: unknown): value is CosmicUiHostQuery {
-  if (!value || typeof value !== "object") return false;
-  const query = value as Partial<CosmicUiHostQuery>;
-  return query.version === COSMIC_UI_PROTOCOL_VERSION && typeof query.respond === "function";
-}
+const NonEmpty = Schema.String.check(Schema.isNonEmpty());
+const HostQueryData = Schema.Struct({
+  version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
+  respond: Schema.Unknown,
+});
+const TextContributionData = Schema.Struct({
+  kind: Schema.Literal("text"),
+  id: NonEmpty,
+  region: Schema.Literals(["identity", "metrics", "details"]),
+  text: Schema.String,
+  compactText: Schema.optional(Schema.String),
+  align: Schema.optional(Schema.Literals(["left", "right"])),
+  tone: Schema.optional(
+    Schema.Literals(["normal", "accent", "dim", "success", "warning", "error"]),
+  ),
+  priority: Schema.optional(Schema.Number),
+  order: Schema.optional(Schema.Number),
+});
+const SurfaceContributionData = Schema.Struct({
+  kind: Schema.Literal("surface"),
+  id: NonEmpty,
+  region: Schema.Literal("media"),
+  preferredWidth: Schema.Number,
+  preferredPlacement: Schema.optional(
+    Schema.Literals(["stacked", "inline-left", "inline-right", "badge", "habitat"]),
+  ),
+  attach: Schema.optional(Schema.Unknown),
+  detach: Schema.optional(Schema.Unknown),
+  render: Schema.Unknown,
+  invalidate: Schema.optional(Schema.Unknown),
+  dispose: Schema.optional(Schema.Unknown),
+});
+const UpsertData = Schema.Struct({
+  version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
+  owner: NonEmpty,
+  contribution: Schema.Union([TextContributionData, SurfaceContributionData]),
+});
+const RemoveData = Schema.Struct({
+  version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
+  owner: NonEmpty,
+  id: Schema.optional(NonEmpty),
+});
+const InvalidateData = Schema.Struct({
+  version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
+  owner: Schema.optional(NonEmpty),
+  id: Schema.optional(NonEmpty),
+});
 
-function optionalString(value: unknown): boolean {
-  return value === undefined || typeof value === "string";
-}
-
-function optionalFiniteNumber(value: unknown): boolean {
-  return value === undefined || (typeof value === "number" && Number.isFinite(value));
-}
-
-function optionalFunction(value: unknown): boolean {
-  return value === undefined || typeof value === "function";
-}
-
-export function isCosmicFooterUpsertEvent(value: unknown): value is CosmicFooterUpsertEvent {
-  if (!value || typeof value !== "object") return false;
-  const event = value as Partial<CosmicFooterUpsertEvent>;
-  const contribution = event.contribution as Partial<CosmicFooterContribution> | undefined;
-  if (
-    event.version !== COSMIC_UI_PROTOCOL_VERSION ||
-    typeof event.owner !== "string" ||
-    !event.owner ||
-    !contribution ||
-    typeof contribution.id !== "string" ||
-    !contribution.id
-  )
-    return false;
-  if (contribution.kind === "text") {
-    return (
-      (contribution.region === "identity" ||
-        contribution.region === "metrics" ||
-        contribution.region === "details") &&
-      typeof contribution.text === "string" &&
-      optionalString(contribution.compactText) &&
-      (contribution.align === undefined ||
-        contribution.align === "left" ||
-        contribution.align === "right") &&
-      (contribution.tone === undefined ||
-        contribution.tone === "normal" ||
-        contribution.tone === "accent" ||
-        contribution.tone === "dim" ||
-        contribution.tone === "success" ||
-        contribution.tone === "warning" ||
-        contribution.tone === "error") &&
-      optionalFiniteNumber(contribution.priority) &&
-      optionalFiniteNumber(contribution.order)
-    );
+const optionalFunction = (value: unknown) => value === undefined || typeof value === "function";
+const decodeSafely = <S extends Schema.ConstraintDecoder<unknown>>(
+  schema: S,
+  value: unknown,
+): S["Type"] | undefined => {
+  try {
+    return Option.getOrUndefined(Schema.decodeUnknownOption(schema)(value));
+  } catch {
+    return undefined;
   }
+};
+
+export function isCosmicUiHostQuery(value: unknown): value is CosmicUiHostQuery {
+  const query = decodeSafely(HostQueryData, value);
+  return query !== undefined && typeof query.respond === "function";
+}
+export function isCosmicFooterUpsertEvent(value: unknown): value is CosmicFooterUpsertEvent {
+  const event = decodeSafely(UpsertData, value);
+  if (!event) return false;
+  const contribution = event.contribution;
+  if (contribution.kind === "text")
+    return (
+      (contribution.priority === undefined || Number.isFinite(contribution.priority)) &&
+      (contribution.order === undefined || Number.isFinite(contribution.order))
+    );
   return (
-    contribution.kind === "surface" &&
-    contribution.region === "media" &&
-    typeof contribution.preferredWidth === "number" &&
     Number.isFinite(contribution.preferredWidth) &&
     contribution.preferredWidth > 0 &&
-    (contribution.preferredPlacement === undefined ||
-      contribution.preferredPlacement === "stacked" ||
-      contribution.preferredPlacement === "inline-left" ||
-      contribution.preferredPlacement === "inline-right" ||
-      contribution.preferredPlacement === "badge" ||
-      contribution.preferredPlacement === "habitat") &&
+    typeof contribution.render === "function" &&
     optionalFunction(contribution.attach) &&
     optionalFunction(contribution.detach) &&
-    typeof contribution.render === "function" &&
     optionalFunction(contribution.invalidate) &&
     optionalFunction(contribution.dispose)
   );
 }
-
 export function isCosmicFooterRemoveEvent(value: unknown): value is CosmicFooterRemoveEvent {
-  if (!value || typeof value !== "object") return false;
-  const event = value as Partial<CosmicFooterRemoveEvent>;
-  return (
-    event.version === COSMIC_UI_PROTOCOL_VERSION &&
-    typeof event.owner === "string" &&
-    Boolean(event.owner) &&
-    (event.id === undefined || (typeof event.id === "string" && Boolean(event.id)))
-  );
+  return decodeSafely(RemoveData, value) !== undefined;
 }
-
 export function isCosmicFooterInvalidateEvent(
   value: unknown,
 ): value is CosmicFooterInvalidateEvent {
-  if (!value || typeof value !== "object") return false;
-  const event = value as Partial<CosmicFooterInvalidateEvent>;
-  return (
-    event.version === COSMIC_UI_PROTOCOL_VERSION &&
-    (event.owner === undefined || (typeof event.owner === "string" && Boolean(event.owner))) &&
-    (event.id === undefined || (typeof event.id === "string" && Boolean(event.id)))
-  );
+  return decodeSafely(InvalidateData, value) !== undefined;
 }

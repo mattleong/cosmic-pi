@@ -1,3 +1,8 @@
+// @effect-diagnostics effect/abortController:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+// @effect-diagnostics effect/processEnv:off
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -15,17 +20,20 @@ function harness(mode: "tui" | "rpc" = "tui") {
   const handlers = new Map<string, Handler[]>();
   const bus = new Map<string, Set<(data: unknown) => void>>();
   const setFooter = vi.fn();
-  const exec = vi.fn(async (command: string, args: string[]) => ({
-    stdout:
-      command === "gh"
-        ? "42\n"
-        : args[0] === "diff"
-          ? "10\t4\tchanged.ts\n"
-          : "## main...origin/main\n M changed.ts\n?? new.ts\n",
-    stderr: "",
-    code: 0,
-    killed: false,
-  }));
+  const unsubscribed = vi.fn();
+  const exec = vi.fn(
+    async (command: string, args: string[], _options?: { signal?: AbortSignal }) => ({
+      stdout:
+        command === "gh"
+          ? "42\n"
+          : args[0] === "diff"
+            ? "10\t4\tchanged.ts\n"
+            : "## main...origin/main\n M changed.ts\n?? new.ts\n",
+      stderr: "",
+      code: 0,
+      killed: false,
+    }),
+  );
   const pi = {
     on(name: string, handler: Handler) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
@@ -41,7 +49,10 @@ function harness(mode: "tui" | "rpc" = "tui") {
         const entries = bus.get(name) ?? new Set();
         entries.add(handler);
         bus.set(name, entries);
-        return () => entries.delete(handler);
+        return () => {
+          entries.delete(handler);
+          unsubscribed(name);
+        };
       },
     },
   } as unknown as ExtensionAPI;
@@ -61,12 +72,48 @@ function harness(mode: "tui" | "rpc" = "tui") {
     ui: { setFooter, notify: vi.fn(), custom: vi.fn() },
   } as unknown as ExtensionContext;
   cosmicUi(pi);
-  return { pi, ctx, handlers, setFooter, exec };
+  return { pi, ctx, handlers, setFooter, exec, unsubscribed };
 }
 
 async function emit(h: ReturnType<typeof harness>, name: string, event: unknown = {}) {
   for (const handler of h.handlers.get(name) ?? []) await handler(event, h.ctx);
 }
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  await vi.waitFor(
+    () => {
+      if (!predicate()) throw new Error("condition did not become true");
+    },
+    { timeout: 1_000, interval: 1 },
+  );
+}
+
+function installPendingExec(h: ReturnType<typeof harness>) {
+  let started = 0;
+  let aborted = 0;
+  h.exec.mockImplementation(
+    (_command: string, _args: string[], options?: { signal?: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        started++;
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            aborted++;
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      }),
+  );
+  return { started: () => started, aborted: () => aborted };
+}
+
+const successfulExec = async (command: string) => ({
+  stdout: command === "gh" ? "7\n" : "## current\n",
+  stderr: "",
+  code: 0,
+  killed: false,
+});
 
 describe("Cosmic UI extension", () => {
   test("answers host queries and installs an ANSI-safe responsive footer in TUI mode", async () => {
@@ -201,6 +248,117 @@ describe("Cosmic UI extension", () => {
     expect(rendered.join("\n")).toContain("second-session");
   });
 
+  test("immediately disposes in-flight startup probes on overlapping session replacement", async () => {
+    const h = harness();
+    const pending = installPendingExec(h);
+    const first = emit(h, "session_start");
+    await waitUntil(() => pending.started() === 2);
+
+    h.exec.mockImplementation(successfulExec);
+    const secondContext = {
+      ...h.ctx,
+      sessionManager: {
+        ...h.ctx.sessionManager,
+        getCwd: () => "/tmp/replacement",
+        getSessionName: () => "replacement",
+      },
+    } as ExtensionContext;
+    const second = Promise.all(
+      (h.handlers.get("session_start") ?? []).map((handler) => handler({}, secondContext)),
+    );
+    await Promise.all([first, second]);
+    expect(pending.aborted()).toBe(2);
+    expect(h.setFooter).toHaveBeenNthCalledWith(2, undefined);
+    const factory = h.setFooter.mock.calls.at(-1)?.[0];
+    const footer = factory(
+      { requestRender: vi.fn() },
+      { fg: (_color: string, text: string) => text },
+      {
+        getGitBranch: () => null,
+        getExtensionStatuses: () => new Map(),
+        getAvailableProviderCount: () => 1,
+        onBranchChange: () => vi.fn(),
+      },
+    );
+    expect(footer.render(100).join("\n")).toContain("/tmp/replacement");
+  });
+
+  test("shutdown during startup survives throwing surfaces and releases every probe", async () => {
+    const h = harness();
+    const callbacks = { attach: vi.fn(), detach: vi.fn(), dispose: vi.fn() };
+    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      owner: "hostile",
+      contribution: {
+        kind: "surface",
+        id: "hostile",
+        region: "media",
+        preferredWidth: 8,
+        render: () => [],
+        attach: () => {
+          callbacks.attach();
+          throw new Error("attach");
+        },
+        detach: () => {
+          callbacks.detach();
+          throw new Error("detach");
+        },
+        dispose: () => {
+          callbacks.dispose();
+          throw new Error("dispose");
+        },
+      },
+    });
+    const pending = installPendingExec(h);
+    const startup = emit(h, "session_start");
+    await waitUntil(() => pending.started() === 2);
+    const factory = h.setFooter.mock.calls[0]?.[0];
+    expect(() =>
+      factory(
+        { requestRender: vi.fn() },
+        { fg: (_color: string, text: string) => text },
+        {
+          getGitBranch: () => null,
+          getExtensionStatuses: () => new Map(),
+          getAvailableProviderCount: () => 1,
+          onBranchChange: () => vi.fn(),
+        },
+      ),
+    ).not.toThrow();
+    await Promise.all([startup, emit(h, "session_shutdown")]);
+    expect(pending.aborted()).toBe(2);
+    expect(callbacks.attach).toHaveBeenCalledOnce();
+    expect(callbacks.detach).toHaveBeenCalledOnce();
+    expect(callbacks.dispose).toHaveBeenCalledOnce();
+    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+  });
+
+  test("reports startup I/O failure and permits a clean subsequent session", async () => {
+    const h = harness();
+    h.ctx.cwd = "\0invalid";
+    await emit(h, "session_start");
+    expect(h.ctx.ui.notify).toHaveBeenCalledWith("Cosmic UI failed to start.", "warning");
+    expect(h.setFooter).not.toHaveBeenCalled();
+
+    h.ctx.cwd = process.cwd();
+    await emit(h, "session_start");
+    expect(h.setFooter).toHaveBeenCalledOnce();
+    await emit(h, "session_shutdown");
+  });
+
+  test("session abort interrupts startup probes without waiting for them", async () => {
+    const h = harness();
+    const controller = new AbortController();
+    h.ctx.signal = controller.signal;
+    const pending = installPendingExec(h);
+    const startup = emit(h, "session_start");
+    await waitUntil(() => pending.started() === 2);
+    controller.abort();
+    await startup;
+    await waitUntil(() => pending.aborted() === 2);
+    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+  });
+
   test("polls git status so external commits and edits refresh automatically", async () => {
     vi.useFakeTimers();
     try {
@@ -237,6 +395,25 @@ describe("Cosmic UI extension", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("session abort removes the footer and interrupts the active runtime", async () => {
+    const h = harness();
+    const controller = new AbortController();
+    h.ctx.signal = controller.signal;
+    await emit(h, "session_start");
+    controller.abort();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+  });
+
+  test("releases protocol subscriptions exactly once on repeated shutdown", async () => {
+    const h = harness();
+    await emit(h, "session_start");
+    await emit(h, "session_shutdown");
+    await emit(h, "session_shutdown");
+    expect(h.unsubscribed).toHaveBeenCalledTimes(4);
   });
 
   test("does not install terminal footer UI in RPC mode", async () => {

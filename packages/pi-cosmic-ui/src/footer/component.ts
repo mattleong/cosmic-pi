@@ -1,4 +1,3 @@
-import { basename, sep } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -32,14 +31,17 @@ export interface FooterTotals {
   cost: number;
 }
 
-export function abbreviateHomePath(
-  path: string,
-  home = process.env.HOME || process.env.USERPROFILE,
-) {
+export function abbreviateHomePath(path: string, home?: string) {
   if (!home) return path;
   if (path === home) return "~";
-  const prefix = home.endsWith(sep) ? home : `${home}${sep}`;
+  const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  const prefix = home.endsWith(separator) ? home : `${home}${separator}`;
   return path.startsWith(prefix) ? `~/${path.slice(prefix.length)}` : path;
+}
+
+function basename(path: string): string {
+  const normalized = path.replaceAll("\\", "/").replace(/\/$/, "");
+  return normalized.slice(normalized.lastIndexOf("/") + 1) || normalized;
 }
 
 function sanitizeStatus(text: string) {
@@ -54,8 +56,9 @@ function builtinContributions(
   contextUsage: ReturnType<ExtensionContext["getContextUsage"]>,
   gitStatus: FooterGitStatus | undefined,
   pullRequestNumber: number | undefined,
+  homeDirectory: string | undefined,
 ): CosmicFooterTextContribution[] {
-  const location = abbreviateHomePath(ctx.sessionManager.getCwd());
+  const location = abbreviateHomePath(ctx.sessionManager.getCwd(), homeDirectory);
   const branch = footerData.getGitBranch();
   const sessionName = ctx.sessionManager.getSessionName();
 
@@ -254,7 +257,8 @@ function ordered(
 
 export function createFooterComponent(options: {
   pi: ExtensionAPI;
-  ctx: ExtensionContext;
+  ctx(): ExtensionContext;
+  homeDirectory(): string | undefined;
   footerData: ReadonlyFooterDataProvider;
   theme: CosmicFooterTheme;
   registry: FooterContributionRegistry;
@@ -263,11 +267,11 @@ export function createFooterComponent(options: {
   gitStatus(): FooterGitStatus | undefined;
   pullRequestNumber(): number | undefined;
 }) {
-  const { pi, ctx, footerData, theme, registry } = options;
+  const { pi, footerData, theme, registry } = options;
   let contextUsageCached = false;
   let cachedContextUsage: ReturnType<ExtensionContext["getContextUsage"]>;
   let cachedLeafId: string | null | undefined;
-  let cachedModel = ctx.model;
+  let cachedModel = options.ctx().model;
 
   function invalidateContextUsage(): void {
     contextUsageCached = false;
@@ -277,6 +281,7 @@ export function createFooterComponent(options: {
   }
 
   function contextUsage(): ReturnType<ExtensionContext["getContextUsage"]> {
+    const ctx = options.ctx();
     const leafId = ctx.sessionManager.getLeafId();
     if (!contextUsageCached || leafId !== cachedLeafId || ctx.model !== cachedModel) {
       cachedContextUsage = ctx.getContextUsage();
@@ -296,6 +301,7 @@ export function createFooterComponent(options: {
     render(width: number): string[] {
       if (width <= 0) return [];
       const config = options.config();
+      const ctx = options.ctx();
       const currentContextUsage = contextUsage();
       const contributions: CosmicFooterContribution[] = [
         ...builtinContributions(
@@ -306,6 +312,7 @@ export function createFooterComponent(options: {
           currentContextUsage,
           options.gitStatus(),
           options.pullRequestNumber(),
+          options.homeDirectory(),
         ),
         ...registry.list(),
       ];
@@ -335,7 +342,7 @@ export function createFooterComponent(options: {
             ? {
                 ...entry,
                 text: `⚡${entry.text}`,
-                compactText: entry.compactText ? `⚡${entry.compactText}` : undefined,
+                ...(entry.compactText ? { compactText: `⚡${entry.compactText}` } : {}),
               }
             : entry,
         );
@@ -402,9 +409,8 @@ export function createFooterComponent(options: {
         try {
           const surfaceLines = surface.render({ width: surfaceWidth, placement, theme });
           lines = combineSurface(surfaceLines, lines, width, placement, surfaceWidth);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.warn(`[pi-cosmic-ui] Failed to render footer surface ${surface.id}: ${message}`);
+        } catch {
+          // Third-party surfaces are isolated from the synchronous footer renderer.
         }
       }
       return lines.map((line) =>

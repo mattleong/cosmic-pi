@@ -36,19 +36,26 @@
   },
   "scripts": {
     "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "pretypecheck": "pnpm --filter pi-cosmic-core build",
     "validate": "pnpm check && pnpm test",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --deny-warnings .",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
+    "pretest": "pnpm --filter pi-cosmic-core build",
     "test": "vitest run",
     "prepublishOnly": "pnpm validate",
     "pack:dry": "pnpm pack --dry-run"
   },
+  "dependencies": {
+    "effect": "catalog:",
+    "pi-cosmic-core": "workspace:*"
+  },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.80.8",
     "@earendil-works/pi-tui": "0.80.8",
+    "@effect/vitest": "catalog:",
     "@types/node": "~22.19.0",
     "oxfmt": "^0.47.0",
     "oxlint": "^1.62.0",

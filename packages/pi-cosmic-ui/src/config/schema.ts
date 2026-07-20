@@ -1,3 +1,5 @@
+import * as Schema from "effect/Schema";
+
 export const FOOTER_DENSITIES = ["auto", "comfortable", "compact"] as const;
 export const MEDIA_PLACEMENTS = [
   "stacked",
@@ -7,29 +9,31 @@ export const MEDIA_PLACEMENTS = [
   "habitat",
 ] as const;
 
-export type FooterDensity = (typeof FOOTER_DENSITIES)[number];
-export type MediaPlacement = (typeof MEDIA_PLACEMENTS)[number];
+export const FooterDensitySchema = Schema.Literals(FOOTER_DENSITIES);
+export const MediaPlacementSchema = Schema.Literals(MEDIA_PLACEMENTS);
+export type FooterDensity = typeof FooterDensitySchema.Type;
+export type MediaPlacement = typeof MediaPlacementSchema.Type;
 
 export interface CosmicUiConfigFile {
-  footer?: {
-    enabled?: boolean;
-    density?: FooterDensity;
-    order?: string[];
-    hidden?: string[];
-    mediaPlacement?: MediaPlacement;
+  readonly footer?: {
+    readonly enabled?: boolean;
+    readonly density?: FooterDensity;
+    readonly order?: readonly string[];
+    readonly hidden?: readonly string[];
+    readonly mediaPlacement?: MediaPlacement;
   };
 }
 
 export interface ResolvedCosmicUiConfig {
-  configPath: string;
-  projectConfigPath: string;
-  globalConfigPath: string;
-  footer: {
-    enabled: boolean;
-    density: FooterDensity;
-    order: string[];
-    hidden: string[];
-    mediaPlacement: MediaPlacement;
+  readonly configPath: string;
+  readonly projectConfigPath: string;
+  readonly globalConfigPath: string;
+  readonly footer: {
+    readonly enabled: boolean;
+    readonly density: FooterDensity;
+    readonly order: readonly string[];
+    readonly hidden: readonly string[];
+    readonly mediaPlacement: MediaPlacement;
   };
 }
 
@@ -47,9 +51,9 @@ export const DEFAULT_FOOTER_ORDER = [
   "openai.usage",
   "xai.usage",
   "extensions",
-];
+] as const;
 
-export const DEFAULT_CONFIG: Required<CosmicUiConfigFile> = {
+export const DEFAULT_CONFIG: { readonly footer: ResolvedCosmicUiConfig["footer"] } = {
   footer: {
     enabled: true,
     density: "auto",

@@ -4,9 +4,10 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Container, SettingsList, Text, type SettingItem } from "@earendil-works/pi-tui";
+import * as Effect from "effect/Effect";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { FOOTER_DENSITIES, MEDIA_PLACEMENTS } from "../config/schema.ts";
-import { updateFooterConfig } from "../config/store.ts";
+import { CosmicUiService } from "../host-service.ts";
 
 const VISIBILITY_IDS = [
   "model",
@@ -28,16 +29,18 @@ export function registerSettingsCommand(
   pi: ExtensionAPI,
   options: {
     config(): ResolvedCosmicUiConfig;
-    setConfig(config: ResolvedCosmicUiConfig): void;
+    updateContext(ctx: ExtensionContext): void;
     update(ctx: ExtensionContext): void;
+    run<A, E>(effect: Effect.Effect<A, E, CosmicUiService>, signal?: AbortSignal): Promise<A>;
   },
 ): void {
   pi.registerCommand("cosmic-ui", {
     description: "Configure Cosmic UI elements",
-    handler: async (_args, ctx) => {
+    handler: (_args, ctx) => {
+      options.updateContext(ctx);
       if (ctx.mode !== "tui") {
         ctx.ui.notify("Cosmic UI settings require interactive TUI mode.", "warning");
-        return;
+        return Promise.resolve();
       }
       const cfg = options.config();
       const items: SettingItem[] = [
@@ -66,7 +69,7 @@ export function registerSettingsCommand(
           values: ["true", "false"],
         })),
       ];
-      await ctx.ui.custom((tui, theme, _keybindings, done) => {
+      return ctx.ui.custom((tui, theme, _keybindings, done) => {
         const container = new Container();
         container.addChild(new Text(theme.fg("accent", theme.bold("Cosmic UI")), 1, 1));
         const list = new SettingsList(
@@ -74,7 +77,6 @@ export function registerSettingsCommand(
           Math.min(14, items.length + 2),
           getSettingsListTheme(),
           (id, value) => {
-            const current = options.config();
             let patch: Partial<ResolvedCosmicUiConfig["footer"]>;
             if (id === "enabled") patch = { enabled: value === "true" };
             else if (id === "density")
@@ -83,17 +85,20 @@ export function registerSettingsCommand(
               patch = {
                 mediaPlacement: value as ResolvedCosmicUiConfig["footer"]["mediaPlacement"],
               };
-            else {
-              const target = id.slice("visible:".length);
-              const hidden = new Set(current.footer.hidden);
-              if (value === "true") hidden.delete(target);
-              else hidden.add(target);
-              patch = { hidden: [...hidden] };
-            }
-            options.setConfig(updateFooterConfig(ctx.cwd, current, patch));
-            list.updateValue(id, value);
-            options.update(ctx);
-            tui.requestRender();
+            else patch = {};
+            const update = id.startsWith("visible:")
+              ? CosmicUiService.use((service) =>
+                  service.setFooterVisibility(id.slice("visible:".length), value === "true"),
+                )
+              : CosmicUiService.use((service) => service.updateFooterConfig(patch));
+            void options
+              .run(update, ctx.signal)
+              .then(() => {
+                list.updateValue(id, value);
+                options.update(ctx);
+                tui.requestRender();
+              })
+              .catch(() => ctx.ui.notify("Unable to update Cosmic UI configuration.", "error"));
           },
           () => done(undefined),
           { enableSearch: true },

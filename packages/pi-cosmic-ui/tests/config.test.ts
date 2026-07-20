@@ -1,49 +1,108 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
+// @effect-diagnostics effect/strictEffectProvide:off
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as Path from "effect/Path";
+import {
+  JsonDocumentError,
+  JsonDocumentStore,
+  nodePlatformLayer,
+  type JsonDocumentStoreShape,
+} from "pi-cosmic-core";
 import { configPaths, resolveConfig, updateFooterConfig } from "../src/config/store.ts";
 
-const dirs: string[] = [];
-afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+const withTempConfig = <A, E>(
+  run: (values: {
+    root: string;
+    cwd: string;
+    agent: string;
+  }) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | JsonDocumentStore>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "cosmic-ui-" });
+    const cwd = path.join(root, "project");
+    const agent = path.join(root, "agent");
+    yield* fs.makeDirectory(cwd, { recursive: true });
+    return yield* run({ root, cwd, agent });
+  }).pipe(Effect.scoped, Effect.provide(nodePlatformLayer));
 
 describe("Cosmic UI config", () => {
-  test("merges project overrides and preserves unknown fields when settings change", () => {
-    const root = mkdtempSync(join(tmpdir(), "cosmic-ui-"));
-    dirs.push(root);
-    const cwd = join(root, "project");
-    const agent = join(root, "agent");
-    mkdirSync(cwd, { recursive: true });
-    const paths = configPaths(cwd, agent);
-    mkdirSync(join(cwd, ".pi", "extensions"), { recursive: true });
-    writeFileSync(
-      paths.project,
-      JSON.stringify({ custom: 42, footer: { density: "compact", future: true } }),
+  it.effect("merges valid fields independently and preserves unknown fields", () =>
+    withTempConfig(({ cwd, agent }) =>
+      Effect.gen(function* () {
+        const documents = yield* JsonDocumentStore;
+        const paths = yield* configPaths(cwd, agent);
+        yield* documents.writeObject(paths.global, {
+          footer: { enabled: false, density: "comfortable", hidden: ["metrics"] },
+        });
+        yield* documents.writeObject(paths.project, {
+          custom: 42,
+          footer: { density: "compact", enabled: "bad", future: true },
+        });
+        const config = yield* resolveConfig(cwd, agent);
+        expect(config.footer).toMatchObject({
+          enabled: false,
+          density: "compact",
+          hidden: ["metrics"],
+        });
+        yield* updateFooterConfig(cwd, agent, config, { enabled: true });
+        expect(yield* documents.readObject(paths.project)).toEqual({
+          custom: 42,
+          footer: { density: "compact", enabled: true, future: true },
+        });
+      }),
+    ),
+  );
+
+  it.effect("logs a safe diagnostic when an existing config cannot be read", () => {
+    const messages: string[] = [];
+    const failure = new JsonDocumentError({
+      operation: "read",
+      path: "/secret/path",
+      message: "credential=do-not-log",
+    });
+    const service: JsonDocumentStoreShape = {
+      exists: () => Effect.succeed(true),
+      readObject: () => Effect.fail(failure),
+      writeObject: () => Effect.fail(failure),
+      updateObject: () => Effect.fail(failure),
+    };
+    const logger = Logger.make(({ message }) => {
+      messages.push(String(message));
+    });
+    return Effect.gen(function* () {
+      const config = yield* resolveConfig("/project", "/agent");
+      expect(config.footer.enabled).toBe(true);
+      expect(messages.join(" ")).toContain("Unable to read a Cosmic UI configuration document");
+      expect(messages.join(" ")).not.toContain("secret");
+      expect(messages.join(" ")).not.toContain("credential");
+    }).pipe(
+      Effect.provide(Layer.merge(Layer.succeed(JsonDocumentStore, service), Path.layer)),
+      Effect.withLogger(logger),
     );
-
-    const config = resolveConfig(cwd, agent);
-    expect(config.footer.density).toBe("compact");
-    updateFooterConfig(cwd, config, { enabled: false }, agent);
-    const raw = JSON.parse(readFileSync(paths.project, "utf8"));
-    expect(raw.custom).toBe(42);
-    expect(raw.footer.future).toBe(true);
-    expect(raw.footer.enabled).toBe(false);
   });
 
-  test("warns about malformed config and refuses to overwrite it", () => {
-    const root = mkdtempSync(join(tmpdir(), "cosmic-ui-"));
-    dirs.push(root);
-    const cwd = join(root, "project");
-    const agent = join(root, "agent");
-    const paths = configPaths(cwd, agent);
-    mkdirSync(join(cwd, ".pi", "extensions"), { recursive: true });
-    writeFileSync(paths.project, "{not-json", "utf8");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-    const config = resolveConfig(cwd, agent);
-    expect(warn).toHaveBeenCalledOnce();
-    expect(() => updateFooterConfig(cwd, config, { enabled: false }, agent)).toThrow();
-    expect(readFileSync(paths.project, "utf8")).toBe("{not-json");
-    warn.mockRestore();
-  });
+  it.effect("falls back on malformed config and refuses to overwrite it", () =>
+    withTempConfig(({ cwd, agent }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* configPaths(cwd, agent);
+        yield* fs.makeDirectory((yield* Path.Path).dirname(paths.project), { recursive: true });
+        yield* fs.writeFileString(paths.project, "{not-json");
+        const config = yield* resolveConfig(cwd, agent);
+        expect(config.footer.enabled).toBe(true);
+        expect(config.configPath).toBe(paths.project);
+        expect(
+          yield* Effect.exit(updateFooterConfig(cwd, agent, config, { enabled: false })).pipe(
+            Effect.map((exit) => exit._tag),
+          ),
+        ).toBe("Failure");
+        expect(yield* fs.readFileString(paths.project)).toBe("{not-json");
+      }),
+    ),
+  );
 });

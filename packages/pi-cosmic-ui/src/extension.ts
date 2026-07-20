@@ -1,9 +1,20 @@
+/** Cosmic UI host with one Effect-managed runtime per Pi session. */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { resolveConfig } from "./config/store.ts";
-import type { ResolvedCosmicUiConfig } from "./config/schema.ts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as MutableRef from "effect/MutableRef";
+import { nodePlatformLayer, PiApi } from "pi-cosmic-core";
+import { makeCosmicUiRuntime } from "./boundary/runtime.ts";
+import { DEFAULT_CONFIG, type ResolvedCosmicUiConfig } from "./config/schema.ts";
 import { createFooterComponent, type FooterTotals } from "./footer/component.ts";
-import { applyGitNumstat, parseGitStatus, type FooterGitStatus } from "./footer/git.ts";
 import { FooterContributionRegistry } from "./footer/registry.ts";
+import {
+  CosmicProbeError,
+  CosmicUiService,
+  emptyTotals,
+  invalidateProbes,
+  makeProjection,
+} from "./host-service.ts";
 import {
   COSMIC_UI_FOOTER_INVALIDATE,
   COSMIC_UI_FOOTER_REMOVE,
@@ -16,260 +27,358 @@ import {
 } from "./protocol.ts";
 import { registerSettingsCommand } from "./settings/controller.ts";
 
-const GIT_REFRESH_INTERVAL_MS = 2_000;
-const PULL_REQUEST_REFRESH_INTERVAL_MS = 30_000;
+const terminalUi = (ctx: ExtensionContext) => ctx.mode === "tui";
 
-const EMPTY_TOTALS = (): FooterTotals => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  cost: 0,
-});
-
-function terminalUi(ctx: ExtensionContext): boolean {
-  return ctx.mode === "tui";
+function totalsFrom(ctx: ExtensionContext): FooterTotals {
+  const totals = emptyTotals();
+  for (const entry of ctx.sessionManager.getEntries()) {
+    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+    totals.input += entry.message.usage.input;
+    totals.output += entry.message.usage.output;
+    totals.cacheRead += entry.message.usage.cacheRead;
+    totals.cacheWrite += entry.message.usage.cacheWrite;
+    totals.cost += entry.message.usage.cost.total;
+  }
+  return totals;
 }
 
 export default function cosmicUi(pi: ExtensionAPI): void {
   const registry = new FooterContributionRegistry();
-  let config: ResolvedCosmicUiConfig | undefined;
-  let totals = EMPTY_TOTALS();
-  let installed = false;
+  const projection = makeProjection();
+  let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
   let installedContext: ExtensionContext | undefined;
   let footerComponent: ReturnType<typeof createFooterComponent> | undefined;
-  let gitStatus: FooterGitStatus | undefined;
-  let pullRequestNumber: number | undefined;
-  let pullRequestCheckedAt = 0;
-  let gitRefreshTimer: ReturnType<typeof setInterval> | undefined;
+  let subscriptions: Array<() => void> = [];
 
-  const refreshTotals = (ctx: ExtensionContext) => {
-    totals = EMPTY_TOTALS();
-    for (const entry of ctx.sessionManager.getEntries()) {
-      if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-      totals.input += entry.message.usage.input;
-      totals.output += entry.message.usage.output;
-      totals.cacheRead += entry.message.usage.cacheRead;
-      totals.cacheWrite += entry.message.usage.cacheWrite;
-      totals.cost += entry.message.usage.cost.total;
-    }
+  const config = (): ResolvedCosmicUiConfig =>
+    MutableRef.get(projection).config ?? {
+      configPath: "",
+      projectConfigPath: "",
+      globalConfigPath: "",
+      footer: { ...DEFAULT_CONFIG.footer },
+    };
+  const updateContext = (ctx: ExtensionContext) => {
+    if (currentContext) MutableRef.set(currentContext, ctx);
   };
-
-  const refreshPullRequest = async (ctx: ExtensionContext, force = false) => {
-    if (!terminalUi(ctx) || installedContext !== ctx) return;
-    const now = Date.now();
-    if (!force && now - pullRequestCheckedAt < PULL_REQUEST_REFRESH_INTERVAL_MS) return;
-    pullRequestCheckedAt = now;
-    let nextNumber: number | undefined;
+  const requestRender = () => registry.requestRenderNow();
+  const uninstallFooter = () => {
+    const ctx = installedContext;
+    installedContext = undefined;
+    footerComponent = undefined;
+    registry.setRenderRequest(undefined);
+    if (!ctx) return;
     try {
-      const result = await pi.exec("gh", ["pr", "view", "--json", "number", "--jq", ".number"], {
-        cwd: ctx.sessionManager.getCwd(),
-        timeout: 3_000,
-      });
-      if (installedContext !== ctx) return;
-      const parsed = Number(result.stdout.trim());
-      if (result.code === 0 && Number.isInteger(parsed) && parsed > 0) nextNumber = parsed;
-    } catch {
-      if (installedContext !== ctx) return;
-      nextNumber = undefined;
-    }
-    if (pullRequestNumber === nextNumber) return;
-    pullRequestNumber = nextNumber;
-    registry.requestRenderNow();
-  };
-
-  const refreshGitStatus = async (ctx: ExtensionContext) => {
-    if (!terminalUi(ctx) || installedContext !== ctx) return;
-    const cwd = ctx.sessionManager.getCwd();
-    let nextStatus: FooterGitStatus | undefined;
-    try {
-      const result = await pi.exec(
-        "git",
-        ["status", "--short", "--branch", "--untracked-files=normal"],
-        { cwd, timeout: 2_000 },
-      );
-      if (installedContext !== ctx) return;
-      nextStatus = result.code === 0 ? parseGitStatus(result.stdout) : undefined;
-    } catch {
-      if (installedContext !== ctx) return;
-      nextStatus = undefined;
-    }
-    if (nextStatus && nextStatus.staged + nextStatus.modified + nextStatus.conflicts > 0) {
-      try {
-        const diff = await pi.exec("git", ["diff", "--numstat", "HEAD", "--"], {
-          cwd,
-          timeout: 2_000,
-        });
-        if (installedContext !== ctx) return;
-        if (diff.code === 0) nextStatus = applyGitNumstat(nextStatus, diff.stdout);
-      } catch {
-        // Keep file-level status when line statistics are unavailable.
-      }
-    }
-    if (JSON.stringify(gitStatus) === JSON.stringify(nextStatus)) return;
-    gitStatus = nextStatus;
-    registry.requestRenderNow();
-  };
-
-  const stopGitPolling = () => {
-    if (gitRefreshTimer) clearInterval(gitRefreshTimer);
-    gitRefreshTimer = undefined;
-  };
-
-  const startGitPolling = (ctx: ExtensionContext) => {
-    stopGitPolling();
-    gitRefreshTimer = setInterval(() => {
-      void refreshGitStatus(ctx);
-      void refreshPullRequest(ctx);
-    }, GIT_REFRESH_INTERVAL_MS);
-    gitRefreshTimer.unref();
-  };
-
-  const update = (ctx: ExtensionContext) => {
-    const current = config ?? (config = resolveConfig(ctx.cwd));
-    if (!terminalUi(ctx)) return;
-    if (installed && installedContext !== ctx) {
-      stopGitPolling();
       ctx.ui.setFooter(undefined);
-      installed = false;
-      installedContext = undefined;
-      footerComponent = undefined;
-      registry.setRenderRequest(undefined);
+    } catch {
+      // Host/footer cleanup must not prevent runtime disposal.
     }
+  };
+
+  let generation = 0;
+  const makeRuntime = (
+    ctx: ExtensionContext,
+    context: MutableRef.MutableRef<ExtensionContext>,
+    session: number,
+  ) => {
+    const service = CosmicUiService.layer({
+      context,
+      cwd: ctx.cwd,
+      projection,
+      isCurrent: () => generation === session,
+      onChange: requestRender,
+    }).pipe(Layer.provide(Layer.merge(nodePlatformLayer, PiApi.layer(pi))));
+    return makeCosmicUiRuntime(pi, service);
+  };
+  type CosmicRuntime = ReturnType<typeof makeRuntime>;
+  let runtime: CosmicRuntime | undefined;
+  let lifecycle = Promise.resolve();
+  let removeAbortListener: (() => void) | undefined;
+  const clearAbortListener = () => {
+    const remove = removeAbortListener;
+    removeAbortListener = undefined;
+    try {
+      remove?.();
+    } catch {
+      // A malformed session signal cannot block runtime disposal.
+    }
+  };
+  const disposals = new WeakMap<CosmicRuntime, Promise<void>>();
+  const disposeNow = (target: CosmicRuntime | undefined): Promise<void> => {
+    if (!target) return Promise.resolve();
+    const existing = disposals.get(target);
+    if (existing) return existing;
+    const disposal = target.dispose().catch(() => undefined);
+    disposals.set(target, disposal);
+    return disposal;
+  };
+
+  const run = <A, E>(
+    effect: Effect.Effect<A, E, CosmicUiService>,
+    signal?: AbortSignal,
+  ): Promise<A> =>
+    runtime
+      ? runtime.run(effect, signal)
+      : Promise.reject(
+          new CosmicProbeError({
+            operation: "runtime",
+            message: "Cosmic UI session has not started.",
+          }),
+        );
+
+  const update = (fallback: ExtensionContext) => {
+    const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
+    const state = MutableRef.get(projection);
+    const current = state.config;
+    if (!current || !terminalUi(ctx)) return;
+    if (installedContext && installedContext !== ctx) uninstallFooter();
     if (!current.footer.enabled) {
-      stopGitPolling();
-      if (installed) ctx.ui.setFooter(undefined);
-      installed = false;
-      installedContext = undefined;
-      footerComponent = undefined;
-      registry.setRenderRequest(undefined);
+      uninstallFooter();
       return;
     }
-    if (installed) {
-      registry.requestRenderNow();
+    if (installedContext) {
+      requestRender();
       return;
     }
-    installed = true;
     installedContext = ctx;
     ctx.ui.setFooter((tui, theme, footerData) => {
       registry.setRenderRequest(() => tui.requestRender());
       const unsubscribeBranch = footerData.onBranchChange(() => {
-        pullRequestNumber = undefined;
-        pullRequestCheckedAt = 0;
+        invalidateProbes(projection);
         tui.requestRender();
-        void refreshGitStatus(ctx);
-        void refreshPullRequest(ctx, true);
+        runtime?.fork(
+          CosmicUiService.use((service) => service.refreshAll(true)),
+          (currentContext ? MutableRef.get(currentContext) : ctx).signal,
+        );
       });
       const component = createFooterComponent({
         pi,
-        ctx,
+        ctx: () => (currentContext ? MutableRef.get(currentContext) : ctx),
         footerData,
         theme,
         registry,
-        config: () => config ?? resolveConfig(ctx.cwd),
-        totals: () => totals,
-        gitStatus: () => gitStatus,
-        pullRequestNumber: () => pullRequestNumber,
+        config,
+        totals: () => MutableRef.get(projection).totals,
+        gitStatus: () => MutableRef.get(projection).gitStatus,
+        pullRequestNumber: () => MutableRef.get(projection).pullRequestNumber,
+        homeDirectory: () => MutableRef.get(projection).homeDirectory,
       });
       footerComponent = component;
       return {
         ...component,
         dispose() {
-          stopGitPolling();
-          unsubscribeBranch();
+          try {
+            unsubscribeBranch();
+          } catch {
+            // Host branch subscriptions cannot block footer/runtime cleanup.
+          }
           registry.setRenderRequest(undefined);
-          installed = false;
           installedContext = undefined;
           footerComponent = undefined;
         },
       };
     });
-    startGitPolling(ctx);
   };
 
-  const unsubscribers = [
-    pi.events.on(COSMIC_UI_HOST_QUERY, (data) => {
-      if (isCosmicUiHostQuery(data)) data.respond();
-    }),
-    pi.events.on(COSMIC_UI_FOOTER_UPSERT, (data) => {
-      if (isCosmicFooterUpsertEvent(data)) registry.upsert(data.owner, data.contribution);
-    }),
-    pi.events.on(COSMIC_UI_FOOTER_REMOVE, (data) => {
-      if (isCosmicFooterRemoveEvent(data)) registry.remove(data.owner, data.id);
-    }),
-    pi.events.on(COSMIC_UI_FOOTER_INVALIDATE, (data) => {
-      if (isCosmicFooterInvalidateEvent(data)) registry.invalidate(data.owner, data.id);
-    }),
-  ];
+  const ensureSubscriptions = () => {
+    if (subscriptions.length > 0) return;
+    subscriptions = [
+      pi.events.on(COSMIC_UI_HOST_QUERY, (data) => {
+        if (!isCosmicUiHostQuery(data)) return;
+        try {
+          data.respond();
+        } catch {
+          // A hostile query responder cannot break the host event bus.
+        }
+      }),
+      pi.events.on(COSMIC_UI_FOOTER_UPSERT, (data) => {
+        try {
+          if (isCosmicFooterUpsertEvent(data)) registry.upsert(data.owner, data.contribution);
+        } catch {
+          // Protocol payload accessors are isolated from the host event bus.
+        }
+      }),
+      pi.events.on(COSMIC_UI_FOOTER_REMOVE, (data) => {
+        try {
+          if (isCosmicFooterRemoveEvent(data)) registry.remove(data.owner, data.id);
+        } catch {
+          // Protocol payload accessors are isolated from the host event bus.
+        }
+      }),
+      pi.events.on(COSMIC_UI_FOOTER_INVALIDATE, (data) => {
+        try {
+          if (isCosmicFooterInvalidateEvent(data)) registry.invalidate(data.owner, data.id);
+        } catch {
+          // Protocol payload accessors are isolated from the host event bus.
+        }
+      }),
+    ];
+  };
+  const disposeSubscriptions = () => {
+    for (const unsubscribe of subscriptions.splice(0)) {
+      try {
+        unsubscribe();
+      } catch {
+        // One hostile bus subscription cannot block remaining cleanup.
+      }
+    }
+  };
+  ensureSubscriptions();
 
-  registerSettingsCommand(pi, {
-    config: () => config ?? resolveConfig(process.cwd()),
-    setConfig: (next) => {
-      config = next;
-    },
-    update,
+  registerSettingsCommand(pi, { config, updateContext, update, run });
+
+  pi.on("session_start", (_event, ctx) => {
+    ensureSubscriptions();
+    const session = ++generation;
+    const previous = runtime;
+    runtime = undefined;
+    currentContext = undefined;
+    clearAbortListener();
+    const previousDisposal = disposeNow(previous);
+    uninstallFooter();
+
+    lifecycle = lifecycle
+      .catch(() => undefined)
+      .then(() => previousDisposal)
+      .then(() => {
+        if (session !== generation) return;
+        MutableRef.set(projection, {
+          config: undefined,
+          totals: totalsFrom(ctx),
+          gitStatus: undefined,
+          pullRequestNumber: undefined,
+          pullRequestCheckedAt: 0,
+          probeRevision: 0,
+          homeDirectory: undefined,
+        });
+        const context = MutableRef.make(ctx);
+        currentContext = context;
+        const next = makeRuntime(ctx, context, session);
+        runtime = next;
+        const abort = () => {
+          if (session !== generation || runtime !== next) return;
+          ++generation;
+          runtime = undefined;
+          currentContext = undefined;
+          clearAbortListener();
+          const disposal = disposeNow(next);
+          uninstallFooter();
+          lifecycle = lifecycle.catch(() => undefined).then(() => disposal);
+        };
+        ctx.signal?.addEventListener("abort", abort, { once: true });
+        removeAbortListener = () => ctx.signal?.removeEventListener("abort", abort);
+        return next
+          .run(
+            CosmicUiService.use(() => Effect.void),
+            ctx.signal,
+          )
+          .then(() => {
+            if (session !== generation || runtime !== next) return;
+            update(ctx);
+            return next.run(
+              CosmicUiService.use((service) => service.refreshAll(true)),
+              ctx.signal,
+            );
+          });
+      })
+      .catch(() => {
+        if (session !== generation) return;
+        const failed = runtime;
+        runtime = undefined;
+        currentContext = undefined;
+        clearAbortListener();
+        const disposal = disposeNow(failed);
+        uninstallFooter();
+        try {
+          ctx.ui.notify("Cosmic UI failed to start.", "warning");
+        } catch {
+          // Host notification failures do not prevent runtime cleanup.
+        }
+        return disposal;
+      });
+    return lifecycle;
   });
 
-  pi.on("session_start", async (_event, ctx) => {
-    config = resolveConfig(ctx.cwd);
-    gitStatus = undefined;
-    pullRequestNumber = undefined;
-    pullRequestCheckedAt = 0;
-    refreshTotals(ctx);
-    update(ctx);
-    await Promise.all([refreshGitStatus(ctx), refreshPullRequest(ctx, true)]);
-  });
-  pi.on("turn_end", async (event, ctx) => {
+  pi.on("turn_end", (event, ctx) => {
+    updateContext(ctx);
+    const current = MutableRef.get(projection);
+    const totals = { ...current.totals };
     if (event.message?.role === "assistant") {
       totals.input += event.message.usage.input;
       totals.output += event.message.usage.output;
       totals.cacheRead += event.message.usage.cacheRead;
       totals.cacheWrite += event.message.usage.cacheWrite;
       totals.cost += event.message.usage.cost.total;
-    } else refreshTotals(ctx);
+    } else Object.assign(totals, totalsFrom(ctx));
+    MutableRef.set(projection, { ...current, totals });
     footerComponent?.invalidateContextUsage();
-    registry.requestRenderNow();
-    await refreshGitStatus(ctx);
+    requestRender();
+    return run(
+      CosmicUiService.use((service) => service.refreshGit()),
+      ctx.signal,
+    ).catch(() => undefined);
   });
-  pi.on("session_compact", (_event, ctx) => {
-    refreshTotals(ctx);
+  const refreshTotals = (ctx: ExtensionContext) => {
+    updateContext(ctx);
+    MutableRef.set(projection, { ...MutableRef.get(projection), totals: totalsFrom(ctx) });
     footerComponent?.invalidateContextUsage();
-    registry.requestRenderNow();
-  });
-  pi.on("session_tree", (_event, ctx) => {
-    refreshTotals(ctx);
+    requestRender();
+  };
+  pi.on("session_compact", (_event, ctx) => refreshTotals(ctx));
+  pi.on("session_tree", (_event, ctx) => refreshTotals(ctx));
+  pi.on("model_select", (_event, ctx) => {
+    updateContext(ctx);
     footerComponent?.invalidateContextUsage();
-    registry.requestRenderNow();
+    requestRender();
   });
-  pi.on("model_select", () => {
+  pi.on("tool_execution_end", (event, ctx) => {
+    updateContext(ctx);
+    if (!["bash", "edit", "write"].includes(event.toolName)) return;
+    return run(
+      CosmicUiService.use((service) => service.refreshGit(true)),
+      ctx.signal,
+    ).catch(() => undefined);
+  });
+  pi.on("thinking_level_select", (_event, ctx) => {
+    updateContext(ctx);
+    requestRender();
+  });
+  pi.on("session_info_changed", (_event, ctx) => {
+    updateContext(ctx);
+    requestRender();
+  });
+  const invalidateContextUsage = (_event: unknown, ctx: ExtensionContext) => {
+    updateContext(ctx);
     footerComponent?.invalidateContextUsage();
-    registry.requestRenderNow();
-  });
-  pi.on("tool_execution_end", async (event, ctx) => {
-    if (["bash", "edit", "write"].includes(event.toolName)) await refreshGitStatus(ctx);
-  });
-  pi.on("thinking_level_select", () => registry.requestRenderNow());
-  pi.on("session_info_changed", () => registry.requestRenderNow());
-  const invalidateContextUsage = () => {
-    footerComponent?.invalidateContextUsage();
-    registry.requestRenderNow();
+    requestRender();
   };
   pi.on("agent_start", invalidateContextUsage);
   pi.on("message_start", invalidateContextUsage);
   pi.on("message_update", invalidateContextUsage);
   pi.on("message_end", invalidateContextUsage);
-  pi.on("session_shutdown", (_event, ctx) => {
-    stopGitPolling();
-    if (installed && terminalUi(ctx)) ctx.ui.setFooter(undefined);
-    installed = false;
-    installedContext = undefined;
-    footerComponent = undefined;
+  pi.on("session_shutdown", () => {
+    ++generation;
+    const current = runtime;
+    runtime = undefined;
+    currentContext = undefined;
+    clearAbortListener();
+    const disposal = disposeNow(current);
+    disposeSubscriptions();
+    uninstallFooter();
     registry.clear();
-    config = undefined;
-    totals = EMPTY_TOTALS();
-    gitStatus = undefined;
-    pullRequestNumber = undefined;
-    pullRequestCheckedAt = 0;
-    for (const unsubscribe of unsubscribers) unsubscribe();
+    lifecycle = lifecycle
+      .catch(() => undefined)
+      .then(() => disposal)
+      .then(() => {
+        MutableRef.set(projection, {
+          config: undefined,
+          totals: emptyTotals(),
+          gitStatus: undefined,
+          pullRequestNumber: undefined,
+          pullRequestCheckedAt: 0,
+          probeRevision: 0,
+          homeDirectory: undefined,
+        });
+      });
+    return lifecycle;
   });
 }
