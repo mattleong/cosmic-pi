@@ -2,6 +2,7 @@
 // @effect-diagnostics effect/newPromise:off
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -508,12 +509,17 @@ describe("xAI refresh lifecycle", () => {
     }).pipe(Effect.provide(serviceLayer));
   });
 
-  it.effect("interrupts polling and queued work when its runtime is disposed", () => {
+  it("interrupts polling and queued work when its runtime is disposed", () => {
     const harness = documentHarness();
     const projection = makeProjection();
+    const requestStarted = Deferred.makeUnsafe<void>();
     let interrupted = 0;
     const http = httpLayer(() =>
-      Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => void (interrupted += 1)))),
+      Effect.gen(function* () {
+        yield* Effect.addFinalizer(() => Effect.sync(() => void (interrupted += 1)));
+        yield* Deferred.succeed(requestStarted, undefined);
+        return yield* Effect.never;
+      }).pipe(Effect.scoped),
     );
     const serviceLayer = XaiUsageService.layer({
       context: MutableRef.make(registryContext()),
@@ -524,12 +530,12 @@ describe("xAI refresh lifecycle", () => {
     }).pipe(Layer.provide(providers(harness.layer, http)));
     const runtime = makePiRuntime({} as ExtensionAPI, serviceLayer);
 
-    return Effect.gen(function* () {
-      yield* Effect.promise(() => runtime.runPromise(XaiUsageService.use(() => Effect.void)));
-      yield* Effect.promise(() => runtime.runPromise(Effect.sleep("1 millis")));
-      yield* Effect.promise(() => runtime.dispose());
-      expect(interrupted).toBeGreaterThan(0);
-    }).pipe(Effect.ensuring(runtime.disposeEffect));
+    return runtime
+      .runPromise(XaiUsageService.use(() => Effect.void))
+      .then(() => runtime.runPromise(Deferred.await(requestStarted)))
+      .then(() => runtime.dispose())
+      .then(() => expect(interrupted).toBeGreaterThan(0))
+      .finally(() => runtime.dispose());
   });
 
   it.effect("coalesces concurrent refresh bursts into one follow-up", () => {
