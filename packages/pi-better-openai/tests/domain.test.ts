@@ -3,6 +3,7 @@
 // @effect-diagnostics effect/newPromise:off
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -10,6 +11,8 @@ import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
 import {
+  AgentDirectory,
+  JsonDocumentError,
   JsonDocumentStore,
   JsonHttpClient,
   JsonHttpError,
@@ -17,9 +20,11 @@ import {
   type JsonHttpClientShape,
   type JsonObject,
 } from "pi-cosmic-core";
+import { makeCapturedTracer } from "pi-cosmic-core/testing";
 import {
   extractAccountIdFromJwt,
   getCodexCredentials,
+  getCodexCredentialsResult,
   parseCodexRegistryCredentials,
   readCodexAuth,
 } from "../src/codex-auth.ts";
@@ -111,13 +116,41 @@ describe("OpenAI configuration and credentials", () => {
   });
 
   it.effect("preserves unknown fields through settings patches", () =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       expect(
-        applySettingToRawConfig({ unknown: 1, usage: { other: true } }, "usage.enabled", "false"),
+        yield* applySettingToRawConfig(
+          { unknown: 1, usage: { other: true } },
+          "usage.enabled",
+          "false",
+        ),
       ).toEqual({ unknown: 1, usage: { other: true, enabled: false } });
       expect(DEFAULT_IMAGE_CONFIG.defaultSave).toBe("project");
     }),
   );
+
+  it.effect("distinguishes total credential failure from genuine absence", () => {
+    const failure = new JsonDocumentError({
+      operation: "read",
+      path: "/redacted",
+      message: "unavailable",
+    });
+    const layer = Layer.succeed(
+      JsonDocumentStore,
+      JsonDocumentStore.of({
+        exists: () => Effect.fail(failure),
+        readObject: () => Effect.fail(failure),
+        writeObject: () => Effect.fail(failure),
+        updateObject: () => Effect.fail(failure),
+      }),
+    );
+    const ctx = context();
+    ctx.modelRegistry.getApiKeyForProvider = () => Promise.reject(new Error("registry"));
+    return Effect.gen(function* () {
+      const result = yield* getCodexCredentialsResult("/auth.json", ctx);
+      expect(result._tag).toBe("Unavailable");
+      expect(JSON.stringify(result)).not.toContain("redacted");
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect("interrupts a pending model-registry credential lookup", () => {
     const pending = new globalThis.Promise<string | undefined>(() => undefined);
@@ -236,58 +269,65 @@ describe("usage payloads, visibility, and fast mode", () => {
     }).pipe(Effect.provide(Layer.merge(store.layer, http)));
   });
 
-  it.effect(
-    "coalesces concurrent forced refreshes into one active request and one follow-up",
-    () => {
-      const store = documents({
-        "/project/.pi/extensions/pi-better-openai.json": {
-          usage: { enabled: true, refreshIntervalMs: 60_000 },
-          footer: { mode: "off" },
-          image: { enabled: false },
-        },
+  it.effect("coalesces refreshes and captures redacted initialization/refresh spans", () => {
+    const captured = makeCapturedTracer();
+    const store = documents({
+      "/project/.pi/extensions/pi-better-openai.json": {
+        usage: { enabled: true, refreshIntervalMs: 60_000 },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      },
+    });
+    let calls = 0;
+    const http = Layer.succeed(
+      JsonHttpClient,
+      JsonHttpClient.of({
+        request: () =>
+          Effect.gen(function* () {
+            calls++;
+            yield* Effect.yieldNow;
+            return { status: 200, body: payload };
+          }),
+      }),
+    );
+    const ctx = context(JSON.stringify({ access: "token", accountId: "acct" }));
+    const contextRef = MutableRef.make(ctx);
+    const projection = makeProjection();
+    const providers = Layer.mergeAll(store.layer, http, Path.layer, AgentDirectory.layer("/agent"));
+    const layer = OpenAIUsageService.layer({
+      context: contextRef,
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+      startPolling: false,
+    }).pipe(Layer.provide(providers));
+    return Effect.gen(function* () {
+      const fiber = yield* Effect.all(
+        Array.from({ length: 20 }, () =>
+          OpenAIUsageService.use((service) => service.refresh({ force: true })),
+        ),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkScoped);
+      yield* Fiber.join(fiber);
+      expect(calls).toBeLessThanOrEqual(2);
+      expect(calls).toBeGreaterThan(0);
+      expect(MutableRef.get(projection)).toMatchObject({
+        authFound: true,
+        authSource: "modelRegistry",
+        accountId: "acct",
       });
-      let calls = 0;
-      const http = Layer.succeed(
-        JsonHttpClient,
-        JsonHttpClient.of({
-          request: () =>
-            Effect.gen(function* () {
-              calls++;
-              yield* Effect.yieldNow;
-              return { status: 200, body: payload };
-            }),
-        }),
+      const names = captured.spans.map((span) => span.name);
+      expect(names).toContain("pi-better-openai.usage.initialize");
+      expect(names).toContain("pi-better-openai.usage.refresh");
+      const telemetry = JSON.stringify(
+        captured.spans.map((span) => ({ name: span.name, attributes: [...span.attributes] })),
       );
-      const ctx = context(JSON.stringify({ access: "token", accountId: "acct" }));
-      const contextRef = MutableRef.make(ctx);
-      const projection = makeProjection();
-      const providers = Layer.mergeAll(store.layer, http, Path.layer);
-      const layer = OpenAIUsageService.layer({
-        context: contextRef,
-        cwd: "/project",
-        agentDir: "/agent",
-        projection,
-        onChange() {},
-        startPolling: false,
-      }).pipe(Layer.provide(providers));
-      return Effect.gen(function* () {
-        const fiber = yield* Effect.all(
-          Array.from({ length: 20 }, () =>
-            OpenAIUsageService.use((service) => service.refresh({ force: true })),
-          ),
-          { concurrency: "unbounded" },
-        ).pipe(Effect.forkScoped);
-        yield* Fiber.join(fiber);
-        expect(calls).toBeLessThanOrEqual(2);
-        expect(calls).toBeGreaterThan(0);
-        expect(MutableRef.get(projection)).toMatchObject({
-          authFound: true,
-          authSource: "modelRegistry",
-          accountId: "acct",
-        });
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    },
-  );
+      expect(telemetry).not.toContain("token");
+      expect(telemetry).not.toContain("acct");
+      expect(telemetry).not.toContain("/project");
+    }).pipe(Effect.scoped, Effect.provide(layer.pipe(Layer.provide(captured.layer))));
+  });
 
   it.effect("times out credential lookup and releases the refresh coordinator", () => {
     const store = documents({
@@ -321,7 +361,9 @@ describe("usage payloads, visibility, and fast mode", () => {
       projection,
       onChange() {},
       startPolling: false,
-    }).pipe(Layer.provide(Layer.mergeAll(store.layer, http, Path.layer)));
+    }).pipe(
+      Layer.provide(Layer.mergeAll(store.layer, http, Path.layer, AgentDirectory.layer("/agent"))),
+    );
     return Effect.gen(function* () {
       const service = yield* OpenAIUsageService;
       const timedOut = yield* service.refresh({ force: true }).pipe(Effect.forkScoped);
@@ -367,7 +409,9 @@ describe("usage payloads, visibility, and fast mode", () => {
       agentDir: "/agent",
       projection,
       onChange() {},
-    }).pipe(Layer.provide(Layer.mergeAll(store.layer, http, Path.layer)));
+    }).pipe(
+      Layer.provide(Layer.mergeAll(store.layer, http, Path.layer, AgentDirectory.layer("/agent"))),
+    );
     return Effect.gen(function* () {
       const service = yield* OpenAIUsageService;
       while (calls < 1) yield* Effect.yieldNow;
@@ -413,14 +457,18 @@ describe("usage payloads, visibility, and fast mode", () => {
         agentDir: "/agent",
         projection,
         onChange() {},
-      }).pipe(Layer.provide(Layer.mergeAll(store.layer, http, Path.layer)));
+      }).pipe(
+        Layer.provide(
+          Layer.mergeAll(store.layer, http, Path.layer, AgentDirectory.layer("/agent")),
+        ),
+      );
       const program = Effect.gen(function* () {
         yield* OpenAIUsageService;
         while (!started) yield* Effect.yieldNow;
         const state = MutableRef.get(projection);
-        expect(state.authFound).toBe(true);
-        expect(state.authSource).toBe("modelRegistry");
-        expect(state.accountId).toBe("acct_registry");
+        expect(state.authFound).toBe(false);
+        expect(state.authSource).toBeUndefined();
+        expect(state.accountId).toBeUndefined();
         expect(state).not.toHaveProperty("accessToken");
       }).pipe(Effect.provide(layer));
       return program.pipe(
@@ -462,7 +510,9 @@ describe("usage payloads, visibility, and fast mode", () => {
       agentDir: "/agent",
       projection,
       onChange() {},
-    }).pipe(Layer.provide(Layer.mergeAll(store.layer, http, Path.layer)));
+    }).pipe(
+      Layer.provide(Layer.mergeAll(store.layer, http, Path.layer, AgentDirectory.layer("/agent"))),
+    );
     return Effect.gen(function* () {
       yield* OpenAIUsageService;
       while (calls < 1 || !MutableRef.get(projection).error) yield* Effect.yieldNow;
@@ -473,6 +523,59 @@ describe("usage payloads, visibility, and fast mode", () => {
       expect(state.accountId).toBe("acct_registry");
       expect(state.statusText).not.toContain("registry-secret");
     }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("suppresses stale usage and notification commits after model selection", () => {
+    const store = documents({
+      "/project/.pi/extensions/pi-better-openai.json": {
+        usage: { enabled: true },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      },
+    });
+    const response = Deferred.makeUnsafe<{ status: number; body: unknown }>();
+    let started = false;
+    const http = Layer.succeed(
+      JsonHttpClient,
+      JsonHttpClient.of({
+        request: () =>
+          Effect.sync(() => {
+            started = true;
+          }).pipe(Effect.andThen(Deferred.await(response))),
+      }),
+    );
+    const ctx = context(JSON.stringify({ access: "token", accountId: "acct" }));
+    let notifications = 0;
+    ctx.ui.notify = () => {
+      notifications++;
+    };
+    const contextRef = MutableRef.make(ctx);
+    const projection = makeProjection();
+    const layer = OpenAIUsageService.layer({
+      context: contextRef,
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+      startPolling: false,
+    }).pipe(
+      Layer.provide(Layer.mergeAll(store.layer, http, Path.layer, AgentDirectory.layer("/agent"))),
+    );
+    return Effect.gen(function* () {
+      const service = yield* OpenAIUsageService;
+      const old = yield* service.refresh({ force: true, notify: true }).pipe(Effect.forkScoped);
+      while (!started) yield* Effect.yieldNow;
+      MutableRef.set(contextRef, {
+        ...MutableRef.get(contextRef),
+        model: { provider: "openai", id: "o3" },
+      } as ExtensionContext);
+      yield* service.contextChanged(true);
+      yield* Deferred.succeed(response, { status: 200, body: payload });
+      yield* Fiber.join(old);
+      expect(MutableRef.get(projection).snapshot).toBeUndefined();
+      expect(MutableRef.get(projection).authFound).toBe(false);
+      expect(notifications).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
   it.effect("gates usage and fast injection by model/auth", () =>

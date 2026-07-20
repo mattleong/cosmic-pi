@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import { ShikiAdapter, ShikiBoundaryError } from "./shiki";
 import { codePreviewSettings, setCodePreviewSettings } from "../settings";
 import { disposeShikiEffect, getShikiStatus, initializeShikiEffect } from "../syntax/shiki";
+import { CodePreviewSyntaxService } from "../syntax/service";
 
 describe("Shiki adapter lifecycle", () => {
   it.effect("degrades typed initialization failures to plain text", () => {
@@ -24,7 +25,11 @@ describe("Shiki adapter lifecycle", () => {
       yield* disposeShikiEffect;
       yield* initializeShikiEffect("dark-plus");
       assert.equal(getShikiStatus().initialized, false);
-    }).pipe(Effect.provide(Layer.succeed(ShikiAdapter, adapter)));
+    }).pipe(
+      Effect.provide(
+        CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+      ),
+    );
   });
 
   it.effect("runs adapter finalization when initialization is interrupted", () => {
@@ -39,6 +44,11 @@ describe("Shiki adapter lifecycle", () => {
       yield* Effect.yieldNow;
       yield* Fiber.interrupt(fiber);
       assert.equal(released, 1);
-    }).pipe(Effect.scoped, Effect.provide(Layer.succeed(ShikiAdapter, adapter)));
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+      ),
+    );
   });
 });

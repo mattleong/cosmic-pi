@@ -1,20 +1,25 @@
 /** Cosmic UI host with one Effect-managed runtime per Pi session. */
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import { nodePlatformLayer, PiApi } from "pi-cosmic-core";
-import { makeCosmicUiRuntime } from "./boundary/runtime.ts";
+import {
+  AgentDirectory,
+  makePiManagedRuntime,
+  makePiSessionRuntimeSlot,
+  nodePlatformLayer,
+} from "pi-cosmic-core";
+import { CosmicUiConfigRepository } from "./config/repository.ts";
 import { DEFAULT_CONFIG, type ResolvedCosmicUiConfig } from "./config/schema.ts";
 import { createFooterComponent, type FooterTotals } from "./footer/component.ts";
 import { FooterContributionRegistry } from "./footer/registry.ts";
-import {
-  CosmicProbeError,
-  CosmicUiService,
-  emptyTotals,
-  invalidateProbes,
-  makeProjection,
-} from "./host-service.ts";
+import { CosmicUiService, emptyTotals, makeProjection } from "./host-service.ts";
+import { PiExec } from "./probe/pi-exec.ts";
+import { RepositoryProbe } from "./probe/repository-probe.ts";
 import {
   COSMIC_UI_FOOTER_INVALIDATE,
   COSMIC_UI_FOOTER_REMOVE,
@@ -74,58 +79,51 @@ export default function cosmicUi(pi: ExtensionAPI): void {
     }
   };
 
-  let generation = 0;
-  const makeRuntime = (
-    ctx: ExtensionContext,
-    context: MutableRef.MutableRef<ExtensionContext>,
-    session: number,
-  ) => {
-    const service = CosmicUiService.layer({
-      context,
-      cwd: ctx.cwd,
-      projection,
-      isCurrent: () => generation === session,
-      onChange: requestRender,
-    }).pipe(Layer.provide(Layer.merge(nodePlatformLayer, PiApi.layer(pi))));
-    return makeCosmicUiRuntime(pi, service);
+  type SessionInput = {
+    readonly ctx: ExtensionContext;
+    readonly context: MutableRef.MutableRef<ExtensionContext>;
   };
-  type CosmicRuntime = ReturnType<typeof makeRuntime>;
-  let runtime: CosmicRuntime | undefined;
-  let lifecycle = Promise.resolve();
-  let removeAbortListener: (() => void) | undefined;
-  const clearAbortListener = () => {
-    const remove = removeAbortListener;
-    removeAbortListener = undefined;
-    try {
-      remove?.();
-    } catch {
-      // A malformed session signal cannot block runtime disposal.
-    }
-  };
-  const disposals = new WeakMap<CosmicRuntime, Promise<void>>();
-  const disposeNow = (target: CosmicRuntime | undefined): Promise<void> => {
-    if (!target) return Promise.resolve();
-    const existing = disposals.get(target);
-    if (existing) return existing;
-    const disposal = target.dispose().catch(() => undefined);
-    disposals.set(target, disposal);
-    return disposal;
-  };
+  const slot = makePiSessionRuntimeSlot<SessionInput, CosmicUiService>({
+    makeRuntime: ({ ctx, context }) => {
+      const platform = Layer.merge(
+        nodePlatformLayer,
+        AgentDirectory.layerFromHost(() => getAgentDir()),
+      );
+      const configRepository = CosmicUiConfigRepository.layer.pipe(Layer.provide(platform));
+      const probe = RepositoryProbe.layer.pipe(Layer.provide(PiExec.layer));
+      const service = CosmicUiService.layer({
+        context,
+        cwd: ctx.cwd,
+        projection,
+        onChange: requestRender,
+      }).pipe(Layer.provide(Layer.merge(configRepository, probe)));
+      return makePiManagedRuntime(pi, service);
+    },
+    startup: () => CosmicUiService.use(() => Effect.void),
+    onActivated: ({ ctx }) => {
+      update(ctx);
+      slot.fork(
+        CosmicUiService.use((service) => service.refreshAll(true)),
+        ctx.signal,
+      );
+    },
+    onDeactivated: () => {
+      currentContext = undefined;
+      uninstallFooter();
+    },
+    onStartFailure: ({ ctx }) => {
+      try {
+        ctx.ui.notify("Cosmic UI failed to start.", "warning");
+      } catch {
+        // Host notification failures do not prevent runtime cleanup.
+      }
+    },
+  });
 
-  const run = <A, E>(
-    effect: Effect.Effect<A, E, CosmicUiService>,
-    signal?: AbortSignal,
-  ): Promise<A> =>
-    runtime
-      ? runtime.run(effect, signal)
-      : Promise.reject(
-          new CosmicProbeError({
-            operation: "runtime",
-            message: "Cosmic UI session has not started.",
-          }),
-        );
+  const run = <A, E>(effect: Effect.Effect<A, E, CosmicUiService>, signal?: AbortSignal) =>
+    slot.run(effect, signal);
 
-  const update = (fallback: ExtensionContext) => {
+  function update(fallback: ExtensionContext) {
     const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
     const state = MutableRef.get(projection);
     const current = state.config;
@@ -143,10 +141,11 @@ export default function cosmicUi(pi: ExtensionAPI): void {
     ctx.ui.setFooter((tui, theme, footerData) => {
       registry.setRenderRequest(() => tui.requestRender());
       const unsubscribeBranch = footerData.onBranchChange(() => {
-        invalidateProbes(projection);
         tui.requestRender();
-        runtime?.fork(
-          CosmicUiService.use((service) => service.refreshAll(true)),
+        slot.fork(
+          CosmicUiService.use((service) =>
+            service.invalidateProbes.pipe(Effect.andThen(service.refreshAll(true))),
+          ),
           (currentContext ? MutableRef.get(currentContext) : ctx).signal,
         );
       });
@@ -177,7 +176,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
         },
       };
     });
-  };
+  }
 
   const ensureSubscriptions = () => {
     if (subscriptions.length > 0) return;
@@ -228,74 +227,19 @@ export default function cosmicUi(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     ensureSubscriptions();
-    const session = ++generation;
-    const previous = runtime;
-    runtime = undefined;
-    currentContext = undefined;
-    clearAbortListener();
-    const previousDisposal = disposeNow(previous);
     uninstallFooter();
-
-    lifecycle = lifecycle
-      .catch(() => undefined)
-      .then(() => previousDisposal)
-      .then(() => {
-        if (session !== generation) return;
-        MutableRef.set(projection, {
-          config: undefined,
-          totals: totalsFrom(ctx),
-          gitStatus: undefined,
-          pullRequestNumber: undefined,
-          pullRequestCheckedAt: 0,
-          probeRevision: 0,
-          homeDirectory: undefined,
-        });
-        const context = MutableRef.make(ctx);
-        currentContext = context;
-        const next = makeRuntime(ctx, context, session);
-        runtime = next;
-        const abort = () => {
-          if (session !== generation || runtime !== next) return;
-          ++generation;
-          runtime = undefined;
-          currentContext = undefined;
-          clearAbortListener();
-          const disposal = disposeNow(next);
-          uninstallFooter();
-          lifecycle = lifecycle.catch(() => undefined).then(() => disposal);
-        };
-        ctx.signal?.addEventListener("abort", abort, { once: true });
-        removeAbortListener = () => ctx.signal?.removeEventListener("abort", abort);
-        return next
-          .run(
-            CosmicUiService.use(() => Effect.void),
-            ctx.signal,
-          )
-          .then(() => {
-            if (session !== generation || runtime !== next) return;
-            update(ctx);
-            return next.run(
-              CosmicUiService.use((service) => service.refreshAll(true)),
-              ctx.signal,
-            );
-          });
-      })
-      .catch(() => {
-        if (session !== generation) return;
-        const failed = runtime;
-        runtime = undefined;
-        currentContext = undefined;
-        clearAbortListener();
-        const disposal = disposeNow(failed);
-        uninstallFooter();
-        try {
-          ctx.ui.notify("Cosmic UI failed to start.", "warning");
-        } catch {
-          // Host notification failures do not prevent runtime cleanup.
-        }
-        return disposal;
-      });
-    return lifecycle;
+    MutableRef.set(projection, {
+      config: undefined,
+      totals: totalsFrom(ctx),
+      gitStatus: undefined,
+      pullRequestNumber: undefined,
+      pullRequestCheckedAt: 0,
+      probeRevision: 0,
+      homeDirectory: undefined,
+    });
+    const context = MutableRef.make(ctx);
+    currentContext = context;
+    return slot.start({ ctx, context }, ctx.signal).then(() => undefined);
   });
 
   pi.on("turn_end", (event, ctx) => {
@@ -309,19 +253,23 @@ export default function cosmicUi(pi: ExtensionAPI): void {
       totals.cacheWrite += event.message.usage.cacheWrite;
       totals.cost += event.message.usage.cost.total;
     } else Object.assign(totals, totalsFrom(ctx));
-    MutableRef.set(projection, { ...current, totals });
     footerComponent?.invalidateContextUsage();
     requestRender();
     return run(
-      CosmicUiService.use((service) => service.refreshGit()),
+      CosmicUiService.use((service) =>
+        service.setTotals(totals).pipe(Effect.andThen(service.refreshGit())),
+      ),
       ctx.signal,
     ).catch(() => undefined);
   });
   const refreshTotals = (ctx: ExtensionContext) => {
     updateContext(ctx);
-    MutableRef.set(projection, { ...MutableRef.get(projection), totals: totalsFrom(ctx) });
     footerComponent?.invalidateContextUsage();
     requestRender();
+    return run(
+      CosmicUiService.use((service) => service.setTotals(totalsFrom(ctx))),
+      ctx.signal,
+    ).catch(() => undefined);
   };
   pi.on("session_compact", (_event, ctx) => refreshTotals(ctx));
   pi.on("session_tree", (_event, ctx) => refreshTotals(ctx));
@@ -356,29 +304,20 @@ export default function cosmicUi(pi: ExtensionAPI): void {
   pi.on("message_update", invalidateContextUsage);
   pi.on("message_end", invalidateContextUsage);
   pi.on("session_shutdown", () => {
-    ++generation;
-    const current = runtime;
-    runtime = undefined;
-    currentContext = undefined;
-    clearAbortListener();
-    const disposal = disposeNow(current);
     disposeSubscriptions();
     uninstallFooter();
     registry.clear();
-    lifecycle = lifecycle
-      .catch(() => undefined)
-      .then(() => disposal)
-      .then(() => {
-        MutableRef.set(projection, {
-          config: undefined,
-          totals: emptyTotals(),
-          gitStatus: undefined,
-          pullRequestNumber: undefined,
-          pullRequestCheckedAt: 0,
-          probeRevision: 0,
-          homeDirectory: undefined,
-        });
+    return slot.shutdown().then(() => {
+      currentContext = undefined;
+      MutableRef.set(projection, {
+        config: undefined,
+        totals: emptyTotals(),
+        gitStatus: undefined,
+        pullRequestNumber: undefined,
+        pullRequestCheckedAt: 0,
+        probeRevision: 0,
+        homeDirectory: undefined,
       });
-    return lifecycle;
+    });
   });
 }

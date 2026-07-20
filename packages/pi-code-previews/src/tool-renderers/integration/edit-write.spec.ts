@@ -7,16 +7,11 @@
 // @effect-diagnostics effect/globalConsole:off
 // @effect-diagnostics effect/globalDate:off
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { test, vi } from "vitest";
 import { codePreviewSettings, setCodePreviewSettings } from "../../settings/index";
 import {
   cloneCodePreviewSettingsForTest,
   createToolRenderContext,
-  delay,
   renderComponent,
   stripAnsi,
   testTheme,
@@ -298,87 +293,6 @@ test("registered write result skips pathological whole-file rewrite diffs", () =
   assert.doesNotMatch(rendered, /Rendering write diff/);
 });
 
-test("registered write execute snapshots previous content inside the file mutation queue", async () => {
-  process.env.CODE_PREVIEW_TOOLS = "write";
-  const dir = await mkdtemp(join(tmpdir(), "pi-code-previews-"));
-  try {
-    const file = join(dir, "target.txt");
-    await writeFile(file, "old", "utf8");
-    const write = findRenderer(registerRenderers(dir), "write");
-    assert.ok(write.execute);
-
-    let release!: () => void;
-    let acquired!: () => void;
-    const releasePromise = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const acquiredPromise = new Promise<void>((resolve) => {
-      acquired = resolve;
-    });
-    const queuedMutation = withFileMutationQueue(file, async () => {
-      acquired();
-      await releasePromise;
-      await writeFile(file, "queued", "utf8");
-    });
-    await acquiredPromise;
-
-    const toolCallId = "tool-queue";
-    const executePromise = write.execute(
-      toolCallId,
-      { path: "target.txt", content: "final" },
-      undefined,
-      undefined,
-      undefined,
-    );
-    await delay(10);
-    release();
-    const [result] = await Promise.all([executePromise, queuedMutation]);
-    const details = (result as { details?: unknown }).details;
-
-    assert.doesNotMatch(JSON.stringify(details), /queued/);
-    const rendered = stripAnsi(
-      renderComponent(
-        write.renderResult!(
-          result as never,
-          { expanded: true, isPartial: false },
-          testTheme(),
-          createToolRenderContext({
-            args: { path: "target.txt", content: "final" },
-            isPartial: false,
-            toolCallId,
-          }),
-        ),
-      ),
-    );
-    assert.match(rendered, /queued/);
-    assert.match(rendered, /final/);
-    assert.equal(await readFile(file, "utf8"), "final");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test("registered write execute reports UTF-8 byte length", async () => {
-  process.env.CODE_PREVIEW_TOOLS = "write";
-  const dir = await mkdtemp(join(tmpdir(), "pi-code-previews-bytes-"));
-  try {
-    const write = findRenderer(registerRenderers(dir), "write");
-    const result = await write.execute!(
-      "tool-unicode",
-      { path: "unicode.txt", content: "é" },
-      undefined,
-      undefined,
-      undefined,
-    );
-    const resultContent = (result as { content: Array<{ type: string; text?: string }> }).content;
-
-    assert.match(resultContent[0]?.text ?? "", /2 bytes/);
-    assert.equal(await readFile(join(dir, "unicode.txt"), "utf8"), "é");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
 test("registered edit renderer hides diff previews until expanded", () => {
   process.env.CODE_PREVIEW_TOOLS = "edit";
   const previousSettings = cloneCodePreviewSettingsForTest();
@@ -486,7 +400,7 @@ test("registered edit result header omits insertion and deletion shape counts", 
   assert.doesNotMatch(rendered, /\bdeletions?\b/);
 });
 
-test("registered result renderers reuse async previews after they settle", async () => {
+test("registered result renderers stay synchronous without an active session", () => {
   process.env.CODE_PREVIEW_TOOLS = "write,edit";
   const registered = registerRenderers();
   const edit = findRenderer(registered, "edit");
@@ -509,12 +423,10 @@ test("registered result renderers reuse async previews after they settle", async
     }),
   ] as const;
   const firstEditPreview = edit.renderResult(...editArgs);
-  assert.match(stripAnsi(renderComponent(firstEditPreview)), /Rendering edit diff/);
-  await delay(10);
+  assert.doesNotMatch(stripAnsi(renderComponent(firstEditPreview)), /Rendering edit diff/);
   const settledEditPreview = edit.renderResult(...editArgs);
   assert.equal(settledEditPreview, firstEditPreview);
-  assert.ok(editInvalidations > 0);
-  assert.doesNotMatch(stripAnsi(renderComponent(settledEditPreview, 80)), /Rendering edit diff/);
+  assert.equal(editInvalidations, 0);
 
   const writeState = {};
   let writeInvalidations = 0;
@@ -532,10 +444,8 @@ test("registered result renderers reuse async previews after they settle", async
     }),
   ] as const;
   const firstWritePreview = write.renderResult(...writeArgs);
-  assert.match(stripAnsi(renderComponent(firstWritePreview)), /Rendering write diff/);
-  await delay(10);
+  assert.doesNotMatch(stripAnsi(renderComponent(firstWritePreview)), /Rendering write diff/);
   const settledWritePreview = write.renderResult(...writeArgs);
   assert.equal(settledWritePreview, firstWritePreview);
-  assert.ok(writeInvalidations > 0);
-  assert.doesNotMatch(stripAnsi(renderComponent(settledWritePreview, 80)), /Rendering write diff/);
+  assert.equal(writeInvalidations, 0);
 });

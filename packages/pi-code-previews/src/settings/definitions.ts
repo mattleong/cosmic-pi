@@ -1,4 +1,5 @@
 import { bundledThemes } from "shiki";
+import * as Schema from "effect/Schema";
 import { parsePositiveInteger } from "../config/env";
 import {
   isCodePreviewToolName,
@@ -15,9 +16,19 @@ import {
   type PathIconMode,
   type ToolCallBackgroundMode,
 } from "./types";
+import {
+  CodePreviewToolsSchema,
+  DiffBackgroundIntensitySchema,
+  DiffWordEmphasisSchema,
+  EditCollapsedLinesSchema,
+  PathIconModeSchema,
+  PositiveIntegerSchema,
+  ToolCallBackgroundModeSchema,
+} from "./schema";
 import { isToolCallBackgroundMode, parseToolCallBackgroundMode } from "./tool-call-background";
 
 export type CodePreviewSettingDescriptor<K extends keyof CodePreviewSettings> = {
+  readonly schema: Schema.Decoder<unknown>;
   normalize(value: unknown, fallback: CodePreviewSettings[K]): CodePreviewSettings[K];
   update(next: CodePreviewSettings, current: CodePreviewSettings, value: string): void;
 };
@@ -36,9 +47,11 @@ type NumberSettingKey = {
 
 function validatedSetting<K extends keyof CodePreviewSettings>(
   key: K,
+  schema: Schema.Decoder<CodePreviewSettings[K]>,
   isValid: (value: unknown) => value is CodePreviewSettings[K],
 ): CodePreviewSettingDescriptor<K> {
   return {
+    schema,
     normalize: (value, fallback) => coerceSetting(value, fallback, isValid),
     update: (next, _current, value) => {
       if (isValid(value)) next[key] = value;
@@ -48,6 +61,7 @@ function validatedSetting<K extends keyof CodePreviewSettings>(
 
 function booleanSetting<K extends BooleanSettingKey>(key: K): CodePreviewSettingDescriptor<K> {
   return {
+    schema: Schema.Boolean as Schema.Decoder<CodePreviewSettings[K]>,
     normalize: coerceBoolean as CodePreviewSettingDescriptor<K>["normalize"],
     update: (next, _current, value) => {
       next[key] = (value === "on") as CodePreviewSettings[K];
@@ -59,6 +73,7 @@ function positiveIntegerSetting<K extends NumberSettingKey>(
   key: K,
 ): CodePreviewSettingDescriptor<K> {
   return {
+    schema: PositiveIntegerSchema as Schema.Decoder<CodePreviewSettings[K]>,
     normalize: coerceNumber as CodePreviewSettingDescriptor<K>["normalize"],
     update: (next, current, value) => {
       next[key] = coerceStringNumber(value, current[key] as number) as CodePreviewSettings[K];
@@ -67,10 +82,15 @@ function positiveIntegerSetting<K extends NumberSettingKey>(
 }
 
 export const CODE_PREVIEW_SETTING_DEFINITIONS = {
-  shikiTheme: validatedSetting("shikiTheme", isBundledThemeName),
-  diffIntensity: validatedSetting("diffIntensity", isDiffBackgroundIntensity),
-  wordEmphasis: validatedSetting("wordEmphasis", isDiffWordEmphasis),
+  shikiTheme: validatedSetting("shikiTheme", Schema.String, isBundledThemeName),
+  diffIntensity: validatedSetting(
+    "diffIntensity",
+    DiffBackgroundIntensitySchema,
+    isDiffBackgroundIntensity,
+  ),
+  wordEmphasis: validatedSetting("wordEmphasis", DiffWordEmphasisSchema, isDiffWordEmphasis),
   toolCallBackground: {
+    schema: ToolCallBackgroundModeSchema,
     normalize: coerceToolCallBackgroundMode,
     update: (next, _current, value) => {
       if (isToolCallBackgroundMode(value)) next.toolCallBackground = value;
@@ -83,6 +103,7 @@ export const CODE_PREVIEW_SETTING_DEFINITIONS = {
   writeCollapsedLines: positiveIntegerSetting("writeCollapsedLines"),
   editDiffPreview: booleanSetting("editDiffPreview"),
   editCollapsedLines: {
+    schema: EditCollapsedLinesSchema,
     normalize: coerceEditPreviewLines,
     update: (next, current, value) => {
       next.editCollapsedLines =
@@ -104,8 +125,9 @@ export const CODE_PREVIEW_SETTING_DEFINITIONS = {
   bashWarnings: booleanSetting("bashWarnings"),
   syntaxHighlighting: booleanSetting("syntaxHighlighting"),
   secretWarnings: booleanSetting("secretWarnings"),
-  pathIcons: validatedSetting("pathIcons", isPathIconMode),
+  pathIcons: validatedSetting("pathIcons", PathIconModeSchema, isPathIconMode),
   tools: {
+    schema: CodePreviewToolsSchema,
     normalize: coerceTools,
     update: (next, current, value) => {
       next.tools = coerceTools(value, current.tools);

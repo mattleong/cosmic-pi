@@ -7,7 +7,7 @@
 // @effect-diagnostics effect/globalConsole:off
 // @effect-diagnostics effect/globalDate:off
 import { FullWidthDiffText, renderSyntaxHighlightedDiff } from "../src/diff/index";
-import { initializeShiki } from "../src/syntax/shiki";
+import { startBenchmarkShikiSession } from "./shiki-session";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/settings/index";
 import {
   benchTheme,
@@ -37,7 +37,7 @@ const theme = benchTheme();
 const previousSettings = { ...codePreviewSettings };
 
 setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
-await initializeShiki(codePreviewSettings.shikiTheme);
+const stopShiki = await startBenchmarkShikiSession(codePreviewSettings.shikiTheme);
 try {
   printBenchHeader("diff component wrapping");
   const renderedCases = renderCases(makeWrapCases());
@@ -85,6 +85,7 @@ try {
   if (sink === Number.MIN_SAFE_INTEGER) console.log("sink", sink);
 } finally {
   setCodePreviewSettings(previousSettings);
+  await stopShiki();
 }
 
 function renderCases(cases: WrapCase[]): RenderedCase[] {

@@ -20,8 +20,8 @@ import {
 
 const { renderSyntaxHighlightedDiff } = await import("../src/diff/index");
 const { changedRanges } = await import("../src/diff/word/emphasis");
-const { initializeShiki } = await import("../src/syntax/shiki");
 const { codePreviewSettings, setCodePreviewSettings } = await import("../src/settings/index");
+const { startBenchmarkShikiSession } = await import("./shiki-session");
 
 type BenchCase = {
   name: string;
@@ -56,7 +56,7 @@ const cases = makeCases();
 const largeScenarios = makeLargeScenarios();
 const previousSettings = { ...codePreviewSettings };
 
-await initializeShiki(codePreviewSettings.shikiTheme);
+const stopShiki = await startBenchmarkShikiSession(codePreviewSettings.shikiTheme);
 try {
   printBenchHeader("diff rendering");
 
@@ -119,6 +119,7 @@ try {
   if (sink === Number.MIN_SAFE_INTEGER) console.log("sink", sink);
 } finally {
   setCodePreviewSettings(previousSettings);
+  await stopShiki();
 }
 
 function runBench(caseName: string, layer: BenchLayer, mode: string, fn: () => void): BenchResult {

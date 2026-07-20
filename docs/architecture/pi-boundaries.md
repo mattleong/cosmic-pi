@@ -6,7 +6,7 @@ Effect application code is separated from APIs that Pi or third-party libraries 
 
 ### Pi registration
 
-Extension factories only register callbacks; they do not acquire background resources. `session_start` creates one managed runtime for the started session, and callbacks delegate to it. A callback may pass Pi's `AbortSignal` to the runtime. The runtime is never recreated per event or command.
+Extension factories only register callbacks; they do not acquire background resources. `session_start` creates one managed runtime for the started session, and callbacks delegate to it. A callback may pass Pi's `AbortSignal` to the runtime. The runtime is never recreated per event or command. Runtime creation cannot be owned by the runtime being created, so `pi-cosmic-core` provides one small host-boundary session slot for generation checks, replacement, abort-listener removal, and idempotent disposal; it owns no application polling or state.
 
 ### Shutdown
 
@@ -14,7 +14,7 @@ The Pi lifecycle boundary disposes the runtime and interrupts session fibers. Fi
 
 ### Synchronous TUI rendering
 
-Pi render methods remain synchronous. Effect services update immutable projection snapshots; renderers only read those snapshots. A renderer must not build a Layer or run an Effect.
+Pi render methods remain synchronous. Effect services own state transitions and update immutable projection snapshots; renderers only read those snapshots from a synchronous boundary projection. A renderer must not build a Layer, read an effectful Ref, or run an Effect.
 
 ### Tool schemas
 
@@ -26,7 +26,17 @@ Promise/callback libraries such as Pi APIs, Sharp, and Shiki are wrapped once wi
 
 ### Cross-extension events
 
-Cosmic UI events carry plain data and explicitly checked function capabilities. They never carry Effect services, Layers, refs, scopes, fibers, or runtimes.
+Cosmic UI events carry plain data and explicitly checked function capabilities. Providers import the narrow `pi-cosmic-ui/protocol` and `pi-cosmic-ui/client` subpaths, never the extension root. Events never carry Effect services, Layers, refs, scopes, fibers, or runtimes.
+
+## Exact imperative exemptions
+
+The architecture checker permits runners only at these call owners:
+
+- `pi-cosmic-core/src/runtime.ts`: the raw managed runtime is narrowed to `run`, `fork`, `runSync`, and idempotent `dispose`;
+- `pi-code-previews/src/boundary/settings-one-shot.ts`: the named serialized pre-session public settings compatibility adapter;
+- `pi-advisor/src/boundary/executor.ts`: the named Pi/compatibility adapter used at host and test boundaries.
+
+Direct filesystem imports are limited to core `SafeFile` and advisor's two narrow read-only Node adapters. Raw JSON compatibility boundaries are limited to the named advisor and code-preview JSON adapters. TypeBox is limited to Pi's advisor tool parameter schema. These are exact files and call owners, not directory-prefix approvals. All package-local runtime facades were removed.
 
 ## Forbidden internal boundaries
 

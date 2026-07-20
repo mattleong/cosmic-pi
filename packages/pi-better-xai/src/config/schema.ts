@@ -4,9 +4,11 @@ export const FOOTER_MODES = ["replace", "status", "off"] as const;
 export const FooterModeSchema = Schema.Literals(FOOTER_MODES);
 export type FooterMode = typeof FooterModeSchema.Type;
 
+const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
+
 export const UsageConfigSchema = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
-  refreshIntervalMs: Schema.optional(Schema.Number),
+  refreshIntervalMs: Schema.optional(FiniteNumberSchema),
   showOnlyOnSubscriptionModels: Schema.optional(Schema.Boolean),
   showResetTimes: Schema.optional(Schema.Boolean),
 });

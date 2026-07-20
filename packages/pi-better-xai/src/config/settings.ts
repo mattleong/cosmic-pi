@@ -1,8 +1,15 @@
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { isRecord } from "../utils.ts";
 import type { ResolvedConfig } from "./schema.ts";
-import { FOOTER_MODES } from "./schema.ts";
+import { FOOTER_MODES, FooterModeSchema } from "./schema.ts";
 
 export type SettingsOptionSection = "usage" | "footer";
+
+export class InvalidSettingError extends Schema.TaggedErrorClass<InvalidSettingError>()(
+  "InvalidSettingError",
+  { id: Schema.String, message: Schema.String },
+) {}
 
 export type SettingsOptionDescriptor = {
   id: string;
@@ -11,13 +18,19 @@ export type SettingsOptionDescriptor = {
   label: string;
   description: string;
   values?: readonly string[];
-  parse(rawValue: string): boolean | number | string;
+  decode(rawValue: string): Effect.Effect<boolean | number | string, InvalidSettingError>;
   currentValue(cfg: ResolvedConfig): string;
 };
 
-const booleanSetting = (rawValue: string): boolean => rawValue === "true";
-const numberSetting = (rawValue: string): number => Number(rawValue);
-const stringSetting = (rawValue: string): string => rawValue;
+const decodeJson = (id: string, schema: Schema.Decoder<boolean | number>) => (raw: string) =>
+  Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(raw).pipe(
+    Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
+  );
+const decodeLiteral = (id: string, schema: Schema.Decoder<string>) => (raw: string) =>
+  Schema.decodeUnknownEffect(schema)(raw).pipe(
+    Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
+  );
+const finiteNumber = Schema.Number.check(Schema.isFinite());
 
 export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   {
@@ -29,7 +42,7 @@ export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     values: FOOTER_MODES,
     description:
       "replace = custom footer line, status = pi status line, off = no Better xAI footer/status.",
-    parse: stringSetting,
+    decode: decodeLiteral("footer.mode", FooterModeSchema),
   },
 ];
 
@@ -42,7 +55,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.usage.enabled),
     values: ["true", "false"],
     description: "Fetch and display xAI subscription usage windows.",
-    parse: booleanSetting,
+    decode: decodeJson("usage.enabled", Schema.Boolean),
   },
   {
     id: "usage.refreshIntervalMs",
@@ -52,7 +65,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.usage.refreshIntervalMs),
     values: ["15000", "30000", "60000", "120000", "300000", "600000"],
     description: "Usage refresh interval in milliseconds.",
-    parse: numberSetting,
+    decode: decodeJson("usage.refreshIntervalMs", finiteNumber),
   },
   {
     id: "usage.showOnlyOnSubscriptionModels",
@@ -62,7 +75,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.usage.showOnlyOnSubscriptionModels),
     values: ["true", "false"],
     description: "Only show usage when the current xAI model uses subscription/OAuth auth.",
-    parse: booleanSetting,
+    decode: decodeJson("usage.showOnlyOnSubscriptionModels", Schema.Boolean),
   },
   {
     id: "usage.showResetTimes",
@@ -72,7 +85,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.usage.showResetTimes),
     values: ["true", "false"],
     description: "Include compact reset countdowns and local reset times.",
-    parse: booleanSetting,
+    decode: decodeJson("usage.showResetTimes", Schema.Boolean),
   },
 ];
 
@@ -80,23 +93,22 @@ export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = 
   ...USAGE_SETTING_DESCRIPTORS,
   ...FOOTER_SETTING_DESCRIPTORS,
 ];
-
 const SETTINGS_OPTION_BY_ID = new Map(
   SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
 );
 
-export function applySettingToRawConfig(
+export const applySettingToRawConfig = Effect.fn("XaiConfig.applySetting")(function* (
   current: Record<string, unknown>,
   id: string,
   rawValue: string,
-): Record<string, unknown> {
+) {
   const next: Record<string, unknown> = { ...current };
   const descriptor = SETTINGS_OPTION_BY_ID.get(id);
   if (!descriptor) return next;
-  const parsedValue = descriptor.parse(rawValue);
+  const parsedValue = yield* descriptor.decode(rawValue);
   const currentSection = next[descriptor.section];
   const section = isRecord(currentSection) ? { ...currentSection } : {};
   section[descriptor.key] = parsedValue;
   next[descriptor.section] = section;
   return next;
-}
+});

@@ -15,11 +15,9 @@ import * as Semaphore from "effect/Semaphore";
 import type {
   AdvisorCheckpoint,
   AdvisorCheckpointRequest,
-  AdvisorRuntimeDriver,
   AdvisorRuntimeServiceShape,
 } from "./advisor-runtime.ts";
 import { AdvisorRuntimeResetRequiredError, MAX_ADVISOR_ABORT_MS } from "./advisor-runtime.ts";
-import { standaloneAdvisorExecutor, type AdvisorEffectExecutor } from "./boundary/executor.ts";
 import {
   AdvisorObservationBuffer,
   renderObservations,
@@ -60,8 +58,8 @@ export interface AdvisorReviewQueueOptions {
 export class AdvisorReviewQueue {
   private readonly observations = new AdvisorObservationBuffer();
   private readonly waiters: Waiter[] = [];
-  private readonly steeringLock = Semaphore.makeUnsafe(1);
-  private readonly initializationLock = Semaphore.makeUnsafe(1);
+  private readonly steeringLock: Semaphore.Semaphore;
+  private readonly initializationLock: Semaphore.Semaphore;
   private epoch = 0;
   private pumping = false;
   private pumpMailbox: Queue.Queue<void> | undefined;
@@ -73,27 +71,28 @@ export class AdvisorReviewQueue {
   private steeringAttemptedThrough = 0;
   private steeringScheduled = false;
   private disposed = false;
-  private readonly processedThroughRef = Ref.makeUnsafe(0);
-  private readonly runtime: AdvisorRuntimeDriver;
-  private readonly runtimeEffects: AdvisorRuntimeServiceShape | undefined;
+  private readonly processedThroughRef: Ref.Ref<number>;
+  private processedThroughProjection = 0;
+  private readonly runtime: AdvisorRuntimeServiceShape;
   private readonly options: AdvisorReviewQueueOptions;
-  private readonly executor: AdvisorEffectExecutor;
   private readonly resourceScope: Scope.Scope;
   constructor(
-    runtime: AdvisorRuntimeDriver,
-    options: AdvisorReviewQueueOptions = {},
-    executor: AdvisorEffectExecutor = standaloneAdvisorExecutor,
-    resourceScope: Scope.Scope = Scope.makeUnsafe(),
-    runtimeEffects?: AdvisorRuntimeServiceShape,
+    runtime: AdvisorRuntimeServiceShape,
+    options: AdvisorReviewQueueOptions,
+    resourceScope: Scope.Scope,
+    steeringLock: Semaphore.Semaphore,
+    initializationLock: Semaphore.Semaphore,
+    processedThroughRef: Ref.Ref<number>,
   ) {
     this.runtime = runtime;
-    this.runtimeEffects = runtimeEffects;
     this.options = options;
-    this.executor = executor;
     this.resourceScope = resourceScope;
+    this.steeringLock = steeringLock;
+    this.initializationLock = initializationLock;
+    this.processedThroughRef = processedThroughRef;
   }
   get processedThrough() {
-    return Ref.getUnsafe(this.processedThroughRef);
+    return this.processedThroughProjection;
   }
   get sequence() {
     return this.observations.sequence;
@@ -108,7 +107,7 @@ export class AdvisorReviewQueue {
     return Boolean(this.activeWaiter);
   }
   get activeToolNames() {
-    return this.runtime.activeToolNames;
+    return this.runtime.activeToolNames();
   }
   ingest(parentTurnId: number, input: AdvisorObservationInput): AdvisorObservation {
     if (this.disposed)
@@ -118,80 +117,43 @@ export class AdvisorReviewQueue {
       this.scheduleActiveSteering();
     return record;
   }
-  checkpoint(request: ReviewQueueCheckpointRequest): Promise<AdvisorCheckpoint> {
-    const done = this.enqueueCheckpoint(request);
-    return this.executor.run(
-      this.initializeEffect().pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            this.schedulePump();
-          }),
-        ),
-        Effect.andThen(Deferred.await(done)),
-      ),
-    );
-  }
   checkpointEffect(request: ReviewQueueCheckpointRequest) {
-    return Effect.suspend(() => {
-      const done = this.enqueueCheckpoint(request);
-      return this.initializeEffect().pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            this.schedulePump();
-          }),
-        ),
-        Effect.andThen(Deferred.await(done)),
+    const self = this;
+    return Effect.gen(function* () {
+      if (self.disposed)
+        return yield* new AdvisorQueueError({ message: "Advisor review queue is disposed." });
+      const target = self.observations.freezeThrough(
+        request.targetSequence ?? self.observations.sequence,
       );
-    });
-  }
-  private enqueueCheckpoint(request: ReviewQueueCheckpointRequest) {
-    if (this.disposed) {
-      const disposed = Deferred.makeUnsafe<AdvisorCheckpoint, AdvisorQueueError>();
-      Deferred.doneUnsafe(
-        disposed,
-        Effect.fail(new AdvisorQueueError({ message: "Advisor review queue is disposed." })),
-      );
-      return disposed;
-    }
-    const target = this.observations.freezeThrough(
-      request.targetSequence ?? this.observations.sequence,
-    );
-    const done = Deferred.makeUnsafe<AdvisorCheckpoint, AdvisorQueueError>();
-    const queuedLimit = MAX_PENDING_CHECKPOINTS + (this.activeWaiter ? 0 : 1);
-    if (this.waiters.length >= queuedLimit) {
-      const dropped = this.waiters.shift();
-      if (dropped)
-        Deferred.doneUnsafe(
-          dropped.done,
-          Effect.fail(
+      const done = yield* Deferred.make<AdvisorCheckpoint, AdvisorQueueError>();
+      const queuedLimit = MAX_PENDING_CHECKPOINTS + (self.activeWaiter ? 0 : 1);
+      if (self.waiters.length >= queuedLimit) {
+        const dropped = self.waiters.shift();
+        if (dropped)
+          yield* Deferred.fail(
+            dropped.done,
             new AdvisorQueueError({ message: "Advisor checkpoint backlog exceeded its bound." }),
-          ),
-        );
-    }
-    this.waiters.push({ request, target, epoch: this.epoch, done });
-    return done;
-  }
-  reset(seed: string, stateSummary?: string): Promise<void> {
-    return this.executor.run(this.resetEffect(seed, stateSummary));
-  }
-  dispose(): Promise<void> {
-    return this.executor.run(this.disposeEffect());
-  }
-  cancelCheckpoint(checkpointId: string): Promise<void> {
-    return this.executor.run(this.cancelCheckpointEffect(checkpointId));
+          );
+      }
+      self.waiters.push({ request, target, epoch: self.epoch, done });
+      yield* self.initializeEffect();
+      self.schedulePump();
+      return yield* Deferred.await(done);
+    });
   }
   resetEffect(seed: string, stateSummary?: string) {
     const self = this;
     return Effect.gen(function* () {
       const resetEpoch = ++self.epoch;
       const error = new AdvisorQueueError({ message: "Advisor review queue was reset." });
-      self.releaseWaiters(error);
-      self.rejectActive(error);
+      yield* self.releaseWaitersEffect(error);
+      yield* self.rejectActiveEffect(error);
       self.activeSteeredThrough = 0;
       self.steeringAttemptedThrough = 0;
       self.steeringScheduled = false;
       self.observations.reset(resetEpoch);
       yield* Ref.set(self.processedThroughRef, 0);
+      self.processedThroughProjection = 0;
       const pumpFiber = self.pumpFiber;
       const steeringFiber = self.steeringFiber;
       self.pumpFiber = undefined;
@@ -200,20 +162,13 @@ export class AdvisorReviewQueue {
       self.steeringMailbox = undefined;
       if (pumpFiber) yield* interruptFiberWithin(pumpFiber);
       if (steeringFiber) yield* interruptFiberWithin(steeringFiber);
-      yield* self.runtimeEffects
-        ? self.runtimeEffects
-            .abort()
-            .pipe(Effect.mapError(toQueueError("Advisor runtime abort failed.")))
-        : promiseEffect(() => self.runtime.abort(), "Advisor runtime abort failed.");
+      yield* self.runtime
+        .abort()
+        .pipe(Effect.mapError(toQueueError("Advisor runtime abort failed.")));
       if (resetEpoch !== self.epoch || self.disposed) return;
-      yield* self.runtimeEffects
-        ? self.runtimeEffects
-            .reprime(seed, stateSummary)
-            .pipe(Effect.mapError(toQueueError("Advisor runtime re-prime failed.")))
-        : promiseEffect(
-            () => self.runtime.reprime(seed, stateSummary),
-            "Advisor runtime re-prime failed.",
-          );
+      yield* self.runtime
+        .reprime(seed, stateSummary)
+        .pipe(Effect.mapError(toQueueError("Advisor runtime re-prime failed.")));
       yield* self.initializeEffect();
     });
   }
@@ -224,8 +179,8 @@ export class AdvisorReviewQueue {
       self.disposed = true;
       self.epoch++;
       const error = new AdvisorQueueError({ message: "Advisor review queue was disposed." });
-      self.releaseWaiters(error);
-      self.rejectActive(error);
+      yield* self.releaseWaitersEffect(error);
+      yield* self.rejectActiveEffect(error);
       const pumpFiber = self.pumpFiber;
       const steeringFiber = self.steeringFiber;
       self.pumpFiber = undefined;
@@ -234,11 +189,7 @@ export class AdvisorReviewQueue {
       self.steeringMailbox = undefined;
       if (pumpFiber) yield* interruptFiberWithin(pumpFiber);
       if (steeringFiber) yield* interruptFiberWithin(steeringFiber);
-      yield* (
-        self.runtimeEffects
-          ? self.runtimeEffects.dispose()
-          : promiseEffect(() => self.runtime.dispose(), "Advisor runtime disposal failed.")
-      ).pipe(Effect.catch(() => Effect.void));
+      yield* self.runtime.dispose();
     });
   }
   cancelCheckpointEffect(checkpointId: string) {
@@ -275,11 +226,7 @@ export class AdvisorReviewQueue {
       if (steering) yield* interruptFiberWithin(steering);
       if (pump) yield* interruptFiberWithin(pump);
       else {
-        yield* (
-          self.runtimeEffects
-            ? self.runtimeEffects.abort()
-            : promiseEffect(() => self.runtime.abort(), "Advisor runtime abort failed.")
-        ).pipe(Effect.catch(() => Effect.void));
+        yield* self.runtime.abort();
       }
       if (!self.disposed) {
         yield* self.initializeEffect();
@@ -389,6 +336,10 @@ export class AdvisorReviewQueue {
             yield* Ref.update(self.processedThroughRef, (processed) =>
               Math.max(processed, checkpoint.processedThrough),
             );
+            self.processedThroughProjection = Math.max(
+              self.processedThroughProjection,
+              checkpoint.processedThrough,
+            );
             yield* Deferred.succeed(waiter.done, checkpoint);
           }
         } else {
@@ -420,23 +371,16 @@ export class AdvisorReviewQueue {
     return Effect.gen(function* () {
       let retried = false;
       while (true) {
-        self.assertRecoveryCurrent(expectedEpoch);
-        const checkpointEffect = self.runtimeEffects
-          ? self.runtimeEffects
-              .checkpoint(request)
-              .pipe(Effect.mapError(toQueueError("Advisor checkpoint failed.")))
-          : promiseEffect(() => self.runtime.checkpoint(request), "Advisor checkpoint failed.");
+        yield* self.assertRecoveryCurrentEffect(expectedEpoch);
+        const checkpointEffect = self.runtime
+          .checkpoint(request)
+          .pipe(Effect.mapError(toQueueError("Advisor checkpoint failed.")));
         const attempt = yield* checkpointEffect.pipe(
-          Effect.onInterrupt(() =>
-            (self.runtimeEffects
-              ? self.runtimeEffects.abort()
-              : promiseEffect(() => self.runtime.abort(), "Advisor runtime abort failed.")
-            ).pipe(Effect.catch(() => Effect.void)),
-          ),
+          Effect.onInterrupt(() => self.runtime.abort()),
           Effect.exit,
         );
         if (attempt._tag === "Success") return attempt.value;
-        self.assertRecoveryCurrent(expectedEpoch);
+        yield* self.assertRecoveryCurrentEffect(expectedEpoch);
         const failure = Option.getOrUndefined(Cause.findErrorOption(attempt.cause));
         if (!isReprimeRequired(failure))
           return yield* new AdvisorQueueError({
@@ -448,15 +392,10 @@ export class AdvisorReviewQueue {
             message: "Advisor checkpoint requires a fresh context.",
           });
         isolate(() => self.options.onRuntimeReset?.("Advisor runtime requires a fresh context."));
-        yield* self.runtimeEffects
-          ? self.runtimeEffects
-              .reprime(state.seed, state.stateSummary)
-              .pipe(Effect.mapError(toQueueError("Advisor runtime re-prime failed.")))
-          : promiseEffect(
-              () => self.runtime.reprime(state.seed, state.stateSummary),
-              "Advisor runtime re-prime failed.",
-            );
-        self.assertRecoveryCurrent(expectedEpoch);
+        yield* self.runtime
+          .reprime(state.seed, state.stateSummary)
+          .pipe(Effect.mapError(toQueueError("Advisor runtime re-prime failed.")));
+        yield* self.assertRecoveryCurrentEffect(expectedEpoch);
         if (retried) {
           self.observations.commitThrough(request.processedThrough);
           return yield* new AdvisorBatchDroppedError({
@@ -467,9 +406,10 @@ export class AdvisorReviewQueue {
       }
     });
   }
-  private assertRecoveryCurrent(expectedEpoch: number) {
-    if (this.disposed || expectedEpoch !== this.epoch)
-      throw new AdvisorQueueError({ message: "Advisor checkpoint recovery became stale." });
+  private assertRecoveryCurrentEffect(expectedEpoch: number) {
+    return this.disposed || expectedEpoch !== this.epoch
+      ? Effect.fail(new AdvisorQueueError({ message: "Advisor checkpoint recovery became stale." }))
+      : Effect.void;
   }
   private scheduleActiveSteering() {
     if (this.steeringScheduled || this.disposed || !this.steeringMailbox) return;
@@ -485,31 +425,29 @@ export class AdvisorReviewQueue {
       const batch = self.observations.peekRange(self.activeSteeredThrough, through);
       if (!batch) return;
       self.steeringAttemptedThrough = Math.max(self.steeringAttemptedThrough, through);
-      const accepted = yield* (
-        self.runtimeEffects
-          ? self.runtimeEffects
-              .steer(batch.rendered)
-              .pipe(Effect.mapError(toQueueError("Advisor steering failed.")))
-          : promiseEffect(() => self.runtime.steer(batch.rendered), "Advisor steering failed.")
-      ).pipe(Effect.catch(() => Effect.succeed(false)));
+      const accepted = yield* self.runtime.steer(batch.rendered).pipe(
+        Effect.mapError(toQueueError("Advisor steering failed.")),
+        Effect.catch(() => Effect.succeed(false)),
+      );
       if (accepted && self.activeWaiter === waiter && waiter.epoch === self.epoch && !self.disposed)
         self.activeSteeredThrough = Math.max(self.activeSteeredThrough, through);
     });
   }
-  private releaseWaiters(error: AdvisorQueueError) {
-    for (const waiter of this.waiters.splice(0))
-      Deferred.doneUnsafe(waiter.done, Effect.fail(error));
+  private releaseWaitersEffect(error: AdvisorQueueError) {
+    return Effect.forEach(this.waiters.splice(0), (waiter) => Deferred.fail(waiter.done, error), {
+      discard: true,
+    });
   }
-  private rejectActive(error: AdvisorQueueError) {
-    if (this.activeWaiter) Deferred.doneUnsafe(this.activeWaiter.done, Effect.fail(error));
+  private rejectActiveEffect(error: AdvisorQueueError) {
+    const active = this.activeWaiter;
     this.activeWaiter = undefined;
+    return active ? Deferred.fail(active.done, error).pipe(Effect.asVoid) : Effect.void;
   }
 }
 export interface AdvisorReviewQueueServiceShape {
   readonly make: (
-    runtime: AdvisorRuntimeDriver,
+    runtime: AdvisorRuntimeServiceShape,
     options?: AdvisorReviewQueueOptions,
-    runtimeEffects?: AdvisorRuntimeServiceShape,
   ) => Effect.Effect<AdvisorReviewQueue>;
 }
 export class AdvisorReviewQueueService extends Context.Service<
@@ -517,28 +455,36 @@ export class AdvisorReviewQueueService extends Context.Service<
   AdvisorReviewQueueServiceShape
 >()("pi-advisor/review-queue/AdvisorReviewQueueService") {}
 
-export const advisorReviewQueueServiceLayer = (executor: AdvisorEffectExecutor) =>
-  Layer.effect(
-    AdvisorReviewQueueService,
-    Effect.gen(function* () {
-      const scope = yield* Effect.scope;
-      return AdvisorReviewQueueService.of({
-        make: (runtime, options = {}, runtimeEffects) => {
-          const queue = new AdvisorReviewQueue(runtime, options, executor, scope, runtimeEffects);
-          return queue.initializeEffect().pipe(Effect.as(queue));
-        },
-      });
-    }),
-  );
+export const advisorReviewQueueServiceLayer = Layer.effect(
+  AdvisorReviewQueueService,
+  Effect.gen(function* () {
+    const scope = yield* Effect.scope;
+    return AdvisorReviewQueueService.of({
+      make: (runtime, options = {}) =>
+        Effect.gen(function* () {
+          const steeringLock = yield* Semaphore.make(1);
+          const initializationLock = yield* Semaphore.make(1);
+          const processedThroughRef = yield* Ref.make(0);
+          const queue = new AdvisorReviewQueue(
+            runtime,
+            options,
+            scope,
+            steeringLock,
+            initializationLock,
+            processedThroughRef,
+          );
+          yield* Scope.addFinalizer(scope, queue.disposeEffect());
+          yield* queue.initializeEffect();
+          return queue;
+        }),
+    });
+  }),
+);
 
 const interruptFiberWithin = <A, E>(fiber: Fiber.Fiber<A, E>) =>
-  Effect.sync(() => fiber.interruptUnsafe()).pipe(
-    Effect.andThen(
-      Fiber.await(fiber).pipe(
-        Effect.timeout(Duration.millis(MAX_ADVISOR_ABORT_MS)),
-        Effect.catch(() => Effect.void),
-      ),
-    ),
+  Fiber.interrupt(fiber).pipe(
+    Effect.timeout(Duration.millis(MAX_ADVISOR_ABORT_MS)),
+    Effect.catch(() => Effect.void),
     Effect.asVoid,
   );
 
@@ -546,16 +492,6 @@ const toQueueError = (fallback: string) => (error: unknown) =>
   error instanceof AdvisorRuntimeResetRequiredError
     ? error
     : new AdvisorQueueError({ message: failureMessage(error, fallback) });
-const promiseEffect = <A>(operation: () => Promise<A>, message: string) =>
-  Effect.tryPromise({
-    try: operation,
-    catch: (error) =>
-      error instanceof AdvisorRuntimeResetRequiredError
-        ? error
-        : new AdvisorQueueError({
-            message: error instanceof Error ? error.message : message,
-          }),
-  });
 function failureMessage(error: unknown, fallback: string): string {
   return typeof error === "object" &&
     error !== null &&

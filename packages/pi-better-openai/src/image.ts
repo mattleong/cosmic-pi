@@ -1,6 +1,5 @@
 import {
   CONFIG_DIR_NAME,
-  getAgentDir,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -13,17 +12,24 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
+import * as Ref from "effect/Ref";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { JsonDocumentStore, StreamingHttpClient, type StreamingHttpError } from "pi-cosmic-core";
-import { SafeFileAdapter } from "./boundary/safe-file.ts";
+import {
+  AgentDirectory,
+  JsonDocumentStore,
+  SafeFile,
+  StreamingHttpClient,
+  type StreamingHttpError,
+} from "pi-cosmic-core";
 import { SharpAdapter } from "./boundary/sharp.ts";
 import type { ResolvedConfig } from "./config.ts";
 import { extractAccountIdFromJwt, getCodexCredentials } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
+import { decodeImageStreamEvent, ImageRequestSchema, type ImageRequest } from "./image-protocol.ts";
 import type { OpenAIProjection } from "./usage-controller.ts";
 import { isRecord } from "./utils.ts";
 
@@ -141,7 +147,9 @@ function resolveModel(
 ): string {
   const model = params.model?.trim();
   if (model) return model.includes("/") ? model.split("/").pop() || model : model;
-  return ctx.model?.provider === "openai-codex" ? ctx.model.id : cfg.image.defaultModel;
+  return ctx.model?.provider === "openai-codex"
+    ? (ctx.model.id ?? cfg.image.defaultModel)
+    : cfg.image.defaultModel;
 }
 function resolveImageConfig(cfg: ResolvedConfig, params: ToolParams) {
   return {
@@ -230,17 +238,26 @@ function buildRequest(
   model: string,
   cfg: ResolvedConfig,
   images: readonly ImageInput[],
-) {
+): ImageRequest {
   const { action, outputFormat } = resolveImageConfig(cfg, params);
-  const content: Array<Record<string, unknown>> = [{ type: "input_text", text: params.prompt }];
+  const content: Array<
+    | { readonly type: "input_text"; readonly text: string }
+    | {
+        readonly type: "input_image";
+        readonly detail: "auto";
+        readonly image_url: string;
+      }
+  > = [{ type: "input_text", text: params.prompt }];
   for (const image of images)
     content.push({
       type: "input_image",
       detail: "auto",
       image_url: `data:${image.mimeType};base64,${image.data}`,
     });
-  const tool: Record<string, unknown> = { type: "image_generation", output_format: outputFormat };
-  if (action !== "auto") tool.action = action;
+  const tool: ImageRequest["tools"][number] =
+    action === "auto"
+      ? { type: "image_generation", output_format: outputFormat }
+      : { type: "image_generation", output_format: outputFormat, action };
   return {
     model,
     instructions: "",
@@ -252,7 +269,7 @@ function buildRequest(
     stream: true,
     include: [],
     client_metadata: { "x-codex-installation-id": "pi-better-openai" },
-  };
+  } satisfies ImageRequest;
 }
 
 export interface OpenAIImageServiceShape {
@@ -274,14 +291,14 @@ export class OpenAIImageService extends Context.Service<
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const http = yield* StreamingHttpClient;
-        const safeFile = yield* SafeFileAdapter;
+        const safeFile = yield* SafeFile;
         const sharp = yield* SharpAdapter;
         const documents = yield* JsonDocumentStore;
-        const agentDir = options.agentDir ?? getAgentDir();
+        const agentDir = options.agentDir ?? (yield* AgentDirectory);
         const authPath = path.join(agentDir, "auth.json");
         const customSaveDir = yield* Config.option(Config.string("PI_IMAGE_SAVE_DIR"));
         const homeDirectory = yield* Config.option(Config.string("HOME"));
-        const state = MutableRef.make<ImageState>({});
+        const state = yield* Ref.make<ImageState>({});
         const credentialsFor = (ctx: Pick<ExtensionContext, "modelRegistry">) =>
           getCodexCredentials(authPath, ctx).pipe(
             Effect.provideService(JsonDocumentStore, documents),
@@ -403,11 +420,16 @@ export class OpenAIImageService extends Context.Service<
               terminated = true;
               return false;
             }
-            const event = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
-              data,
-            ).pipe(
+            const rawEvent = yield* Schema.decodeUnknownEffect(
+              Schema.fromJsonString(Schema.Unknown),
+            )(data).pipe(
               Effect.mapError(() =>
                 fail("stream", "Codex image response contained malformed JSON."),
+              ),
+            );
+            const event: unknown = yield* decodeImageStreamEvent(rawEvent).pipe(
+              Effect.mapError(() =>
+                fail("stream", "Codex image response contained a malformed event."),
               ),
             );
             const image = extractImageFromEvent(event, mimeType, fallbackId);
@@ -640,7 +662,7 @@ export class OpenAIImageService extends Context.Service<
           return destination;
         });
         const generate = Effect.fn("OpenAIImage.generate")(function* (rawParams: unknown) {
-          MutableRef.set(state, { lastStatus: "requesting" });
+          yield* Ref.set(state, { lastStatus: "requesting" });
           if (
             !isRecord(rawParams) ||
             Object.keys(rawParams).some((key) => !TOOL_PARAM_KEYS.has(key))
@@ -696,9 +718,16 @@ export class OpenAIImageService extends Context.Service<
                 originator: "codex_cli_rs",
                 "User-Agent": "codex_cli_rs/0.0.0 (pi-better-openai)",
               },
-              jsonBody: buildRequest(params, model, cfg, inputs),
+              jsonBody: yield* Schema.decodeUnknownEffect(ImageRequestSchema)(
+                buildRequest(params, model, cfg, inputs),
+              ).pipe(
+                Effect.mapError(imageError("request", "Unable to encode Codex image request.")),
+              ),
             })
-            .pipe(Effect.mapError(imageError("request", "Codex image request failed.")));
+            .pipe(
+              Effect.mapError(imageError("request", "Codex image request failed.")),
+              Effect.withSpan("pi-better-openai.image.request"),
+            );
           if (response.status < 200 || response.status >= 300) {
             yield* response.discard.pipe(
               Effect.timeout("1 second"),
@@ -709,8 +738,10 @@ export class OpenAIImageService extends Context.Service<
           const parsed = yield* parseSse(
             response.body,
             imageMimeType(`image.${outputFormat}`, outputFormat),
+          ).pipe(Effect.withSpan("pi-better-openai.image.stream"));
+          const validated = yield* validatedGeneratedImage(parsed, outputFormat).pipe(
+            Effect.withSpan("pi-better-openai.image.convert"),
           );
-          const validated = yield* validatedGeneratedImage(parsed, outputFormat);
           let savedPath: string | undefined;
           if (saveDir) {
             const protectedBase =
@@ -721,7 +752,7 @@ export class OpenAIImageService extends Context.Service<
               validated.bytes,
               outputFormat,
               validated.id,
-            );
+            ).pipe(Effect.withSpan("pi-better-openai.image.write"));
           }
           const { bytes: _bytes, ...image } = validated;
           const result: CodexImageResult = {
@@ -732,7 +763,7 @@ export class OpenAIImageService extends Context.Service<
             action,
             outputFormat,
           };
-          MutableRef.set(state, { lastStatus: `completed (${result.id})` });
+          yield* Ref.set(state, { lastStatus: `completed (${result.id})` });
           return result;
         });
         const safeGenerate = (params: unknown) =>
@@ -749,7 +780,6 @@ export class OpenAIImageService extends Context.Service<
                   ? error.message
                   : "OpenAI image request timed out.",
               );
-              MutableRef.set(state, { lastStatus: "error", lastError: message });
               return fail(
                 "operation" in error && typeof error.operation === "string"
                   ? error.operation
@@ -757,11 +787,14 @@ export class OpenAIImageService extends Context.Service<
                 message,
               );
             }),
+            Effect.tapError((error) =>
+              Ref.set(state, { lastStatus: "error", lastError: error.message }),
+            ),
           );
         const debug = Effect.fn("OpenAIImage.debug")(function* () {
           const ctx = MutableRef.get(options.context);
           const cfg = MutableRef.get(options.projection).config;
-          const credentials = yield* credentialsFor(ctx);
+          const credentials = yield* credentialsFor(ctx).pipe(Effect.catch(() => Effect.void));
           const image = cfg?.image;
           const accountId = maskIdentifier(credentials?.accountId);
           return {
@@ -775,7 +808,7 @@ export class OpenAIImageService extends Context.Service<
                 : (image?.defaultModel ?? "gpt-5.5"),
             defaultSave: image?.defaultSave ?? "project",
             enabled: image?.enabled ?? false,
-            ...MutableRef.get(state),
+            ...(yield* Ref.get(state)),
           } satisfies ImageGenerationDebug;
         });
         return OpenAIImageService.of({ generate: safeGenerate, debug });

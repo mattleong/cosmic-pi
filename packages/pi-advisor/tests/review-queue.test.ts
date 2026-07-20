@@ -2,13 +2,73 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import { describe, expect, test, vi } from "vitest";
 import type {
   AdvisorCheckpoint,
   AdvisorCheckpointRequest,
   AdvisorRuntimeDriver,
+  AdvisorRuntimeServiceShape,
 } from "../src/advisor-runtime.ts";
-import { AdvisorReviewQueue } from "../src/review-queue.ts";
+import {
+  AdvisorReviewQueue,
+  AdvisorQueueError,
+  AdvisorReviewQueueService,
+  advisorReviewQueueServiceLayer,
+  type AdvisorReviewQueueOptions,
+} from "../src/review-queue.ts";
+import { AdvisorModelError } from "../src/client.ts";
+
+type TestQueue = AdvisorReviewQueue & {
+  checkpoint: (
+    request: Parameters<AdvisorReviewQueue["checkpointEffect"]>[0],
+  ) => Promise<AdvisorCheckpoint>;
+  dispose: () => Promise<void>;
+  reset: (seed: string, stateSummary?: string) => Promise<void>;
+};
+
+async function makeQueue(
+  driver: AdvisorRuntimeDriver,
+  options: AdvisorReviewQueueOptions = {},
+): Promise<TestQueue> {
+  const scope = Scope.makeUnsafe();
+  const runtime: AdvisorRuntimeServiceShape = {
+    activeToolNames: () => driver.activeToolNames,
+    start: (value) => Effect.tryPromise({ try: () => driver.start(value), catch: modelError }),
+    checkpoint: (value) =>
+      Effect.tryPromise({ try: () => driver.checkpoint(value), catch: modelError }),
+    steer: (value) => Effect.tryPromise({ try: () => driver.steer(value), catch: modelError }),
+    reprime: (seed, state) =>
+      Effect.tryPromise({ try: () => driver.reprime(seed, state), catch: modelError }),
+    abort: () => Effect.promise(() => driver.abort()),
+    dispose: () => Effect.promise(() => driver.dispose()),
+  };
+  const queue = new AdvisorReviewQueue(
+    runtime,
+    options,
+    scope,
+    Effect.runSync(Semaphore.make(1)),
+    Effect.runSync(Semaphore.make(1)),
+    Effect.runSync(Ref.make(0)),
+  ) as TestQueue;
+  await Effect.runPromise(queue.initializeEffect());
+  queue.checkpoint = (request) => Effect.runPromise(queue.checkpointEffect(request));
+  queue.reset = (seed, state) => Effect.runPromise(queue.resetEffect(seed, state));
+  queue.dispose = () =>
+    Effect.runPromise(queue.disposeEffect().pipe(Effect.andThen(Scope.close(scope, Exit.void))));
+  return queue;
+}
+
+const modelError = (error: unknown) =>
+  error instanceof AdvisorModelError
+    ? error
+    : new AdvisorModelError({ message: error instanceof Error ? error.message : "test failure" });
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -63,9 +123,30 @@ async function tick() {
 }
 
 describe("AdvisorReviewQueue", () => {
+  test("ManagedRuntime disposal alone finalizes an acquired queue exactly once", async () => {
+    let disposals = 0;
+    const runtime: AdvisorRuntimeServiceShape = {
+      activeToolNames: () => [],
+      start: () => Effect.void,
+      checkpoint: () => Effect.never,
+      steer: () => Effect.succeed(false),
+      reprime: () => Effect.void,
+      abort: () => Effect.void,
+      dispose: () =>
+        Effect.sync(() => {
+          disposals += 1;
+        }),
+    };
+    const managed = ManagedRuntime.make(advisorReviewQueueServiceLayer);
+    const service = await managed.runPromise(AdvisorReviewQueueService);
+    await managed.runPromise(service.make(runtime));
+    await managed.dispose();
+    expect(disposals).toBe(1);
+  });
+
   test("serializes two checkpoints and does not ordinarily abort the first", async () => {
     const harness = runtimeHarness();
-    const queue = new AdvisorReviewQueue(harness.runtime);
+    const queue = await makeQueue(harness.runtime);
     queue.ingest(1, { type: "user", text: "request" });
     const first = queue.checkpoint({ checkpointId: "one", focus: "standard", parentTurnId: 1 });
     const second = queue.checkpoint({ checkpointId: "two", focus: "standard", parentTurnId: 1 });
@@ -90,7 +171,7 @@ describe("AdvisorReviewQueue", () => {
 
   test("coalesces and live-steers bounded deltas without committing them", async () => {
     const harness = runtimeHarness();
-    const queue = new AdvisorReviewQueue(harness.runtime);
+    const queue = await makeQueue(harness.runtime);
     queue.ingest(1, { type: "assistant_text_delta", text: "before" });
     const checkpoint = queue.checkpoint({
       checkpointId: "one",
@@ -137,7 +218,7 @@ describe("AdvisorReviewQueue", () => {
     (harness.runtime.steer as ReturnType<typeof vi.fn>)
       .mockImplementationOnce(() => firstSteer.promise)
       .mockImplementationOnce(() => secondSteer.promise);
-    const queue = new AdvisorReviewQueue(harness.runtime);
+    const queue = await makeQueue(harness.runtime);
     queue.ingest(1, { type: "assistant_text_delta", text: "checkpoint seed" });
     const checkpoint = queue.checkpoint({
       checkpointId: "one",
@@ -167,7 +248,7 @@ describe("AdvisorReviewQueue", () => {
 
   test("freezes exact pre-pump checkpoint barriers across a seq1/seq2 coalescing race", async () => {
     const harness = runtimeHarness();
-    const queue = new AdvisorReviewQueue(harness.runtime);
+    const queue = await makeQueue(harness.runtime);
     queue.ingest(1, { type: "assistant_text_delta", text: "seq1" });
     const first = queue.checkpoint({ checkpointId: "one", focus: "standard", parentTurnId: 1 });
     queue.ingest(1, { type: "assistant_text_delta", text: "seq2" });
@@ -188,7 +269,7 @@ describe("AdvisorReviewQueue", () => {
 
   test("freezes seq1 tool_update before seq2 same-tool replacement in the pre-pump race", async () => {
     const harness = runtimeHarness();
-    const queue = new AdvisorReviewQueue(harness.runtime);
+    const queue = await makeQueue(harness.runtime);
     queue.ingest(1, { type: "tool_update", toolCallId: "c", toolName: "read", update: "seq1" });
     const first = queue.checkpoint({ checkpointId: "one", focus: "standard", parentTurnId: 1 });
     queue.ingest(1, { type: "tool_update", toolCallId: "c", toolName: "read", update: "seq2" });
@@ -210,7 +291,7 @@ describe("AdvisorReviewQueue", () => {
   test("retains failed or idle-race live delivery for the next coherent checkpoint", async () => {
     const harness = runtimeHarness();
     (harness.runtime.steer as ReturnType<typeof vi.fn>).mockResolvedValueOnce(false);
-    const queue = new AdvisorReviewQueue(harness.runtime);
+    const queue = await makeQueue(harness.runtime);
     queue.ingest(1, { type: "user", text: "initial" });
     const first = queue.checkpoint({ checkpointId: "one", focus: "standard", parentTurnId: 1 });
     await tick();
@@ -231,7 +312,7 @@ describe("AdvisorReviewQueue", () => {
 
   test("requeues an in-flight observation batch after checkpoint failure", async () => {
     const harness = runtimeHarness();
-    const queue = new AdvisorReviewQueue(harness.runtime);
+    const queue = await makeQueue(harness.runtime);
     queue.ingest(1, { type: "user", text: "must survive" });
     const failed = queue.checkpoint({ checkpointId: "failed", focus: "standard", parentTurnId: 1 });
     await tick();
@@ -249,12 +330,32 @@ describe("AdvisorReviewQueue", () => {
     expect(queue.processedThrough).toBe(1_001);
   });
 
+  test("reports correlation validation as a typed queue failure, not a defect", async () => {
+    const harness = runtimeHarness();
+    (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(
+      async (request: AdvisorCheckpointRequest) => ({ ...result(request), checkpointId: "wrong" }),
+    );
+    const queue = await makeQueue(harness.runtime);
+    queue.ingest(1, { type: "user", text: "request" });
+    const exit = await Effect.runPromiseExit(
+      queue.checkpointEffect({ checkpointId: "expected", focus: "standard", parentTurnId: 1 }),
+    );
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      const failure = Cause.findErrorOption(exit.cause);
+      expect(failure._tag).toBe("Some");
+      if (failure._tag === "Some") expect(failure.value).toBeInstanceOf(AdvisorQueueError);
+      expect(Cause.hasDies(exit.cause)).toBe(false);
+    }
+    await queue.dispose();
+  });
+
   test("preserves typed provider failure text for parent classification", async () => {
     const harness = runtimeHarness();
     (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("Advisor authentication failed; credential unavailable."),
     );
-    const queue = new AdvisorReviewQueue(harness.runtime);
+    const queue = await makeQueue(harness.runtime);
     queue.ingest(1, { type: "user", text: "request" });
     await expect(
       queue.checkpoint({ checkpointId: "auth", focus: "standard", parentTurnId: 1 }),
@@ -272,7 +373,7 @@ describe("AdvisorReviewQueue", () => {
       },
     );
     const reset = vi.fn();
-    const queue = new AdvisorReviewQueue(harness.runtime, {
+    const queue = await makeQueue(harness.runtime, {
       getReprimeState: () => ({ seed: "current cursor", stateSummary: "compact" }),
       onRuntimeReset: reset,
     });
@@ -295,7 +396,7 @@ describe("AdvisorReviewQueue", () => {
         return result(request);
       },
     );
-    const queue = new AdvisorReviewQueue(harness.runtime, {
+    const queue = await makeQueue(harness.runtime, {
       getReprimeState: () => ({ seed: "current cursor", stateSummary: "compact" }),
     });
     queue.ingest(1, { type: "user", text: "oversized" });
@@ -316,7 +417,7 @@ describe("AdvisorReviewQueue", () => {
     (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(
       () => failure.promise,
     );
-    const queue = new AdvisorReviewQueue(harness.runtime, {
+    const queue = await makeQueue(harness.runtime, {
       getReprimeState: () => ({ seed: "obsolete cursor", stateSummary: "obsolete state" }),
     });
     queue.ingest(1, { type: "user", text: "old request" });
@@ -340,7 +441,7 @@ describe("AdvisorReviewQueue", () => {
 
   test("hard reset aborts and rejects stale checkpoint work", async () => {
     const harness = runtimeHarness();
-    const queue = new AdvisorReviewQueue(harness.runtime);
+    const queue = await makeQueue(harness.runtime);
     queue.ingest(1, { type: "user", text: "old branch" });
     const checkpoint = queue.checkpoint({
       checkpointId: "old",

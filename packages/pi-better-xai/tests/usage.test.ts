@@ -1,5 +1,6 @@
 // @effect-diagnostics effect/strictEffectProvide:off
 // @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/preferSchemaOverJson:off
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -10,6 +11,7 @@ import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
 import {
+  AgentDirectory,
   JsonDocumentError,
   JsonDocumentStore,
   JsonHttpClient,
@@ -19,7 +21,8 @@ import {
   type JsonHttpClientShape,
   type JsonObject,
 } from "pi-cosmic-core";
-import { getXaiCredentials } from "../src/auth.ts";
+import { makeCapturedTracer } from "pi-cosmic-core/testing";
+import { getXaiCredentials, getXaiCredentialsResult } from "../src/auth.ts";
 import {
   applySettingToRawConfig,
   readRawConfig,
@@ -96,7 +99,7 @@ function registryContext(token = "registry-token") {
 }
 
 function providers(documents: Layer.Layer<JsonDocumentStore>, http: Layer.Layer<JsonHttpClient>) {
-  return Layer.merge(Layer.merge(documents, http), Path.layer);
+  return Layer.mergeAll(documents, http, Path.layer, AgentDirectory.layer("/agent"));
 }
 
 function resolvedConfig(showOnlyOnSubscriptionModels = true): ResolvedConfig {
@@ -178,11 +181,25 @@ describe("xAI configuration", () => {
       expect(config.usage.enabled).toBe(false);
       expect(config.usage.refreshIntervalMs).toBe(30000);
       const raw = yield* readRawConfig(config.globalConfigPath);
-      const updated = applySettingToRawConfig(raw, "usage.showResetTimes", "false");
+      const updated = yield* applySettingToRawConfig(raw, "usage.showResetTimes", "false");
       yield* writeConfig(config.globalConfigPath, updated);
       expect(harness.documents.get(config.globalConfigPath)?.unknown).toBe("keep");
     }).pipe(Effect.provide(Layer.merge(harness.layer, Path.layer)));
   });
+
+  it.effect("rejects malformed setting values instead of coercing them", () =>
+    Effect.gen(function* () {
+      expect((yield* Effect.result(applySettingToRawConfig({}, "usage.enabled", "yes")))._tag).toBe(
+        "Failure",
+      );
+      expect(
+        (yield* Effect.result(applySettingToRawConfig({}, "usage.refreshIntervalMs", "NaN")))._tag,
+      ).toBe("Failure");
+      expect((yield* Effect.result(applySettingToRawConfig({}, "footer.mode", "other")))._tag).toBe(
+        "Failure",
+      );
+    }),
+  );
 
   it.effect("falls back to defaults for malformed config", () => {
     const harness = documentHarness({
@@ -222,6 +239,37 @@ describe("xAI configuration", () => {
 });
 
 describe("xAI credentials", () => {
+  it.effect("distinguishes total credential failure from genuine absence", () => {
+    const failure = new JsonDocumentError({
+      operation: "read",
+      path: "/redacted",
+      message: "unavailable",
+    });
+    const documents = Layer.succeed(
+      JsonDocumentStore,
+      JsonDocumentStore.of({
+        exists: () => Effect.fail(failure),
+        readObject: () => Effect.fail(failure),
+        writeObject: () => Effect.fail(failure),
+        updateObject: () => Effect.fail(failure),
+      }),
+    );
+    const ctx = registryContext();
+    ctx.modelRegistry.getApiKeyForProvider = () => Promise.reject(new Error("registry"));
+    return Effect.gen(function* () {
+      const result = yield* getXaiCredentialsResult("/auth.json", ctx);
+      expect(result._tag).toBe("Unavailable");
+      expect("message" in result ? result.message : "").not.toContain("redacted");
+    }).pipe(
+      Effect.provide(
+        providers(
+          documents,
+          httpLayer(() => Effect.die("unexpected HTTP")),
+        ),
+      ),
+    );
+  });
+
   it.effect("extracts the team identifier from an OAuth JWT", () => {
     const payload = Buffer.from('{"team_id":"team-42"}').toString("base64url");
     const harness = documentHarness({
@@ -375,6 +423,77 @@ describe("xAI credentials", () => {
     }).pipe(Effect.provide(providers(harness.layer, http)));
   });
 
+  it.effect("fails closed after expired auth refresh fails with no registry token", () => {
+    const harness = documentHarness({
+      "/agent/auth.json": {
+        xai: { type: "oauth", access: "expired", refresh: "refresh", expires: 0 },
+      },
+    });
+    const requests: Array<{ readonly url: string; readonly authorization?: string }> = [];
+    const http = httpLayer((request) => {
+      requests.push({
+        url: request.url,
+        ...(request.headers?.Authorization ? { authorization: request.headers.Authorization } : {}),
+      });
+      return Effect.fail(new JsonHttpError({ operation: "request", message: "refresh failed" }));
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const result = yield* Effect.result(requestXaiUsage("/agent/auth.json", registryContext("")));
+      expect(result._tag).toBe("Failure");
+      expect(requests).toHaveLength(1);
+      expect(requests.some(({ authorization }) => authorization === "Bearer expired")).toBe(false);
+    }).pipe(Effect.provide(providers(harness.layer, http)));
+  });
+
+  it.effect("treats expired auth without a refresh token as missing", () => {
+    const harness = documentHarness({
+      "/agent/auth.json": { xai: { type: "oauth", access: "expired", expires: 0 } },
+    });
+    const requests: string[] = [];
+    const http = httpLayer(({ url }) =>
+      Effect.sync(() => {
+        requests.push(url);
+        return { status: 500, body: {} };
+      }),
+    );
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      expect(yield* requestXaiUsage("/agent/auth.json", registryContext(""))).toBeUndefined();
+      expect(requests).toEqual([]);
+    }).pipe(Effect.provide(providers(harness.layer, http)));
+  });
+
+  it.effect("uses a still-valid skew-window token only after refresh failure", () => {
+    const harness = documentHarness({
+      "/agent/auth.json": {
+        xai: {
+          type: "oauth",
+          access: "still-valid",
+          refresh: "refresh",
+          expires: NOW + 60_000,
+        },
+      },
+    });
+    const authorizations: string[] = [];
+    const http = httpLayer((request) => {
+      if (!request.headers?.Authorization) return Effect.fail({ _tag: "refresh-failed" } as never);
+      return Effect.sync(() => {
+        authorizations.push(request.headers?.Authorization ?? "");
+        return {
+          status: 200,
+          body: request.url.includes("format=credits") ? weeklyFixture : monthlyFixture,
+        };
+      });
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      expect(yield* requestXaiUsage("/agent/auth.json", registryContext(""))).toBeDefined();
+      expect(authorizations).toEqual(["Bearer still-valid", "Bearer still-valid"]);
+      expect(authorizations).not.toContain("Bearer expired");
+    }).pipe(Effect.provide(providers(harness.layer, http)));
+  });
+
   it.effect("is interruptible while model registry credentials are pending", () => {
     const harness = documentHarness();
     const http = httpLayer(() => Effect.die("unexpected HTTP"));
@@ -480,7 +599,8 @@ describe("xAI refresh lifecycle", () => {
     }).pipe(Effect.provide(serviceLayer));
   });
 
-  it.effect("uses the latest event context for eligibility and requests", () => {
+  it.effect("uses current context and captures redacted initialization/refresh spans", () => {
+    const captured = makeCapturedTracer();
     const harness = documentHarness();
     const initial = registryContext();
     initial.model = { provider: "openai", id: "gpt" } as typeof initial.model;
@@ -506,7 +626,16 @@ describe("xAI refresh lifecycle", () => {
       MutableRef.set(context, registryContext());
       yield* XaiUsageService.use((service) => service.refresh({ force: true }));
       expect(MutableRef.get(projection).snapshot?.weeklyLeftPercent).toBe(82);
-    }).pipe(Effect.provide(serviceLayer));
+      const names = captured.spans.map((span) => span.name);
+      expect(names).toContain("pi-better-xai.usage.initialize");
+      expect(names).toContain("pi-better-xai.usage.refresh");
+      const telemetry = JSON.stringify(
+        captured.spans.map((span) => ({ name: span.name, attributes: [...span.attributes] })),
+      );
+      expect(telemetry).not.toContain("registry-token");
+      expect(telemetry).not.toContain("/project");
+      expect(telemetry).not.toContain("/agent");
+    }).pipe(Effect.provide(serviceLayer.pipe(Layer.provide(captured.layer))));
   });
 
   it("interrupts in-flight polling when its runtime is disposed", () => {
@@ -536,6 +665,45 @@ describe("xAI refresh lifecycle", () => {
       .then(() => runtime.dispose())
       .then(() => expect(interrupted).toBeGreaterThan(0))
       .finally(() => runtime.dispose());
+  });
+
+  it.effect("suppresses every stale commit after model selection", () => {
+    const harness = documentHarness();
+    const monthlyResponse = Deferred.makeUnsafe<{ status: number; body: unknown }>();
+    const weeklyResponse = Deferred.makeUnsafe<{ status: number; body: unknown }>();
+    let calls = 0;
+    const http = httpLayer(() => Deferred.await(calls++ === 0 ? monthlyResponse : weeklyResponse));
+    const contextRef = MutableRef.make(registryContext());
+    const projection = makeProjection();
+    let notifications = 0;
+    const ctx = MutableRef.get(contextRef);
+    ctx.ui.notify = () => {
+      notifications++;
+    };
+    const serviceLayer = XaiUsageService.layer({
+      context: contextRef,
+      cwd: "/project",
+      projection,
+      onChange() {},
+      startPolling: false,
+      agentDir: "/agent",
+    }).pipe(Layer.provide(providers(harness.layer, http)));
+    return Effect.gen(function* () {
+      const service = yield* XaiUsageService;
+      const old = yield* service.refresh({ force: true, notify: true }).pipe(Effect.forkScoped);
+      while (calls < 2) yield* Effect.yieldNow;
+      MutableRef.set(contextRef, {
+        ...MutableRef.get(contextRef),
+        model: { provider: "openai", id: "gpt" },
+      } as ExtensionContext);
+      yield* service.contextChanged(true);
+      yield* Deferred.succeed(monthlyResponse, { status: 200, body: monthlyFixture });
+      yield* Deferred.succeed(weeklyResponse, { status: 200, body: weeklyFixture });
+      yield* Fiber.join(old);
+      expect(MutableRef.get(projection).snapshot).toBeUndefined();
+      expect(MutableRef.get(projection).authFound).toBe(false);
+      expect(notifications).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(serviceLayer));
   });
 
   it.effect("coalesces concurrent refresh bursts into one follow-up", () => {

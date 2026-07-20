@@ -121,7 +121,15 @@ export const resolveConfig = Effect.fn("XaiConfig.resolveConfig")(function* (
   }
 
   const readOrDefault = (path: string, exists: boolean) =>
-    exists ? readConfig(path).pipe(Effect.catch(() => Effect.void)) : Effect.void;
+    exists
+      ? readConfig(path).pipe(
+          Effect.catch(() =>
+            Effect.logWarning("Unable to read a Better xAI configuration document.").pipe(
+              Effect.asVoid,
+            ),
+          ),
+        )
+      : Effect.void;
   const project = yield* readOrDefault(paths.project, projectExists);
   const global = yield* readOrDefault(paths.global, globalExists);
   const usage = {

@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { Type } from "typebox";
-import { standaloneAdvisorExecutor, type AdvisorEffectExecutor } from "./boundary/executor.ts";
+import { standaloneAdvisorExecutor } from "./boundary/executor.ts";
 import { ReadOnlyFileSystem, type AdvisorProjectRoot } from "./boundary/read-only-fs.ts";
 
 // Stable file reads use isSymbolicLink checks and O_NOFOLLOW in the capability-narrow adapter.
@@ -33,9 +33,16 @@ export class AdvisorToolSafetyError extends Schema.TaggedErrorClass<AdvisorToolS
 ) {}
 const safety = (message: string) => new AdvisorToolSafetyError({ message });
 
+export interface AdvisorToolRunner {
+  readonly run: <A, E>(
+    effect: Effect.Effect<A, E, ReadOnlyFileSystem | Path.Path>,
+    signal?: AbortSignal,
+  ) => Promise<A>;
+}
+
 export const createAdvisorToolsEffect = Effect.fn("AdvisorTools.create")(function* (
   cwd: string,
-  executor: AdvisorEffectExecutor,
+  executor: AdvisorToolRunner,
 ) {
   const files = yield* ReadOnlyFileSystem;
   const root = yield* files
@@ -57,7 +64,7 @@ export function isPackageAdvisorTool(value: ToolDefinition | undefined): boolean
 
 function createReadTool(
   root: AdvisorProjectRoot,
-  executor: AdvisorEffectExecutor,
+  executor: AdvisorToolRunner,
 ): AdvisorToolDefinition {
   return mark(
     defineTool({
@@ -103,7 +110,7 @@ function createReadTool(
 }
 function createLsTool(
   root: AdvisorProjectRoot,
-  executor: AdvisorEffectExecutor,
+  executor: AdvisorToolRunner,
 ): AdvisorToolDefinition {
   return mark(
     defineTool({
@@ -140,7 +147,7 @@ function createLsTool(
 }
 function createFindTool(
   root: AdvisorProjectRoot,
-  executor: AdvisorEffectExecutor,
+  executor: AdvisorToolRunner,
 ): AdvisorToolDefinition {
   return mark(
     defineTool({
@@ -160,7 +167,7 @@ function createFindTool(
         return executor.run(
           Effect.gen(function* () {
             const base = yield* confinedPath(root, params.path ?? ".", "directory");
-            const matcher = globMatcher(params.pattern ?? "**");
+            const matcher = yield* globMatcherEffect(params.pattern ?? "**");
             const scan = yield* walk(root, base);
             const all = scan.paths.filter(matcher);
             const matched = all.slice(0, ADVISOR_TOOL_LIMITS.maxMatches);
@@ -178,7 +185,7 @@ function createFindTool(
 }
 function createGrepTool(
   root: AdvisorProjectRoot,
-  executor: AdvisorEffectExecutor,
+  executor: AdvisorToolRunner,
 ): AdvisorToolDefinition {
   return mark(
     defineTool({
@@ -196,7 +203,7 @@ function createGrepTool(
       execute(_id, params, signal) {
         return executor.run(
           Effect.gen(function* () {
-            assertBoundedPattern(params.pattern, "Grep patterns");
+            yield* boundedPatternEffect(params.pattern, "Grep patterns");
             const needle = params.ignoreCase ? params.pattern.toLocaleLowerCase() : params.pattern;
             const target = yield* confinedPath(root, params.path ?? ".", "any");
             const files = yield* ReadOnlyFileSystem;
@@ -265,13 +272,13 @@ const confinedPath = Effect.fn("AdvisorTools.confinedPath")(function* (
   if (input.includes("\0")) return yield* safety("Paths may not contain NUL bytes.");
   const path = yield* Path.Path;
   const lexical = path.isAbsolute(input) ? path.resolve(input) : path.resolve(root.path, input);
-  assertInside(path, root.path, lexical);
+  yield* assertInsideEffect(path, root.path, lexical);
   yield* assertNoSymlinkComponents(root.path, lexical);
   const files = yield* ReadOnlyFileSystem;
   const canonical = yield* files
     .realPath(lexical)
     .pipe(Effect.mapError(() => safety("Requested path does not exist inside the project.")));
-  assertInside(path, root.path, canonical);
+  yield* assertInsideEffect(path, root.path, canonical);
   const info = yield* files
     .stat(canonical)
     .pipe(Effect.mapError(() => safety("Requested path is unavailable.")));
@@ -300,7 +307,7 @@ const walk = Effect.fn("AdvisorTools.walk")(function* (root: AdvisorProjectRoot,
     const canonical = yield* files
       .realPath(current.path)
       .pipe(Effect.mapError(() => safety("Directory changed during scan.")));
-    assertInside(path, root.path, canonical);
+    yield* assertInsideEffect(path, root.path, canonical);
     const remaining = ADVISOR_TOOL_LIMITS.maxVisitedEntries - visitedEntries;
     const listing = yield* files
       .readDirectory(canonical, root, Math.max(0, remaining))
@@ -309,7 +316,7 @@ const walk = Effect.fn("AdvisorTools.walk")(function* (root: AdvisorProjectRoot,
     for (const entry of listing.entries) {
       visitedEntries++;
       const absolute = path.resolve(canonical, entry.name);
-      assertInside(path, root.path, absolute);
+      yield* assertInsideEffect(path, root.path, absolute);
       const projectPath = yield* projectRelative(root.path, absolute);
       if (entry.type === "symlink") continue;
       if (entry.type === "directory") {
@@ -342,24 +349,28 @@ const assertNoSymlinkComponents = Effect.fn("AdvisorTools.noSymlink")(function* 
       return yield* safety("Symbolic-link paths are not allowed for Advisor tools.");
   }
 });
-function assertInside(path: Path.Path, root: string, candidate: string): void {
+const assertInsideEffect = Effect.fn("AdvisorTools.insideRoot")(function* (
+  path: Path.Path,
+  root: string,
+  candidate: string,
+) {
   const relation = path.relative(root, candidate);
   if (
     relation === "" ||
     (relation !== ".." && !relation.startsWith(`..${path.sep}`) && !path.isAbsolute(relation))
   )
     return;
-  throw safety("Requested path escapes the project root.");
-}
+  return yield* safety("Requested path escapes the project root.");
+});
 const projectRelative = Effect.fn("AdvisorTools.relative")(function* (root: string, value: string) {
   const path = yield* Path.Path;
   return path.relative(root, value).replaceAll("\\", "/") || ".";
 });
-function globMatcher(pattern: string): (path: string) => boolean {
-  assertBoundedPattern(pattern, "Find patterns");
+const globMatcherEffect = Effect.fn("AdvisorTools.globPattern")(function* (pattern: string) {
+  yield* boundedPatternEffect(pattern, "Find patterns");
   const components = pattern.replaceAll("\\", "/").replace(/^\.\//, "").split("/").filter(Boolean);
-  return (path) => matchGlobComponents(components, path.split("/").filter(Boolean));
-}
+  return (path: string) => matchGlobComponents(components, path.split("/").filter(Boolean));
+});
 function matchGlobComponents(pattern: readonly string[], path: readonly string[]): boolean {
   let states = new Uint8Array(pattern.length + 1);
   states[0] = 1;
@@ -402,11 +413,16 @@ function matchGlobComponent(pattern: string, value: string): boolean {
   while (pattern[pi] === "*") pi++;
   return pi === pattern.length;
 }
-function assertBoundedPattern(pattern: string, label: string) {
+const boundedPatternEffect = Effect.fn("AdvisorTools.boundedPattern")(function* (
+  pattern: string,
+  label: string,
+) {
   if (pattern.length > ADVISOR_TOOL_LIMITS.maxPatternChars)
-    throw safety(`${label} may not exceed ${ADVISOR_TOOL_LIMITS.maxPatternChars} characters.`);
-  if (pattern.includes("\0")) throw safety(`${label} may not contain NUL bytes.`);
-}
+    return yield* safety(
+      `${label} may not exceed ${ADVISOR_TOOL_LIMITS.maxPatternChars} characters.`,
+    );
+  if (pattern.includes("\0")) return yield* safety(`${label} may not contain NUL bytes.`);
+});
 function textResult(text: string, root: AdvisorProjectRoot, truncated: boolean) {
   return {
     content: [

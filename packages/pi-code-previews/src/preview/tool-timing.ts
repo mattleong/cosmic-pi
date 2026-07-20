@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import { deferPreview, previewNow, schedulePreview } from "../boundary/runtime";
+import { synchronousNow } from "../boundary/clock";
+import { deferCodePreview, scheduleCodePreview } from "../session-capability";
 import { codePreviewSettings } from "../settings/index";
 
 type ToolTimingUpdateContext = {
@@ -66,7 +67,7 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
     state.codePreviewTimingStartedAt === undefined &&
     context.isPartial !== false
   ) {
-    state.codePreviewTimingStartedAt = previewNow();
+    state.codePreviewTimingStartedAt = synchronousNow();
     state.codePreviewTimingEndedAt = undefined;
   }
 
@@ -75,13 +76,13 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   if (context.isPartial === true && options.animate !== false)
     ensureToolCallTimingInterval(state, context.invalidate);
   else if (context.isPartial === false) {
-    state.codePreviewTimingEndedAt ??= previewNow();
+    state.codePreviewTimingEndedAt ??= synchronousNow();
     clearToolCallTimingInterval(state);
   }
 
   if (options.formatLabel === false) return undefined;
   const running = context.isPartial === true;
-  const endTime = running ? previewNow() : (state.codePreviewTimingEndedAt ?? previewNow());
+  const endTime = running ? synchronousNow() : (state.codePreviewTimingEndedAt ?? synchronousNow());
   const label = running ? "Elapsed" : "Took";
   return { label: `${label} ${formatToolCallDuration(endTime - startedAt)}` };
 }
@@ -106,7 +107,7 @@ function withLastComponent<TContext extends ToolTimingRenderContext>(
 }
 
 function ensureToolCallTimingInterval(state: TimingState, invalidate: () => void): void {
-  state.codePreviewTimingCancel ??= schedulePreview(100, () =>
+  state.codePreviewTimingCancel ??= scheduleCodePreview(100, () =>
     invalidateForToolCallTiming(state, invalidate),
   );
 }
@@ -117,7 +118,7 @@ function invalidateForToolCallTiming(state: TimingState, invalidate: () => void)
   try {
     invalidate();
   } finally {
-    deferPreview(() => {
+    deferCodePreview(() => {
       if (state.codePreviewTimingOnlyRenderToken === token)
         state.codePreviewTimingOnlyRenderToken = undefined;
     });

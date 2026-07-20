@@ -134,23 +134,35 @@ describe("config helpers", () => {
     ["footer.mode", "status", "status"],
     ["image.defaultSave", "global", "global"],
     ["image.timeoutMs", "45000", 45_000],
-  ])("parses setting %s from its persisted string form", (id, raw, expected) => {
+  ])("parses setting %s from its persisted string form", async (id, raw, expected) => {
     const descriptors = new Map(SETTINGS_OPTION_DESCRIPTORS.map((value) => [value.id, value]));
-    expect(descriptors.get(id)?.parse(raw)).toBe(expected);
+    expect(await Effect.runPromise(descriptors.get(id)!.decode(raw))).toBe(expected);
   });
 
-  test("settings patches preserve unknown shapes", () => {
+  test("rejects invalid booleans, numbers, and enums", async () => {
+    for (const [id, value] of [
+      ["usage.enabled", "yes"],
+      ["usage.refreshIntervalMs", "NaN"],
+      ["footer.mode", "other"],
+    ] as const) {
+      await expect(Effect.runPromise(applySettingToRawConfig({}, id, value))).rejects.toBeDefined();
+    }
+  });
+
+  test("settings patches preserve unknown shapes", async () => {
     const raw = { unknown: "preserved", usage: { unknownUsage: true } };
     expect(
-      applySettingToRawConfig(raw, "fast.enabled", "true", {
-        persistState: true,
-        active: true,
-        desiredActive: true,
-      }),
+      await Effect.runPromise(
+        applySettingToRawConfig(raw, "fast.enabled", "true", {
+          persistState: true,
+          active: true,
+          desiredActive: true,
+        }),
+      ),
     ).toMatchObject({ active: true, desiredActive: true, unknown: "preserved" });
-    expect(applySettingToRawConfig(raw, "usage.refreshIntervalMs", "15000").usage).toEqual({
-      unknownUsage: true,
-      refreshIntervalMs: 15_000,
-    });
+    const usage = await Effect.runPromise(
+      applySettingToRawConfig(raw, "usage.refreshIntervalMs", "15000"),
+    );
+    expect(usage.usage).toEqual({ unknownUsage: true, refreshIntervalMs: 15_000 });
   });
 });

@@ -1,12 +1,9 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import { JsonDocumentStore } from "pi-cosmic-core";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
-import { ShikiAdapter } from "./boundary/shiki";
-import { loadCodePreviewSettingsEffect } from "./settings/bootstrap";
+import { CodePreviewSettingsService } from "./settings/service";
 import type { CodePreviewSettings } from "./settings/types";
-import { disposeShikiEffect, initializeShikiEffect } from "./syntax/shiki";
+import { CodePreviewSyntaxService } from "./syntax/service";
 
 export interface CodePreviewSessionShape {
   readonly loadSettings: (
@@ -23,19 +20,12 @@ export class CodePreviewSession extends Context.Service<
   static readonly layer = Layer.effect(
     this,
     Effect.gen(function* () {
-      const documents = yield* JsonDocumentStore;
-      const path = yield* Path.Path;
-      const shiki = yield* ShikiAdapter;
-      const service = CodePreviewSession.of({
-        loadSettings: (cwd, projectTrusted) =>
-          loadCodePreviewSettingsEffect(cwd, projectTrusted).pipe(
-            Effect.provideService(JsonDocumentStore, documents),
-            Effect.provideService(Path.Path, path),
-          ),
-        initializeSyntax: (theme) =>
-          initializeShikiEffect(theme).pipe(Effect.provideService(ShikiAdapter, shiki)),
+      const settings = yield* CodePreviewSettingsService;
+      const syntax = yield* CodePreviewSyntaxService;
+      return CodePreviewSession.of({
+        loadSettings: (cwd, projectTrusted) => settings.load({ projectCwd: cwd, projectTrusted }),
+        initializeSyntax: syntax.initialize,
       });
-      return yield* Effect.acquireRelease(Effect.succeed(service), () => disposeShikiEffect);
     }),
   );
 }

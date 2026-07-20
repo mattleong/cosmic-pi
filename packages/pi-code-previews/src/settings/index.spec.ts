@@ -90,7 +90,7 @@ test("settings normalization falls back to accumulated settings for invalid over
   assert.deepEqual(normalizeSettings({ tools: "read,grep" }, fallback).tools, ["read", "grep"]);
 });
 
-test("setCodePreviewSettings updates existing settings object references", () => {
+test("setCodePreviewSettings publishes a new frozen snapshot", () => {
   const previous = { ...codePreviewSettings, tools: [...codePreviewSettings.tools] };
   const reference = codePreviewSettings;
   try {
@@ -99,8 +99,11 @@ test("setCodePreviewSettings updates existing settings object references", () =>
       readCollapsedLines: 33,
       tools: ["bash"],
     });
-    assert.equal(reference.readCollapsedLines, 33);
-    assert.deepEqual(reference.tools, ["bash"]);
+    assert.notEqual(codePreviewSettings, reference);
+    assert.equal(codePreviewSettings.readCollapsedLines, 33);
+    assert.deepEqual(codePreviewSettings.tools, ["bash"]);
+    assert.equal(Object.isFrozen(codePreviewSettings), true);
+    assert.equal(Object.isFrozen(codePreviewSettings.tools), true);
   } finally {
     setCodePreviewSettings(previous);
   }

@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedConfig } from "../config.ts";
 import * as MutableRef from "effect/MutableRef";
 import { visibleStatusLine, type XaiProjection } from "../usage-controller.ts";
-import type { FooterTextPrimitive } from "./protocol.ts";
+import type { CosmicFooterTextContribution as FooterTextPrimitive } from "pi-cosmic-ui/protocol";
 
 export interface XaiUsageUiState {
   visible: boolean;

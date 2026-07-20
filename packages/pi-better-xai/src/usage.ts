@@ -4,7 +4,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { JsonHttpClient } from "pi-cosmic-core";
+import { formatCompactReset, formatResetCountdown, JsonHttpClient } from "pi-cosmic-core";
 import { getXaiCredentials } from "./auth.ts";
 
 export const BILLING_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
@@ -69,55 +69,7 @@ function parseIsoToSecondsFromNow(value: string | undefined, now: number): numbe
   return Math.max(0, (DateTime.toEpochMillis(parsed.value) - now) / 1000);
 }
 
-export function formatResetCountdown(seconds: number | null): string | null {
-  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return null;
-  const total = Math.max(0, Math.round(seconds));
-  const days = Math.floor(total / 86_400);
-  const hours = Math.floor((total % 86_400) / 3_600);
-  const minutes = Math.floor((total % 3_600) / 60);
-  const secs = total % 60;
-  if (days > 0) return `${days}d${hours}h`;
-  if (hours > 0) return `${hours}h${minutes}m`;
-  if (minutes > 0) return `${minutes}m`;
-  return `${secs}s`;
-}
-
-function formatResetClock(
-  seconds: number | null,
-  options: { readonly includeDate?: boolean } | undefined,
-  now: number,
-): string | null {
-  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return null;
-  const reset = DateTime.makeUnsafe(now + seconds * 1000);
-  const current = DateTime.makeUnsafe(now);
-  const time = DateTime.formatLocal(reset, { hour: "numeric", minute: "2-digit" });
-  const resetDay = DateTime.formatLocal(reset, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const currentDay = DateTime.formatLocal(current, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  if (!options?.includeDate && resetDay === currentDay) return time;
-  const weekday = DateTime.formatLocal(reset, { weekday: "short" });
-  if (!options?.includeDate) return `${weekday} ${time}`;
-  const date = DateTime.formatLocal(reset, { month: "numeric", day: "numeric" });
-  return `${weekday} ${date} ${time}`;
-}
-
-function formatCompactReset(
-  label: string,
-  seconds: number | null,
-  options: { readonly includeDate?: boolean } | undefined,
-  now: number,
-): string | null {
-  const countdown = formatResetCountdown(seconds);
-  const clock = formatResetClock(seconds, options, now);
-  return countdown && clock ? `${label} ↺ ${countdown} - ${clock}` : null;
-}
+export { formatResetCountdown };
 
 export function parseMonthlyBilling(
   payload: unknown,
@@ -318,7 +270,7 @@ export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (
         Effect.catch(() => Effect.void),
       ),
     ] as const,
-    { concurrency: "unbounded" },
+    { concurrency: 2 },
   );
   if (monthly.status < 200 || monthly.status >= 300) {
     return yield* new XaiUsageError({

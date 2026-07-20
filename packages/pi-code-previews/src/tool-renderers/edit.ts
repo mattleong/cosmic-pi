@@ -44,8 +44,12 @@ export function registerEdit(pi: ExtensionAPI, cwd: string) {
         const operations = getEditPreviewOperations(args);
         const operationsSource = editOperationsSource(operations);
         const argsKey = previewArgsKey("edit-args", operationsSource, path);
-        if (renderContext.state.editArgsKey !== argsKey) {
+        if (
+          renderContext.state.editArgsKey !== argsKey ||
+          renderContext.state.editArgsExactSource !== operationsSource
+        ) {
           renderContext.state.editArgsKey = argsKey;
+          renderContext.state.editArgsExactSource = operationsSource;
           renderContext.state.editSummaryText = undefined;
           renderContext.state.editCallPreviewKey = undefined;
           renderContext.state.editCallPreviewComponent = undefined;

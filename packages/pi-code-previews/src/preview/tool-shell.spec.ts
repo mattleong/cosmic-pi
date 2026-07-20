@@ -162,7 +162,7 @@ test("tool timing excludes call and result render work", () => {
   assert.match(stripAnsi(renderComponent(result)), /╰─ Took 1\.0s/);
 });
 
-test("tool timing invalidates every 100ms while partial and stops when complete", () => {
+test("tool timing does not start a timer outside an active session", () => {
   setCodePreviewSettings({ ...codePreviewSettings, toolCallTiming: true });
   vi.useFakeTimers();
   const shell = createCodePreviewToolShell("on");
@@ -188,7 +188,7 @@ test("tool timing invalidates every 100ms while partial and stops when complete"
     () => textComponent("result"),
   );
   vi.advanceTimersByTime(500);
-  assert.equal(invalidations, 5);
+  assert.equal(invalidations, 0);
 
   shell.renderResult(
     baseRenderContext(state, {
@@ -200,7 +200,7 @@ test("tool timing invalidates every 100ms while partial and stops when complete"
     () => textComponent("result"),
   );
   vi.advanceTimersByTime(1_000);
-  assert.equal(invalidations, 5);
+  assert.equal(invalidations, 0);
 });
 
 test("tool timing invalidations reuse previous preview components", () => {

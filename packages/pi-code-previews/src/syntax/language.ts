@@ -1,7 +1,7 @@
 import { bundledLanguages } from "shiki";
 import { isValidJsonSyntax } from "../boundary/json";
 import { nodeBasename, nodeExtname } from "../boundary/node";
-import { positiveEnvInteger } from "../config/env";
+import { codePreviewPerformanceConfig } from "../config/env";
 
 const EXACT_BASENAMES = new Map<string, string>([
   ["dockerfile", "dockerfile"],
@@ -68,11 +68,6 @@ const SHEBANG_ALIASES = new Map<string, string>([
   ["php", normalizePreviewLanguageAlias("php")],
 ]);
 
-const CONTENT_LANGUAGE_DETECTION_CHARS = positiveEnvInteger(
-  "CODE_PREVIEW_CONTENT_LANGUAGE_DETECTION_CHARS",
-  50_000,
-);
-
 export function resolvePreviewLanguage({
   path,
   content,
@@ -117,7 +112,8 @@ function languageFromShebang(content: string | undefined): string | undefined {
 }
 
 function languageFromContent(content: string | undefined): string | undefined {
-  if (!content || content.length > CONTENT_LANGUAGE_DETECTION_CHARS) return undefined;
+  if (!content || content.length > codePreviewPerformanceConfig.contentLanguageDetectionChars)
+    return undefined;
   const trimmed = content.trim();
   if (!trimmed) return undefined;
   if ((trimmed.startsWith("{") || trimmed.startsWith("[")) && isJson(trimmed)) return "json";

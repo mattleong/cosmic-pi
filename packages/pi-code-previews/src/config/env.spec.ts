@@ -7,8 +7,16 @@
 // @effect-diagnostics effect/globalConsole:off
 // @effect-diagnostics effect/globalDate:off
 import assert from "node:assert/strict";
+import { it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Effect from "effect/Effect";
 import { afterEach, test } from "vitest";
-import { booleanEnv, parseBoolean } from "./env";
+import {
+  booleanEnv,
+  loadCodePreviewEnvironment,
+  parseBoolean,
+  performanceConfigFromEnvironment,
+} from "./env";
 
 const originalValue = process.env.CODE_PREVIEW_TEST_BOOLEAN;
 
@@ -16,6 +24,25 @@ afterEach(() => {
   if (originalValue === undefined) delete process.env.CODE_PREVIEW_TEST_BOOLEAN;
   else process.env.CODE_PREVIEW_TEST_BOOLEAN = originalValue;
 });
+
+it.effect("decodes performance thresholds once through Effect Config", () =>
+  Effect.gen(function* () {
+    const environment = yield* loadCodePreviewEnvironment;
+    const performance = performanceConfigFromEnvironment(environment);
+    assert.equal(performance.asyncRenderChars, 1234);
+    assert.equal(performance.cacheLimit, 192);
+  }).pipe(
+    Effect.provideService(
+      ConfigProvider.ConfigProvider,
+      ConfigProvider.fromEnv({
+        env: {
+          CODE_PREVIEW_ASYNC_RENDER_CHARS: "1234",
+          CODE_PREVIEW_CACHE_LIMIT: "invalid",
+        },
+      }),
+    ),
+  ),
+);
 
 test("boolean environment values recognize explicit true and false forms", () => {
   for (const value of ["1", "true", "ON", " yes "]) assert.equal(parseBoolean(value), true);

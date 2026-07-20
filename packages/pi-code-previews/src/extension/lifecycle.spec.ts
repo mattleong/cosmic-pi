@@ -6,10 +6,9 @@ import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { makePiManagedRuntime } from "pi-cosmic-core";
 import { afterEach, test } from "vitest";
-import { makeCodePreviewRuntime, type CodePreviewRuntime } from "../boundary/runtime";
-import { ShikiAdapter } from "../boundary/shiki";
+import type { CodePreviewRuntime } from "./index";
 import { CodePreviewSession } from "../session-service";
 import { defaultCodePreviewSettings, setCodePreviewSettings } from "../settings";
 import { codePreviewsWithDependencies, type CodePreviewExtensionDependencies } from "./index";
@@ -52,8 +51,7 @@ function harness(load: (call: number) => Effect.Effect<typeof settings>) {
           () => Effect.sync(() => releases++),
         ),
       );
-      const layer = Layer.mergeAll(serviceLayer, nodeFilePlatformLayer, ShikiAdapter.layer);
-      return makeCodePreviewRuntime(runtimePi, layer) as CodePreviewRuntime;
+      return makePiManagedRuntime(runtimePi, serviceLayer) as unknown as CodePreviewRuntime;
     },
   };
   const context = (signal?: AbortSignal): Context => ({

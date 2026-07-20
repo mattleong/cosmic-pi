@@ -8,12 +8,12 @@ import { StreamingHttpClient } from "./streaming-http.ts";
 
 const fileSystemAndPath = Layer.merge(NodeFileSystem.layer, NodePath.layer);
 const documents = JsonDocumentStore.layer.pipe(Layer.provideMerge(fileSystemAndPath));
-const httpClient = NodeHttpClient.layerUndici;
-const http = JsonHttpClient.layer.pipe(Layer.provideMerge(httpClient));
-const streamingHttp = StreamingHttpClient.layer.pipe(Layer.provideMerge(httpClient));
+const http = Layer.merge(JsonHttpClient.layer, StreamingHttpClient.layer).pipe(
+  Layer.provide(NodeHttpClient.layerUndici),
+);
 
 /** Filesystem, path, and atomic JSON-document services without networking capabilities. */
 export const fileLayer = documents;
 
 /** Node platform services used by network-capable cosmic-pi extensions. */
-export const layer = Layer.mergeAll(fileLayer, http, streamingHttp);
+export const layer = Layer.merge(fileLayer, http);

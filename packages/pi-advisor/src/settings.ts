@@ -1,4 +1,5 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import * as Effect from "effect/Effect";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { supportsFastModel } from "pi-better-openai/fast-models";
@@ -16,6 +17,7 @@ import {
   writeAdvisorConfigPatchAsync,
 } from "./config.ts";
 import type { AdvisorReviewFocus } from "./review.ts";
+import { PiCommandAdapter, type PiCommandError } from "./pi-command-adapter.ts";
 
 const SETTINGS_COMMAND = "advisor-settings";
 const STATUS_COMMAND = "advisor-status";
@@ -163,7 +165,17 @@ export function registerAdvisorCommands(
   pi: ExtensionAPI,
   state: AdvisorConfigState,
   actions: AdvisorCommandActions = NOOP_COMMAND_ACTIONS,
+  runCommand?: <A>(effect: Effect.Effect<A, PiCommandError, PiCommandAdapter>) => Promise<A>,
 ): void {
+  const execute = (operation: () => Promise<void>): Promise<void> =>
+    runCommand
+      ? runCommand(
+          Effect.gen(function* () {
+            const adapter = yield* PiCommandAdapter;
+            return yield* adapter.fromPromise(operation);
+          }),
+        ).catch(() => undefined)
+      : operation();
   pi.registerCommand(ADVISOR_COMMAND, {
     description: "Control advisor review",
     getArgumentCompletions: (prefix) => {
@@ -185,11 +197,11 @@ export function registerAdvisorCommands(
         .map((value) => ({ value, label: value }));
       return matches.length > 0 ? matches : null;
     },
-    handler: (args, ctx) => handleAdvisorCommand(args, ctx, state, actions),
+    handler: (args, ctx) => execute(() => handleAdvisorCommand(args, ctx, state, actions)),
   });
   pi.registerCommand(SETTINGS_COMMAND, {
     description: "Configure automatic advisor supervision",
-    handler: (_args, ctx) => openAdvisorSettings(ctx, state),
+    handler: (_args, ctx) => execute(() => openAdvisorSettings(ctx, state)),
   });
   pi.registerCommand(STATUS_COMMAND, {
     description: "Show advisor model and configuration status",

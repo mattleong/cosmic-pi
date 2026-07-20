@@ -9,12 +9,16 @@ import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
 import {
+  AgentDirectory,
   JsonDocumentStore,
   PiApi,
   type JsonDocumentStoreShape,
   type JsonObject,
 } from "pi-cosmic-core";
-import { CosmicUiService, invalidateProbes, makeProjection } from "../src/host-service.ts";
+import { CosmicUiConfigRepository } from "../src/config/repository.ts";
+import { CosmicUiService, makeProjection } from "../src/host-service.ts";
+import { PiExec } from "../src/probe/pi-exec.ts";
+import { RepositoryProbe } from "../src/probe/repository-probe.ts";
 
 function documents(initial: Readonly<Record<string, JsonObject>> = {}) {
   const values = new Map(Object.entries(initial));
@@ -50,20 +54,19 @@ function serviceLayer(
   const projection = makeProjection();
   const contextRef = options.context ?? MutableRef.make(context());
   const store = documents(options.documents);
-  const dependencies = Layer.mergeAll(
-    store.layer,
-    Path.layer,
-    PiApi.layer({ exec } as unknown as ExtensionAPI),
+  const platform = Layer.mergeAll(store.layer, Path.layer, AgentDirectory.layer("/agent"));
+  const repository = CosmicUiConfigRepository.layer.pipe(Layer.provide(platform));
+  const probe = RepositoryProbe.layer.pipe(
+    Layer.provide(PiExec.layer),
+    Layer.provide(PiApi.layer({ exec } as unknown as ExtensionAPI)),
   );
   const layer = CosmicUiService.layer({
     context: contextRef,
     cwd: "/project",
-    agentDir: "/agent",
     projection,
     onChange() {},
-    isCurrent: () => true,
     startPolling: options.startPolling ?? false,
-  }).pipe(Layer.provide(dependencies));
+  }).pipe(Layer.provide(Layer.merge(repository, probe)));
   return { layer, projection, contextRef, documents: store.values };
 }
 
@@ -199,7 +202,7 @@ describe("Cosmic UI host service", () => {
       const service = yield* CosmicUiService;
       const old = yield* service.refreshAll(true).pipe(Effect.forkScoped);
       while (oldResolvers.size < 2) yield* Effect.yieldNow;
-      invalidateProbes(projection);
+      yield* service.invalidateProbes;
       const next = yield* service.refreshAll(true).pipe(Effect.forkScoped);
       oldResolvers.get("git")?.(result("## old\n M old.ts\n"));
       oldResolvers.get("gh")?.(result("1\n"));
@@ -250,7 +253,7 @@ describe("Cosmic UI host service", () => {
       let pending = false;
       let started = 0;
       let aborted = 0;
-      const { layer, projection } = serviceLayer(
+      const { layer } = serviceLayer(
         (_command, _args, options) => {
           calls++;
           if (pending)
@@ -271,7 +274,7 @@ describe("Cosmic UI host service", () => {
         { startPolling: true },
       );
       const program = Effect.gen(function* () {
-        yield* CosmicUiService;
+        const service = yield* CosmicUiService;
         yield* TestClock.adjust("1999 millis");
         expect(calls).toBe(0);
         yield* TestClock.adjust("1 millis");
@@ -285,19 +288,16 @@ describe("Cosmic UI host service", () => {
         yield* TestClock.adjust("2 seconds");
         while (calls < 3) yield* Effect.yieldNow;
 
-        const current = MutableRef.get(projection);
-        MutableRef.set(projection, { ...current, pullRequestCheckedAt: -30_000 });
         pending = true;
-        yield* TestClock.adjust("2 seconds");
-        while (started < 2) yield* Effect.yieldNow;
-      }).pipe(Effect.provide(layer));
-      return program.pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            expect(aborted).toBe(2);
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* service.refreshAll(true).pipe(Effect.forkScoped);
+            while (started < 2) yield* Effect.yieldNow;
           }),
-        ),
-      );
+        );
+        expect(aborted).toBe(2);
+      }).pipe(Effect.provide(layer));
+      return program;
     },
   );
 

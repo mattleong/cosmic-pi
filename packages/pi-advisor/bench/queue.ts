@@ -2,22 +2,19 @@
 // @effect-diagnostics effect/globalConsole:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 import { performance } from "node:perf_hooks";
+import * as Effect from "effect/Effect";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import type { AdvisorCheckpointRequest, AdvisorRuntimeDriver } from "../src/advisor-runtime.ts";
-import { advisorPlatformLayer, type AdvisorEffectExecutor } from "../src/boundary/executor.ts";
-import { AdvisorReviewQueue } from "../src/review-queue.ts";
+import type {
+  AdvisorCheckpointRequest,
+  AdvisorRuntimeServiceShape,
+} from "../src/advisor-runtime.ts";
+import { AdvisorReviewQueueService, advisorReviewQueueServiceLayer } from "../src/review-queue.ts";
 
-const managed = ManagedRuntime.make(advisorPlatformLayer);
-const executor: AdvisorEffectExecutor = {
-  run: (effect, signal) => managed.runPromise(effect, signal ? { signal } : undefined),
-  fork: (effect) => managed.runFork(effect),
-  now: () => performance.now(),
-};
-const driver: AdvisorRuntimeDriver = {
-  activeToolNames: [],
-  start: () => Promise.resolve(),
+const runtime: AdvisorRuntimeServiceShape = {
+  activeToolNames: () => [],
+  start: () => Effect.void,
   checkpoint: (request: AdvisorCheckpointRequest) =>
-    Promise.resolve({
+    Effect.succeed({
       checkpointId: request.checkpointId,
       processedThrough: request.processedThrough,
       stateSummary: "",
@@ -25,12 +22,14 @@ const driver: AdvisorRuntimeDriver = {
       summary: "pass",
       findings: [],
     }),
-  steer: () => Promise.resolve(false),
-  reprime: () => Promise.resolve(),
-  abort: () => Promise.resolve(),
-  dispose: () => Promise.resolve(),
+  steer: () => Effect.succeed(false),
+  reprime: () => Effect.void,
+  abort: () => Effect.void,
+  dispose: () => Effect.void,
 };
-const queue = new AdvisorReviewQueue(driver, {}, executor);
+const managed = ManagedRuntime.make(advisorReviewQueueServiceLayer);
+const service = await managed.runPromise(AdvisorReviewQueueService);
+const queue = await managed.runPromise(service.make(runtime));
 
 const ingestionStarted = performance.now();
 for (let index = 0; index < 100_000; index += 1) {
@@ -41,14 +40,15 @@ const ingestionMs = performance.now() - ingestionStarted;
 const checkpointStarted = performance.now();
 for (let index = 0; index < 500; index += 1) {
   queue.ingest(index + 2, { type: "turn_complete", status: "stop" });
-  await queue.checkpoint({
-    checkpointId: `bench-${index}`,
-    focus: "observation",
-    parentTurnId: index + 2,
-  });
+  await managed.runPromise(
+    queue.checkpointEffect({
+      checkpointId: `bench-${index}`,
+      focus: "observation",
+      parentTurnId: index + 2,
+    }),
+  );
 }
 const checkpointMs = performance.now() - checkpointStarted;
-await queue.dispose();
 await managed.dispose();
 
 console.log(

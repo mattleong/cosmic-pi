@@ -48,9 +48,18 @@ export class StreamingHttpClient extends Context.Service<
             : HttpClientRequest.get(input.url);
         if (input.headers) outgoing = HttpClientRequest.setHeaders(outgoing, input.headers);
         if (input.jsonBody !== undefined) {
-          outgoing = HttpClientRequest.bodyJsonUnsafe(outgoing, input.jsonBody);
+          outgoing = yield* HttpClientRequest.bodyJson(outgoing, input.jsonBody).pipe(
+            Effect.mapError(
+              () =>
+                new StreamingHttpError({
+                  operation: "encode",
+                  message: "Streaming HTTP request body was not valid JSON.",
+                }),
+            ),
+          );
         }
         const response = yield* client.execute(outgoing).pipe(
+          Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
           Effect.mapError(
             () =>
               new StreamingHttpError({
@@ -58,6 +67,9 @@ export class StreamingHttpClient extends Context.Service<
                 message: "Streaming HTTP request failed.",
               }),
           ),
+          Effect.withSpan("pi-cosmic-core.http.streaming.request", {
+            attributes: { "http.request.method": input.method ?? "GET" },
+          }),
         );
         const body = response.stream.pipe(
           Stream.mapError(
@@ -71,7 +83,12 @@ export class StreamingHttpClient extends Context.Service<
         return {
           status: response.status,
           body,
-          discard: body.pipe(Stream.runDrain),
+          discard: body.pipe(
+            Stream.runDrain,
+            Effect.withSpan("pi-cosmic-core.http.streaming.discard", {
+              attributes: { "http.response.status_code": response.status },
+            }),
+          ),
         } satisfies StreamingHttpResponse;
       });
       return StreamingHttpClient.of({ request });

@@ -6,6 +6,9 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as TestClock from "effect/testing/TestClock";
 import { advisorDelayEffect, advisorIntervalEffect } from "../src/boundary/clock.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
@@ -15,7 +18,6 @@ import { AdvisorReviewQueue, type AdvisorReviewQueueOptions } from "../src/revie
 import {
   AdvisorRuntime,
   MAX_ADVISOR_ABORT_MS,
-  type AdvisorRuntimeDriver,
   type AdvisorRuntimeServiceShape,
 } from "../src/advisor-runtime.ts";
 
@@ -90,21 +92,13 @@ describe("advisor Effect clock boundaries", () => {
         abort: () => Effect.void,
         dispose: () => Effect.void,
       };
-      const driver: AdvisorRuntimeDriver = {
-        activeToolNames: [],
-        start: () => Promise.resolve(),
-        checkpoint: () => Promise.reject(new Error("Promise driver must not run")),
-        steer: () => Promise.resolve(false),
-        reprime: () => Promise.resolve(),
-        abort: () => Promise.resolve(),
-        dispose: () => Promise.resolve(),
-      };
       const queue = new AdvisorReviewQueue(
-        driver,
-        {} satisfies AdvisorReviewQueueOptions,
-        standaloneAdvisorExecutor,
-        scope,
         effects,
+        {} satisfies AdvisorReviewQueueOptions,
+        scope,
+        yield* Semaphore.make(1),
+        yield* Semaphore.make(1),
+        yield* Ref.make(0),
       );
       yield* queue.initializeEffect();
       queue.ingest(1, { type: "user", text: "first" });
@@ -164,6 +158,7 @@ describe("advisor Effect clock boundaries", () => {
         },
         standaloneAdvisorExecutor,
         scope,
+        yield* Queue.unbounded<void>(),
       );
       yield* runtime
         .startEffect({
@@ -223,16 +218,14 @@ describe("advisor Effect clock boundaries", () => {
             disposed += 1;
           }),
       };
-      const driver: AdvisorRuntimeDriver = {
-        activeToolNames: [],
-        start: () => Promise.resolve(),
-        checkpoint: () => Promise.reject(new Error("Promise driver must not run")),
-        steer: () => Promise.resolve(false),
-        reprime: () => Promise.resolve(),
-        abort: () => Promise.resolve(),
-        dispose: () => Promise.resolve(),
-      };
-      const queue = new AdvisorReviewQueue(driver, {}, standaloneAdvisorExecutor, scope, effects);
+      const queue = new AdvisorReviewQueue(
+        effects,
+        {},
+        scope,
+        yield* Semaphore.make(1),
+        yield* Semaphore.make(1),
+        yield* Ref.make(0),
+      );
       yield* queue.initializeEffect();
       queue.ingest(1, { type: "user", text: "pending" });
       const checkpoint = yield* queue

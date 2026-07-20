@@ -163,7 +163,7 @@ export const readRawAdvisorConfigEffect = Effect.fn("AdvisorConfig.readRaw")(fun
   return yield* documents.readObject(path).pipe(
     Effect.map((value) => value ?? {}),
     Effect.catch((error) =>
-      Effect.logWarning(`Advisor config read failed (${error.operation}) at ${path}.`).pipe(
+      Effect.logWarning(`Advisor config read failed (${error.operation}).`).pipe(
         Effect.as({} as JsonObject),
       ),
     ),

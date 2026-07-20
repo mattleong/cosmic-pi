@@ -1,5 +1,6 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/strictEffectProvide:off
+// @effect-diagnostics effect/preferSchemaOverJson:off
 import {
   mkdirSync,
   mkdtempSync,
@@ -25,14 +26,16 @@ import * as Random from "effect/Random";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import {
+  AgentDirectory,
+  SafeFile,
   StreamingHttpClient,
   StreamingHttpError,
   nodePlatformLayer,
   type StreamingHttpRequest,
   type StreamingHttpResponse,
 } from "pi-cosmic-core";
+import { makeCapturedTracer } from "pi-cosmic-core/testing";
 import sharp from "sharp";
-import { SafeFileAdapter } from "../src/boundary/safe-file.ts";
 import { SharpAdapter } from "../src/boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG } from "../src/config.ts";
 import {
@@ -117,10 +120,10 @@ function harness(
     StreamingHttpClient.of({ request: response }),
   );
   const platform = fileSystemLayer
-    ? Layer.mergeAll(nodePlatformLayer, mockHttp, fileSystemLayer)
-    : Layer.merge(nodePlatformLayer, mockHttp);
+    ? Layer.mergeAll(nodePlatformLayer, mockHttp, fileSystemLayer, AgentDirectory.layer(agentDir))
+    : Layer.mergeAll(nodePlatformLayer, mockHttp, AgentDirectory.layer(agentDir));
   const layer = OpenAIImageService.layer({ context, projection, agentDir }).pipe(
-    Layer.provide(Layer.merge(SharpAdapter.layer, SafeFileAdapter.layer)),
+    Layer.provide(Layer.merge(SharpAdapter.layer, SafeFile.layer)),
     Layer.provide(platform),
   );
   return {
@@ -325,6 +328,27 @@ describe("Effect-native OpenAI image service", () => {
       expect(third.message).toContain("Codex image error");
       expect(third.message).not.toContain("sk-secret");
       expect(third.message).not.toContain("acct_secret");
+    });
+  });
+
+  it.effect("schema-rejects malformed known events and ignores forward-compatible events", () => {
+    const malformed = harness(() =>
+      Effect.succeed(httpResponse(200, sse([{ type: "response.output_item.done", item: null }]))),
+    );
+    const future = harness(() =>
+      Effect.succeed(httpResponse(200, sse([{ type: "response.future", extra: 1 }, completed()]))),
+    );
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        OpenAIImageService.use((service) => service.generate({ prompt: "x" })).pipe(
+          malformed.effect,
+        ),
+      );
+      expect(error.message).toContain("malformed event");
+      const result = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x" }),
+      ).pipe(future.effect);
+      expect(result.id).toBe("ig_test");
     });
   });
 
@@ -651,6 +675,31 @@ describe("Effect-native OpenAI image service", () => {
       expect(error.message).not.toContain("sk-secret");
       expect(error.message).not.toContain("acct_hidden");
     }).pipe(h.effect);
+  });
+
+  it.effect("captures stable image spans without prompts, paths, tokens, or account IDs", () => {
+    const captured = makeCapturedTracer();
+    const h = harness(() => Effect.succeed(httpResponse(200, sse([completed()]))));
+    return Effect.gen(function* () {
+      yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "secret prompt sk-secret accountId=acct_hidden" }),
+      );
+      const names = captured.spans.map((span) => span.name);
+      expect(names).toEqual(
+        expect.arrayContaining([
+          "pi-better-openai.image.request",
+          "pi-better-openai.image.stream",
+          "pi-better-openai.image.convert",
+        ]),
+      );
+      const telemetry = JSON.stringify(
+        captured.spans.map((span) => ({ name: span.name, attributes: [...span.attributes] })),
+      );
+      expect(telemetry).not.toContain("secret prompt");
+      expect(telemetry).not.toContain("sk-secret");
+      expect(telemetry).not.toContain("acct_hidden");
+      expect(telemetry).not.toContain(h.cwd);
+    }).pipe(h.effect, Effect.provide(captured.layer));
   });
 
   it.effect("ignores provider data-URL MIME and enforces requested bytes", () => {

@@ -3,7 +3,7 @@ import type { ResolvedConfig } from "../config.ts";
 import { supportsFast, type FastController } from "../fast-controller.ts";
 import type * as MutableRef from "effect/MutableRef";
 import { visibleStatusLine, type OpenAIProjection } from "../usage-controller.ts";
-import type { FooterTextPrimitive } from "./protocol.ts";
+import type { CosmicFooterTextContribution as FooterTextPrimitive } from "pi-cosmic-ui/protocol";
 
 export interface FastModeUiState {
   desired: boolean;

@@ -21,8 +21,8 @@ process.env.CODE_PREVIEW_TOOLS = "edit";
 process.env.CODE_PREVIEW_ASYNC_RENDER_CHARS ??= "100000000";
 
 const { codePreviewSettings, setCodePreviewSettings } = await import("../src/settings/index");
-const { initializeShiki } = await import("../src/syntax/shiki");
 const { registerToolRenderers } = await import("../src/tool-renderers/registration");
+const { startBenchmarkShikiSession } = await import("./shiki-session");
 
 const WIDTH = 120;
 let sink = 0;
@@ -70,7 +70,7 @@ setCodePreviewSettings({
   toolCallTiming: false,
   wordEmphasis: "smart",
 });
-await initializeShiki(codePreviewSettings.shikiTheme);
+const stopShiki = await startBenchmarkShikiSession(codePreviewSettings.shikiTheme);
 
 try {
   printBenchHeader("edit renderer end-to-end");
@@ -141,6 +141,7 @@ try {
   if (sink === Number.MIN_SAFE_INTEGER) console.log("sink", sink);
 } finally {
   setCodePreviewSettings(previousSettings);
+  await stopShiki();
 }
 
 function registerRenderers(): Renderer[] {

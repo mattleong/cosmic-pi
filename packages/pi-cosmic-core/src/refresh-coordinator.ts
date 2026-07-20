@@ -9,36 +9,35 @@ export interface RefreshRequest {
   readonly force?: boolean;
 }
 
-interface State<E> {
+interface State<Request, E> {
   readonly active: Deferred.Deferred<void, E> | undefined;
-  readonly queued: RefreshRequest | undefined;
+  readonly queued: Request | undefined;
   readonly acceptingFollowUp: boolean;
 }
 
-const merge = (current: RefreshRequest | undefined, next: RefreshRequest): RefreshRequest => ({
+const mergeRefreshRequest = (
+  current: RefreshRequest | undefined,
+  next: RefreshRequest,
+): RefreshRequest => ({
   notify: current?.notify === true || next.notify === true,
   force: current?.force === true || next.force === true,
 });
 
-/**
- * Builds a single-flight coordinator. Concurrent callers share both the active
- * refresh result and its failure/interruption. Flags arriving during the first
- * successful operation are coalesced into at most one follow-up. A failed or
- * interrupted first operation does not run queued work; its Exit is replayed
- * to every waiter so a later caller can retry explicitly.
- */
-export const makeRefreshCoordinator = <E = never>() =>
+/** Generic single-flight coordinator with one bounded, merged follow-up. */
+export const makeRefreshCoordinatorWith = <Request, E = never>(
+  merge: (current: Request | undefined, next: Request) => Request,
+) =>
   Effect.gen(function* () {
     const lock = yield* Semaphore.make(1);
-    const state = MutableRef.make<State<E>>({
+    const state = MutableRef.make<State<Request, E>>({
       active: undefined,
       queued: undefined,
       acceptingFollowUp: false,
     });
 
     const run = <R>(
-      request: RefreshRequest,
-      operation: (request: RefreshRequest) => Effect.Effect<void, E, R>,
+      request: Request,
+      operation: (request: Request) => Effect.Effect<void, E, R>,
     ): Effect.Effect<void, E, R> =>
       Effect.gen(function* () {
         const registration = yield* lock.withPermits(1)(
@@ -96,6 +95,10 @@ export const makeRefreshCoordinator = <E = never>() =>
 
     return { run } as const;
   });
+
+/** Provider refresh specialization retained for existing packages. */
+export const makeRefreshCoordinator = <E = never>() =>
+  makeRefreshCoordinatorWith<RefreshRequest, E>(mergeRefreshRequest);
 
 export type RefreshCoordinator<E = never> = Effect.Success<
   ReturnType<typeof makeRefreshCoordinator<E>>

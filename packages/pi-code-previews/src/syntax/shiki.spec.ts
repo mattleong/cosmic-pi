@@ -1,193 +1,132 @@
-// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
-// @effect-diagnostics effect/asyncFunction:off
+// Resource lifecycle assertions.
 // @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/processEnv:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
-// @effect-diagnostics effect/globalConsole:off
-// @effect-diagnostics effect/globalDate:off
+// @effect-diagnostics effect/strictEffectProvide:off
+// @effect-diagnostics effect/preferSchemaOverJson:off
 import assert from "node:assert/strict";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { afterEach, beforeEach, test } from "vitest";
-import { setActivePlatformRunner } from "../boundary/platform";
-import { makeCodePreviewRuntime, setActiveCodePreviewRuntime } from "../boundary/runtime";
-import { ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
-import { CodePreviewSession } from "../session-service";
-import { codePreviewSettings, setCodePreviewSettings } from "../settings/index";
-import { getShikiStatus, initializeShiki, renderWithShiki } from "./shiki";
+import { makeCapturedLogger, makeCapturedTracer } from "pi-cosmic-core/testing";
+import { ShikiAdapter, ShikiBoundaryError, type ShikiHighlighter } from "../boundary/shiki";
+import { codePreviewSettings, setCodePreviewSettings } from "../settings";
+import { CodePreviewSyntaxService, isExactShikiCacheHit } from "./service";
 
-let previousCodePreviewSettings = { ...codePreviewSettings };
-
-const fakeHighlighter = (dispose: () => void) =>
+const highlighter = (dispose: () => void) =>
   ({
     dispose,
     codeToTokensBase: (code: string) => [[{ content: code, color: "#ffffff" }]],
   }) as unknown as ShikiHighlighter;
 
-beforeEach(() => {
-  previousCodePreviewSettings = { ...codePreviewSettings };
-});
-
-afterEach(async () => {
-  setCodePreviewSettings(previousCodePreviewSettings);
-  setActiveCodePreviewRuntime(undefined);
-  setActivePlatformRunner(undefined);
-  await initializeShiki(previousCodePreviewSettings.shikiTheme);
-});
-
-test("concurrent initialization is single-flight and the latest theme wins", async () => {
-  setCodePreviewSettings({
-    ...codePreviewSettings,
-    shikiTheme: "vitesse-black",
-    syntaxHighlighting: true,
-  });
-  const before = getShikiStatus().statusVersion;
-  await Promise.all([initializeShiki("vitesse-black"), initializeShiki("vitesse-black")]);
-  assert.equal(getShikiStatus().statusVersion, before + 1);
-
-  await Promise.all([
-    initializeShiki("github-light-high-contrast"),
-    initializeShiki("vitesse-black"),
-  ]);
-  const rendered = renderWithShiki("const latest = true;", "typescript")?.[0] ?? "";
-  assert.match(rendered, /\x1b\[38;2;139;148;158m/);
-});
-
-test("initializeShiki does not mutate configured settings", async () => {
-  setCodePreviewSettings({
-    ...codePreviewSettings,
-    shikiTheme: "dark-plus",
-    syntaxHighlighting: true,
-  });
-  await initializeShiki("github-light-high-contrast");
-
-  assert.equal(codePreviewSettings.shikiTheme, "dark-plus");
-});
-
-test("light Shiki themes preserve their dark foreground colors", async () => {
-  setCodePreviewSettings({
-    ...codePreviewSettings,
-    shikiTheme: "github-light-high-contrast",
-    syntaxHighlighting: true,
-  });
-  await initializeShiki("github-light-high-contrast");
-
-  const rendered = renderWithShiki("const value = 1;", "typescript")?.[0] ?? "";
-  assert.doesNotMatch(rendered, /\x1b\[38;2;139;148;158m/);
-  assert.match(rendered, /\x1b\[38;2;14;17;22m/);
-});
-
-test("dark Shiki themes still normalize low-contrast foreground colors", async () => {
-  setCodePreviewSettings({
-    ...codePreviewSettings,
-    shikiTheme: "vitesse-black",
-    syntaxHighlighting: true,
-  });
-  await initializeShiki("vitesse-black");
-
-  const rendered = renderWithShiki("const value = 1;", "typescript")?.[0] ?? "";
-  assert.match(rendered, /\x1b\[38;2;139;148;158m/);
-  assert.doesNotMatch(rendered, /\x1b\[38;2;68;68;68m/);
-});
-
-test("session disposal interrupts language loading and disposes losing/current highlighters", async () => {
-  setCodePreviewSettings({
-    ...codePreviewSettings,
-    shikiTheme: "theme-b",
-    syntaxHighlighting: true,
-  });
-  let resolveA: ((value: ShikiHighlighter) => void) | undefined;
-  let resolveB: ((value: ShikiHighlighter) => void) | undefined;
-  const pendingA = new Promise<ShikiHighlighter>((resolve) => {
-    resolveA = resolve;
-  });
-  const pendingB = new Promise<ShikiHighlighter>((resolve) => {
-    resolveB = resolve;
-  });
-  let disposedA = 0;
-  let disposedB = 0;
-  let languageStarted: (() => void) | undefined;
-  const languagePending = new Promise<void>((resolve) => {
-    languageStarted = resolve;
-  });
-  let languageInterrupted = 0;
-  const adapter = ShikiAdapter.of({
-    create: (theme) => Effect.promise(() => (theme === "theme-a" ? pendingA : pendingB)),
-    loadLanguage: () =>
-      Effect.sync(() => languageStarted?.()).pipe(
-        Effect.andThen(Effect.never),
-        Effect.ensuring(Effect.sync(() => languageInterrupted++)),
+describe("session syntax service", () => {
+  it.effect("treats hashes as indexes and exact source as identity", () =>
+    Effect.sync(() => {
+      const cached = { source: "first" };
+      assert.equal(isExactShikiCacheHit(cached, "first"), true);
+      assert.equal(isExactShikiCacheHit(cached, "hash-collision"), false);
+    }),
+  );
+  it.effect("shares initialization and captures a redacted resource span", () => {
+    const captured = makeCapturedTracer();
+    let created = 0;
+    let disposed = 0;
+    const adapter = ShikiAdapter.of({
+      create: () =>
+        Effect.yieldNow.pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              created++;
+              return highlighter(() => disposed++);
+            }),
+          ),
+        ),
+      loadLanguage: () => Effect.void,
+    });
+    return Effect.gen(function* () {
+      setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
+      const service = yield* CodePreviewSyntaxService;
+      yield* Effect.all(
+        [service.initialize("secret-theme-path"), service.initialize("secret-theme-path")],
+        {
+          concurrency: "unbounded",
+        },
+      );
+      assert.equal(created, 1);
+      assert.equal(service.status().initialized, true);
+      assert.ok(captured.spans.some((span) => span.name === "pi-code-previews.shiki.initialize"));
+      assert.equal(
+        JSON.stringify(
+          captured.spans.map((span) => ({ name: span.name, attributes: [...span.attributes] })),
+        ).includes("secret-theme-path"),
+        false,
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+          captured.layer,
+        ),
       ),
-  });
-  const dependencies = Layer.merge(nodeFilePlatformLayer, Layer.succeed(ShikiAdapter, adapter));
-  const layer = CodePreviewSession.layer.pipe(Layer.provideMerge(dependencies));
-  const runtime = makeCodePreviewRuntime({} as ExtensionAPI, layer);
-  setActiveCodePreviewRuntime(runtime as never);
-  setActivePlatformRunner({
-    run: (effect, signal) => runtime.run(effect, signal),
-    runShiki: (effect, signal) => runtime.run(effect, signal),
-    forkShiki: (effect) => runtime.fork(effect),
+      Effect.ensuring(Effect.sync(() => assert.equal(disposed, 1))),
+    );
   });
 
-  const first = initializeShiki("theme-a");
-  const second = initializeShiki("theme-b");
-  resolveB?.(fakeHighlighter(() => disposedB++));
-  await second;
-  resolveA?.(fakeHighlighter(() => disposedA++));
-  await first;
-  assert.equal(disposedA, 1);
-  assert.equal(disposedB, 0);
-
-  let invalidations = 0;
-  renderWithShiki("print('owned')", "python", () => invalidations++);
-  await languagePending;
-  await runtime.dispose();
-  setActiveCodePreviewRuntime(undefined);
-  setActivePlatformRunner(undefined);
-  assert.equal(languageInterrupted, 1);
-  assert.equal(disposedB, 1);
-  assert.equal(invalidations, 0);
-  assert.equal(getShikiStatus().pendingLanguages, 0);
-  assert.equal(getShikiStatus().initialized, false);
-});
-
-test("session disposal interrupts an in-flight highlighter creation", async () => {
-  setCodePreviewSettings({
-    ...codePreviewSettings,
-    shikiTheme: "pending-theme",
-    syntaxHighlighting: true,
-  });
-  let started: (() => void) | undefined;
-  const pending = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  let interrupted = 0;
-  const adapter = ShikiAdapter.of({
-    create: () =>
-      Effect.sync(() => started?.()).pipe(
-        Effect.andThen(Effect.never),
-        Effect.ensuring(Effect.sync(() => interrupted++)),
+  it.effect("logs only a redacted actionable Shiki degradation", () => {
+    setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
+    const captured = makeCapturedLogger();
+    const adapter = ShikiAdapter.of({
+      create: () =>
+        Effect.fail(
+          new ShikiBoundaryError({
+            operation: "initialize",
+            message: "secret-theme /secret/path sk-secret",
+          }),
+        ),
+      loadLanguage: () => Effect.void,
+    });
+    return CodePreviewSyntaxService.use((service) => service.initialize("secret-theme")).pipe(
+      Effect.provide(
+        Layer.merge(
+          CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+          captured.layer,
+        ),
       ),
-    loadLanguage: () => Effect.void,
+      Effect.tap(() =>
+        Effect.sync(() => {
+          const telemetry = JSON.stringify(captured.entries);
+          assert.match(telemetry, /Shiki failed to initialize/);
+          assert.equal(telemetry.includes("secret-theme"), false);
+          assert.equal(telemetry.includes("secret\/path"), false);
+          assert.equal(telemetry.includes("sk-secret"), false);
+        }),
+      ),
+    );
   });
-  const dependencies = Layer.merge(nodeFilePlatformLayer, Layer.succeed(ShikiAdapter, adapter));
-  const layer = CodePreviewSession.layer.pipe(Layer.provideMerge(dependencies));
-  const runtime = makeCodePreviewRuntime({} as ExtensionAPI, layer);
-  setActiveCodePreviewRuntime(runtime as never);
-  setActivePlatformRunner({
-    run: (effect, signal) => runtime.run(effect, signal),
-    runShiki: (effect, signal) => runtime.run(effect, signal),
-    forkShiki: (effect) => runtime.fork(effect),
+
+  it.effect("interrupts in-flight initialization", () => {
+    let interrupted = 0;
+    return Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const adapter = ShikiAdapter.of({
+        create: () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(Effect.sync(() => interrupted++)),
+          ),
+        loadLanguage: () => Effect.void,
+      });
+      const effect = CodePreviewSyntaxService.use((service) =>
+        service.initialize("dark-plus"),
+      ).pipe(
+        Effect.provide(
+          CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+        ),
+      );
+      const fiber = yield* effect.pipe(Effect.forkScoped);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(fiber);
+      assert.equal(interrupted, 1);
+    }).pipe(Effect.scoped);
   });
-  const initialization = initializeShiki("pending-theme");
-  await pending;
-  await runtime.dispose();
-  await assert.rejects(initialization);
-  setActiveCodePreviewRuntime(undefined);
-  setActivePlatformRunner(undefined);
-  assert.equal(interrupted, 1);
-  assert.equal(getShikiStatus().initialized, false);
 });

@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createCosmicFooterClient } from "pi-cosmic-ui/client";
 import type { ResolvedConfig } from "../config.ts";
 import type { FastController } from "../fast-controller.ts";
 import type * as MutableRef from "effect/MutableRef";
@@ -9,15 +10,6 @@ import {
   openAIUsageFooterPrimitive,
   openAIUsageUiState,
 } from "./primitives.ts";
-import {
-  COSMIC_UI_FOOTER_REMOVE,
-  COSMIC_UI_FOOTER_UPSERT,
-  COSMIC_UI_HOST_QUERY,
-  COSMIC_UI_PROTOCOL_VERSION,
-  type BetterOpenAIFooterPrimitive,
-} from "./protocol.ts";
-
-const OWNER = "pi-better-openai";
 
 export interface CosmicUiAdapter {
   readonly active: boolean;
@@ -25,57 +17,26 @@ export interface CosmicUiAdapter {
   update(ctx: ExtensionContext, cfg: ResolvedConfig): void;
   shutdown(): void;
 }
-
 export function createCosmicUiAdapter(options: {
   pi: ExtensionAPI;
   fastController: FastController;
   projection: MutableRef.MutableRef<OpenAIProjection>;
 }): CosmicUiAdapter {
-  const { pi, fastController, projection } = options;
-  const events = (pi as ExtensionAPI & { events?: ExtensionAPI["events"] }).events;
-  let hostActive = false;
-
-  const upsert = (contribution: BetterOpenAIFooterPrimitive) => {
-    events?.emit(COSMIC_UI_FOOTER_UPSERT, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: OWNER,
-      contribution,
-    });
-  };
-  const remove = (id?: string) => {
-    events?.emit(COSMIC_UI_FOOTER_REMOVE, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: OWNER,
-      id,
-    });
-  };
-
+  const client = createCosmicFooterClient(options.pi.events, "pi-better-openai");
   return {
     get active() {
-      return hostActive;
+      return client.active;
     },
-    detectHost() {
-      hostActive = false;
-      events?.emit(COSMIC_UI_HOST_QUERY, {
-        version: COSMIC_UI_PROTOCOL_VERSION,
-        respond: () => {
-          hostActive = true;
-        },
-      });
-      return hostActive;
-    },
+    detectHost: client.query,
     update(ctx, cfg) {
-      if (!hostActive) return;
-      const fast = fastModeFooterPrimitive(fastModeUiState(ctx, fastController));
-      const usage = openAIUsageFooterPrimitive(openAIUsageUiState(ctx, cfg, projection));
-      if (fast) upsert(fast);
-      else remove("openai.fast");
-      if (usage) upsert(usage);
-      else remove("openai.usage");
+      if (!client.active) return;
+      const fast = fastModeFooterPrimitive(fastModeUiState(ctx, options.fastController));
+      const usage = openAIUsageFooterPrimitive(openAIUsageUiState(ctx, cfg, options.projection));
+      if (fast) client.upsert(fast);
+      else client.remove("openai.fast");
+      if (usage) client.upsert(usage);
+      else client.remove("openai.usage");
     },
-    shutdown() {
-      if (hostActive) remove();
-      hostActive = false;
-    },
+    shutdown: client.shutdown,
   };
 }

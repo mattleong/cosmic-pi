@@ -1,37 +1,30 @@
 import * as Effect from "effect/Effect";
-import { runSerializedPlatformEffect } from "../boundary/platform";
-import { defaultCodePreviewSettings } from "./defaults";
-import { cloneCodePreviewSettings, codePreviewSettings, setCodePreviewSettings } from "./state";
 import {
-  loadSettingsFromDiskUnlockedEffect,
-  settingsBoundaryLock,
-  settingsCoordinationLock,
-} from "./store";
+  hasCodePreviewSessionCapability,
+  runCodePreviewSessionEffect,
+} from "../session-capability";
+import { runOneShotSettingsEffect } from "../boundary/settings-one-shot";
+import { CodePreviewSettingsService } from "./service";
 import type { CodePreviewSettings } from "./types";
 
 export const loadCodePreviewSettingsEffect = Effect.fn("CodePreviewSettings.bootstrap")(function* (
   projectCwd?: string,
   projectTrusted = false,
 ) {
-  return yield* settingsCoordinationLock.withPermits(1)(
-    Effect.gen(function* () {
-      const savedSettings = yield* loadSettingsFromDiskUnlockedEffect({
-        ...(projectCwd === undefined ? {} : { projectCwd }),
-        projectTrusted,
-      });
-      setCodePreviewSettings(savedSettings ?? defaultCodePreviewSettings);
-      return cloneCodePreviewSettings(codePreviewSettings);
-    }),
-  );
+  const service = yield* CodePreviewSettingsService;
+  return yield* service.load({
+    ...(projectCwd === undefined ? {} : { projectCwd }),
+    projectTrusted,
+  });
 });
 
-/** Public Promise boundary retained for package integrations. */
+/** Public pre-session compatibility uses the single named one-shot settings adapter. */
 export function loadCodePreviewSettings(
   projectCwd?: string,
   projectTrusted = false,
 ): Promise<CodePreviewSettings> {
-  return runSerializedPlatformEffect(
-    settingsBoundaryLock,
-    loadCodePreviewSettingsEffect(projectCwd, projectTrusted),
-  );
+  const effect = loadCodePreviewSettingsEffect(projectCwd, projectTrusted);
+  return hasCodePreviewSessionCapability()
+    ? runCodePreviewSessionEffect(effect)
+    : runOneShotSettingsEffect(effect);
 }

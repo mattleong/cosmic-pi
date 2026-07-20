@@ -1,21 +1,8 @@
-import * as Config from "effect/Config";
-import * as ConfigProvider from "effect/ConfigProvider";
-import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-
-/** Synchronous configuration boundary required by Pi's synchronous render APIs. */
+// Synchronous host/process projection required by Pi rendering and compatibility tests.
+// Production configuration is decoded once by CodePreviewEnvironmentService.
 export function environmentValue(name: string): string | undefined {
-  const environment = Reflect.get(process, "env") as Record<string, string>;
-  return Option.getOrUndefined(
-    Effect.runSync(
-      Config.option(Config.string(name)).pipe(
-        Effect.provideService(
-          ConfigProvider.ConfigProvider,
-          ConfigProvider.fromEnv({ env: environment }),
-        ),
-      ),
-    ),
-  );
+  const environment = Reflect.get(process, "env") as Record<string, string | undefined>;
+  return environment[name];
 }
 
 export function currentWorkingDirectory(): string {

@@ -2,7 +2,13 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { JsonDocumentStore, JsonHttpClient, type JsonObject } from "pi-cosmic-core";
+import {
+  JsonDocumentStore,
+  JsonHttpClient,
+  readSchemaDocument,
+  type JsonObject,
+} from "pi-cosmic-core";
+import type { XaiAuthResult } from "./auth-result.ts";
 import { isRecord } from "./utils.ts";
 
 export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
@@ -10,6 +16,7 @@ export const XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token";
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 
+const XaiAuthDocumentSchema = Schema.Struct({ xai: Schema.optional(Schema.Unknown) });
 const XaiAuthEntrySchema = Schema.Struct({
   type: Schema.Literal("oauth"),
   access: Schema.String,
@@ -70,11 +77,17 @@ export const extractTeamIdFromJwt = Effect.fn("XaiAuth.extractTeamIdFromJwt")(fu
 
 const credentialsFromEntry = Effect.fn("XaiAuth.credentialsFromEntry")(function* (entry: unknown) {
   const decoded = yield* Schema.decodeUnknownEffect(XaiAuthEntrySchema)(entry).pipe(
-    Effect.catch(() => Effect.void),
+    Effect.mapError(
+      () =>
+        new XaiAuthError({ operation: "decode", message: "xAI credential fields are malformed." }),
+    ),
   );
-  if (!decoded) return undefined;
   const accessToken = decoded.access.trim();
-  if (!accessToken) return undefined;
+  if (!accessToken)
+    return yield* new XaiAuthError({
+      operation: "decode",
+      message: "xAI credential fields are malformed.",
+    });
   const refreshToken = decoded.refresh?.trim() || undefined;
   const teamId = yield* extractTeamIdFromJwt(accessToken);
   return {
@@ -85,15 +98,37 @@ const credentialsFromEntry = Effect.fn("XaiAuth.credentialsFromEntry")(function*
   } satisfies XaiCredentials;
 });
 
-export const readXaiAuth = Effect.fn("XaiAuth.readXaiAuth")(function* (authPath: string) {
-  const documents = yield* JsonDocumentStore;
-  const document = yield* documents.readObject(authPath).pipe(
+export const readXaiAuthResult = Effect.fn("XaiAuth.readXaiAuthResult")(function* (
+  authPath: string,
+) {
+  const document = yield* readSchemaDocument(authPath, XaiAuthDocumentSchema).pipe(
     Effect.mapError(
       () => new XaiAuthError({ operation: "read", message: "Unable to read xAI credentials." }),
     ),
-    Effect.catch(() => Effect.void),
   );
-  return yield* credentialsFromEntry(document?.xai);
+  const rawEntry = document?.value.xai;
+  if (rawEntry === undefined) return { _tag: "Missing" } as const;
+  const decoded = yield* credentialsFromEntry(rawEntry).pipe(Effect.result);
+  if (decoded._tag === "Failure")
+    return {
+      _tag: "Malformed",
+      operation: decoded.failure.operation,
+      message: decoded.failure.message,
+    } as const satisfies XaiAuthResult;
+  return {
+    _tag: "Found",
+    credentials: { ...decoded.success, source: "authFile" as const },
+  } as const satisfies XaiAuthResult;
+});
+
+export const readXaiAuth = Effect.fn("XaiAuth.readXaiAuth")(function* (authPath: string) {
+  const result = yield* readXaiAuthResult(authPath);
+  if (result._tag === "Found") {
+    const { source: _source, ...credentials } = result.credentials;
+    return credentials;
+  }
+  if (result._tag === "Missing") return undefined;
+  return yield* new XaiAuthError({ operation: result.operation, message: result.message });
 });
 
 const writeXaiAuth = Effect.fn("XaiAuth.writeXaiAuth")(function* (
@@ -187,37 +222,75 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
   } satisfies XaiCredentials;
 });
 
-export const getXaiCredentials = Effect.fn("XaiAuth.getXaiCredentials")(function* (
+export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResult")(function* (
   authPath: string,
   ctx: Pick<ExtensionContext, "modelRegistry">,
 ) {
   const now = yield* Clock.currentTimeMillis;
-  const auth = yield* readXaiAuth(authPath);
+  const fileResult = yield* readXaiAuthResult(authPath).pipe(
+    Effect.catch((error) =>
+      Effect.succeed({
+        _tag: "Unavailable",
+        operation: error.operation,
+        message: error.message,
+      } as const),
+    ),
+  );
+  const auth = fileResult._tag === "Found" ? fileResult.credentials : undefined;
+  let refreshFailure: XaiAuthError | undefined;
   if (auth?.refreshToken && (auth.expires === undefined || now >= auth.expires - REFRESH_SKEW_MS)) {
-    const refreshed = yield* refreshXaiToken(authPath, auth.refreshToken).pipe(
-      Effect.map((credentials) => ({ ...credentials, source: "authFile" as const })),
-      Effect.catch(() => Effect.void),
-    );
-    if (refreshed) return refreshed;
+    const refreshed = yield* refreshXaiToken(authPath, auth.refreshToken).pipe(Effect.result);
+    if (refreshed._tag === "Success")
+      return {
+        _tag: "Found",
+        credentials: { ...refreshed.success, source: "authFile" as const },
+      } as const;
+    refreshFailure = refreshed.failure;
   }
 
   const registryToken = yield* Effect.tryPromise({
     try: () => ctx.modelRegistry.getApiKeyForProvider("xai"),
     catch: () =>
       new XaiAuthError({ operation: "registry", message: "Unable to read xAI credentials." }),
-  }).pipe(Effect.catch(() => Effect.void));
-  const registryAccess = registryToken?.trim();
-  if (registryAccess) {
-    const teamId = yield* extractTeamIdFromJwt(registryAccess);
+  }).pipe(Effect.result);
+  if (registryToken._tag === "Success") {
+    const registryAccess = registryToken.success?.trim();
+    if (registryAccess) {
+      const teamId = yield* extractTeamIdFromJwt(registryAccess);
+      return {
+        _tag: "Found",
+        credentials: {
+          accessToken: registryAccess,
+          source: "modelRegistry" as const,
+          ...(teamId ? { teamId } : {}),
+        },
+      } as const;
+    }
+  }
+  if (auth?.accessToken && (auth.expires === undefined || now < auth.expires))
+    return { _tag: "Found", credentials: auth } as const;
+  if (refreshFailure)
     return {
-      accessToken: registryAccess,
-      source: "modelRegistry" as const,
-      ...(teamId ? { teamId } : {}),
-    } satisfies XaiCredentialsWithSource;
-  }
+      _tag: "Unavailable",
+      operation: refreshFailure.operation,
+      message: refreshFailure.message,
+    } as const;
+  if (fileResult._tag === "Malformed" || fileResult._tag === "Unavailable") return fileResult;
+  if (registryToken._tag === "Failure")
+    return {
+      _tag: "Unavailable",
+      operation: registryToken.failure.operation,
+      message: registryToken.failure.message,
+    } as const;
+  return { _tag: "Missing" } as const;
+});
 
-  if (auth?.accessToken && (auth.expires === undefined || now < auth.expires)) {
-    return { ...auth, source: "authFile" as const } satisfies XaiCredentialsWithSource;
-  }
-  return undefined;
+export const getXaiCredentials = Effect.fn("XaiAuth.getXaiCredentials")(function* (
+  authPath: string,
+  ctx: Pick<ExtensionContext, "modelRegistry">,
+) {
+  const result = yield* getXaiCredentialsResult(authPath, ctx);
+  if (result._tag === "Found") return result.credentials;
+  if (result._tag === "Missing") return undefined;
+  return yield* new XaiAuthError({ operation: result.operation, message: result.message });
 });

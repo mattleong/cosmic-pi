@@ -29,6 +29,7 @@
   "type": "module",
   "exports": {
     ".": "./index.ts",
+    "./client": "./src/footer/client.ts",
     "./protocol": "./src/protocol.ts"
   },
   "publishConfig": {

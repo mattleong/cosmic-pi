@@ -55,6 +55,7 @@
   "dependencies": {
     "effect": "catalog:",
     "pi-cosmic-core": "workspace:*",
+    "pi-cosmic-ui": "workspace:*",
     "sharp": "^0.34.5"
   },
   "devDependencies": {

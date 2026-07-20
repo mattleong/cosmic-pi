@@ -1,13 +1,25 @@
-import { runSerializedPlatformEffect } from "../boundary/platform";
+import {
+  hasCodePreviewSessionCapability,
+  runCodePreviewSessionEffect,
+} from "../session-capability";
 import { cloneCodePreviewSettings, type CodePreviewSettings } from "./index";
-import { saveSettingsToDisk, settingsBoundaryLock, waitForSettingsSavesEffect } from "./store";
+import { runOneShotSettingsEffect } from "../boundary/settings-one-shot";
+import { CodePreviewSettingsService } from "./service";
 
 export function queueSettingsSave(settings: CodePreviewSettings): Promise<void> {
-  return saveSettingsToDisk(cloneCodePreviewSettings(settings));
+  const effect = CodePreviewSettingsService.use((service) =>
+    service.save(cloneCodePreviewSettings(settings)),
+  );
+  return hasCodePreviewSessionCapability()
+    ? runCodePreviewSessionEffect(effect)
+    : runOneShotSettingsEffect(effect);
 }
 
 export function flushSettingsSaveQueue(): Promise<void> {
-  return runSerializedPlatformEffect(settingsBoundaryLock, waitForSettingsSavesEffect);
+  const effect = CodePreviewSettingsService.use((service) => service.flush);
+  return hasCodePreviewSessionCapability()
+    ? runCodePreviewSessionEffect(effect)
+    : runOneShotSettingsEffect(effect);
 }
 
 export function formatSettingsSaveError(error: unknown): string {

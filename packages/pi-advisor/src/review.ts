@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { stringifyJson } from "./boundary/json.ts";
@@ -150,7 +151,32 @@ At a checkpoint, follow this rule: Return exactly one JSON object and no prose o
 {"checkpointId":"exact requested id","processedThrough":0,"stateSummary":"bounded compact state","verdict":"pass"|"suggest"|"revise","summary":"non-empty summary","suggestions":[{"fingerprint":"short-stable-semantic-key","kind":"alternative"|"investigation"|"verification"|"simplification"|"tradeoff"|"edge-case","suggestion":"non-empty possible angle","rationale":"why it may help","relevance":"possible"|"likely"|"high"}],"findings":[{"fingerprint":"short-stable-semantic-key","category":"intent"|"correctness"|"completeness"|"evidence","severity":"nit"|"concern"|"blocker","confidence":"low"|"medium"|"high","evidenceBasis":"none"|"inferred"|"direct","issue":"non-empty issue","evidence":"non-empty transcript evidence","recommendation":"non-empty recommendation"}]}
 
 The bounded stateSummary may retain conclusions and routing context, but never raw transcript deltas, thinking, tool output, file content, or credentials.`;
-/** Parse and validate one strict advisor JSON response. */
+/** Effect-native provider protocol boundary. Expected validation failures stay typed. */
+export const parseAdvisorReviewEffect = Effect.fn("AdvisorReview.decode")(function* (raw: string) {
+  if (raw.length > MAX_ADVISOR_REVIEW_CHARS) {
+    return yield* reviewError("Advisor review exceeds the maximum response size.");
+  }
+  const jsonText = yield* Effect.try({
+    try: () => unwrapJson(raw),
+    catch: (error) =>
+      error instanceof AdvisorReviewParseError
+        ? error
+        : reviewError("Advisor returned malformed JSON."),
+  });
+  const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(AdvisorReviewWireSchema))(
+    jsonText,
+    { onExcessProperty: "error" },
+  ).pipe(Effect.mapError(() => reviewError("Advisor review failed schema validation.")));
+  return yield* Effect.try({
+    try: () => normalizeDecodedAdvisorReview(decoded),
+    catch: (error) =>
+      error instanceof AdvisorReviewParseError
+        ? error
+        : reviewError("Advisor review failed schema validation."),
+  });
+});
+
+/** Pure compatibility parser retained for deterministic parser consumers. */
 export function parseAdvisorReview(raw: string): AdvisorReview {
   if (raw.length > MAX_ADVISOR_REVIEW_CHARS) {
     throw reviewError("Advisor review exceeds the maximum response size.");

@@ -2,8 +2,14 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
+// @effect-diagnostics effect/preferSchemaOverJson:off
+// @effect-diagnostics effect/strictEffectProvide:off
 import type { AgentSession, CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
+import * as Scope from "effect/Scope";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import { describe, expect, test, vi } from "vitest";
 import {
@@ -16,12 +22,47 @@ import {
   MAX_ADVISOR_TOOL_ROUNDS,
   NoDiscoveryAdvisorResourceLoader,
   parseAdvisorCheckpoint,
+  parseAdvisorCheckpointEffect,
   type AdvisorCheckpointRequest,
+  type AdvisorRuntimeDriver,
+  type AdvisorRuntimeStartOptions,
 } from "../src/advisor-runtime.ts";
 import { ADVISOR_TOOL_NAMES, createAdvisorTools } from "../src/advisor-tools.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
 import type { AdvisorUsageTelemetry } from "../src/client.ts";
+import { makeCapturedTracer } from "pi-cosmic-core/testing";
 import type { ResolvedAdvisorConfig } from "../src/config.ts";
+
+type TestRuntime = AdvisorRuntime & AdvisorRuntimeDriver;
+const makeTestRuntime = (dependencies: ConstructorParameters<typeof AdvisorRuntime>[0]) => {
+  const runtime = new AdvisorRuntime(
+    dependencies,
+    standaloneAdvisorExecutor,
+    Scope.makeUnsafe(),
+    Effect.runSync(Queue.unbounded<void>()),
+  ) as TestRuntime;
+  Object.defineProperties(runtime, {
+    start: {
+      value: (options: AdvisorRuntimeStartOptions) =>
+        standaloneAdvisorExecutor.run(runtime.startEffect(options)),
+    },
+    checkpoint: {
+      value: (request: AdvisorCheckpointRequest) =>
+        standaloneAdvisorExecutor.run(runtime.checkpointEffect(request)),
+    },
+    steer: {
+      value: (observations: string) =>
+        standaloneAdvisorExecutor.run(runtime.steerEffect(observations)),
+    },
+    reprime: {
+      value: (seed: string, state?: string) =>
+        standaloneAdvisorExecutor.run(runtime.reprimeEffect(seed, state)),
+    },
+    abort: { value: () => standaloneAdvisorExecutor.run(runtime.abortEffect()) },
+    dispose: { value: () => standaloneAdvisorExecutor.run(runtime.disposeEffect()) },
+  });
+  return runtime;
+};
 
 function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisorConfig {
   return {
@@ -134,7 +175,7 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
     abort: vi.fn(async () => undefined),
     dispose: vi.fn(),
   };
-  const runtime = new AdvisorRuntime({
+  const runtime = makeTestRuntime({
     createChildModel: vi.fn(async () => ({
       modelRuntime: {} as never,
       model: { provider: "p", id: "m" } as never,
@@ -158,7 +199,7 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
 }
 
 async function start(
-  runtime: AdvisorRuntime,
+  runtime: TestRuntime,
   overrides: Partial<ResolvedAdvisorConfig> = {},
   runtimeOptions: {
     instructions?: string;
@@ -501,11 +542,49 @@ describe("AdvisorRuntime", () => {
     }
   });
 
+  test("ManagedRuntime disposal alone releases the active child exactly once", async () => {
+    const session = {
+      sessionFile: undefined,
+      messages: [],
+      isStreaming: false,
+      getActiveToolNames: vi.fn(() => []),
+      getToolDefinition: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
+      prompt: vi.fn(async () => undefined),
+      steer: vi.fn(async () => undefined),
+      followUp: vi.fn(async () => undefined),
+      abort: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    } as unknown as AgentSession;
+    const layer = advisorRuntimeServiceLayer(standaloneAdvisorExecutor, {
+      createChildModel: vi.fn(async () => ({
+        modelRuntime: {} as never,
+        model: { provider: "p", id: "m" } as never,
+        thinkingLevel: "medium" as const,
+      })),
+      createTools: vi.fn(async () => []),
+      createSession: vi.fn(async () => ({ session, extensionsResult: {} as never })),
+    }).pipe(Layer.provideMerge(advisorPlatformLayer));
+    const managed = ManagedRuntime.make(layer);
+    const service = await managed.runPromise(AdvisorRuntimeService);
+    await managed.runPromise(
+      service.start({
+        ctx: { cwd: process.cwd(), modelRegistry: {} as never },
+        config: config(),
+        seed: "seed",
+      }),
+    );
+
+    await managed.dispose();
+    expect(session.abort).toHaveBeenCalledOnce();
+    expect(session.dispose).toHaveBeenCalledOnce();
+  });
+
   test("bounds auth/model startup and rejects without creating a session", async () => {
     vi.useFakeTimers();
     try {
       const never = new Promise<never>(() => undefined);
-      const runtime = new AdvisorRuntime({ createChildModel: vi.fn(() => never) });
+      const runtime = makeTestRuntime({ createChildModel: vi.fn(() => never) });
       const pending = start(runtime, { timeoutMs: 25 });
       const rejection = expect(pending).rejects.toThrow("startup timed out");
       await vi.advanceTimersByTimeAsync(25);
@@ -524,7 +603,7 @@ describe("AdvisorRuntime", () => {
         resolveSession = resolve;
       });
       const base = harness();
-      const runtime = new AdvisorRuntime({
+      const runtime = makeTestRuntime({
         createChildModel: vi.fn(async () => ({
           modelRuntime: {} as never,
           model: { provider: "p", id: "m" } as never,
@@ -777,6 +856,32 @@ describe("AdvisorRuntime", () => {
         }),
       ),
     ).toThrow("checkpoint ID");
+  });
+
+  test("captures redacted checkpoint decode spans with typed failures", async () => {
+    const captured = makeCapturedTracer();
+    for (const raw of [
+      "not json sk-secret /secret/path accountId=acct_hidden",
+      "x".repeat(MAX_ADVISOR_CHECKPOINT_CHARS + 1),
+    ]) {
+      const exit = await Effect.runPromiseExit(
+        parseAdvisorCheckpointEffect(raw).pipe(Effect.provide(captured.layer)),
+      );
+      expect(exit._tag).toBe("Failure");
+      if (exit._tag === "Failure") {
+        const failure = Cause.findErrorOption(exit.cause);
+        expect(failure._tag).toBe("Some");
+        if (failure._tag === "Some") expect(failure.value).toBeInstanceOf(Error);
+        expect(Cause.hasDies(exit.cause)).toBe(false);
+      }
+    }
+    expect(captured.spans.map((span) => span.name)).toContain("pi-advisor.checkpoint.decode");
+    const telemetry = JSON.stringify(
+      captured.spans.map((span) => ({ name: span.name, attributes: [...span.attributes] })),
+    );
+    expect(telemetry).not.toContain("sk-secret");
+    expect(telemetry).not.toContain("/secret/path");
+    expect(telemetry).not.toContain("acct_hidden");
   });
 
   test("rejects duplicate fingerprints before blocker verification can correlate them", () => {

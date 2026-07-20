@@ -1,0 +1,195 @@
+// Test entry point provides the controller Layer explicitly.
+// @effect-diagnostics effect/strictEffectProvide:off
+import { describe, expect, it } from "@effect/vitest";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as SynchronizedRef from "effect/SynchronizedRef";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  AdvisorController,
+  advisorControllerApplicationLayer,
+  advisorControllerLayer,
+  type AdvisorControllerApplicationOptions,
+} from "../src/advisor-controller.ts";
+import { advisorRuntimeServiceLayer, type AdvisorRuntimeDriver } from "../src/advisor-runtime.ts";
+import { advisorReviewQueueServiceLayer } from "../src/review-queue.ts";
+import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
+import { PiCommandAdapter } from "../src/pi-command-adapter.ts";
+
+describe("AdvisorController", () => {
+  it.effect("publishes immutable snapshots", () =>
+    Effect.gen(function* () {
+      const controller = yield* AdvisorController;
+      const before = yield* SynchronizedRef.get(controller.snapshot);
+      const next = { ...before, paused: true };
+      yield* controller.publish(next);
+      expect(yield* SynchronizedRef.get(controller.snapshot)).toEqual(next);
+    }).pipe(Effect.provide(advisorControllerLayer)),
+  );
+
+  it.effect("replaces and releases the authoritative child in order", () =>
+    Effect.gen(function* () {
+      const controller = yield* AdvisorController;
+      const events: string[] = [];
+      yield* controller.replaceChild(
+        Effect.sync(() => {
+          events.push("acquire:first");
+          return "first";
+        }),
+        (child) => Effect.sync(() => events.push(`release:${child}`)),
+      );
+      yield* controller.replaceChild(
+        Effect.sync(() => {
+          events.push("acquire:second");
+          return "second";
+        }),
+        (child) => Effect.sync(() => events.push(`release:${child}`)),
+      );
+      expect(events).toEqual(["acquire:first", "release:first", "acquire:second"]);
+      yield* controller.stopChild();
+      expect(events).toEqual([
+        "acquire:first",
+        "release:first",
+        "acquire:second",
+        "release:second",
+      ]);
+    }).pipe(Effect.provide(advisorControllerLayer)),
+  );
+
+  it.effect("interrupts replacement acquisition and releases its scoped resource", () =>
+    Effect.gen(function* () {
+      const controller = yield* AdvisorController;
+      let acquired = 0;
+      let released = 0;
+      const replacing = controller.replaceChild(
+        Effect.scoped(
+          Effect.acquireRelease(
+            Effect.sync(() => {
+              acquired += 1;
+              return "pending";
+            }),
+            () =>
+              Effect.sync(() => {
+                released += 1;
+              }),
+          ).pipe(Effect.andThen(Effect.never)),
+        ),
+        () => Effect.void,
+      );
+      const fiber = yield* replacing.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(fiber);
+      expect(acquired).toBe(1);
+      expect(released).toBe(1);
+    }).pipe(Effect.provide(advisorControllerLayer)),
+  );
+
+  it.effect("releases the active child when the Layer scope closes", () => {
+    let releases = 0;
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(advisorControllerLayer);
+        const controller = Context.get(context, AdvisorController);
+        yield* controller.replaceChild(Effect.succeed("active"), () =>
+          Effect.sync(() => {
+            releases += 1;
+          }),
+        );
+        expect(releases).toBe(0);
+      }),
+    ).pipe(Effect.andThen(Effect.sync(() => expect(releases).toBe(1))));
+  });
+
+  it.effect("owns real session config, child replacement, and shutdown state", () => {
+    let starts = 0;
+    let disposals = 0;
+    const driver: AdvisorRuntimeDriver = {
+      get activeToolNames() {
+        return [];
+      },
+      start: () => {
+        starts += 1;
+        return Promise.resolve();
+      },
+      checkpoint: () => Promise.reject(new Error("unused")),
+      steer: () => Promise.resolve(true),
+      reprime: () => Promise.resolve(),
+      abort: () => Promise.resolve(),
+      dispose: () => {
+        disposals += 1;
+        return Promise.resolve();
+      },
+    };
+    const pi = {
+      on: () => undefined,
+      registerCommand: () => undefined,
+      sendMessage: () => undefined,
+      appendEntry: () => undefined,
+    } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: "/project",
+      mode: "tui",
+      hasUI: true,
+      signal: undefined,
+      abort: () => undefined,
+      hasPendingMessages: () => false,
+      isIdle: () => true,
+      isProjectTrusted: () => false,
+      ui: { notify: () => undefined, setStatus: () => undefined },
+      modelRegistry: { find: () => undefined },
+      sessionManager: {
+        buildContextEntries: () => [],
+        getBranch: () => [],
+        getLeafId: () => "root",
+        getSessionId: () => "session",
+      },
+    } as unknown as ExtensionContext;
+    const options: AdvisorControllerApplicationOptions = {
+      pi,
+      executor: standaloneAdvisorExecutor,
+      dependencies: {
+        loadConfig: () => ({
+          configPath: "/tmp/pi-advisor-controller-test.json",
+          enabled: true,
+          provider: "provider",
+          model: "model",
+          fastMode: false,
+          thinkingLevel: "medium",
+          reviewPolicy: "guardrail",
+          timeoutMs: 30_000,
+          maxContextChars: 48_000,
+          configured: true,
+        }),
+        createRuntime: () => driver,
+      },
+      eventHandlers: new Map(),
+      commandHandlers: new Map(),
+      commandDefinitions: new Map(),
+    };
+    const dependencies = Layer.mergeAll(
+      advisorRuntimeServiceLayer(standaloneAdvisorExecutor),
+      advisorReviewQueueServiceLayer,
+      PiCommandAdapter.layer,
+    ).pipe(Layer.provideMerge(advisorPlatformLayer));
+    const application = advisorControllerApplicationLayer(options).pipe(
+      Layer.provideMerge(dependencies),
+    );
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(application);
+        const controller = Context.get(context, AdvisorController);
+        yield* controller.sessionInitialize(undefined as never, ctx);
+        expect(starts).toBe(1);
+        expect((yield* SynchronizedRef.get(controller.snapshot)).config.model).toBe("model");
+        yield* controller.sessionInitialize(undefined as never, ctx);
+        expect(starts).toBe(2);
+        expect(disposals).toBe(1);
+        yield* controller.sessionShutdown(undefined as never, ctx);
+        expect(disposals).toBe(2);
+        expect((yield* SynchronizedRef.get(controller.snapshot)).started).toBe(false);
+      }),
+    );
+  });
+});

@@ -14,15 +14,17 @@ export const MediaPlacementSchema = Schema.Literals(MEDIA_PLACEMENTS);
 export type FooterDensity = typeof FooterDensitySchema.Type;
 export type MediaPlacement = typeof MediaPlacementSchema.Type;
 
-export interface CosmicUiConfigFile {
-  readonly footer?: {
-    readonly enabled?: boolean;
-    readonly density?: FooterDensity;
-    readonly order?: readonly string[];
-    readonly hidden?: readonly string[];
-    readonly mediaPlacement?: MediaPlacement;
-  };
-}
+export const CosmicUiFooterConfigSchema = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean),
+  density: Schema.optional(FooterDensitySchema),
+  order: Schema.optional(Schema.Array(Schema.String)),
+  hidden: Schema.optional(Schema.Array(Schema.String)),
+  mediaPlacement: Schema.optional(MediaPlacementSchema),
+});
+export const CosmicUiConfigFileSchema = Schema.Struct({
+  footer: Schema.optional(CosmicUiFooterConfigSchema),
+});
+export type CosmicUiConfigFile = typeof CosmicUiConfigFileSchema.Type;
 
 export interface ResolvedCosmicUiConfig {
   readonly configPath: string;

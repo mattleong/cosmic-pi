@@ -1,11 +1,9 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { positiveEnvInteger } from "../config/env";
+import { codePreviewPerformanceConfig } from "../config/env";
 import { wrapAnsiToWidth } from "../shared/terminal-text";
 import { createDiffBackgroundResolver, diffLineBg } from "./background";
 import { DIFF_ADD_MARKER, DIFF_REMOVE_MARKER } from "./markers";
-
-const DIFF_WRAP_ROWS = positiveEnvInteger("CODE_PREVIEW_DIFF_WRAP_ROWS", 3);
 
 type MarkedDiffLine = { kind?: "add" | "remove"; line: string };
 
@@ -34,7 +32,7 @@ export class FullWidthDiffText implements Component {
       const wrappedRows = wrapAnsiToWidth(
         line,
         width,
-        DIFF_WRAP_ROWS,
+        codePreviewPerformanceConfig.diffWrapRows,
         visibleWidth(continuation) < width ? continuation : "",
       );
       if (!kind) {

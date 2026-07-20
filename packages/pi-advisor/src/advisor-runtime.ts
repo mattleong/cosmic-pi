@@ -19,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import type { ResolvedAdvisorConfig } from "./config.ts";
@@ -33,6 +34,7 @@ import {
   createAdvisorTools,
   createAdvisorToolsEffect,
   isPackageAdvisorTool,
+  type AdvisorToolRunner,
 } from "./advisor-tools.ts";
 import {
   ADVISOR_SYSTEM_PROMPT,
@@ -45,11 +47,7 @@ import {
 import { redactSensitiveText } from "./observation-protocol.ts";
 import { AdvisorTrajectoryDetector } from "./trajectory.ts";
 import { isRecord } from "./utils.ts";
-import {
-  standaloneAdvisorExecutor,
-  type AdvisorEffectExecutor,
-  type AdvisorPlatform,
-} from "./boundary/executor.ts";
+import type { AdvisorPlatform } from "./boundary/executor.ts";
 import { snapshotData } from "./boundary/safe-data.ts";
 
 export const MAX_ADVISOR_STATE_SUMMARY_CHARS = 4_000;
@@ -130,10 +128,11 @@ interface ActiveCheckpointFinalization {
   finalizationQueued: boolean;
 }
 
-export class AdvisorRuntime implements AdvisorRuntimeDriver {
+export class AdvisorRuntime {
   private session: AgentSession | undefined;
   private unsubscribe: (() => void) | undefined;
   private resourceFiber: Fiber.Fiber<never, AdvisorModelError> | undefined;
+  private controlFiber: Fiber.Fiber<void, never> | undefined;
   private sessionAborted = false;
   private epoch = 0;
   private options: AdvisorRuntimeStartOptions | undefined;
@@ -145,16 +144,19 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
   private pendingSeed: { seed: string; stateSummary?: string; maxContextChars: number } | undefined;
   private activeCheckpoint: ActiveCheckpointFinalization | undefined;
   private readonly dependencies: AdvisorRuntimeDependencies;
-  private readonly executor: AdvisorEffectExecutor;
+  private readonly toolRunner: AdvisorToolRunner;
   private readonly resourceScope: Scope.Scope;
+  private readonly controlMailbox: Queue.Queue<void>;
   constructor(
-    dependencies: AdvisorRuntimeDependencies = {},
-    executor: AdvisorEffectExecutor = standaloneAdvisorExecutor,
-    resourceScope: Scope.Scope = Scope.makeUnsafe(),
+    dependencies: AdvisorRuntimeDependencies,
+    toolRunner: AdvisorToolRunner,
+    resourceScope: Scope.Scope,
+    controlMailbox: Queue.Queue<void>,
   ) {
     this.dependencies = dependencies;
-    this.executor = executor;
+    this.toolRunner = toolRunner;
     this.resourceScope = resourceScope;
+    this.controlMailbox = controlMailbox;
   }
   get activeToolNames(): readonly string[] {
     return this.session?.getActiveToolNames() ?? [];
@@ -162,29 +164,15 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
   get childSession(): AgentSession | undefined {
     return this.session;
   }
-  start(options: AdvisorRuntimeStartOptions): Promise<void> {
-    return this.executor.run(this.startEffect(options));
-  }
-  checkpoint(request: AdvisorCheckpointRequest): Promise<AdvisorCheckpoint> {
-    return this.executor.run(this.checkpointEffect(request));
-  }
-  steer(observations: string): Promise<boolean> {
-    return this.executor.run(this.steerEffect(observations));
-  }
-  reprime(seed: string, stateSummary?: string): Promise<void> {
-    return this.executor.run(this.reprimeEffect(seed, stateSummary));
-  }
-  abort(): Promise<void> {
-    return this.executor.run(this.abortEffect());
-  }
-  dispose(): Promise<void> {
-    return this.executor.run(this.disposeEffect());
-  }
-
   startEffect(options: AdvisorRuntimeStartOptions) {
     const self = this;
     return Effect.gen(function* () {
-      yield* self.disposeEffect();
+      if (!self.controlFiber) {
+        self.controlFiber = yield* Effect.forkIn(self.controlLoopEffect(), self.resourceScope, {
+          startImmediately: true,
+        });
+      }
+      yield* self.disposeChildEffect();
       const startEpoch = self.epoch;
       self.options = options;
       const initialize = Effect.gen(function* () {
@@ -201,7 +189,7 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
               try: () => self.dependencies.createTools!(options.ctx.cwd),
               catch: toModelError("Advisor tools could not be created."),
             })
-          : yield* createAdvisorToolsEffect(options.ctx.cwd, self.executor);
+          : yield* createAdvisorToolsEffect(options.ctx.cwd, self.toolRunner);
         if (startEpoch !== self.epoch)
           return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
         const createOptions: CreateAgentSessionOptions = {
@@ -228,7 +216,7 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
           yield* stopSessionEffect(result.session, 5_000);
           return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
         }
-        const acquired = Deferred.makeUnsafe<void, AdvisorModelError>();
+        const acquired = yield* Deferred.make<void, AdvisorModelError>();
         const resource = Effect.acquireUseRelease(
           Effect.succeed(result.session),
           (session) =>
@@ -292,7 +280,7 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
           yield* Fiber.interrupt(resourceFiber);
           return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
         }
-        self.assertSafeTools();
+        yield* self.assertSafeToolsEffect();
         if (result.session.sessionFile !== undefined)
           return yield* self.fatalSafetyFailureEffect(
             "Advisor child session unexpectedly has a persistent file.",
@@ -320,8 +308,8 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
   checkpointEffect(request: AdvisorCheckpointRequest) {
     const self = this;
     return Effect.gen(function* () {
-      const session = self.requireSession();
-      self.assertSafeTools();
+      const session = yield* self.requireSessionEffect();
+      yield* self.assertSafeToolsEffect();
       const checkpointEpoch = self.epoch;
       self.sessionAborted = false;
       self.toolRounds = 0;
@@ -332,10 +320,11 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
       const seed = self.pendingSeed;
       const prompt = buildCheckpointPrompt(request, seed);
       const finalPrompt = buildCheckpointFinalizationPrompt(request);
+      const abortRequested = yield* Deferred.make<void>();
       const active: ActiveCheckpointFinalization = {
         epoch: checkpointEpoch,
         finalPrompt,
-        abortRequested: Deferred.makeUnsafe<void>(),
+        abortRequested,
         finalizationQueued: false,
       };
       self.activeCheckpoint = active;
@@ -397,6 +386,11 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
         Effect.withSpan("pi-advisor.child.checkpoint"),
       );
       void result;
+      if (self.resetRequiredReason) {
+        const reason = self.resetRequiredReason;
+        yield* self.abortEffect();
+        return yield* new AdvisorRuntimeResetRequiredError({ message: reason });
+      }
       if (checkpointEpoch !== self.epoch)
         return yield* new AdvisorRuntimeResetRequiredError({
           message:
@@ -412,11 +406,10 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
           message:
             "Advisor prompt settled before correlated checkpoint finalization could be queued.",
         });
-      self.assertSafeTools();
+      yield* self.assertSafeToolsEffect();
       if (seed === self.pendingSeed) self.pendingSeed = undefined;
-      const checkpoint = parseAdvisorCheckpoint(
-        assistantTextAfterPrompt(session.messages, finalPrompt),
-      );
+      const finalizedText = yield* assistantTextAfterPromptEffect(session.messages, finalPrompt);
+      const checkpoint = yield* parseAdvisorCheckpointEffect(finalizedText);
       if (
         checkpoint.checkpointId !== request.checkpointId ||
         checkpoint.processedThrough !== request.processedThrough
@@ -430,8 +423,8 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
   steerEffect(observations: string) {
     const self = this;
     return Effect.gen(function* () {
-      const session = self.requireSession();
-      self.assertSafeTools();
+      const session = yield* self.requireSessionEffect();
+      yield* self.assertSafeToolsEffect();
       const steeringEpoch = self.epoch;
       if (!session.isStreaming || !self.activeCheckpoint) return false;
       yield* Effect.tryPromise({
@@ -468,7 +461,7 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
       );
     });
   }
-  disposeEffect() {
+  private disposeChildEffect() {
     const self = this;
     return Effect.suspend(() => {
       const resourceFiber = self.resourceFiber;
@@ -490,25 +483,54 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
         : Effect.void;
     });
   }
-  private requireSession(): AgentSession {
-    if (!this.session) throw new AdvisorModelError({ message: "Advisor runtime is not started." });
-    return this.session;
+  disposeEffect() {
+    const self = this;
+    return self.disposeChildEffect().pipe(
+      Effect.andThen(
+        Effect.suspend(() => {
+          const control = self.controlFiber;
+          self.controlFiber = undefined;
+          return control ? Fiber.interrupt(control).pipe(Effect.asVoid) : Effect.void;
+        }),
+      ),
+    );
   }
-  private assertSafeTools(): void {
-    const session = this.requireSession();
-    for (const name of session.getActiveToolNames()) {
-      if (!(ADVISOR_TOOL_NAMES as readonly string[]).includes(name))
-        this.failSafetySynchronously(`Unsafe Advisor tool became active: ${name}`);
-      if (!isPackageAdvisorTool(session.getToolDefinition(name)))
-        this.failSafetySynchronously(`Advisor tool identity mismatch: ${name}`);
-    }
+  private controlLoopEffect() {
+    const self = this;
+    return Effect.gen(function* () {
+      while (true) {
+        yield* Queue.take(self.controlMailbox);
+        const active = self.activeCheckpoint;
+        if (active) yield* Deferred.succeed(active.abortRequested, undefined);
+        else if (self.resourceFiber) yield* Fiber.interrupt(self.resourceFiber);
+      }
+    });
   }
-  private failSafetySynchronously(message: string): never {
-    // Signal the sole scoped owner immediately. During startup, startEffect's
-    // identity-local failure finalizer also joins this same fiber exactly once.
-    this.resourceFiber?.interruptUnsafe();
-    isolateCallback(() => this.options?.onDiagnostic?.(message));
-    throw new AdvisorModelError({ message: `Advisor runtime safety check failed: ${message}` });
+  private requireSessionEffect() {
+    return this.session
+      ? Effect.succeed(this.session)
+      : Effect.fail(new AdvisorModelError({ message: "Advisor runtime is not started." }));
+  }
+  private assertSafeToolsEffect() {
+    const self = this;
+    return Effect.gen(function* () {
+      const session = yield* self.requireSessionEffect();
+      for (const name of session.getActiveToolNames()) {
+        if (!(ADVISOR_TOOL_NAMES as readonly string[]).includes(name))
+          return yield* self.failSafetyEffect(`Unsafe Advisor tool became active: ${name}`);
+        if (!isPackageAdvisorTool(session.getToolDefinition(name)))
+          return yield* self.failSafetyEffect(`Advisor tool identity mismatch: ${name}`);
+      }
+    });
+  }
+  private failSafetyEffect(message: string) {
+    return Effect.sync(() => isolateCallback(() => this.options?.onDiagnostic?.(message))).pipe(
+      Effect.andThen(
+        Effect.fail(
+          new AdvisorModelError({ message: `Advisor runtime safety check failed: ${message}` }),
+        ),
+      ),
+    );
   }
   private fatalSafetyFailureEffect(message: string) {
     return this.disposeEffect().pipe(
@@ -591,14 +613,7 @@ export class AdvisorRuntime implements AdvisorRuntimeDriver {
   private invalidateForReprime(message: string) {
     if (this.resetRequiredReason) return;
     this.resetRequiredReason = message;
-    const active = this.activeCheckpoint;
-    if (active) {
-      Deferred.doneUnsafe(active.abortRequested, Effect.void);
-    } else {
-      // No checkpoint owner can consume a signal, so interrupt the scoped
-      // resource owner directly rather than launching an untracked runner.
-      this.resourceFiber?.interruptUnsafe();
-    }
+    Queue.offerUnsafe(this.controlMailbox, undefined);
     isolateCallback(() => this.options?.onDiagnostic?.(message));
   }
 }
@@ -621,45 +636,35 @@ export class AdvisorRuntimeService extends Context.Service<
 >()("pi-advisor/advisor-runtime/AdvisorRuntimeService") {}
 
 export const advisorRuntimeServiceLayer = (
-  executor: AdvisorEffectExecutor,
+  toolRunner: AdvisorToolRunner,
   dependencies: AdvisorRuntimeDependencies = {},
 ) =>
   Layer.effect(
     AdvisorRuntimeService,
-    Effect.gen(function* () {
-      const scope = yield* Effect.scope;
-      const platform = yield* Effect.context<AdvisorPlatform>();
-      const runtime = new AdvisorRuntime(dependencies, executor, scope);
-      const provide = <A, E>(effect: Effect.Effect<A, E, AdvisorPlatform>) =>
-        effect.pipe(Effect.provide(platform));
-      return AdvisorRuntimeService.of({
-        activeToolNames: () => runtime.activeToolNames,
-        start: (options) => provide(runtime.startEffect(options)),
-        checkpoint: (request) => provide(runtime.checkpointEffect(request)),
-        steer: (observations) => provide(runtime.steerEffect(observations)),
-        reprime: (seed, stateSummary) => provide(runtime.reprimeEffect(seed, stateSummary)),
-        abort: () => provide(runtime.abortEffect()),
-        dispose: () => provide(runtime.disposeEffect()),
-      });
-    }),
+    Effect.acquireRelease(
+      Effect.gen(function* () {
+        const scope = yield* Effect.scope;
+        const platform = yield* Effect.context<AdvisorPlatform>();
+        const controlMailbox = yield* Queue.unbounded<void>();
+        const runtime = new AdvisorRuntime(dependencies, toolRunner, scope, controlMailbox);
+        const provide = <A, E>(effect: Effect.Effect<A, E, AdvisorPlatform>) =>
+          effect.pipe(Effect.provide(platform));
+        return {
+          runtime,
+          service: AdvisorRuntimeService.of({
+            activeToolNames: () => runtime.activeToolNames,
+            start: (options) => provide(runtime.startEffect(options)),
+            checkpoint: (request) => provide(runtime.checkpointEffect(request)),
+            steer: (observations) => provide(runtime.steerEffect(observations)),
+            reprime: (seed, stateSummary) => provide(runtime.reprimeEffect(seed, stateSummary)),
+            abort: () => provide(runtime.abortEffect()),
+            dispose: () => provide(runtime.disposeEffect()),
+          }),
+        };
+      }),
+      ({ runtime }) => runtime.disposeEffect(),
+    ).pipe(Effect.map(({ service }) => service)),
   );
-
-export function advisorRuntimeServiceDriver(
-  service: AdvisorRuntimeServiceShape,
-  executor: AdvisorEffectExecutor,
-): AdvisorRuntimeDriver {
-  return {
-    get activeToolNames() {
-      return service.activeToolNames();
-    },
-    start: (options) => executor.run(service.start(options)),
-    checkpoint: (request) => executor.run(service.checkpoint(request)),
-    steer: (observations) => executor.run(service.steer(observations)),
-    reprime: (seed, stateSummary) => executor.run(service.reprime(seed, stateSummary)),
-    abort: () => executor.run(service.abort()),
-    dispose: () => executor.run(service.dispose()),
-  };
-}
 
 export class NoDiscoveryAdvisorResourceLoader implements ResourceLoader {
   private readonly extensionRuntime = createExtensionRuntime();
@@ -694,6 +699,32 @@ export class NoDiscoveryAdvisorResourceLoader implements ResourceLoader {
   }
 }
 
+const decodeAdvisorCheckpoint = Effect.fn("AdvisorCheckpoint.decode")(function* (raw: string) {
+  if (raw.length > MAX_ADVISOR_CHECKPOINT_CHARS) {
+    return yield* new AdvisorModelError({
+      message: "Advisor checkpoint exceeds the maximum response size.",
+    });
+  }
+  const decoded = yield* Schema.decodeUnknownEffect(
+    Schema.fromJsonString(AdvisorCheckpointWireSchema),
+  )(raw.trim(), { onExcessProperty: "error" }).pipe(
+    Effect.mapError(
+      () => new AdvisorModelError({ message: "Advisor checkpoint failed schema validation." }),
+    ),
+  );
+  return yield* Effect.try({
+    try: () => diagnoseAdvisorCheckpoint(stringifyJson(decoded)),
+    catch: (error) =>
+      error instanceof AdvisorModelError
+        ? error
+        : new AdvisorModelError({ message: "Advisor checkpoint failed schema validation." }),
+  });
+});
+
+export const parseAdvisorCheckpointEffect = (raw: string) =>
+  decodeAdvisorCheckpoint(raw).pipe(Effect.withSpan("pi-advisor.checkpoint.decode"));
+
+/** Pure compatibility parser retained for deterministic parser tests. */
 export function parseAdvisorCheckpoint(raw: string): AdvisorCheckpoint {
   if (raw.length > MAX_ADVISOR_CHECKPOINT_CHARS) {
     throw new AdvisorModelError({
@@ -844,6 +875,19 @@ function buildObservationSteer(observations: string): string {
     observations,
   ].join("\n\n");
 }
+
+const assistantTextAfterPromptEffect = Effect.fn("AdvisorCheckpoint.correlatedText")(function* (
+  messages: readonly unknown[],
+  prompt: string,
+) {
+  return yield* Effect.try({
+    try: () => assistantTextAfterPrompt(messages, prompt),
+    catch: (error) =>
+      error instanceof AdvisorModelError
+        ? error
+        : new AdvisorModelError({ message: "Advisor correlated response was unavailable." }),
+  });
+});
 
 function assistantTextAfterPrompt(messages: readonly unknown[], prompt: string): string {
   let promptIndex = -1;

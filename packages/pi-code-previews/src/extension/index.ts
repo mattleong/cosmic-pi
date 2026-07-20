@@ -1,21 +1,57 @@
 /** Effect-managed Pi boundary for code previews. */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { setActivePlatformRunner } from "../boundary/platform";
 import {
-  makeCodePreviewRuntime,
-  setActiveCodePreviewRuntime,
-  type CodePreviewRuntime,
-} from "../boundary/runtime";
+  AgentDirectory,
+  makePiManagedRuntime,
+  makePiSessionRuntimeSlot,
+  nodeFilePlatformLayer,
+  type PiManagedRuntime,
+} from "pi-cosmic-core";
 import { ShikiAdapter } from "../boundary/shiki";
 import { registerHealthCommand } from "../commands/health";
 import { registerSettingsCommand } from "../commands/settings";
+import {
+  clearCodePreviewSessionCapability,
+  installCodePreviewSessionCapability,
+} from "../session-capability";
 import { CodePreviewSession } from "../session-service";
-import { codePreviewSettings } from "../settings/index";
+import { codePreviewSettings } from "../settings";
+import { CodePreviewEnvironmentService } from "../settings/environment-service";
+import { CodePreviewSettingsService } from "../settings/service";
+import { CodePreviewSyntaxService } from "../syntax/service";
 import type { CodePreviewToolName } from "../tools/names";
 import { registerToolRenderers } from "../tool-renderers/registration";
+import { CodePreviewWriteService } from "../write/service";
+
+const hostLayer = Layer.mergeAll(
+  nodeFilePlatformLayer,
+  AgentDirectory.layerFromHost(getAgentDir),
+  CodePreviewEnvironmentService.layer,
+);
+const settingsLayer = CodePreviewSettingsService.layer.pipe(Layer.provideMerge(hostLayer));
+const syntaxLayer = CodePreviewSyntaxService.layer.pipe(Layer.provideMerge(ShikiAdapter.layer));
+const sessionLayer = CodePreviewSession.layer.pipe(
+  Layer.provideMerge(Layer.merge(settingsLayer, syntaxLayer)),
+);
+const codePreviewApplicationLayer = Layer.mergeAll(
+  hostLayer,
+  settingsLayer,
+  syntaxLayer,
+  CodePreviewWriteService.layer,
+  sessionLayer,
+);
+
+type CodePreviewApplication = Layer.Success<typeof codePreviewApplicationLayer>;
+export type CodePreviewRuntime = PiManagedRuntime<CodePreviewApplication, unknown>;
+
+type SessionInput = {
+  readonly cwd: string;
+  readonly projectTrusted: boolean;
+  readonly signal?: AbortSignal;
+  readonly notifyFailure: () => void;
+};
 
 export interface CodePreviewExtensionDependencies {
   readonly makeRuntime: (pi: ExtensionAPI) => CodePreviewRuntime;
@@ -24,17 +60,8 @@ export interface CodePreviewExtensionDependencies {
   readonly registerRenderers: typeof registerToolRenderers;
 }
 
-function clearActiveRuntime(): void {
-  setActiveCodePreviewRuntime(undefined);
-  setActivePlatformRunner(undefined);
-}
-
 const defaultDependencies: CodePreviewExtensionDependencies = {
-  makeRuntime: (pi) => {
-    const dependencies = Layer.merge(nodeFilePlatformLayer, ShikiAdapter.layer);
-    const layer = CodePreviewSession.layer.pipe(Layer.provideMerge(dependencies));
-    return makeCodePreviewRuntime(pi, layer) as CodePreviewRuntime;
-  },
+  makeRuntime: (pi) => makePiManagedRuntime(pi, codePreviewApplicationLayer),
   registerHealth: registerHealthCommand,
   registerSettings: registerSettingsCommand,
   registerRenderers: registerToolRenderers,
@@ -54,113 +81,66 @@ export function codePreviewsWithDependencies(
   dependencies.registerHealth(pi);
   dependencies.registerSettings(pi);
 
-  let runtime: CodePreviewRuntime | undefined;
-  let lifecycle = Promise.resolve();
-  let generation = 0;
-  let removeAbortListener: (() => void) | undefined;
-  const disposals = new WeakMap<CodePreviewRuntime, Promise<void>>();
-  const disposeNow = (target: CodePreviewRuntime | undefined) => {
-    if (!target) return Promise.resolve();
-    const existing = disposals.get(target);
-    if (existing) return existing;
-    const disposal = target.dispose().catch(() => undefined);
-    disposals.set(target, disposal);
-    return disposal;
-  };
-  const clearAbort = () => {
-    const remove = removeAbortListener;
-    removeAbortListener = undefined;
-    try {
-      remove?.();
-    } catch {
-      // Host signal cleanup cannot block runtime disposal.
-    }
-  };
+  const slot = makePiSessionRuntimeSlot<SessionInput, CodePreviewApplication, unknown, unknown>({
+    makeRuntime: () => dependencies.makeRuntime(pi),
+    startup: (input) =>
+      CodePreviewSession.use((service) =>
+        service.loadSettings(input.cwd, input.projectTrusted).pipe(
+          Effect.tap(() =>
+            Effect.sync(() =>
+              dependencies.registerRenderers(pi, input.cwd, {
+                registeredTools,
+                activatedTools,
+                projectTrusted: input.projectTrusted,
+              }),
+            ),
+          ),
+          Effect.asVoid,
+        ),
+      ),
+    onActivated: (input, token) => {
+      installCodePreviewSessionCapability({
+        token,
+        run: (effect, signal) => slot.run(effect, signal),
+        fork: (effect, signal) => slot.fork(effect, signal),
+      });
+      if (codePreviewSettings.syntaxHighlighting)
+        slot.fork(
+          CodePreviewSession.use((service) =>
+            service.initializeSyntax(codePreviewSettings.shikiTheme),
+          ),
+          input.signal,
+        );
+    },
+    onDeactivated: (_input, token) => clearCodePreviewSessionCapability(token),
+    onStartFailure: (input) => {
+      clearCodePreviewSessionCapability();
+      input.notifyFailure();
+    },
+  });
 
   pi.on("session_start", (_event, ctx) => {
-    const session = ++generation;
-    const previous = runtime;
-    runtime = undefined;
-    clearActiveRuntime();
-    clearAbort();
-    const previousDisposal = disposeNow(previous);
-    lifecycle = lifecycle
-      .catch(() => undefined)
-      .then(() => previousDisposal)
-      .then(() => {
-        if (session !== generation) return;
-        const next = dependencies.makeRuntime(pi);
-        runtime = next;
-        setActiveCodePreviewRuntime(runtime);
-        setActivePlatformRunner({
-          run: (effect, signal) => next.run(effect, signal),
-          runShiki: (effect, signal) => next.run(effect, signal),
-          forkShiki: (effect) => next.fork(effect),
-        });
-        const abort = () => {
-          if (session !== generation || runtime !== next) return;
-          ++generation;
-          runtime = undefined;
-          clearActiveRuntime();
-          clearAbort();
-          const disposal = disposeNow(next as CodePreviewRuntime);
-          lifecycle = lifecycle.catch(() => undefined).then(() => disposal);
-        };
-        ctx.signal?.addEventListener("abort", abort, { once: true });
-        removeAbortListener = () => ctx.signal?.removeEventListener("abort", abort);
-        const projectTrusted =
-          typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
-        return next
-          .run(
-            Effect.gen(function* () {
-              const service = yield* CodePreviewSession;
-              yield* service.loadSettings(ctx.cwd, projectTrusted);
-              yield* Effect.sync(() =>
-                dependencies.registerRenderers(pi, ctx.cwd, {
-                  registeredTools,
-                  activatedTools,
-                  projectTrusted,
-                }),
-              );
-            }),
-            ctx.signal,
-          )
-          .then(() => {
-            if (session !== generation || runtime !== next) return;
-            if (codePreviewSettings.syntaxHighlighting)
-              next.fork(
-                CodePreviewSession.use((service) =>
-                  service.initializeSyntax(codePreviewSettings.shikiTheme),
-                ),
-                ctx.signal,
-              );
-          });
-      })
-      .catch(() => {
-        if (session !== generation) return;
-        const failed = runtime;
-        runtime = undefined;
-        clearActiveRuntime();
-        clearAbort();
-        try {
-          ctx.ui.notify("Code previews failed to start.", "warning");
-        } catch {
-          // Host notification failure cannot block disposal.
-        }
-        return disposeNow(failed);
-      });
-    return lifecycle;
+    const projectTrusted =
+      typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
+    return slot
+      .start(
+        {
+          cwd: ctx.cwd,
+          projectTrusted,
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+          notifyFailure: () => {
+            try {
+              ctx.ui.notify("Code previews failed to start.", "warning");
+            } catch {
+              // Host notification failure cannot block disposal.
+            }
+          },
+        },
+        ctx.signal,
+      )
+      .then(() => undefined);
   });
 
-  pi.on("session_shutdown", () => {
-    ++generation;
-    const current = runtime;
-    runtime = undefined;
-    clearActiveRuntime();
-    clearAbort();
-    const disposal = disposeNow(current);
-    lifecycle = lifecycle.catch(() => undefined).then(() => disposal);
-    return lifecycle;
-  });
+  pi.on("session_shutdown", () => slot.shutdown());
   return Promise.resolve();
 }

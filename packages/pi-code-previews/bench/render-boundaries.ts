@@ -1,6 +1,6 @@
 // Test/benchmark boundary intentionally reports native timing.
 // @effect-diagnostics effect/globalConsole:off
-import { previewNow } from "../src/boundary/runtime";
+import { synchronousNow as previewNow } from "../src/boundary/clock";
 import { resolvePreviewLanguage } from "../src/syntax/language";
 import { printBenchHeader, printLayerSummary, runBench } from "./helpers";
 

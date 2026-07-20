@@ -1,17 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createCosmicFooterClient } from "pi-cosmic-ui/client";
 import type { ResolvedConfig } from "../config.ts";
 import type * as MutableRef from "effect/MutableRef";
 import type { XaiProjection } from "../usage-controller.ts";
 import { xaiUsageFooterPrimitive, xaiUsageUiState } from "./primitives.ts";
-import {
-  COSMIC_UI_FOOTER_REMOVE,
-  COSMIC_UI_FOOTER_UPSERT,
-  COSMIC_UI_HOST_QUERY,
-  COSMIC_UI_PROTOCOL_VERSION,
-  type BetterXaiFooterPrimitive,
-} from "./protocol.ts";
-
-const OWNER = "pi-better-xai";
 
 export interface CosmicUiAdapter {
   readonly active: boolean;
@@ -19,53 +11,22 @@ export interface CosmicUiAdapter {
   update(ctx: ExtensionContext, cfg: ResolvedConfig): void;
   shutdown(): void;
 }
-
 export function createCosmicUiAdapter(options: {
   pi: ExtensionAPI;
   projection: MutableRef.MutableRef<XaiProjection>;
 }): CosmicUiAdapter {
-  const { pi, projection } = options;
-  const events = (pi as ExtensionAPI & { events?: ExtensionAPI["events"] }).events;
-  let hostActive = false;
-
-  const upsert = (contribution: BetterXaiFooterPrimitive) => {
-    events?.emit(COSMIC_UI_FOOTER_UPSERT, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: OWNER,
-      contribution,
-    });
-  };
-  const remove = (id?: string) => {
-    events?.emit(COSMIC_UI_FOOTER_REMOVE, {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: OWNER,
-      id,
-    });
-  };
-
+  const client = createCosmicFooterClient(options.pi.events, "pi-better-xai");
   return {
     get active() {
-      return hostActive;
+      return client.active;
     },
-    detectHost() {
-      hostActive = false;
-      events?.emit(COSMIC_UI_HOST_QUERY, {
-        version: COSMIC_UI_PROTOCOL_VERSION,
-        respond: () => {
-          hostActive = true;
-        },
-      });
-      return hostActive;
-    },
+    detectHost: client.query,
     update(ctx, cfg) {
-      if (!hostActive) return;
-      const usage = xaiUsageFooterPrimitive(xaiUsageUiState(ctx, cfg, projection));
-      if (usage) upsert(usage);
-      else remove("xai.usage");
+      if (!client.active) return;
+      const usage = xaiUsageFooterPrimitive(xaiUsageUiState(ctx, cfg, options.projection));
+      if (usage) client.upsert(usage);
+      else client.remove("xai.usage");
     },
-    shutdown() {
-      if (hostActive) remove();
-      hostActive = false;
-    },
+    shutdown: client.shutdown,
   };
 }

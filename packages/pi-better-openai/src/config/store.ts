@@ -1,11 +1,10 @@
-import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
 import { CONFIG_BASENAME } from "../identity.ts";
-import { isRecord } from "../utils.ts";
 import {
   DEFAULT_CONFIG,
   DEFAULT_FOOTER_CONFIG,
@@ -15,7 +14,9 @@ import {
   ImageOutputFormatSchema,
   ImageSaveModeSchema,
   type ConfigFile,
+  type ImageConfig,
   type ResolvedConfig,
+  type UsageConfig,
 } from "./schema.ts";
 
 export class OpenAIConfigError extends Schema.TaggedErrorClass<OpenAIConfigError>()(
@@ -56,22 +57,34 @@ const decodeNumber = (value: unknown) =>
 const decodeString = (value: unknown) =>
   Option.getOrUndefined(Schema.decodeUnknownOption(Schema.String)(value));
 
+const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
+const record = (value: unknown) =>
+  Option.getOrUndefined(Schema.decodeUnknownOption(UnknownRecordSchema)(value));
+const finiteNumber = (value: unknown) => {
+  const decoded = decodeNumber(value);
+  return decoded !== undefined && Number.isFinite(decoded) ? decoded : undefined;
+};
+const compact = <A extends Record<string, unknown>>(value: A) =>
+  Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined));
+
+/** Tolerant field-level wire decode: one malformed field never discards valid siblings. */
 function decodeConfig(value: unknown): ConfigFile {
-  if (!isRecord(value)) return {};
-  const usageRaw = isRecord(value.usage) ? value.usage : undefined;
-  const footerRaw = isRecord(value.footer) ? value.footer : undefined;
-  const imageRaw = isRecord(value.image) ? value.image : undefined;
-  const usage: UsageConfigShape = {
+  const root = record(value);
+  if (!root) return {};
+  const usageRaw = record(root.usage);
+  const footerRaw = record(root.footer);
+  const imageRaw = record(root.image);
+  const usage = compact({
     enabled: decodeBoolean(usageRaw?.enabled),
-    refreshIntervalMs: decodeNumber(usageRaw?.refreshIntervalMs),
+    refreshIntervalMs: finiteNumber(usageRaw?.refreshIntervalMs),
     showOnlyOnSubscriptionModels: decodeBoolean(usageRaw?.showOnlyOnSubscriptionModels),
     showResetTimes: decodeBoolean(usageRaw?.showResetTimes),
-  };
+  }) as UsageConfig;
   const footerMode = Option.getOrUndefined(
     Schema.decodeUnknownOption(FooterModeSchema)(footerRaw?.mode),
   );
   const defaultModel = decodeString(imageRaw?.defaultModel)?.trim();
-  const image: ImageConfigShape = {
+  const image = compact({
     enabled: decodeBoolean(imageRaw?.enabled),
     defaultModel: defaultModel || undefined,
     defaultSave: Option.getOrUndefined(
@@ -80,37 +93,19 @@ function decodeConfig(value: unknown): ConfigFile {
     outputFormat: Option.getOrUndefined(
       Schema.decodeUnknownOption(ImageOutputFormatSchema)(imageRaw?.outputFormat),
     ),
-    timeoutMs: decodeNumber(imageRaw?.timeoutMs),
-  };
-  const compact = <A extends Record<string, unknown>>(record: A) =>
-    Object.fromEntries(Object.entries(record).filter(([, field]) => field !== undefined));
-  const compactUsage = compact(usage);
-  const compactImage = compact(image);
+    timeoutMs: finiteNumber(imageRaw?.timeoutMs),
+  }) as ImageConfig;
   return {
     ...compact({
-      persistState: decodeBoolean(value.persistState),
-      active: decodeBoolean(value.active),
-      desiredActive: decodeBoolean(value.desiredActive),
+      persistState: decodeBoolean(root.persistState),
+      active: decodeBoolean(root.active),
+      desiredActive: decodeBoolean(root.desiredActive),
     }),
-    ...(Object.keys(compactUsage).length ? { usage: compactUsage } : {}),
+    ...(Object.keys(usage).length ? { usage } : {}),
     ...(footerMode ? { footer: { mode: footerMode } } : {}),
-    ...(Object.keys(compactImage).length ? { image: compactImage } : {}),
-  } as ConfigFile;
+    ...(Object.keys(image).length ? { image } : {}),
+  };
 }
-
-type UsageConfigShape = {
-  enabled?: boolean | undefined;
-  refreshIntervalMs?: number | undefined;
-  showOnlyOnSubscriptionModels?: boolean | undefined;
-  showResetTimes?: boolean | undefined;
-};
-type ImageConfigShape = {
-  enabled?: boolean | undefined;
-  defaultModel?: string | undefined;
-  defaultSave?: typeof ImageSaveModeSchema.Type | undefined;
-  outputFormat?: typeof ImageOutputFormatSchema.Type | undefined;
-  timeoutMs?: number | undefined;
-};
 
 export const readConfig = Effect.fn("OpenAIConfig.readConfig")(function* (path: string) {
   const documents = yield* JsonDocumentStore;
@@ -136,7 +131,7 @@ export const updateConfig = Effect.fn("OpenAIConfig.updateConfig")(function* (
 
 export const resolveConfig = Effect.fn("OpenAIConfig.resolveConfig")(function* (
   cwd: string,
-  agentDir = getAgentDir(),
+  agentDir: string,
 ) {
   const documents = yield* JsonDocumentStore;
   const paths = yield* configPaths(cwd, agentDir);
@@ -150,12 +145,16 @@ export const resolveConfig = Effect.fn("OpenAIConfig.resolveConfig")(function* (
     yield* writeConfig(paths.global, DEFAULT_CONFIG as JsonObject);
     globalExists = true;
   }
-  const project = projectExists
-    ? yield* readConfig(paths.project).pipe(Effect.catch(() => Effect.void))
-    : undefined;
-  const global = globalExists
-    ? yield* readConfig(paths.global).pipe(Effect.catch(() => Effect.void))
-    : undefined;
+  const readOrWarn = (path: string) =>
+    readConfig(path).pipe(
+      Effect.catch(() =>
+        Effect.logWarning("Unable to read a Better OpenAI configuration document.").pipe(
+          Effect.asVoid,
+        ),
+      ),
+    );
+  const project = projectExists ? yield* readOrWarn(paths.project) : undefined;
+  const global = globalExists ? yield* readOrWarn(paths.global) : undefined;
   const desiredActive =
     project?.desiredActive ??
     project?.active ??

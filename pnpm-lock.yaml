@@ -93,6 +93,9 @@ importers:
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
+      pi-cosmic-ui:
+        specifier: workspace:*
+        version: link:../pi-cosmic-ui
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
@@ -127,6 +130,9 @@ importers:
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
+      pi-cosmic-ui:
+        specifier: workspace:*
+        version: link:../pi-cosmic-ui
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 0.80.8

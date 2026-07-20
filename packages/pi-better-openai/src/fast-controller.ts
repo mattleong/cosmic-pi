@@ -1,5 +1,4 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as MutableRef from "effect/MutableRef";
 import type { ResolvedConfig } from "./config.ts";
 import { isRecord } from "./config.ts";
 import { fastModelKey, SUPPORTED_FAST_MODELS, supportsFastModel } from "./fast-models.ts";
@@ -31,32 +30,26 @@ interface FastState {
 }
 
 export class FastController {
-  private readonly state = MutableRef.make<FastState>({ desiredActive: false, active: false });
+  private state: FastState = { desiredActive: false, active: false };
   private readonly serviceTier: string;
   constructor(serviceTier: string) {
     this.serviceTier = serviceTier;
   }
   get desiredActive() {
-    return MutableRef.get(this.state).desiredActive;
+    return this.state.desiredActive;
   }
   get active() {
-    return MutableRef.get(this.state).active;
+    return this.state.active;
   }
   applyDesiredState(ctx: ExtensionContext): void {
-    const current = MutableRef.get(this.state);
-    MutableRef.set(this.state, { ...current, active: current.desiredActive && supportsFast(ctx) });
+    this.state = { ...this.state, active: this.state.desiredActive && supportsFast(ctx) };
   }
   initializeForSession(ctx: ExtensionContext, cfg: ResolvedConfig, flagActive: boolean): void {
     const desiredActive = flagActive || (cfg.persistState ? cfg.desiredActive : false);
-    MutableRef.set(this.state, { desiredActive, active: desiredActive && supportsFast(ctx) });
+    this.state = { desiredActive, active: desiredActive && supportsFast(ctx) };
   }
   setDesired(ctx: ExtensionContext, desiredActive: boolean): void {
-    const current = MutableRef.get(this.state);
-    MutableRef.set(this.state, {
-      ...current,
-      desiredActive,
-      active: desiredActive && supportsFast(ctx),
-    });
+    this.state = { ...this.state, desiredActive, active: desiredActive && supportsFast(ctx) };
   }
   stateText(ctx: ExtensionContext): string {
     return fastStateText(ctx, this.desiredActive, this.active);
@@ -77,16 +70,15 @@ export class FastController {
   }
   injectProviderPayload(event: { payload?: unknown }, ctx: ExtensionContext): unknown {
     if (!this.active || !supportsFast(ctx) || !isRecord(event.payload)) return undefined;
-    const current = MutableRef.get(this.state);
-    MutableRef.set(this.state, {
-      ...current,
+    this.state = {
+      ...this.state,
       lastInjectedModel: currentModelKey(ctx),
       lastInjectedTier: this.serviceTier,
-    });
+    };
     return { ...event.payload, service_tier: this.serviceTier };
   }
   debugLines(ctx: ExtensionContext): string[] {
-    const state = MutableRef.get(this.state);
+    const state = this.state;
     return [
       `Fast desired: ${state.desiredActive}`,
       `Fast active: ${state.active}`,

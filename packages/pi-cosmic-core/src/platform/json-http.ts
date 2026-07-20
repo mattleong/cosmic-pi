@@ -37,6 +37,7 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
         if (input.formBody) outgoing = HttpClientRequest.bodyUrlParams(outgoing, input.formBody);
 
         const response = yield* client.execute(outgoing).pipe(
+          Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
           Effect.mapError(
             () =>
               new JsonHttpError({
@@ -44,6 +45,9 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
                 message: "HTTP request failed.",
               }),
           ),
+          Effect.withSpan("pi-cosmic-core.http.json.request", {
+            attributes: { "http.request.method": input.method ?? "GET" },
+          }),
         );
         const body = yield* response.json.pipe(
           Effect.mapError(
@@ -53,6 +57,9 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
                 message: "HTTP response was not valid JSON.",
               }),
           ),
+          Effect.withSpan("pi-cosmic-core.http.json.decode", {
+            attributes: { "http.response.status_code": response.status },
+          }),
         );
         return { status: response.status, body };
       });

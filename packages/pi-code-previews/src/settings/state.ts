@@ -1,12 +1,14 @@
 import { defaultCodePreviewSettings } from "./defaults";
+import { initializeSettingsProjection, publishSettingsProjection } from "./projection";
 import type { CodePreviewSettings } from "./types";
 
-export const codePreviewSettings: CodePreviewSettings = cloneCodePreviewSettings(
-  defaultCodePreviewSettings,
-);
+initializeSettingsProjection(defaultCodePreviewSettings);
 
-export function setCodePreviewSettings(next: CodePreviewSettings) {
-  Object.assign(codePreviewSettings, cloneCodePreviewSettings(next));
+/** Live immutable synchronous projection. Imports observe replacement atomically. */
+export let codePreviewSettings: CodePreviewSettings = defaultCodePreviewSettings;
+
+export function setCodePreviewSettings(next: CodePreviewSettings): void {
+  codePreviewSettings = publishSettingsProjection(next);
 }
 
 export function cloneCodePreviewSettings(settings: CodePreviewSettings): CodePreviewSettings {
