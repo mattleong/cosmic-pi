@@ -1,3 +1,11 @@
+// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+// @effect-diagnostics effect/processEnv:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/globalTimers:off
+// @effect-diagnostics effect/globalConsole:off
+// @effect-diagnostics effect/globalDate:off
 import { collectChangedDiffBlock } from "../diff/changed-blocks";
 import { renderSyntaxHighlightedDiff } from "../diff/index";
 import { isChangedDiffLine, parseDiffLine } from "../diff/parse";
@@ -135,7 +143,7 @@ function evaluateCase(accuracyCase: WordEmphasisAccuracyCase): WordEmphasisAccur
     exactSpanLines,
     spanLines: rendered.length,
     spans: metrics(spanCounts),
-    pairs: pairCounts ? metrics(pairCounts) : undefined,
+    ...(pairCounts ? { pairs: metrics(pairCounts) } : {}),
   };
 }
 

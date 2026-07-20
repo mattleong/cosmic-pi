@@ -1,5 +1,6 @@
-import { basename, extname } from "node:path";
 import { bundledLanguages } from "shiki";
+import { isValidJsonSyntax } from "../boundary/json";
+import { nodeBasename, nodeExtname } from "../boundary/node";
 import { positiveEnvInteger } from "../config/env";
 
 const EXACT_BASENAMES = new Map<string, string>([
@@ -77,9 +78,9 @@ export function resolvePreviewLanguage({
   content,
   piLanguage,
 }: {
-  path?: string;
-  content?: string;
-  piLanguage?: string;
+  path?: string | undefined;
+  content?: string | undefined;
+  piLanguage?: string | undefined;
 }): string | undefined {
   return firstSupported(
     piLanguage,
@@ -91,12 +92,12 @@ export function resolvePreviewLanguage({
 
 function languageFromPath(path: string | undefined): string | undefined {
   if (!path) return undefined;
-  const name = basename(path).toLowerCase();
+  const name = nodeBasename(path).toLowerCase();
   if (name.startsWith(".env")) return "dotenv";
   if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
   const exact = EXACT_BASENAMES.get(name);
   if (exact) return exact;
-  return EXTENSION_ALIASES.get(extname(name));
+  return EXTENSION_ALIASES.get(nodeExtname(name));
 }
 
 function languageFromShebang(content: string | undefined): string | undefined {
@@ -106,11 +107,11 @@ function languageFromShebang(content: string | undefined): string | undefined {
     .replace(/^#!\s*/, "")
     .split(/\s+/)
     .filter(Boolean);
-  const envIndex = parts.findIndex((part) => basename(part) === "env");
+  const envIndex = parts.findIndex((part) => nodeBasename(part) === "env");
   const command =
     envIndex >= 0 ? parts.slice(envIndex + 1).find((part) => !part.startsWith("-")) : parts[0];
   if (!command) return undefined;
-  const rawExecutable = basename(command).toLowerCase();
+  const rawExecutable = nodeBasename(command).toLowerCase();
   const executable = rawExecutable.replace(/\d+(\.\d+)?$/, "");
   return SHEBANG_ALIASES.get(executable) ?? SHEBANG_ALIASES.get(rawExecutable);
 }
@@ -133,10 +134,5 @@ function firstSupported(...languages: Array<string | undefined>): string | undef
 }
 
 function isJson(text: string): boolean {
-  try {
-    JSON.parse(text);
-    return true;
-  } catch {
-    return false;
-  }
+  return isValidJsonSyntax(text);
 }

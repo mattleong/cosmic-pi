@@ -12,10 +12,12 @@ export interface BuiltinToolOptions {
 
 export function getBuiltinToolOptions(cwd: string, projectTrusted: boolean): BuiltinToolOptions {
   const settings = SettingsManager.create(cwd, getAgentDir(), { projectTrusted });
+  const commandPrefix = settings.getShellCommandPrefix();
+  const shellPath = settings.getShellPath();
   return {
     bash: {
-      commandPrefix: settings.getShellCommandPrefix(),
-      shellPath: settings.getShellPath(),
+      ...(commandPrefix === undefined ? {} : { commandPrefix }),
+      ...(shellPath === undefined ? {} : { shellPath }),
     },
     read: {
       autoResizeImages: settings.getImageAutoResize(),

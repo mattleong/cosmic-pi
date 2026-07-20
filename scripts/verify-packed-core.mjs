@@ -19,6 +19,9 @@ const openaiManifest = JSON.parse(
 const cosmicUiManifest = JSON.parse(
   await readFile(join(root, "packages/pi-cosmic-ui/package.json"), "utf8"),
 );
+const codePreviewsManifest = JSON.parse(
+  await readFile(join(root, "packages/pi-code-previews/package.json"), "utf8"),
+);
 const piVersion = coreManifest.devDependencies["@earendil-works/pi-coding-agent"];
 const tuiVersion = xaiManifest.peerDependencies["@earendil-works/pi-tui"];
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "cosmic-pi-pack-"));
@@ -43,6 +46,7 @@ try {
     "pi-better-xai",
     "pi-better-openai",
     "pi-cosmic-ui",
+    "pi-code-previews",
   ]) {
     run("pnpm", ["--filter", packageName, "pack", "--pack-destination", temporaryDirectory], root);
   }
@@ -51,15 +55,17 @@ try {
   const xaiTarballName = tarballs.find((name) => name.startsWith("pi-better-xai-"));
   const openaiTarballName = tarballs.find((name) => name.startsWith("pi-better-openai-"));
   const cosmicUiTarballName = tarballs.find((name) => name.startsWith("pi-cosmic-ui-"));
+  const codePreviewsTarballName = tarballs.find((name) => name.startsWith("pi-code-previews-"));
   if (
     !coreTarballName ||
     !xaiTarballName ||
     !openaiTarballName ||
     !cosmicUiTarballName ||
-    tarballs.length !== 4
+    !codePreviewsTarballName ||
+    tarballs.length !== 5
   ) {
     throw new Error(
-      `Expected core, xAI, OpenAI, and Cosmic UI tarballs, found: ${tarballs.join(", ")}.`,
+      `Expected core, xAI, OpenAI, Cosmic UI, and code-preview tarballs, found: ${tarballs.join(", ")}.`,
     );
   }
 
@@ -67,6 +73,7 @@ try {
   const xaiTarball = join(temporaryDirectory, xaiTarballName);
   const openaiTarball = join(temporaryDirectory, openaiTarballName);
   const cosmicUiTarball = join(temporaryDirectory, cosmicUiTarballName);
+  const codePreviewsTarball = join(temporaryDirectory, codePreviewsTarballName);
   await writeFile(
     join(temporaryDirectory, "package.json"),
     `${JSON.stringify(
@@ -82,6 +89,7 @@ try {
           "pi-better-xai": `file:${xaiTarball}`,
           "pi-cosmic-core": `file:${coreTarball}`,
           "pi-cosmic-ui": `file:${cosmicUiTarball}`,
+          "pi-code-previews": `file:${codePreviewsTarball}`,
         },
         pnpm: {
           overrides: {
@@ -114,7 +122,7 @@ try {
     [
       "--input-type=module",
       "--eval",
-      "import { createJiti } from 'jiti'; const jiti = createJiti(import.meta.url); const xai = await jiti.import('pi-better-xai'); const openai = await jiti.import('pi-better-openai'); const cosmicUi = await jiti.import('pi-cosmic-ui'); const protocol = await jiti.import('pi-cosmic-ui/protocol'); if (typeof xai.default !== 'function') throw new Error('missing xAI extension export'); if (typeof openai.default !== 'function') throw new Error('missing OpenAI extension export'); if (typeof cosmicUi.default !== 'function') throw new Error('missing Cosmic UI extension export'); if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== 'function') throw new Error('missing Cosmic UI protocol exports');",
+      "import { createJiti } from 'jiti'; const jiti = createJiti(import.meta.url); const xai = await jiti.import('pi-better-xai'); const openai = await jiti.import('pi-better-openai'); const cosmicUi = await jiti.import('pi-cosmic-ui'); const protocol = await jiti.import('pi-cosmic-ui/protocol'); const previews = await import('pi-code-previews'); if (typeof xai.default !== 'function') throw new Error('missing xAI extension export'); if (typeof openai.default !== 'function') throw new Error('missing OpenAI extension export'); if (typeof cosmicUi.default !== 'function') throw new Error('missing Cosmic UI extension export'); if (typeof previews.default !== 'function' || typeof previews.loadCodePreviewSettings !== 'function' || typeof previews.withCodePreviewShell !== 'function') throw new Error('missing code-preview public exports'); if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== 'function') throw new Error('missing Cosmic UI protocol exports');",
     ],
     temporaryDirectory,
   );
@@ -159,8 +167,19 @@ try {
     throw new Error("Packed pi-cosmic-ui dependencies are not synchronized.");
   }
 
+  const packedCodePreviewsManifest = JSON.parse(
+    await readFile(join(temporaryDirectory, "node_modules/pi-code-previews/package.json"), "utf8"),
+  );
+  if (
+    packedCodePreviewsManifest.dependencies.effect !== expectedEffectVersion ||
+    packedCodePreviewsManifest.dependencies["pi-cosmic-core"] !== coreManifest.version ||
+    packedCodePreviewsManifest.version !== codePreviewsManifest.version
+  ) {
+    throw new Error("Packed pi-code-previews dependencies are not synchronized.");
+  }
+
   console.log(
-    "Packed core, xAI, OpenAI, and Cosmic UI packages install and import in a clean consumer.",
+    "Packed core, xAI, OpenAI, Cosmic UI, and code-preview packages install and import in a clean consumer.",
   );
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });

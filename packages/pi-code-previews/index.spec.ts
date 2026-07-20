@@ -1,3 +1,11 @@
+// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+// @effect-diagnostics effect/processEnv:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/globalTimers:off
+// @effect-diagnostics effect/globalConsole:off
+// @effect-diagnostics effect/globalDate:off
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -98,6 +106,47 @@ test("extension entrypoint registers commands and session renderer wiring", asyn
   );
   assert.deepEqual(registeredTools, ["grep"]);
   assert.deepEqual(activeTools, ["read", "bash", "grep"]);
+  await handlers.get("session_shutdown")?.({}, { cwd: root });
+});
+
+test("session replacement, abort, and shutdown are idempotent", async () => {
+  const root = await createTestTempDirectory("pi-code-previews-lifecycle-");
+  process.env.PI_CODING_AGENT_DIR = root;
+  process.env.HOME = join(root, "home");
+  await writeFile(
+    join(root, "code-previews.json"),
+    JSON.stringify({ syntaxHighlighting: false, tools: [] }),
+    "utf8",
+  );
+  type LifecycleContext = {
+    cwd: string;
+    signal?: AbortSignal | undefined;
+    isProjectTrusted(): boolean;
+    ui: { notify(): void };
+  };
+  const handlers = new Map<string, (event: unknown, ctx: LifecycleContext) => unknown>();
+  await codePreviews({
+    registerCommand: () => undefined,
+    registerTool: () => undefined,
+    on: (name: string, handler: (event: unknown, ctx: LifecycleContext) => unknown) =>
+      handlers.set(name, handler),
+  } as never);
+  assert.ok(handlers.has("session_start"));
+  assert.ok(handlers.has("session_shutdown"));
+  const firstAbort = new AbortController();
+  const context = {
+    cwd: root,
+    signal: firstAbort.signal,
+    isProjectTrusted: () => true,
+    ui: { notify: () => undefined },
+  };
+  await handlers.get("session_start")?.({}, context);
+  firstAbort.abort();
+  await Promise.resolve();
+  await handlers.get("session_start")?.({}, { ...context, signal: undefined });
+  await handlers.get("session_shutdown")?.({}, context);
+  await handlers.get("session_shutdown")?.({}, context);
+  assert.equal(codePreviewSettings.syntaxHighlighting, false);
 });
 
 test("health command renders current settings", async () => {

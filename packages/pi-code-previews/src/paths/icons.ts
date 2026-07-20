@@ -1,4 +1,4 @@
-import { basename, extname } from "node:path";
+import { nodeBasename, nodeExtname } from "../boundary/node";
 import type { PathIconMode } from "../settings/types";
 
 const NERD_FILE = "\uf15b";
@@ -52,6 +52,6 @@ export function pathIcon(path: string, isDirectory: boolean, mode: PathIconMode)
   if (mode === "off") return "";
   if (mode === "unicode") return isDirectory ? "▸" : "•";
   if (isDirectory) return NERD_DIR;
-  const name = basename(path).toLowerCase();
-  return NERD_BY_NAME[name] ?? NERD_BY_EXT[extname(name).slice(1)] ?? NERD_FILE;
+  const name = nodeBasename(path).toLowerCase();
+  return NERD_BY_NAME[name] ?? NERD_BY_EXT[nodeExtname(name).slice(1)] ?? NERD_FILE;
 }

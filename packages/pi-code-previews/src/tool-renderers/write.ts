@@ -45,13 +45,18 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
     ...originalWrite,
     renderShell: previewShell.renderShell,
 
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
+    execute(toolCallId, params, signal, onUpdate, ctx) {
       const path = getPathArg(params);
       const content = getObjectValue(params, "content");
       if (!path || typeof content !== "string") {
-        const before = path ? await readExistingFileForPreview(path, cwd, "") : undefined;
-        const result = await originalWrite.execute(toolCallId, params, signal, onUpdate, ctx);
-        return withCodePreviewBeforeWrite(result, before, toolCallId);
+        const before = path
+          ? readExistingFileForPreview(path, cwd, "")
+          : Promise.resolve(undefined);
+        return before.then((snapshot) =>
+          originalWrite
+            .execute(toolCallId, params, signal, onUpdate, ctx)
+            .then((result) => withCodePreviewBeforeWrite(result, snapshot, toolCallId)),
+        );
       }
       return executeWriteWithPreview(toolCallId, path, content, cwd, signal);
     },

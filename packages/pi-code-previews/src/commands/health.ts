@@ -15,7 +15,7 @@ import {
 export function registerHealthCommand(pi: ExtensionAPI): void {
   pi.registerCommand("code-preview-health", {
     description: "Show code preview renderer health and settings",
-    handler: async (_args, ctx) => {
+    handler: (_args, ctx) => {
       const status = getShikiStatus();
       const skippedLines = formatSkippedCodePreviewToolLines();
       const pendingTools = formatPendingCodePreviewTools();
@@ -47,7 +47,7 @@ export function registerHealthCommand(pi: ExtensionAPI): void {
         `Path icons: ${codePreviewSettings.pathIcons}`,
         `Settings file: ${getSettingsPath()}`,
       ];
-      await ctx.ui.custom(
+      return ctx.ui.custom(
         (_tui, theme, _kb, done) =>
           new HealthPanel(
             lines.map((line, index) => (index === 0 ? theme.bold(line) : line)).join("\n"),

@@ -1,8 +1,25 @@
+// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+// @effect-diagnostics effect/processEnv:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/globalTimers:off
+// @effect-diagnostics effect/globalConsole:off
+// @effect-diagnostics effect/globalDate:off
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { JsonDocumentStore, type JsonDocumentStoreShape, type JsonObject } from "pi-cosmic-core";
 import { afterEach, test } from "vitest";
+import { setActivePlatformRunner } from "../boundary/platform";
+import { makeCodePreviewRuntime } from "../boundary/runtime";
+import { ShikiAdapter } from "../boundary/shiki";
 import { codePreviewSettings, defaultCodePreviewSettings, setCodePreviewSettings } from "./index";
 import { loadCodePreviewSettings } from "./bootstrap";
 import { queueSettingsSave } from "./persistence";
@@ -10,6 +27,7 @@ import { cleanupTestTempDirectories, createTestTempDirectory } from "../testing/
 import {
   extractCodePreviewSettings,
   getSettingsPath,
+  getSettingsSaveContext,
   loadSettingsFromDisk,
   saveSettingsToDisk,
 } from "./store";
@@ -19,6 +37,7 @@ const originalHome = process.env.HOME;
 const originalCwd = process.cwd();
 
 afterEach(async () => {
+  setActivePlatformRunner(undefined);
   if (originalPiCodingAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = originalPiCodingAgentDir;
   if (originalHome === undefined) delete process.env.HOME;
@@ -91,6 +110,33 @@ test("extractCodePreviewSettings accepts nested, prefixed, and saved raw setting
   );
   assert.deepEqual(extractCodePreviewSettings({ pathIcons: "off" }), { pathIcons: "off" });
   assert.deepEqual(extractCodePreviewSettings({ theme: "dark" }), {});
+});
+
+test("saving preserves unknown root and nested settings fields", async () => {
+  const root = await createTestTempDirectory("pi-code-previews-unknown-");
+  process.env.PI_CODING_AGENT_DIR = root;
+  await writeJson(join(root, "code-previews.json"), {
+    owner: "keep",
+    codePreview: { readCollapsedLines: 12, futureSetting: { enabled: true } },
+  });
+  const loaded = await loadSettingsFromDisk();
+  assert.ok(loaded);
+  await saveSettingsToDisk({ ...loaded, readCollapsedLines: 20 }, getSettingsSaveContext());
+  const saved = JSON.parse(await readFile(join(root, "code-previews.json"), "utf8"));
+  assert.equal(saved.owner, "keep");
+  assert.equal(saved.codePreview.readCollapsedLines, 20);
+  assert.deepEqual(saved.codePreview.futureSetting, { enabled: true });
+});
+
+test("concurrent queued saves publish in invocation order", async () => {
+  const root = await createTestTempDirectory("pi-code-previews-concurrent-save-");
+  process.env.PI_CODING_AGENT_DIR = root;
+  const loaded = (await loadSettingsFromDisk()) ?? defaultCodePreviewSettings;
+  const first = queueSettingsSave({ ...loaded, readCollapsedLines: 41 });
+  const second = queueSettingsSave({ ...loaded, readCollapsedLines: 42 });
+  await Promise.all([first, second]);
+  const saved = JSON.parse(await readFile(join(root, "code-previews.json"), "utf8"));
+  assert.equal(saved.readCollapsedLines, 42);
 });
 
 test("loadSettingsFromDisk merges settings in precedence order", async () => {
@@ -319,3 +365,110 @@ async function writeJson(path: string, data: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(data)}\n`, "utf8");
 }
+
+function installOwnedSettingsRuntime(service: JsonDocumentStoreShape) {
+  const layer = Layer.mergeAll(
+    NodeFileSystem.layer,
+    NodePath.layer,
+    Layer.succeed(JsonDocumentStore, JsonDocumentStore.of(service)),
+    ShikiAdapter.layer,
+  );
+  const runtime = makeCodePreviewRuntime({} as ExtensionAPI, layer);
+  setActivePlatformRunner({
+    run: (effect, signal) => runtime.run(effect, signal),
+    runShiki: (effect, signal) => runtime.run(effect, signal),
+    forkShiki: (effect) => runtime.fork(effect),
+  });
+  return runtime;
+}
+
+test("active-session settings loads and saves are interrupted and finalized by runtime disposal", async () => {
+  const configDir = await createTestTempDirectory("pi-code-previews-owned-settings-");
+  process.env.PI_CODING_AGENT_DIR = configDir;
+  let loadStarted: (() => void) | undefined;
+  const loading = new Promise<void>((resolve) => {
+    loadStarted = resolve;
+  });
+  let loadInterrupted = 0;
+  const loadRuntime = installOwnedSettingsRuntime({
+    exists: () => Effect.succeed(true),
+    readObject: () =>
+      Effect.sync(() => loadStarted?.()).pipe(
+        Effect.andThen(Effect.never),
+        Effect.ensuring(Effect.sync(() => loadInterrupted++)),
+      ),
+    writeObject: () => Effect.sync(() => void 0),
+    updateObject: (_path, update) => Effect.sync(() => update({})),
+  });
+  const load = loadSettingsFromDisk();
+  await loading;
+  await loadRuntime.dispose();
+  await assert.rejects(load);
+  assert.equal(loadInterrupted, 1);
+
+  let saveStarted: (() => void) | undefined;
+  const saving = new Promise<void>((resolve) => {
+    saveStarted = resolve;
+  });
+  let saveInterrupted = 0;
+  const saveRuntime = installOwnedSettingsRuntime({
+    exists: () => Effect.succeed(false),
+    readObject: () => Effect.sync(() => undefined),
+    writeObject: () => Effect.sync(() => void 0),
+    updateObject: (_path, _update) =>
+      Effect.sync(() => saveStarted?.()).pipe(
+        Effect.andThen(Effect.never),
+        Effect.ensuring(Effect.sync(() => saveInterrupted++)),
+      ),
+  });
+  const save = saveSettingsToDisk({
+    ...defaultCodePreviewSettings,
+    readCollapsedLines: 37,
+  });
+  await saving;
+  await saveRuntime.dispose();
+  await assert.rejects(save);
+  assert.equal(saveInterrupted, 1);
+  setActivePlatformRunner(undefined);
+});
+
+test("concurrent load and save share one settings coordination domain", async () => {
+  const configDir = await createTestTempDirectory("pi-code-previews-settings-order-");
+  process.env.PI_CODING_AGENT_DIR = configDir;
+  const documents = new Map<string, JsonObject>();
+  let active = 0;
+  let maximum = 0;
+  const service: JsonDocumentStoreShape = {
+    exists: (path) => Effect.succeed(documents.has(path)),
+    readObject: (path) =>
+      Effect.sync(() => {
+        active++;
+        maximum = Math.max(maximum, active);
+        active--;
+        return documents.get(path);
+      }),
+    writeObject: (path, document) =>
+      Effect.sync(() => {
+        documents.set(path, document);
+      }),
+    updateObject: (path, update) =>
+      Effect.gen(function* () {
+        active++;
+        maximum = Math.max(maximum, active);
+        yield* Effect.yieldNow;
+        const next = update(documents.get(path) ?? {});
+        documents.set(path, next);
+        active--;
+        return next;
+      }),
+  };
+  const runtime = installOwnedSettingsRuntime(service);
+  await Promise.all([
+    loadSettingsFromDisk(),
+    saveSettingsToDisk({ ...defaultCodePreviewSettings, readCollapsedLines: 44 }),
+    loadSettingsFromDisk(),
+  ]);
+  assert.equal(maximum, 1);
+  await runtime.dispose();
+  setActivePlatformRunner(undefined);
+});

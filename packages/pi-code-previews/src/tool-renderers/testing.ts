@@ -1,6 +1,6 @@
-import assert from "node:assert/strict";
 import { type Component } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach } from "vitest";
+import { environmentValue, setEnvironmentValueForTest } from "../boundary/environment";
 import { registerToolRenderers } from "./registration";
 
 export type RegisteredRenderer = {
@@ -18,12 +18,11 @@ export function preserveCodePreviewToolsEnv(): void {
   let previousCodePreviewTools: string | undefined;
 
   beforeEach(() => {
-    previousCodePreviewTools = process.env.CODE_PREVIEW_TOOLS;
+    previousCodePreviewTools = environmentValue("CODE_PREVIEW_TOOLS");
   });
 
   afterEach(() => {
-    if (previousCodePreviewTools === undefined) delete process.env.CODE_PREVIEW_TOOLS;
-    else process.env.CODE_PREVIEW_TOOLS = previousCodePreviewTools;
+    setEnvironmentValueForTest("CODE_PREVIEW_TOOLS", previousCodePreviewTools);
   });
 }
 
@@ -41,6 +40,6 @@ export function findRenderer<T extends RegisteredRenderer = RegisteredRenderer>(
   name: string,
 ): T {
   const tool = registered.find((candidate) => candidate.name === name);
-  assert.ok(tool, `Expected ${name} renderer to be registered`);
+  if (!tool) throw new TypeError(`Expected ${name} renderer to be registered`);
   return tool as T;
 }

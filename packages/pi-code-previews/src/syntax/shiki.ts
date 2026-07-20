@@ -1,5 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { bundledThemesInfo, createHighlighter } from "shiki";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as MutableRef from "effect/MutableRef";
+import { bundledThemesInfo } from "shiki";
+import { forkShikiEffect, runShikiEffect } from "../boundary/platform";
+import { ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
 import { positiveEnvInteger } from "../config/env";
 import { hashString } from "../cache/hash";
 import { codePreviewSettings } from "../settings/index";
@@ -7,10 +12,15 @@ import { expandPreviewTabs } from "../shared/preview-tabs";
 import { escapeControlChars } from "../shared/terminal-text";
 import { normalizePreviewLanguageAlias } from "./language";
 
-let shikiHighlighter: Awaited<ReturnType<typeof createHighlighter>> | undefined;
+let shikiHighlighter: ShikiHighlighter | undefined;
 let shikiInitVersion = 0;
 let shikiHighlighterGeneration = 0;
-let shikiInitializingTheme: string | undefined;
+type InitializationFlight = {
+  readonly theme: string;
+  readonly version: number;
+  readonly done: Deferred.Deferred<void>;
+};
+const initializationFlight = MutableRef.make<InitializationFlight | undefined>(undefined);
 let shikiStatusVersion = 0;
 let renderCacheChars = 0;
 const loadedShikiLanguages = new Set<string>();
@@ -36,45 +46,72 @@ const PRELOADED_SHIKI_LANGUAGES = [
   "yaml",
 ] as const;
 
-export async function initializeShiki(theme: string) {
+export const initializeShikiEffect = Effect.fn("CodePreviewShiki.initialize")(function* (
+  theme: string,
+) {
   if (!codePreviewSettings.syntaxHighlighting) return;
-  const initVersion = ++shikiInitVersion;
-  shikiInitializingTheme = theme;
-  try {
-    const nextHighlighter = await createHighlighter({
-      themes: [theme],
-      langs: [...PRELOADED_SHIKI_LANGUAGES],
-    });
-    if (initVersion !== shikiInitVersion) {
-      nextHighlighter.dispose();
-      return;
-    }
+  const current = MutableRef.get(initializationFlight);
+  if (current?.theme === theme) return yield* Deferred.await(current.done);
+  const version = ++shikiInitVersion;
+  const done = yield* Deferred.make<void>();
+  const flight = { theme, version, done } satisfies InitializationFlight;
+  MutableRef.set(initializationFlight, flight);
+  const adapter = yield* ShikiAdapter;
+  yield* adapter.create(theme, PRELOADED_SHIKI_LANGUAGES).pipe(
+    Effect.matchEffect({
+      onFailure: () =>
+        Effect.sync(() => {
+          if (version !== shikiInitVersion) return;
+          shikiHighlighter?.dispose();
+          shikiHighlighter = undefined;
+          shikiHighlighterGeneration++;
+          bumpShikiStatusVersion();
+          resetShikiLanguageState();
+          highlighterReadyCallbacks.clear();
+        }).pipe(
+          Effect.andThen(
+            Effect.logWarning("Shiki failed to initialize; code previews will use plain text."),
+          ),
+        ),
+      onSuccess: (nextHighlighter) =>
+        Effect.sync(() => {
+          if (version !== shikiInitVersion) {
+            nextHighlighter.dispose();
+            return;
+          }
+          const previousHighlighter = shikiHighlighter;
+          shikiHighlighter = nextHighlighter;
+          shikiHighlighterGeneration++;
+          bumpShikiStatusVersion();
+          previousHighlighter?.dispose();
+          resetShikiLanguageState();
+          for (const lang of PRELOADED_SHIKI_LANGUAGES) loadedShikiLanguages.add(lang);
+          notifyHighlighterReady();
+        }),
+    }),
+    Effect.ensuring(
+      Effect.sync(() => {
+        if (MutableRef.get(initializationFlight) === flight)
+          MutableRef.set(initializationFlight, undefined);
+      }).pipe(Effect.andThen(Deferred.succeed(done, undefined)), Effect.asVoid),
+    ),
+  );
+});
 
-    const previousHighlighter = shikiHighlighter;
-    shikiHighlighter = nextHighlighter;
-    shikiInitializingTheme = undefined;
-    shikiHighlighterGeneration++;
-    bumpShikiStatusVersion();
-    previousHighlighter?.dispose();
-
-    resetShikiLanguageState();
-    for (const lang of PRELOADED_SHIKI_LANGUAGES) loadedShikiLanguages.add(lang);
-    notifyHighlighterReady();
-  } catch (error) {
-    if (initVersion !== shikiInitVersion) return;
-    shikiInitializingTheme = undefined;
-    console.warn(
-      "[pi-code-previews] Shiki failed to initialize; previews will be plain text.",
-      error,
-    );
-    shikiHighlighter?.dispose();
-    shikiHighlighter = undefined;
-    shikiHighlighterGeneration++;
-    bumpShikiStatusVersion();
-    resetShikiLanguageState();
-    highlighterReadyCallbacks.clear();
-  }
+export function initializeShiki(theme: string): Promise<void> {
+  return runShikiEffect(initializeShikiEffect(theme));
 }
+
+export const disposeShikiEffect = Effect.sync(() => {
+  ++shikiInitVersion;
+  MutableRef.set(initializationFlight, undefined);
+  shikiHighlighter?.dispose();
+  shikiHighlighter = undefined;
+  shikiHighlighterGeneration++;
+  resetShikiLanguageState();
+  highlighterReadyCallbacks.clear();
+  bumpShikiStatusVersion();
+});
 
 export function renderHighlightedText(
   text: string,
@@ -189,8 +226,8 @@ function renderedCharSize(value: string[]): number {
 
 function requestHighlighterInit(theme: string, invalidate: (() => void) | undefined): void {
   if (invalidate) highlighterReadyCallbacks.add(invalidate);
-  if (shikiInitializingTheme === theme) return;
-  void initializeShiki(theme);
+  if (MutableRef.get(initializationFlight)?.theme === theme) return;
+  forkShikiEffect(initializeShikiEffect(theme));
 }
 
 function notifyHighlighterReady(): void {
@@ -210,25 +247,33 @@ function requestLanguageLoad(shikiLang: string, invalidate: (() => void) | undef
   if (!highlighter) return;
   const generation = shikiHighlighterGeneration;
   pendingShikiLanguages.add(shikiLang);
-  void highlighter
-    .loadLanguage(shikiLang as never)
-    .then(() => {
-      if (generation !== shikiHighlighterGeneration) return;
-      loadedShikiLanguages.add(shikiLang);
-      bumpShikiStatusVersion();
-      const callbacks = languageLoadCallbacks.get(shikiLang);
-      languageLoadCallbacks.delete(shikiLang);
-      callbacks?.forEach((callback) => callback());
-    })
-    .catch(() => {
-      if (generation === shikiHighlighterGeneration) {
-        bumpShikiStatusVersion();
-        languageLoadCallbacks.delete(shikiLang);
-      }
-    })
-    .finally(() => {
-      if (generation === shikiHighlighterGeneration) pendingShikiLanguages.delete(shikiLang);
-    });
+  forkShikiEffect(
+    ShikiAdapter.use((adapter) => adapter.loadLanguage(highlighter, shikiLang)).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          if (generation !== shikiHighlighterGeneration) return;
+          loadedShikiLanguages.add(shikiLang);
+          bumpShikiStatusVersion();
+          const callbacks = languageLoadCallbacks.get(shikiLang);
+          languageLoadCallbacks.delete(shikiLang);
+          callbacks?.forEach((callback) => callback());
+        }),
+      ),
+      Effect.catch(() =>
+        Effect.sync(() => {
+          if (generation === shikiHighlighterGeneration) {
+            bumpShikiStatusVersion();
+            languageLoadCallbacks.delete(shikiLang);
+          }
+        }),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (generation === shikiHighlighterGeneration) pendingShikiLanguages.delete(shikiLang);
+        }),
+      ),
+    ),
+  );
 }
 
 export function normalizeShikiLanguage(lang: string): string {

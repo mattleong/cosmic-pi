@@ -25,7 +25,7 @@
     "effect:lsp:patch": "effect-language-service patch",
     "effect:lsp:check": "effect-language-service check",
     "effect:lsp:verify": "node scripts/verify-effect-lsp.mjs",
-    "effect:diagnostics": "effect-language-service diagnostics --project packages/pi-cosmic-core/tsconfig.json && effect-language-service diagnostics --project packages/pi-better-xai/tsconfig.json && effect-language-service diagnostics --project packages/pi-better-openai/tsconfig.json && effect-language-service diagnostics --project packages/pi-cosmic-ui/tsconfig.json",
+    "effect:diagnostics": "effect-language-service diagnostics --project packages/pi-cosmic-core/tsconfig.json && effect-language-service diagnostics --project packages/pi-better-xai/tsconfig.json && effect-language-service diagnostics --project packages/pi-better-openai/tsconfig.json && effect-language-service diagnostics --project packages/pi-cosmic-ui/tsconfig.json && effect-language-service diagnostics --project packages/pi-code-previews/tsconfig.json",
     "architecture:check": "node scripts/check-effect-architecture.mjs",
     "pack:smoke": "node scripts/verify-packed-core.mjs",
     "prepare": "effect-language-service patch",

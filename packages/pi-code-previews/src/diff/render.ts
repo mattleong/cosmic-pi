@@ -24,10 +24,10 @@ export function renderSyntaxHighlightedDiff(
   invalidate?: () => void,
 ): string {
   return renderDiff(diff, {
-    lang,
+    ...(lang === undefined ? {} : { lang }),
     theme,
     limit,
-    invalidate,
+    ...(invalidate === undefined ? {} : { invalidate }),
     syntaxHighlight: true,
     wordEmphasis: codePreviewSettings.wordEmphasis,
   });

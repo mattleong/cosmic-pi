@@ -1,19 +1,18 @@
-import { homedir } from "node:os";
-import { isAbsolute, relative } from "node:path";
+import { nodeHomeDirectory, nodeIsAbsolute, nodeRelative } from "../boundary/node";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { escapeControlChars } from "../shared/terminal-text";
 
 export function formatDisplayPath(path: string, cwd: string): string {
   if (!path) return "";
 
-  if (isAbsolute(path)) {
-    const fromCwd = relative(cwd, path);
-    if (fromCwd && !isParentRelativePath(fromCwd) && !isAbsolute(fromCwd)) return fromCwd;
+  if (nodeIsAbsolute(path)) {
+    const fromCwd = nodeRelative(cwd, path);
+    if (fromCwd && !isParentRelativePath(fromCwd) && !nodeIsAbsolute(fromCwd)) return fromCwd;
     if (!fromCwd) return ".";
 
-    const home = homedir();
-    const fromHome = relative(home, path);
-    if (fromHome && !isParentRelativePath(fromHome) && !isAbsolute(fromHome))
+    const home = nodeHomeDirectory();
+    const fromHome = nodeRelative(home, path);
+    if (fromHome && !isParentRelativePath(fromHome) && !nodeIsAbsolute(fromHome))
       return `~/${fromHome}`;
     if (!fromHome) return "~";
   }

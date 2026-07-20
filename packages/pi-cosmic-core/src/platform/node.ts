@@ -12,5 +12,8 @@ const httpClient = NodeHttpClient.layerUndici;
 const http = JsonHttpClient.layer.pipe(Layer.provideMerge(httpClient));
 const streamingHttp = StreamingHttpClient.layer.pipe(Layer.provideMerge(httpClient));
 
-/** Narrow Node services used by cosmic-pi extensions. */
-export const layer = Layer.mergeAll(fileSystemAndPath, documents, http, streamingHttp);
+/** Filesystem, path, and atomic JSON-document services without networking capabilities. */
+export const fileLayer = documents;
+
+/** Node platform services used by network-capable cosmic-pi extensions. */
+export const layer = Layer.mergeAll(fileLayer, http, streamingHttp);

@@ -1,8 +1,11 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { isFileNotFound } from "../shared/errors";
+import * as Effect from "effect/Effect";
+import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
+import { JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
+import { currentWorkingDirectory, environmentValue, warnBoundary } from "../boundary/environment";
+import { nodeJoin } from "../boundary/node";
+import { runSerializedPlatformEffect } from "../boundary/platform";
 import { CODE_PREVIEW_SETTING_KEYS } from "./definitions";
 import { defaultCodePreviewSettings } from "./defaults";
 import { cloneCodePreviewSettings } from "./state";
@@ -13,20 +16,17 @@ export type SettingsSaveContext = {
   baseline: CodePreviewSettings;
   loaded: CodePreviewSettings;
   globalOverrides: Record<string, unknown>;
+  globalDocument: JsonObject;
+  nested: boolean;
 };
 
 let settingsSaveContext = defaultSettingsSaveContext();
+/** One coordination domain protects loaded state, save context, and persistence ordering. */
+export const settingsBoundaryLock = Semaphore.makeUnsafe(1);
+export const settingsCoordinationLock = Semaphore.makeUnsafe(1);
 
 export function getSettingsPath(): string {
-  return join(getAgentDir(), "code-previews.json");
-}
-
-function getLegacyAgentDir(): string {
-  return join(homedir(), ".pi", "agent");
-}
-
-function getLegacySettingsPath(): string {
-  return join(getLegacyAgentDir(), "code-previews.json");
+  return nodeJoin(getAgentDir(), "code-previews.json");
 }
 
 export type LoadSettingsOptions = {
@@ -34,42 +34,73 @@ export type LoadSettingsOptions = {
   projectTrusted?: boolean;
 };
 
-export async function loadSettingsFromDisk(
+const loadSettingsFile = Effect.fn("CodePreviewSettings.loadFile")(function* (
+  settingsPath: string,
+  fallback: CodePreviewSettings,
+) {
+  const documents = yield* JsonDocumentStore;
+  const document = yield* documents
+    .readObject(settingsPath)
+    .pipe(
+      Effect.catch(() =>
+        Effect.sync(() => warnBoundary(`Failed to load settings from ${settingsPath}.`)).pipe(
+          Effect.as(undefined),
+        ),
+      ),
+    );
+  if (!document) return undefined;
+  const data = extractCodePreviewSettings(document);
+  return { document, data, settings: normalizeSettings(data, fallback) };
+});
+
+export const loadSettingsFromDiskUnlockedEffect = Effect.fn("CodePreviewSettings.loadUnlocked")(
+  function* (options: LoadSettingsOptions = {}) {
+    const path = yield* Path.Path;
+    const agentDir = getAgentDir();
+    const home = environmentValue("HOME");
+    const homeDir = home ?? path.dirname(path.dirname(agentDir));
+    const settingsPath = path.join(agentDir, "code-previews.json");
+    const legacyAgentDir = path.join(homeDir, ".pi", "agent");
+    const projectCwd = options.projectCwd ?? currentWorkingDirectory();
+    let loaded = false;
+    let effective = cloneCodePreviewSettings(defaultCodePreviewSettings);
+    const baselinePaths = [
+      path.join(homeDir, ".pi", "settings.json"),
+      path.join(legacyAgentDir, "settings.json"),
+      path.join(agentDir, "settings.json"),
+      ...(options.projectTrusted ? [path.join(projectCwd, ".pi", "settings.json")] : []),
+      path.join(legacyAgentDir, "code-previews.json"),
+    ].filter((candidate) => candidate !== settingsPath);
+    for (const candidate of new Set(baselinePaths)) {
+      const next = yield* loadSettingsFile(candidate, effective);
+      if (!next) continue;
+      effective = next.settings;
+      loaded = true;
+    }
+    const baseline = cloneCodePreviewSettings(effective);
+    const globalSettings = yield* loadSettingsFile(settingsPath, effective);
+    if (globalSettings) {
+      effective = globalSettings.settings;
+      loaded = true;
+    }
+    settingsSaveContext = {
+      baseline,
+      loaded: cloneCodePreviewSettings(effective),
+      globalOverrides: { ...globalSettings?.data },
+      globalDocument: { ...globalSettings?.document },
+      nested: isRecord(globalSettings?.document.codePreview),
+    };
+    return loaded ? effective : undefined;
+  },
+);
+
+export const loadSettingsFromDiskEffect = (options: LoadSettingsOptions = {}) =>
+  settingsCoordinationLock.withPermits(1)(loadSettingsFromDiskUnlockedEffect(options));
+
+export function loadSettingsFromDisk(
   options: LoadSettingsOptions = {},
 ): Promise<CodePreviewSettings | undefined> {
-  let loaded = false;
-  let effective = cloneCodePreviewSettings(defaultCodePreviewSettings);
-  const settingsPath = getSettingsPath();
-  const baselinePaths = [
-    join(homedir(), ".pi", "settings.json"),
-    join(getLegacyAgentDir(), "settings.json"),
-    join(getAgentDir(), "settings.json"),
-    ...(options.projectTrusted
-      ? [join(options.projectCwd ?? process.cwd(), ".pi", "settings.json")]
-      : []),
-    getLegacySettingsPath(),
-  ].filter((candidate) => candidate !== settingsPath);
-  for (const candidate of new Set(baselinePaths)) {
-    // Each settings layer uses the previous layer as its fallback, so precedence requires this.
-    // oxlint-disable-next-line no-await-in-loop
-    const next = await loadSettingsFile(candidate, effective);
-    if (!next) continue;
-    effective = next.settings;
-    loaded = true;
-  }
-
-  const baseline = cloneCodePreviewSettings(effective);
-  const globalSettings = await loadSettingsFile(settingsPath, effective);
-  if (globalSettings) {
-    effective = globalSettings.settings;
-    loaded = true;
-  }
-  settingsSaveContext = {
-    baseline,
-    loaded: cloneCodePreviewSettings(effective),
-    globalOverrides: { ...globalSettings?.data },
-  };
-  return loaded ? effective : undefined;
+  return runSerializedPlatformEffect(settingsBoundaryLock, loadSettingsFromDiskEffect(options));
 }
 
 export function getSettingsSaveContext(): SettingsSaveContext {
@@ -77,42 +108,49 @@ export function getSettingsSaveContext(): SettingsSaveContext {
     baseline: cloneCodePreviewSettings(settingsSaveContext.baseline),
     loaded: cloneCodePreviewSettings(settingsSaveContext.loaded),
     globalOverrides: { ...settingsSaveContext.globalOverrides },
+    globalDocument: { ...settingsSaveContext.globalDocument },
+    nested: settingsSaveContext.nested,
   };
 }
 
-export async function saveSettingsToDisk(
+export const saveSettingsToDiskEffect = Effect.fn("CodePreviewSettings.save")(function* (
   settings: CodePreviewSettings,
-  context: SettingsSaveContext = defaultSettingsSaveContext(),
+  context?: SettingsSaveContext,
+) {
+  yield* settingsCoordinationLock.withPermits(1)(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const documents = yield* JsonDocumentStore;
+      const settingsPath = path.join(getAgentDir(), "code-previews.json");
+      const currentContext = context ?? getSettingsSaveContext();
+      yield* documents.updateObject(settingsPath, (latest) =>
+        settingsDocument(settings, {
+          ...currentContext,
+          globalDocument: latest,
+          nested: isRecord(latest.codePreview),
+        }),
+      );
+    }),
+  );
+});
+
+export function saveSettingsToDisk(
+  settings: CodePreviewSettings,
+  context?: SettingsSaveContext,
 ): Promise<void> {
-  const settingsPath = getSettingsPath();
-  await mkdir(dirname(settingsPath), { recursive: true });
-  await writeFile(
-    settingsPath,
-    `${JSON.stringify(settingsOverrides(settings, context), null, 2)}\n`,
-    "utf8",
+  return runSerializedPlatformEffect(
+    settingsBoundaryLock,
+    saveSettingsToDiskEffect(settings, context),
   );
 }
 
-async function loadSettingsFile(
-  settingsPath: string,
-  fallback: CodePreviewSettings,
-): Promise<{ data: Record<string, unknown>; settings: CodePreviewSettings } | undefined> {
-  try {
-    const content = await readFile(settingsPath, "utf8");
-    const data = extractCodePreviewSettings(JSON.parse(content));
-    return { data, settings: normalizeSettings(data, fallback) };
-  } catch (error) {
-    if (!isFileNotFound(error))
-      console.warn(`[pi-code-previews] Failed to load settings from ${settingsPath}.`, error);
-    return undefined;
-  }
-}
+export const waitForSettingsSavesEffect = Effect.void;
 
 function settingsOverrides(
   settings: CodePreviewSettings,
   context: SettingsSaveContext,
-): Record<string, unknown> {
-  const overrides = { ...context.globalOverrides };
+): JsonObject {
+  const overrides: JsonObject = { ...context.globalOverrides };
   for (const key of CODE_PREVIEW_SETTING_KEYS) {
     const value = settings[key];
     if (settingValuesEqual(value, context.loaded[key])) continue;
@@ -120,6 +158,20 @@ function settingsOverrides(
     else Object.assign(overrides, { [key]: value });
   }
   return overrides;
+}
+
+function settingsDocument(settings: CodePreviewSettings, context: SettingsSaveContext): JsonObject {
+  const overrides = settingsOverrides(settings, context);
+  if (context.nested) {
+    const nested = isRecord(context.globalDocument.codePreview)
+      ? { ...context.globalDocument.codePreview }
+      : {};
+    for (const key of CODE_PREVIEW_SETTING_KEYS) delete nested[key];
+    return { ...context.globalDocument, codePreview: { ...nested, ...overrides } };
+  }
+  const document = { ...context.globalDocument };
+  for (const key of CODE_PREVIEW_SETTING_KEYS) delete document[key];
+  return { ...document, ...overrides };
 }
 
 function settingValuesEqual(left: unknown, right: unknown): boolean {
@@ -135,17 +187,21 @@ function defaultSettingsSaveContext(): SettingsSaveContext {
     baseline: cloneCodePreviewSettings(defaultCodePreviewSettings),
     loaded: cloneCodePreviewSettings(defaultCodePreviewSettings),
     globalOverrides: {},
+    globalDocument: {},
+    nested: false,
   };
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 export function extractCodePreviewSettings(data: unknown): Record<string, unknown> {
-  if (!data || typeof data !== "object") return {};
-  const object = data as Record<string, unknown>;
-  const nested = object.codePreview;
-  if (nested && typeof nested === "object") return nested as Record<string, unknown>;
-  if (hasDirectCodePreviewSettings(object)) return object;
+  if (!isRecord(data)) return {};
+  const nested = data.codePreview;
+  if (isRecord(nested)) return nested;
+  if (hasDirectCodePreviewSettings(data)) return data;
   const extracted: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(object)) {
+  for (const [key, value] of Object.entries(data)) {
     if (!key.startsWith("codePreview")) continue;
     const normalized = key.slice("codePreview".length);
     if (!normalized) continue;

@@ -1,22 +1,22 @@
+import { runSerializedPlatformEffect } from "../boundary/platform";
 import { cloneCodePreviewSettings, type CodePreviewSettings } from "./index";
-import { getSettingsSaveContext, saveSettingsToDisk } from "./store";
-
-let settingsSaveQueue: Promise<void> = Promise.resolve();
+import { saveSettingsToDisk, settingsBoundaryLock, waitForSettingsSavesEffect } from "./store";
 
 export function queueSettingsSave(settings: CodePreviewSettings): Promise<void> {
-  const snapshot = cloneCodePreviewSettings(settings);
-  const context = getSettingsSaveContext();
-  const nextSave = settingsSaveQueue
-    .catch(() => undefined)
-    .then(() => saveSettingsToDisk(snapshot, context));
-  settingsSaveQueue = nextSave;
-  return nextSave;
+  return saveSettingsToDisk(cloneCodePreviewSettings(settings));
 }
 
 export function flushSettingsSaveQueue(): Promise<void> {
-  return settingsSaveQueue;
+  return runSerializedPlatformEffect(settingsBoundaryLock, waitForSettingsSavesEffect);
 }
 
 export function formatSettingsSaveError(error: unknown): string {
-  return `Failed to save code preview settings: ${error instanceof Error ? error.message : String(error)}`;
+  const message =
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+      ? error.message
+      : "Unknown error.";
+  return `Failed to save code preview settings: ${message}`;
 }

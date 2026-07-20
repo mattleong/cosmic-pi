@@ -1,3 +1,11 @@
+// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+// @effect-diagnostics effect/processEnv:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/globalTimers:off
+// @effect-diagnostics effect/globalConsole:off
+// @effect-diagnostics effect/globalDate:off
 import { evaluateWordEmphasisAccuracy } from "../src/testing/word-emphasis-accuracy";
 
 const report = await evaluateWordEmphasisAccuracy();

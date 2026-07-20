@@ -101,6 +101,8 @@ function approved(rule, path) {
     return path.includes("/boundary/") || path === "packages/pi-cosmic-core/src/runtime.ts";
   }
   if (rule === "directFileSystem") return path.startsWith("packages/pi-cosmic-core/src/platform/");
+  if (rule === "globalDate") return path === "packages/pi-code-previews/src/boundary/clock.ts";
+  if (rule === "rawJson") return path === "packages/pi-code-previews/src/boundary/json.ts";
   return false;
 }
 

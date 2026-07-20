@@ -16,9 +16,9 @@ export type BorderState = Record<string, unknown> & {
   codePreviewBorderResultComponent?: Component;
   codePreviewBorderShell?: BorderedToolCall;
   codePreviewBorderTheme?: Theme;
-  codePreviewBorderCurrentSlot?: BorderSlot;
-  codePreviewBorderCallExpandLabel?: string;
-  codePreviewBorderResultExpandLabel?: string;
+  codePreviewBorderCurrentSlot?: BorderSlot | undefined;
+  codePreviewBorderCallExpandLabel?: string | undefined;
+  codePreviewBorderResultExpandLabel?: string | undefined;
   codePreviewBorderLastCallExecutionStarted?: boolean;
   codePreviewBorderLastCallPartial?: boolean;
 };

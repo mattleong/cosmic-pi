@@ -14,7 +14,7 @@ export function createDiffPreviewText(
     hiddenLineNoun: string;
     skipHighlightLabel: string;
     decorate?: (body: string) => string;
-    invalidate?: () => void;
+    invalidate?: (() => void) | undefined;
   },
 ): FullWidthDiffText {
   const { body, syntaxHighlightSkipped } = renderDiffPreviewBody(

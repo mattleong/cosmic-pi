@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { deferPreview, previewNow, schedulePreview } from "../boundary/runtime";
 import { codePreviewSettings } from "../settings/index";
 
 type ToolTimingUpdateContext = {
@@ -14,10 +15,10 @@ type ToolTimingRenderContext = ToolTimingUpdateContext & {
 };
 
 export type TimingState = Record<string, unknown> & {
-  codePreviewTimingStartedAt?: number;
-  codePreviewTimingEndedAt?: number;
-  codePreviewTimingInterval?: ReturnType<typeof setInterval>;
-  codePreviewTimingOnlyRenderToken?: number;
+  codePreviewTimingStartedAt?: number | undefined;
+  codePreviewTimingEndedAt?: number | undefined;
+  codePreviewTimingCancel?: (() => void) | undefined;
+  codePreviewTimingOnlyRenderToken?: number | undefined;
   codePreviewTimingCallComponent?: Component;
   codePreviewTimingResultComponent?: Component;
 };
@@ -65,7 +66,7 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
     state.codePreviewTimingStartedAt === undefined &&
     context.isPartial !== false
   ) {
-    state.codePreviewTimingStartedAt = Date.now();
+    state.codePreviewTimingStartedAt = previewNow();
     state.codePreviewTimingEndedAt = undefined;
   }
 
@@ -74,13 +75,13 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   if (context.isPartial === true && options.animate !== false)
     ensureToolCallTimingInterval(state, context.invalidate);
   else if (context.isPartial === false) {
-    state.codePreviewTimingEndedAt ??= Date.now();
+    state.codePreviewTimingEndedAt ??= previewNow();
     clearToolCallTimingInterval(state);
   }
 
   if (options.formatLabel === false) return undefined;
   const running = context.isPartial === true;
-  const endTime = running ? Date.now() : (state.codePreviewTimingEndedAt ?? Date.now());
+  const endTime = running ? previewNow() : (state.codePreviewTimingEndedAt ?? previewNow());
   const label = running ? "Elapsed" : "Took";
   return { label: `${label} ${formatToolCallDuration(endTime - startedAt)}` };
 }
@@ -105,9 +106,8 @@ function withLastComponent<TContext extends ToolTimingRenderContext>(
 }
 
 function ensureToolCallTimingInterval(state: TimingState, invalidate: () => void): void {
-  state.codePreviewTimingInterval ??= setInterval(
-    () => invalidateForToolCallTiming(state, invalidate),
-    100,
+  state.codePreviewTimingCancel ??= schedulePreview(100, () =>
+    invalidateForToolCallTiming(state, invalidate),
   );
 }
 
@@ -117,7 +117,7 @@ function invalidateForToolCallTiming(state: TimingState, invalidate: () => void)
   try {
     invalidate();
   } finally {
-    queueMicrotask(() => {
+    deferPreview(() => {
       if (state.codePreviewTimingOnlyRenderToken === token)
         state.codePreviewTimingOnlyRenderToken = undefined;
     });
@@ -125,9 +125,9 @@ function invalidateForToolCallTiming(state: TimingState, invalidate: () => void)
 }
 
 function clearToolCallTimingInterval(state: TimingState): void {
-  if (!state.codePreviewTimingInterval) return;
-  clearInterval(state.codePreviewTimingInterval);
-  state.codePreviewTimingInterval = undefined;
+  if (!state.codePreviewTimingCancel) return;
+  state.codePreviewTimingCancel();
+  state.codePreviewTimingCancel = undefined;
   state.codePreviewTimingOnlyRenderToken = undefined;
 }
 

@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
+import { deferPreview } from "../boundary/runtime";
 import { positiveEnvInteger } from "../config/env";
 import { escapeControlChars } from "../shared/terminal-text";
 
@@ -14,7 +15,7 @@ export class AsyncPreview implements Component {
 
   constructor(message: string, theme: Theme, compute: () => Component, invalidate: () => void) {
     this.component = new Text(theme.fg("muted", message), 0, 0);
-    setTimeout(() => {
+    deferPreview(() => {
       try {
         this.component = compute();
       } catch (error) {
@@ -28,7 +29,7 @@ export class AsyncPreview implements Component {
         );
       }
       invalidate();
-    }, 0);
+    });
   }
 
   render(width: number): string[] {

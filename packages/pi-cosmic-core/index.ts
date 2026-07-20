@@ -25,4 +25,7 @@ export {
   type StreamingHttpRequest,
   type StreamingHttpResponse,
 } from "./src/platform/streaming-http.ts";
-export { layer as nodePlatformLayer } from "./src/platform/node.ts";
+export {
+  fileLayer as nodeFilePlatformLayer,
+  layer as nodePlatformLayer,
+} from "./src/platform/node.ts";

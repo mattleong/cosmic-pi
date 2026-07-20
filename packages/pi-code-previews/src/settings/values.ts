@@ -1,4 +1,5 @@
-import { getObjectValue } from "../shared/objects";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import {
   ALL_CODE_PREVIEW_TOOLS,
   parseToolToggleId,
@@ -31,21 +32,25 @@ export function normalizeSettings(
   data: unknown,
   fallback: CodePreviewSettings = codePreviewSettings,
 ): CodePreviewSettings {
+  const decoded = Option.getOrElse(
+    Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Unknown))(data),
+    () => ({}),
+  );
   const next = {} as CodePreviewSettings;
-  for (const key of CODE_PREVIEW_SETTING_KEYS) normalizeSetting(next, data, fallback, key);
+  for (const key of CODE_PREVIEW_SETTING_KEYS) normalizeSetting(next, decoded, fallback, key);
   return withRequiredToolRenderers(next);
 }
 
 function normalizeSetting<K extends keyof CodePreviewSettings>(
   next: CodePreviewSettings,
-  data: unknown,
+  data: Readonly<Record<string, unknown>>,
   fallback: CodePreviewSettings,
   key: K,
 ): void {
   const definition = CODE_PREVIEW_SETTING_DEFINITIONS[
     key
   ] as unknown as CodePreviewSettingDescriptor<K>;
-  next[key] = definition.normalize(getObjectValue(data, key), fallback[key]);
+  next[key] = definition.normalize(data[key], fallback[key]);
 }
 
 export function updateSetting(

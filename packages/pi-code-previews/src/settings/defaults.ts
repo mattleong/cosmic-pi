@@ -1,3 +1,4 @@
+import { environmentValue } from "../boundary/environment";
 import { booleanEnv, parsePositiveInteger, positiveEnvInteger } from "../config/env";
 import { ALL_CODE_PREVIEW_TOOLS } from "../tools/names";
 import {
@@ -42,12 +43,12 @@ export const defaultCodePreviewSettings: CodePreviewSettings = {
 };
 
 function envTheme(name: string, fallback: string): string {
-  const value = process.env[name];
+  const value = environmentValue(name);
   return isBundledThemeName(value) ? value : fallback;
 }
 
 function envEditLines(name: string, fallback: number | "all"): number | "all" {
-  const value = process.env[name];
+  const value = environmentValue(name);
   if (value === "all") return "all";
   return parsePositiveInteger(value) ?? fallback;
 }
@@ -56,12 +57,12 @@ function envDiffIntensity(
   name: string,
   fallback: DiffBackgroundIntensity,
 ): DiffBackgroundIntensity {
-  const value = process.env[name];
+  const value = environmentValue(name);
   return isDiffBackgroundIntensity(value) ? value : fallback;
 }
 
 function envDiffWordEmphasis(name: string, fallback: DiffWordEmphasis): DiffWordEmphasis {
-  const value = process.env[name]?.toLowerCase();
+  const value = environmentValue(name)?.toLowerCase();
   return isDiffWordEmphasis(value) ? value : fallback;
 }
 
@@ -69,10 +70,10 @@ function envToolCallBackgroundMode(
   name: string,
   fallback: ToolCallBackgroundMode,
 ): ToolCallBackgroundMode {
-  return parseToolCallBackgroundMode(process.env[name]) ?? fallback;
+  return parseToolCallBackgroundMode(environmentValue(name)) ?? fallback;
 }
 
 function envPathIconMode(name: string, fallback: PathIconMode): PathIconMode {
-  const value = process.env[name]?.toLowerCase();
+  const value = environmentValue(name)?.toLowerCase();
   return isPathIconMode(value) ? value : fallback;
 }

@@ -1,3 +1,11 @@
+// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+// @effect-diagnostics effect/processEnv:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/globalTimers:off
+// @effect-diagnostics effect/globalConsole:off
+// @effect-diagnostics effect/globalDate:off
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
@@ -159,7 +167,6 @@ function callContext(expanded: boolean, state: Record<string, unknown>): RenderC
     invalidate: () => undefined,
     isError: false,
     isPartial: true,
-    lastComponent: undefined,
     showImages: true,
     state,
     toolCallId: "bench-edit",
