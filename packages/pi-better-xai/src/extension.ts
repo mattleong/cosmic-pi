@@ -21,6 +21,14 @@ import {
 
 const XAI_STATUS_COMMAND = "xai-usage";
 
+export interface BetterXaiExtensionDependencies {
+  readonly startupEffect: (generation: number) => Effect.Effect<void, never, XaiUsageService>;
+}
+
+const defaultDependencies: BetterXaiExtensionDependencies = {
+  startupEffect: () => XaiUsageService.use(() => Effect.void),
+};
+
 function hasTerminalUI(ctx: ExtensionContext): boolean {
   return ctx.mode === "tui" || (ctx.mode === undefined && ctx.hasUI);
 }
@@ -35,6 +43,14 @@ function requiredConfig(projection: MutableRef.MutableRef<XaiProjection>): Resol
 }
 
 export default function betterXai(pi: ExtensionAPI): void {
+  betterXaiWithDependencies(pi, defaultDependencies);
+}
+
+/** Internal seam for deterministic lifecycle/finalizer tests. */
+export function betterXaiWithDependencies(
+  pi: ExtensionAPI,
+  dependencies: BetterXaiExtensionDependencies,
+): void {
   const projection = makeProjection();
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
   let footerController: ReturnType<typeof createFooterController>;
@@ -67,8 +83,28 @@ export default function betterXai(pi: ExtensionAPI): void {
     }).pipe(Layer.provide(nodePlatformLayer));
     return makeXaiRuntime(pi, applicationLayer);
   };
-  let runtime: ReturnType<typeof makeRuntime> | undefined;
+  type XaiRuntime = ReturnType<typeof makeRuntime>;
+  let runtime: XaiRuntime | undefined;
   let lifecycle = Promise.resolve();
+  let removeAbortListener: (() => void) | undefined;
+  const clearAbortListener = () => {
+    const remove = removeAbortListener;
+    removeAbortListener = undefined;
+    try {
+      remove?.();
+    } catch {
+      // A malformed session signal cannot block runtime disposal.
+    }
+  };
+  const disposals = new WeakMap<XaiRuntime, Promise<void>>();
+  const disposeNow = (target: XaiRuntime | undefined): Promise<void> => {
+    if (!target) return Promise.resolve();
+    const existing = disposals.get(target);
+    if (existing) return existing;
+    const disposal = target.dispose().catch(() => undefined);
+    disposals.set(target, disposal);
+    return disposal;
+  };
 
   const run = <A, E>(
     effect: Effect.Effect<A, E, XaiUsageService>,
@@ -101,15 +137,16 @@ export default function betterXai(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     const generation = ++sessionGeneration;
+    const previous = runtime;
+    runtime = undefined;
+    currentContext = undefined;
+    clearAbortListener();
+    const previousDisposal = disposeNow(previous);
     cosmicUiAdapter.shutdown();
+
     lifecycle = lifecycle
       .catch(() => undefined)
-      .then(() => {
-        const previous = runtime;
-        runtime = undefined;
-        currentContext = undefined;
-        return previous?.dispose();
-      })
+      .then(() => previousDisposal)
       .then(() => {
         if (generation !== sessionGeneration) return;
         resetProjection(projection);
@@ -117,21 +154,62 @@ export default function betterXai(pi: ExtensionAPI): void {
         currentContext = context;
         const next = makeRuntime(ctx, context, generation);
         runtime = next;
-        return next
-          .run(
-            XaiUsageService.use(() => Effect.void),
-            ctx.signal,
-          )
-          .then(() => {
-            if (generation !== sessionGeneration) return;
-            if (hasTerminalUI(ctx)) cosmicUiAdapter.detectHost();
-            else cosmicUiAdapter.shutdown();
-            updateFooter(ctx);
+        const abort = () => {
+          if (generation !== sessionGeneration || runtime !== next) return;
+          const abortedGeneration = ++sessionGeneration;
+          runtime = undefined;
+          currentContext = undefined;
+          clearAbortListener();
+          const disposal = disposeNow(next);
+          cosmicUiAdapter.shutdown();
+          lifecycle = lifecycle
+            .catch(() => undefined)
+            .then(() => disposal)
+            .then(() => {
+              if (abortedGeneration === sessionGeneration && !runtime) resetProjection(projection);
+            });
+          return disposal;
+        };
+        ctx.signal?.addEventListener("abort", abort, { once: true });
+        removeAbortListener = () => ctx.signal?.removeEventListener("abort", abort);
+        if (ctx.signal?.aborted) {
+          runtime = undefined;
+          currentContext = undefined;
+          clearAbortListener();
+          const disposal = disposeNow(next);
+          cosmicUiAdapter.shutdown();
+          try {
+            ctx.ui.notify("Better xAI failed to start.", "warning");
+          } catch {
+            // Host notification failures do not prevent runtime cleanup.
+          }
+          return disposal.then(() => {
+            if (generation === sessionGeneration && !runtime) resetProjection(projection);
           });
+        }
+        return next.run(dependencies.startupEffect(generation), ctx.signal).then(() => {
+          if (generation !== sessionGeneration || runtime !== next) return;
+          if (hasTerminalUI(ctx)) cosmicUiAdapter.detectHost();
+          else cosmicUiAdapter.shutdown();
+          updateFooter(ctx);
+        });
       })
       .catch(() => {
-        if (generation === sessionGeneration)
+        if (generation !== sessionGeneration) return;
+        const failed = runtime;
+        runtime = undefined;
+        currentContext = undefined;
+        clearAbortListener();
+        const disposal = disposeNow(failed);
+        cosmicUiAdapter.shutdown();
+        try {
           ctx.ui.notify("Better xAI failed to start.", "warning");
+        } catch {
+          // Host notification failures do not prevent runtime cleanup.
+        }
+        return disposal.then(() => {
+          if (generation === sessionGeneration && !runtime) resetProjection(projection);
+        });
       });
     return lifecycle;
   });
@@ -156,17 +234,19 @@ export default function betterXai(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", () => {
-    ++sessionGeneration;
+    const shutdownGeneration = ++sessionGeneration;
+    const current = runtime;
+    runtime = undefined;
+    currentContext = undefined;
+    clearAbortListener();
+    const disposal = disposeNow(current);
     cosmicUiAdapter.shutdown();
     lifecycle = lifecycle
       .catch(() => undefined)
+      .then(() => disposal)
       .then(() => {
-        const current = runtime;
-        runtime = undefined;
-        currentContext = undefined;
-        return current?.dispose();
-      })
-      .then(() => resetProjection(projection));
+        if (shutdownGeneration === sessionGeneration && !runtime) resetProjection(projection);
+      });
     return lifecycle;
   });
 }

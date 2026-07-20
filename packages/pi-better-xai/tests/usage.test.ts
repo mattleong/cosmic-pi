@@ -509,7 +509,7 @@ describe("xAI refresh lifecycle", () => {
     }).pipe(Effect.provide(serviceLayer));
   });
 
-  it("interrupts polling and queued work when its runtime is disposed", () => {
+  it("interrupts in-flight polling when its runtime is disposed", () => {
     const harness = documentHarness();
     const projection = makeProjection();
     const requestStarted = Deferred.makeUnsafe<void>();
