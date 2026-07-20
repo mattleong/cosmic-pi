@@ -1,9 +1,20 @@
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+// @effect-diagnostics effect/processEnv:off
+// @effect-diagnostics effect/globalDate:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/floatingEffect:off
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  initTheme,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterOpenAI, { _test } from "../index.ts";
+import { textPanel } from "../src/settings/picker.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => void | Promise<void>;
 type CommandHandler = (args: string, ctx: ExtensionContext) => void | Promise<void>;
@@ -168,21 +179,17 @@ afterEach(() => {
 
 describe("footer path formatting", () => {
   test("abbreviates only exact home and child paths", () => {
-    expect(_test.abbreviateHomePath("/Users/alice/project", "/Users/alice")).toBe("~/project");
-    expect(_test.abbreviateHomePath("/Users/alice", "/Users/alice")).toBe("~");
-    expect(_test.abbreviateHomePath("/Users/alice2/project", "/Users/alice")).toBe(
-      "/Users/alice2/project",
-    );
-    expect(_test.abbreviateHomePath("/Users/alice/project", undefined)).toBe(
-      "/Users/alice/project",
-    );
+    expect(_test.abbreviateHomePath("/Users/alice/project")).toBe("~/project");
+    expect(_test.abbreviateHomePath("/Users/alice")).toBe("~");
+    expect(_test.abbreviateHomePath("/home/alice/project")).toBe("~/project");
+    expect(_test.abbreviateHomePath("/project")).toBe("/project");
   });
 });
 
 describe("diagnostic text panel", () => {
   test("closes only for explicit close keys, not arrow escape sequences", () => {
     const done = vi.fn();
-    const panel = _test.textPanel("Diagnostics", ["line"], done);
+    const panel = textPanel("Diagnostics", ["line"], done);
 
     panel.handleInput("\x1b[A");
     expect(done).not.toHaveBeenCalled();
@@ -317,6 +324,49 @@ describe("footer mode ownership", () => {
     await emit(harness, "session_start");
 
     expect(harness.setFooter).not.toHaveBeenCalled();
+  });
+
+  test("renders and navigates hierarchical TUI settings with redacted diagnostics", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "status");
+    const configPath = join(cwd, ".pi", "extensions", "pi-better-openai.json");
+    const raw = JSON.parse(readFileSync(configPath, "utf8"));
+    writeFileSync(configPath, JSON.stringify({ ...raw, accessToken: "sk-secret-value" }));
+    const harness = createHarness(cwd);
+    initTheme(undefined, false);
+    let component: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+    harness.custom.mockImplementation((factory) => {
+      component = factory(
+        { requestRender: vi.fn() },
+        {
+          fg: (_tone: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+        {},
+        vi.fn(),
+      );
+      return Promise.resolve(undefined);
+    });
+
+    await emit(harness, "session_start");
+    await harness.commands.get("openai-settings")?.("", harness.ctx);
+    const root = component!.render(120).join("\n");
+    expect(root).toContain("Fast mode");
+    expect(root).toContain("Footer");
+    expect(root).toContain("Usage");
+    expect(root).toContain("Image tool");
+    expect(root).toContain("Diagnostics");
+
+    for (let index = 0; index < 4; index++) component!.handleInput("\x1b[B");
+    component!.handleInput("\r");
+    expect(component!.render(120).join("\n")).toContain("Diagnostics");
+    component!.handleInput("\x1b[B");
+    component!.handleInput("\x1b[B");
+    component!.handleInput("\r");
+    const redacted = component!.render(120).join("\n");
+    expect(redacted).toContain("Redacted config");
+    expect(redacted).toContain("[REDACTED]");
+    expect(redacted).not.toContain("sk-secret-value");
   });
 
   test("does not open the custom settings component in RPC mode", async () => {

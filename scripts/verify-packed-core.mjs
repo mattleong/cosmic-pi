@@ -13,6 +13,9 @@ const coreManifest = JSON.parse(
 const xaiManifest = JSON.parse(
   await readFile(join(root, "packages/pi-better-xai/package.json"), "utf8"),
 );
+const openaiManifest = JSON.parse(
+  await readFile(join(root, "packages/pi-better-openai/package.json"), "utf8"),
+);
 const piVersion = coreManifest.devDependencies["@earendil-works/pi-coding-agent"];
 const tuiVersion = xaiManifest.peerDependencies["@earendil-works/pi-tui"];
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "cosmic-pi-pack-"));
@@ -32,18 +35,20 @@ function run(command, args, cwd) {
 }
 
 try {
-  for (const packageName of ["pi-cosmic-core", "pi-better-xai"]) {
+  for (const packageName of ["pi-cosmic-core", "pi-better-xai", "pi-better-openai"]) {
     run("pnpm", ["--filter", packageName, "pack", "--pack-destination", temporaryDirectory], root);
   }
   const tarballs = (await readdir(temporaryDirectory)).filter((name) => name.endsWith(".tgz"));
   const coreTarballName = tarballs.find((name) => name.startsWith("pi-cosmic-core-"));
   const xaiTarballName = tarballs.find((name) => name.startsWith("pi-better-xai-"));
-  if (!coreTarballName || !xaiTarballName || tarballs.length !== 2) {
-    throw new Error(`Expected core and xAI tarballs, found: ${tarballs.join(", ")}.`);
+  const openaiTarballName = tarballs.find((name) => name.startsWith("pi-better-openai-"));
+  if (!coreTarballName || !xaiTarballName || !openaiTarballName || tarballs.length !== 3) {
+    throw new Error(`Expected core, xAI, and OpenAI tarballs, found: ${tarballs.join(", ")}.`);
   }
 
   const coreTarball = join(temporaryDirectory, coreTarballName);
   const xaiTarball = join(temporaryDirectory, xaiTarballName);
+  const openaiTarball = join(temporaryDirectory, openaiTarballName);
   await writeFile(
     join(temporaryDirectory, "package.json"),
     `${JSON.stringify(
@@ -55,6 +60,7 @@ try {
           "@earendil-works/pi-coding-agent": piVersion,
           "@earendil-works/pi-tui": tuiVersion,
           jiti: "2.7.0",
+          "pi-better-openai": `file:${openaiTarball}`,
           "pi-better-xai": `file:${xaiTarball}`,
           "pi-cosmic-core": `file:${coreTarball}`,
         },
@@ -89,7 +95,7 @@ try {
     [
       "--input-type=module",
       "--eval",
-      "import { createJiti } from 'jiti'; const api = await createJiti(import.meta.url).import('pi-better-xai'); if (typeof api.default !== 'function') throw new Error('missing xAI extension export');",
+      "import { createJiti } from 'jiti'; const jiti = createJiti(import.meta.url); const xai = await jiti.import('pi-better-xai'); const openai = await jiti.import('pi-better-openai'); if (typeof xai.default !== 'function') throw new Error('missing xAI extension export'); if (typeof openai.default !== 'function') throw new Error('missing OpenAI extension export');",
     ],
     temporaryDirectory,
   );
@@ -112,8 +118,18 @@ try {
   ) {
     throw new Error("Packed pi-better-xai dependencies are not synchronized.");
   }
+  const packedOpenaiManifest = JSON.parse(
+    await readFile(join(temporaryDirectory, "node_modules/pi-better-openai/package.json"), "utf8"),
+  );
+  if (
+    packedOpenaiManifest.dependencies.effect !== expectedEffectVersion ||
+    packedOpenaiManifest.dependencies["pi-cosmic-core"] !== coreManifest.version ||
+    packedOpenaiManifest.version !== openaiManifest.version
+  ) {
+    throw new Error("Packed pi-better-openai dependencies are not synchronized.");
+  }
 
-  console.log("Packed core and xAI packages install and import in a clean consumer.");
+  console.log("Packed core, xAI, and OpenAI packages install and import in a clean consumer.");
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
 }

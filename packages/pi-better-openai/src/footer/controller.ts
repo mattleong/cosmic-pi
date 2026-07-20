@@ -4,7 +4,8 @@ import { supportsFast, type FastController } from "../fast-controller.ts";
 import { abbreviateHomePath } from "../footer-layout.ts";
 import { formatTokens, sanitizeStatusText, truncateToWidth, visibleWidth } from "../format.ts";
 import { STATUS_KEY } from "../identity.ts";
-import type { UsageController } from "../usage-controller.ts";
+import type * as MutableRef from "effect/MutableRef";
+import { visibleStatusLine, type OpenAIProjection } from "../usage-controller.ts";
 
 export interface FooterController {
   readonly installed: boolean;
@@ -25,10 +26,10 @@ export function createFooterController(deps: {
   pi: ExtensionAPI;
   config(ctx: ExtensionContext): ResolvedConfig;
   fastController: FastController;
-  usageController: UsageController;
+  projection: MutableRef.MutableRef<OpenAIProjection>;
   hasTerminalUI(ctx: ExtensionContext): boolean;
 }): FooterController {
-  const { pi, config, fastController, usageController, hasTerminalUI } = deps;
+  const { pi, config, fastController, projection, hasTerminalUI } = deps;
   let footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   let footerInstalled = false;
   let requestFooterRender: (() => void) | undefined;
@@ -40,6 +41,7 @@ export function createFooterController(deps: {
   let sessionNameCached = false;
   let cachedSessionNameLeafId: string | null | undefined;
   let cachedSessionName: string | undefined;
+  let currentContext: ExtensionContext | undefined;
 
   function refreshFooterTotals(ctx: ExtensionContext): void {
     footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
@@ -105,18 +107,22 @@ export function createFooterController(deps: {
         },
         invalidate() {},
         render(width: number): string[] {
+          const renderContext = currentContext ?? ctx;
           const parts: string[] = [];
           if (footerTotals.input) parts.push(`↑${formatTokens(footerTotals.input)}`);
           if (footerTotals.output) parts.push(`↓${formatTokens(footerTotals.output)}`);
           if (footerTotals.cacheRead) parts.push(`R${formatTokens(footerTotals.cacheRead)}`);
           if (footerTotals.cacheWrite) parts.push(`W${formatTokens(footerTotals.cacheWrite)}`);
 
-          const usingSubscription = ctx.model ? ctx.modelRegistry.isUsingOAuth(ctx.model) : false;
+          const usingSubscription = renderContext.model
+            ? renderContext.modelRegistry.isUsingOAuth(renderContext.model)
+            : false;
           if (footerTotals.cost || usingSubscription)
             parts.push(`$${footerTotals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
 
-          const currentContextUsage = contextUsage(ctx);
-          const contextWindow = currentContextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
+          const currentContextUsage = contextUsage(renderContext);
+          const contextWindow =
+            currentContextUsage?.contextWindow ?? renderContext.model?.contextWindow ?? 0;
           const contextPercentValue = currentContextUsage?.percent ?? 0;
           const contextPercent =
             currentContextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
@@ -139,11 +145,11 @@ export function createFooterController(deps: {
             statsLeftWidth = visibleWidth(statsLeft);
           }
 
-          const modelName = ctx.model?.id || "no-model";
+          const modelName = renderContext.model?.id || "no-model";
           const thinkingLevel = pi.getThinkingLevel();
-          const fastActive = fastController.active && supportsFast(ctx);
+          const fastActive = fastController.active && supportsFast(renderContext);
           let rightWithoutProvider = modelName;
-          if (ctx.model?.reasoning) {
+          if (renderContext.model?.reasoning) {
             const effort = thinkingLevel === "off" ? "thinking off" : thinkingLevel;
             rightWithoutProvider = `${modelName} • ${fastActive ? "⚡" : ""}${effort}`;
           } else if (fastActive) {
@@ -151,8 +157,8 @@ export function createFooterController(deps: {
           }
 
           let rightSide = rightWithoutProvider;
-          if ((footerData.getAvailableProviderCount?.() ?? 0) > 1 && ctx.model) {
-            const withProvider = `(${ctx.model.provider}) ${rightWithoutProvider}`;
+          if ((footerData.getAvailableProviderCount?.() ?? 0) > 1 && renderContext.model) {
+            const withProvider = `(${renderContext.model.provider}) ${rightWithoutProvider}`;
             if (statsLeftWidth + 2 + visibleWidth(withProvider) <= width) rightSide = withProvider;
           }
 
@@ -171,10 +177,10 @@ export function createFooterController(deps: {
             } else statsLine = statsLeft;
           }
 
-          let pwd = abbreviateHomePath(ctx.sessionManager.getCwd());
+          let pwd = abbreviateHomePath(renderContext.sessionManager.getCwd());
           const branch = footerData.getGitBranch?.();
           if (branch) pwd = `${pwd} (${branch})`;
-          const currentSessionName = sessionName(ctx);
+          const currentSessionName = sessionName(renderContext);
           if (currentSessionName) pwd = `${pwd} • ${currentSessionName}`;
 
           const textLines: string[] = [
@@ -182,8 +188,13 @@ export function createFooterController(deps: {
             theme.fg("dim", statsLeft) + theme.fg("dim", statsLine.slice(statsLeft.length)),
           ];
 
-          const cfg = config(ctx);
-          const usageStatusLine = usageController.statusLine(ctx, cfg, usingSubscription);
+          const cfg = config(renderContext);
+          const usageStatusLine = visibleStatusLine(
+            renderContext,
+            cfg,
+            projection,
+            usingSubscription,
+          );
           if (usageStatusLine)
             textLines.push(
               truncateToWidth(theme.fg("dim", usageStatusLine), width, theme.fg("dim", "...")),
@@ -217,6 +228,7 @@ export function createFooterController(deps: {
   }
 
   function updateFooter(ctx: ExtensionContext): void {
+    currentContext = ctx;
     const cfg = config(ctx);
     if (!hasTerminalUI(ctx)) {
       if (cfg.footer.mode === "off") {
@@ -224,7 +236,7 @@ export function createFooterController(deps: {
         return;
       }
       const fast = fastController.statusSegment(ctx);
-      const usage = usageController.statusLine(ctx, cfg);
+      const usage = visibleStatusLine(ctx, cfg, projection);
       setStatus(ctx, [fast, usage].filter(Boolean).join(" | ") || undefined);
       return;
     }
@@ -242,7 +254,7 @@ export function createFooterController(deps: {
     }
 
     const fast = fastController.statusSegment(ctx);
-    const usage = usageController.statusLine(ctx, cfg);
+    const usage = visibleStatusLine(ctx, cfg, projection);
     setStatus(ctx, [fast, usage].filter(Boolean).join(" | ") || undefined);
   }
 

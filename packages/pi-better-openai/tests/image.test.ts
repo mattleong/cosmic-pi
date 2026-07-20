@@ -1,591 +1,814 @@
+// @effect-diagnostics effect/nodeBuiltinImport:off
+// @effect-diagnostics effect/strictEffectProvide:off
 import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   truncateSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir, homedir } from "node:os";
-import { join, relative } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { afterEach, describe, expect, it, vi } from "@effect/vitest";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as MutableRef from "effect/MutableRef";
+import * as Random from "effect/Random";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
+import {
+  StreamingHttpClient,
+  StreamingHttpError,
+  nodePlatformLayer,
+  type StreamingHttpRequest,
+  type StreamingHttpResponse,
+} from "pi-cosmic-core";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { _test } from "../index.ts";
-import { registerOpenAIImage } from "../src/image.ts";
-import { makeResolvedConfig } from "./helpers.ts";
+import { SafeFileAdapter } from "../src/boundary/safe-file.ts";
+import { SharpAdapter } from "../src/boundary/sharp.ts";
+import { DEFAULT_IMAGE_CONFIG } from "../src/config.ts";
+import {
+  OpenAIImageService,
+  _imageTest,
+  registerOpenAIImage,
+  type CodexImageResult,
+} from "../src/image.ts";
+import { makeProjection, type OpenAIProjection } from "../src/usage-controller.ts";
 
-vi.mock("../src/codex-auth.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/codex-auth.ts")>();
-  return {
-    ...actual,
-    readCodexAuth: vi.fn(() => undefined),
-    getCodexCredentials: vi.fn(async (ctx?: Pick<ExtensionContext, "modelRegistry">) => {
-      const registryToken = await ctx?.modelRegistry
-        ?.getApiKeyForProvider("openai-codex")
-        .catch(() => undefined);
-      const registryCredentials = actual.parseCodexRegistryCredentials(registryToken);
-      return registryCredentials ? { ...registryCredentials, source: "modelRegistry" } : undefined;
-    }),
-  };
+const directories: string[] = [];
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
+});
+const temp = () => {
+  const value = mkdtempSync(join(tmpdir(), "openai-image-effect-"));
+  directories.push(value);
+  return value;
+};
+const sse = (events: readonly unknown[]) =>
+  Stream.make(
+    new TextEncoder().encode(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")),
+  );
+const PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGNgYGD4DwABBAEAX+XDSwAAAABJRU5ErkJggg==";
+const completed = (data = PNG_BASE64) => ({
+  type: "response.output_item.done",
+  item: { type: "image_generation_call", id: "ig_test", status: "completed", result: data },
+});
+const httpResponse = (status: number, body: Stream.Stream<Uint8Array, StreamingHttpError>) => ({
+  status,
+  body,
+  discard: body.pipe(Stream.runDrain),
 });
 
-type ToolExecute = (
-  toolCallId: string,
-  params: Record<string, unknown>,
-  signal: AbortSignal | undefined,
-  onUpdate: ((update: unknown) => void) | undefined,
-  ctx: ExtensionContext,
-) => Promise<{ content: unknown[]; details?: unknown }>;
-
-type RegisteredTool = {
-  name: string;
-  execute: ToolExecute;
-};
-
-type ImageHarness = {
-  ctx: ExtensionContext;
-  tool: RegisteredTool;
-  getDebug: Awaited<ReturnType<typeof registerOpenAIImage>>["getDebug"];
-};
-
-const tempDirs: string[] = [];
-const originalImageSaveDir = process.env.PI_IMAGE_SAVE_DIR;
-
-function createTempProject() {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-better-openai-image-"));
-  tempDirs.push(cwd);
-  return cwd;
-}
-
-function sseResponse(events: unknown[], lineEnding = "\n"): Response {
-  const encoder = new TextEncoder();
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        for (const event of events) {
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify(event)}${lineEnding}${lineEnding}`),
-          );
-        }
-        controller.close();
-      },
-    }),
-    { headers: { "content-type": "text/event-stream" } },
+function harness(
+  response: (request: StreamingHttpRequest) => Effect.Effect<StreamingHttpResponse>,
+  timeoutMs = DEFAULT_IMAGE_CONFIG.timeoutMs,
+  fileSystemLayer?: Layer.Layer<FileSystem.FileSystem>,
+) {
+  const cwd = temp();
+  const agentDir = temp();
+  writeFileSync(
+    join(agentDir, "auth.json"),
+    JSON.stringify({ "openai-codex": { type: "oauth", access: "token", accountId: "acct" } }),
   );
-}
-
-function finalImageEvent(id = "ig_test", data = "Zm9v") {
-  return {
-    type: "response.output_item.done",
-    item: { type: "image_generation_call", id, status: "completed", result: data },
-  };
-}
-
-async function writeTinyPng(path: string): Promise<void> {
-  await sharp({
-    create: {
-      width: 1,
-      height: 1,
-      channels: 4,
-      background: { r: 0, g: 0, b: 0, alpha: 1 },
-    },
-  })
-    .png()
-    .toFile(path);
-}
-
-async function writeTinyJpeg(path: string): Promise<void> {
-  const data = await sharp({
-    create: {
-      width: 1,
-      height: 1,
-      channels: 3,
-      background: { r: 0, g: 0, b: 0 },
-    },
-  })
-    .jpeg()
-    .toBuffer();
-  writeFileSync(path, data);
-}
-
-function createImageHarness(
-  options: {
-    cwd?: string;
-    registryCredentials?: string | undefined;
-    imageConfig?: Partial<typeof _test.DEFAULT_IMAGE_CONFIG>;
-  } = {},
-): ImageHarness {
-  const cwd = options.cwd ?? createTempProject();
-  let registeredTool: RegisteredTool | undefined;
-  const pi = {
-    registerTool: vi.fn((tool: RegisteredTool) => {
-      registeredTool = tool;
-    }),
-    registerCommand: vi.fn(),
-    registerMessageRenderer: vi.fn(),
-  } as unknown as ExtensionAPI;
   const ctx = {
     cwd,
     hasUI: true,
-    signal: undefined,
     model: { provider: "openai-codex", id: "gpt-5.5" },
-    ui: { notify: vi.fn(), setFooter: vi.fn(), setStatus: vi.fn() },
-    sessionManager: {
-      getEntries: vi.fn(() => []),
-      getCwd: vi.fn(() => cwd),
-      getSessionName: vi.fn(() => undefined),
-    },
     modelRegistry: {
-      getApiKeyForProvider: vi.fn(() => Promise.resolve(options.registryCredentials)),
-      isUsingOAuth: vi.fn(() => true),
+      getApiKeyForProvider: () => Promise.resolve(undefined),
+      isUsingOAuth: () => true,
     },
-    getContextUsage: vi.fn(() => ({ contextWindow: 0, percent: 0 })),
+    ui: { notify() {} },
   } as unknown as ExtensionContext;
-  const cfg = makeResolvedConfig({
-    image: {
-      ..._test.DEFAULT_IMAGE_CONFIG,
-      enabled: true,
-      defaultSave: "none",
-      ...options.imageConfig,
+  const config = {
+    configPath: join(cwd, ".pi/extensions/pi-better-openai.json"),
+    projectConfigPath: "",
+    globalConfigPath: "",
+    projectConfigExists: true,
+    globalConfigExists: false,
+    persistState: false,
+    active: false,
+    desiredActive: false,
+    usage: {
+      enabled: false,
+      refreshIntervalMs: 60_000,
+      showOnlyOnSubscriptionModels: true,
+      showResetTimes: false,
     },
-  });
-  const debug = registerOpenAIImage(pi, () => cfg);
-  if (!registeredTool) throw new Error("openai_image tool was not registered.");
-  return { ctx, tool: registeredTool, getDebug: debug.getDebug };
+    footer: { mode: "off" as const },
+    image: { ...DEFAULT_IMAGE_CONFIG, defaultSave: "none" as const, timeoutMs },
+  };
+  const projection = makeProjection();
+  MutableRef.set(projection, { ...MutableRef.get(projection), config } satisfies OpenAIProjection);
+  const context = MutableRef.make(ctx);
+  const mockHttp = Layer.succeed(
+    StreamingHttpClient,
+    StreamingHttpClient.of({ request: response }),
+  );
+  const platform = fileSystemLayer
+    ? Layer.mergeAll(nodePlatformLayer, mockHttp, fileSystemLayer)
+    : Layer.merge(nodePlatformLayer, mockHttp);
+  const layer = OpenAIImageService.layer({ context, projection, agentDir }).pipe(
+    Layer.provide(Layer.merge(SharpAdapter.layer, SafeFileAdapter.layer)),
+    Layer.provide(platform),
+  );
+  return {
+    cwd,
+    agentDir,
+    projection,
+    effect: <A, E>(program: Effect.Effect<A, E, OpenAIImageService>) =>
+      program.pipe(Effect.provide(layer)),
+  };
 }
 
-function stubFetch(response: Response): ReturnType<typeof vi.fn> {
-  const fetchMock = vi.fn(() => Promise.resolve(response));
-  vi.stubGlobal("fetch", fetchMock);
-  return fetchMock;
-}
-
-async function executeImageTool(harness: ImageHarness, params: Record<string, unknown>) {
-  return harness.tool.execute("tool-call-1", params, undefined, vi.fn(), harness.ctx);
-}
-
-async function rejectedError(promise: Promise<unknown>): Promise<Error> {
-  try {
-    await promise;
-  } catch (error) {
-    if (error instanceof Error) return error;
-    throw new Error(`Expected Error rejection, received ${String(error)}`);
-  }
-  throw new Error("Expected promise to reject.");
-}
-
-beforeEach(() => {
-  delete process.env.PI_IMAGE_SAVE_DIR;
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.clearAllMocks();
-  if (originalImageSaveDir === undefined) delete process.env.PI_IMAGE_SAVE_DIR;
-  else process.env.PI_IMAGE_SAVE_DIR = originalImageSaveDir;
-  for (const tempDir of tempDirs.splice(0)) {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-describe("image helpers", () => {
-  test("exposes image tool defaults", () => {
-    expect(_test.imageTest.OPENAI_IMAGE_TOOL).toBe("openai_image");
+describe("Effect-native OpenAI image service", () => {
+  it.effect("preserves prompts, uploads edit inputs, consumes SSE, and saves output", () => {
+    let request: StreamingHttpRequest | undefined;
+    const h = harness((input) => {
+      request = input;
+      return Effect.succeed(httpResponse(200, sse([{ partial_image_b64: "cA==" }, completed()])));
+    });
+    const input = join(h.cwd, "input.png");
+    return Effect.gen(function* () {
+      yield* Effect.tryPromise(() =>
+        sharp({
+          create: { width: 1, height: 1, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } },
+        })
+          .png()
+          .toFile(input),
+      );
+      const result = yield* OpenAIImageService.use((service) =>
+        service.generate({
+          prompt: "verbatim user prompt",
+          action: "edit",
+          images: ["input.png"],
+          save: "project",
+        }),
+      );
+      expect(result.prompt).toBe("verbatim user prompt");
+      expect(result.data).toBe(PNG_BASE64);
+      expect(result.savedPath).toContain(join(h.cwd, ".pi", "generated-images"));
+      expect(readFileSync(result.savedPath!).toString("base64")).toBe(PNG_BASE64);
+      expect(request?.jsonBody).toMatchObject({
+        input: [
+          {
+            content: [
+              { type: "input_text", text: "verbatim user prompt" },
+              { type: "input_image" },
+            ],
+          },
+        ],
+      });
+      const requestBody = request?.jsonBody as {
+        input?: Array<{ content?: Array<{ image_url?: string }> }>;
+      };
+      expect(requestBody.input?.[0]?.content?.[1]?.image_url).toMatch(/^data:image\/png;base64,/);
+    }).pipe(h.effect);
   });
 
-  test("detects image mime types and display paths", () => {
-    expect(_test.imageTest.imageMimeType("x.jpg")).toBe("image/jpeg");
-    expect(_test.imageTest.displayPath(join(homedir(), "dev", "image.png"))).toBe(
-      "~/dev/image.png",
+  it.effect(
+    "rejects workspace escapes, symlinks, oversized files, and Sharp failures before HTTP",
+    () => {
+      let calls = 0;
+      const h = harness(() => {
+        calls++;
+        return Effect.succeed(httpResponse(200, sse([completed()])));
+      });
+      const outside = join(temp(), "outside.png");
+      writeFileSync(outside, "not-image");
+      const bad = join(h.cwd, "bad.txt");
+      writeFileSync(bad, "not-image");
+      mkdirSync(join(h.cwd, "non-regular.png"));
+      const large = join(h.cwd, "large.png");
+      writeFileSync(large, "");
+      truncateSync(large, 20 * 1024 * 1024 + 1);
+      const link = join(h.cwd, "link.png");
+      symlinkSync(outside, link);
+      return Effect.gen(function* () {
+        const service = yield* OpenAIImageService;
+        const escape = yield* Effect.flip(service.generate({ prompt: "x", images: [outside] }));
+        expect(escape.message).toContain("inside the current workspace");
+        const invalid = yield* Effect.flip(service.generate({ prompt: "x", images: ["bad.txt"] }));
+        expect(invalid.message).toContain("readable image");
+        const nonRegular = yield* Effect.flip(
+          service.generate({ prompt: "x", images: ["non-regular.png"] }),
+        );
+        expect(nonRegular.message).toContain("changed during validation");
+        const oversized = yield* Effect.flip(
+          service.generate({ prompt: "x", images: ["large.png"] }),
+        );
+        expect(oversized.message).toContain("too large");
+        const linked = yield* Effect.flip(service.generate({ prompt: "x", images: ["link.png"] }));
+        expect(linked.message).toContain("inside the current workspace");
+        expect(calls).toBe(0);
+      }).pipe(h.effect);
+    },
+  );
+
+  it.effect("rejects a deterministic input swap before external bytes reach HTTP", () => {
+    let calls = 0;
+    const h = harness(() => {
+      calls++;
+      return Effect.succeed(httpResponse(200, sse([completed()])));
+    });
+    const input = join(h.cwd, "swap.png");
+    const outside = join(temp(), "outside.png");
+    writeFileSync(input, Buffer.from(PNG_BASE64, "base64"));
+    writeFileSync(outside, Buffer.from(PNG_BASE64, "base64"));
+    const nodeFs = process.getBuiltinModule("node:fs")!;
+    const originalLstat = nodeFs.promises.lstat.bind(nodeFs.promises);
+    vi.spyOn(nodeFs.promises, "lstat").mockImplementationOnce(((path, options) =>
+      originalLstat(path, options).then((stats) => {
+        renameSync(input, `${input}.original`);
+        symlinkSync(outside, input);
+        return stats;
+      })) as typeof nodeFs.promises.lstat);
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        OpenAIImageService.use((service) =>
+          service.generate({ prompt: "x", images: ["swap.png"] }),
+        ),
+      );
+      expect(error.message).toContain("changed during validation");
+      expect(calls).toBe(0);
+    }).pipe(h.effect);
+  });
+
+  it.effect("rejects an ancestor-directory swap before reading external bytes", () => {
+    let httpCalls = 0;
+    let readCalls = 0;
+    const h = harness(() => {
+      httpCalls++;
+      return Effect.succeed(httpResponse(200, sse([completed()])));
+    });
+    const insideDirectory = join(h.cwd, "references");
+    const outsideDirectory = temp();
+    mkdirSync(insideDirectory);
+    writeFileSync(join(insideDirectory, "input.png"), Buffer.from(PNG_BASE64, "base64"));
+    writeFileSync(join(outsideDirectory, "input.png"), Buffer.from(PNG_BASE64, "base64"));
+
+    const nodeFs = process.getBuiltinModule("node:fs")!;
+    const originalLstat = nodeFs.promises.lstat.bind(nodeFs.promises);
+    const originalOpen = nodeFs.promises.open.bind(nodeFs.promises);
+    vi.spyOn(nodeFs.promises, "lstat").mockImplementationOnce(((path, options) => {
+      renameSync(insideDirectory, `${insideDirectory}-original`);
+      symlinkSync(outsideDirectory, insideDirectory);
+      return originalLstat(path, options);
+    }) as typeof nodeFs.promises.lstat);
+    vi.spyOn(nodeFs.promises, "open").mockImplementation(((...args) =>
+      originalOpen(...args).then((handle) => {
+        const originalRead = handle.readFile.bind(handle);
+        vi.spyOn(handle, "readFile").mockImplementation(((...readArgs) => {
+          readCalls++;
+          return originalRead(...readArgs);
+        }) as typeof handle.readFile);
+        return handle;
+      })) as typeof nodeFs.promises.open);
+
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        OpenAIImageService.use((service) =>
+          service.generate({ prompt: "x", images: ["references/input.png"] }),
+        ),
+      );
+      expect(error.message).toContain("changed during validation");
+      expect(readCalls).toBe(0);
+      expect(httpCalls).toBe(0);
+    }).pipe(h.effect);
+  });
+
+  it.effect("types non-OK and malformed SSE failures without exposing response bodies", () => {
+    const nonOk = harness(() =>
+      Effect.succeed(httpResponse(500, sse([{ secret: "Bearer sk-secret" }]))),
     );
-  });
-
-  test("extracts data URLs", () => {
-    expect(_test.imageTest.dataUrlParts("data:image/png;base64,Zm9v", "image/png")).toEqual({
-      data: "Zm9v",
-      mimeType: "image/png",
-    });
-  });
-
-  test("extracts image generation results from response events", () => {
-    const extracted = _test.imageTest.extractImageFromEvent(
-      {
-        type: "response.output_item.done",
-        item: { type: "image_generation_call", id: "ig_1", status: "completed", result: "Zm9v" },
-      },
-      "image/png",
-    );
-    expect(extracted?.data).toBe("Zm9v");
-
-    const partial = _test.imageTest.extractImageFromEvent(
-      { partial_image_b64: "cGFydGlhbA==" },
-      "image/png",
-    );
-    expect(partial).toMatchObject({ status: "partial", data: "cGFydGlhbA==" });
-  });
-
-  test("builds image generation requests", () => {
-    expect(
-      _test.imageTest.buildRequest(
-        { prompt: "draw an otter" },
-        "gpt-5.5",
-        makeResolvedConfig({ image: _test.DEFAULT_IMAGE_CONFIG }),
-        [],
-      ).tool_choice,
-    ).toEqual({ type: "image_generation" });
-  });
-});
-
-describe("openai_image tool execution", () => {
-  test("executes through the registered tool and sends a Codex image request", async () => {
-    const fetchMock = stubFetch(sseResponse([finalImageEvent()]));
-    const harness = createImageHarness({
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-
-    const result = await executeImageTool(harness, { prompt: "draw an otter", save: "none" });
-
-    expect(harness.tool.name).toBe("openai_image");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(_test.imageTest.CODEX_RESPONSES_URL);
-    expect(init.headers).toMatchObject({
-      authorization: "Bearer test-access",
-      "chatgpt-account-id": "acct_test",
-    });
-    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-    expect(body).toMatchObject({
-      model: "gpt-5.5",
-      tool_choice: { type: "image_generation" },
-    });
-    expect(body.input).toMatchObject([
-      { role: "user", content: [{ type: "input_text", text: "draw an otter" }] },
-    ]);
-    expect(result.content).toEqual([
-      { type: "text", text: expect.stringContaining("Generated image") },
-      { type: "image", data: "Zm9v", mimeType: "image/png" },
-    ]);
-    expect(result.details).toMatchObject({ id: "ig_test", data: "Zm9v", savedPath: undefined });
-  });
-
-  test("waits for a final image_generation_call when partial image events arrive first", async () => {
-    stubFetch(
-      sseResponse([{ partial_image_b64: "cGFydGlhbA==" }, finalImageEvent("ig_final", "ZmluYWw=")]),
-    );
-    const harness = createImageHarness({
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-
-    const result = await executeImageTool(harness, { prompt: "draw", save: "none" });
-
-    expect(result.content).toContainEqual({
-      type: "image",
-      data: "ZmluYWw=",
-      mimeType: "image/png",
-    });
-    expect(result.details).toMatchObject({ id: "ig_final", data: "ZmluYWw=" });
-  });
-
-  test("parses CRLF-delimited SSE events", async () => {
-    stubFetch(sseResponse([finalImageEvent("ig_crlf", "Y3JsZg==")], "\r\n"));
-    const harness = createImageHarness({
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-
-    const result = await executeImageTool(harness, { prompt: "draw", save: "none" });
-
-    expect(result.details).toMatchObject({ id: "ig_crlf", data: "Y3JsZg==" });
-  });
-
-  test("rejects streams that end without a completed image_generation_call", async () => {
-    stubFetch(sseResponse([{ partial_image_b64: "cGFydGlhbA==" }]));
-    const harness = createImageHarness({
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-
-    await expect(executeImageTool(harness, { prompt: "draw", save: "none" })).rejects.toThrow(
-      "No completed image_generation_call result returned by Codex.",
-    );
-  });
-
-  test("uploads project-local reference images and saves generated output to the project", async () => {
-    const cwd = createTempProject();
-    const relativeInput = join(cwd, "input.png");
-    const absoluteInput = join(cwd, "absolute.png");
-    await writeTinyPng(relativeInput);
-    await writeTinyPng(absoluteInput);
-    const relativeData = readFileSync(relativeInput).toString("base64");
-    const absoluteData = readFileSync(absoluteInput).toString("base64");
-    const fetchMock = stubFetch(sseResponse([finalImageEvent("ig_saved", "Zm9v")]));
-    const harness = createImageHarness({
-      cwd,
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-      imageConfig: { defaultSave: "project" },
-    });
-
-    const result = await executeImageTool(harness, {
-      prompt: "edit it",
-      images: ["input.png", absoluteInput],
-    });
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(String(init.body)) as { input: Array<{ content: unknown[] }> };
-    expect(body.input[0]?.content).toEqual([
-      { type: "input_text", text: "edit it" },
-      {
-        type: "input_image",
-        detail: "auto",
-        image_url: `data:image/png;base64,${relativeData}`,
-      },
-      {
-        type: "input_image",
-        detail: "auto",
-        image_url: `data:image/png;base64,${absoluteData}`,
-      },
-    ]);
-    const outputDir = join(cwd, ".pi", "generated-images");
-    const files = readdirSync(outputDir);
-    expect(files).toHaveLength(1);
-    expect(files[0]).toMatch(/^openai-image-.*-ig_saved\.png$/);
-    expect(readFileSync(join(outputDir, files[0]!)).toString("base64")).toBe("Zm9v");
-    expect(result.details).toMatchObject({ savedPath: join(outputDir, files[0]!) });
-  });
-
-  test("uses detected image content type instead of a misleading file extension", async () => {
-    const cwd = createTempProject();
-    const renamedJpeg = join(cwd, "actually-jpeg.png");
-    await writeTinyJpeg(renamedJpeg);
-    const fetchMock = stubFetch(sseResponse([finalImageEvent()]));
-    const harness = createImageHarness({
-      cwd,
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-
-    await executeImageTool(harness, {
-      prompt: "edit it",
-      images: ["actually-jpeg.png"],
-      save: "none",
-    });
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(String(init.body)).toContain("data:image/jpeg;base64,");
-  });
-
-  test("honors an explicitly refined tool prompt instead of replacing it from history", async () => {
-    const fetchMock = stubFetch(sseResponse([finalImageEvent()]));
-    const harness = createImageHarness({
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-    harness.ctx.sessionManager.getEntries = vi.fn(() => [
-      { type: "message", message: { role: "user", content: "raw user wording" } },
-    ]) as unknown as ExtensionContext["sessionManager"]["getEntries"];
-
-    await executeImageTool(harness, { prompt: "explicitly refined prompt", save: "none" });
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(String(init.body)) as { input: Array<{ content: unknown[] }> };
-    expect(body.input[0]?.content).toContainEqual({
-      type: "input_text",
-      text: "explicitly refined prompt",
-    });
-  });
-
-  test("resolves relative custom save directories from the project", async () => {
-    const cwd = createTempProject();
-    stubFetch(sseResponse([finalImageEvent("ig_custom", "Zm9v")]));
-    const harness = createImageHarness({
-      cwd,
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-
-    const result = await executeImageTool(harness, {
-      prompt: "draw",
-      save: "custom",
-      saveDir: "artifacts",
-    });
-
-    expect(result.details).toMatchObject({
-      savedPath: expect.stringMatching(
-        new RegExp(`^${join(cwd, "artifacts").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+    const malformed = harness(() =>
+      Effect.succeed(
+        httpResponse(200, Stream.make(new TextEncoder().encode("data: not-json\n\n"))),
       ),
-    });
-    expect(readdirSync(join(cwd, "artifacts"))).toHaveLength(1);
-  });
-
-  test("rejects a missing custom save directory before requesting an image", async () => {
-    const fetchMock = stubFetch(sseResponse([finalImageEvent()]));
-    const harness = createImageHarness({
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-
-    await expect(executeImageTool(harness, { prompt: "draw", save: "custom" })).rejects.toThrow(
-      "save=custom requires saveDir or PI_IMAGE_SAVE_DIR",
     );
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  test("rejects image paths outside the workspace before upload", async () => {
-    const cwd = createTempProject();
-    const outsideDir = createTempProject();
-    const outsideImage = join(outsideDir, "outside.png");
-    await writeTinyPng(outsideImage);
-    const fetchMock = stubFetch(sseResponse([finalImageEvent()]));
-    const harness = createImageHarness({
-      cwd,
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-
-    await expect(
-      executeImageTool(harness, { prompt: "draw", images: [outsideImage] }),
-    ).rejects.toThrow("Image input must be a file inside the current workspace");
-    await expect(
-      executeImageTool(harness, { prompt: "draw", images: [relative(cwd, outsideImage)] }),
-    ).rejects.toThrow("Image input must be a file inside the current workspace");
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  test("rejects directory image inputs before upload", async () => {
-    const cwd = createTempProject();
-    mkdirSync(join(cwd, "images"));
-    const fetchMock = stubFetch(sseResponse([finalImageEvent()]));
-    const harness = createImageHarness({
-      cwd,
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-
-    await expect(executeImageTool(harness, { prompt: "draw", images: ["images"] })).rejects.toThrow(
-      "Image input must be a file inside the current workspace",
+    const providerError = harness(() =>
+      Effect.succeed(
+        httpResponse(
+          200,
+          sse([{ type: "error", message: "Bearer sk-secret accountId=acct_secret failed" }]),
+        ),
+      ),
     );
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  test("rejects non-image files before upload", async () => {
-    const cwd = createTempProject();
-    writeFileSync(join(cwd, "notes.txt"), "not an image", "utf8");
-    const fetchMock = stubFetch(sseResponse([finalImageEvent()]));
-    const harness = createImageHarness({
-      cwd,
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
+    return Effect.gen(function* () {
+      const first = yield* Effect.flip(
+        OpenAIImageService.use((service) => service.generate({ prompt: "x" })).pipe(nonOk.effect),
+      );
+      expect(first.message).toBe("Codex image request failed (500).");
+      expect(first.message).not.toContain("secret");
+      const second = yield* Effect.flip(
+        OpenAIImageService.use((service) => service.generate({ prompt: "x" })).pipe(
+          malformed.effect,
+        ),
+      );
+      expect(second.message).toContain("malformed JSON");
+      const third = yield* Effect.flip(
+        OpenAIImageService.use((service) => service.generate({ prompt: "x" })).pipe(
+          providerError.effect,
+        ),
+      );
+      expect(third.message).toContain("Codex image error");
+      expect(third.message).not.toContain("sk-secret");
+      expect(third.message).not.toContain("acct_secret");
     });
-
-    await expect(
-      executeImageTool(harness, { prompt: "draw", images: ["notes.txt"] }),
-    ).rejects.toThrow("Image input is not a readable image");
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  test("rejects oversized image inputs before upload", async () => {
-    const cwd = createTempProject();
-    const largeImage = join(cwd, "large.png");
-    writeFileSync(largeImage, "");
-    truncateSync(largeImage, _test.imageTest.MAX_IMAGE_INPUT_BYTES + 1);
-    const fetchMock = stubFetch(sseResponse([finalImageEvent()]));
-    const harness = createImageHarness({
-      cwd,
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-
-    await expect(
-      executeImageTool(harness, { prompt: "draw", images: ["large.png"] }),
-    ).rejects.toThrow("Image input is too large");
-    expect(fetchMock).not.toHaveBeenCalled();
+  it.effect("times out an in-progress response stream using the Effect clock", () => {
+    const h = harness(() => Effect.succeed(httpResponse(200, Stream.never)), 1);
+    return Effect.gen(function* () {
+      const fiber = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x" }),
+      ).pipe(Effect.flip, Effect.forkScoped);
+      yield* TestClock.adjust("2 millis");
+      const error = yield* Fiber.join(fiber);
+      expect(error.operation).toBe("timeout");
+    }).pipe(Effect.scoped, h.effect);
   });
 
-  test("caps distinct reference images before building an unbounded request", async () => {
-    const cwd = createTempProject();
-    const imageNames = Array.from(
-      { length: _test.imageTest.MAX_IMAGE_INPUTS + 1 },
-      (_, index) => `input-${index}.png`,
+  it.effect("interrupts an in-progress response stream", () => {
+    let started = false;
+    let released = 0;
+    const body = Stream.concat(
+      Stream.make(new Uint8Array()).pipe(Stream.tap(() => Effect.sync(() => (started = true)))),
+      Stream.never,
+    ).pipe(Stream.ensuring(Effect.sync(() => released++)));
+    const h = harness(() => Effect.succeed(httpResponse(200, body)));
+    return Effect.gen(function* () {
+      const fiber = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x" }),
+      ).pipe(Effect.forkScoped);
+      while (!started) yield* Effect.yieldNow;
+      yield* Fiber.interrupt(fiber);
+      expect(released).toBe(1);
+    }).pipe(Effect.scoped, h.effect);
+  });
+
+  it.effect("parses arbitrary chunks, CRLF, comments, and multiline data incrementally", () => {
+    const json = JSON.stringify(completed());
+    const splitAt = json.indexOf(',"item"') + 1;
+    const source = `: comment\r\ndata: ${json.slice(0, splitAt)}\r\ndata: ${json.slice(splitAt)}\r\n\r\n`;
+    const bytes = new TextEncoder().encode(source);
+    const chunks = Array.from(bytes, (byte) => new Uint8Array([byte]));
+    const h = harness(() => Effect.succeed(httpResponse(200, Stream.fromIterable(chunks))));
+    return Effect.gen(function* () {
+      const result = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "chunked" }),
+      );
+      expect(result.data).toBe(PNG_BASE64);
+    }).pipe(h.effect);
+  });
+
+  it.effect("returns a completed event immediately and finalizes an open stream", () => {
+    let released = 0;
+    const first = new TextEncoder().encode(`data: ${JSON.stringify(completed())}\n\n`);
+    const body = Stream.concat(Stream.make(first), Stream.never).pipe(
+      Stream.ensuring(Effect.sync(() => released++)),
     );
-    await Promise.all(imageNames.map((name) => writeTinyPng(join(cwd, name))));
-    const fetchMock = stubFetch(sseResponse([finalImageEvent()]));
-    const harness = createImageHarness({
-      cwd,
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-
-    await expect(
-      executeImageTool(harness, { prompt: "collage", images: imageNames, save: "none" }),
-    ).rejects.toThrow(`Too many image inputs (max ${_test.imageTest.MAX_IMAGE_INPUTS})`);
-    expect(fetchMock).not.toHaveBeenCalled();
+    const h = harness(() => Effect.succeed(httpResponse(200, body)));
+    return Effect.gen(function* () {
+      const result = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "done" }),
+      );
+      expect(result.id).toBe("ig_test");
+      expect(released).toBe(1);
+    }).pipe(h.effect);
   });
 
-  test("rejects when image generation is disabled before calling fetch", async () => {
-    const fetchMock = stubFetch(sseResponse([finalImageEvent()]));
-    const harness = createImageHarness({
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-      imageConfig: { enabled: false },
-    });
-
-    await expect(executeImageTool(harness, { prompt: "draw" })).rejects.toThrow(
-      "OpenAI image generation is disabled in config.",
+  it.effect("keeps an earlier completion when the later transport would fail", () => {
+    const first = Stream.make(new TextEncoder().encode(`data: ${JSON.stringify(completed())}\n\n`));
+    const later = Stream.fail(
+      new StreamingHttpError({ operation: "test", message: "late transport failure" }),
     );
-    expect(fetchMock).not.toHaveBeenCalled();
+    const h = harness(() => Effect.succeed(httpResponse(200, Stream.concat(first, later))));
+    return Effect.gen(function* () {
+      const result = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "done" }),
+      );
+      expect(result.id).toBe("ig_test");
+    }).pipe(h.effect);
   });
 
-  test("rejects when Codex credentials are missing before calling fetch", async () => {
-    const fetchMock = stubFetch(sseResponse([finalImageEvent()]));
-    const harness = createImageHarness({ registryCredentials: undefined });
-
-    await expect(executeImageTool(harness, { prompt: "draw" })).rejects.toThrow(
-      "Missing openai-codex OAuth credentials.",
+  it.effect("handles mixed SSE line endings, split UTF-8, and many events in one chunk", () => {
+    const event = {
+      ...completed(),
+      item: { ...completed().item, revised_prompt: "otter 🦦" },
+    };
+    const comments = Array.from({ length: 2_000 }, (_, index) => `: keepalive ${index}\n\n`).join(
+      "",
     );
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  test("redacts non-OK Codex response bodies from errors and debug state", async () => {
-    const secretBody = `Bearer sk-secretsecret accountId=acct_1234567890abcdef ${"x".repeat(700)}`;
-    const fetchMock = stubFetch(
-      new Response(secretBody, { status: 500, statusText: "Server Error" }),
+    const source = `${comments}data: ${JSON.stringify(event)}\r\n\r`;
+    const bytes = new TextEncoder().encode(source);
+    const emoji = new TextEncoder().encode("🦦");
+    const emojiIndex = bytes.findIndex((_value, index) =>
+      emoji.every((candidate, offset) => bytes[index + offset] === candidate),
     );
-    const harness = createImageHarness({
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
-    });
-
-    const error = await rejectedError(executeImageTool(harness, { prompt: "draw" }));
-    const debug = await harness.getDebug(harness.ctx);
-
-    expect(error.message).toBe("Codex image request failed (500 Server Error).");
-    expect(error.message).not.toContain("sk-secretsecret");
-    expect(error.message).not.toContain("acct_1234567890abcdef");
-    expect(debug.lastError).toBe(error.message);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = Stream.fromIterable([
+      bytes.slice(0, emojiIndex + 1),
+      bytes.slice(emojiIndex + 1, emojiIndex + 3),
+      bytes.slice(emojiIndex + 3),
+    ]);
+    const h = harness(() => Effect.succeed(httpResponse(200, body)));
+    return Effect.gen(function* () {
+      const result = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "mixed" }),
+      );
+      expect(result.revisedPrompt).toBe("otter 🦦");
+    }).pipe(h.effect);
   });
 
-  test("redacts and bounds SSE error messages", async () => {
-    const message = `bad\u001b[31m Bearer sk-secretsecret accountId=acct_1234567890abcdef ${"x".repeat(700)}`;
-    stubFetch(sseResponse([{ type: "error", message }]));
-    const harness = createImageHarness({
-      registryCredentials: JSON.stringify({ access: "test-access", accountId: "acct_test" }),
+  it.effect("fully decodes and rejects truncated input and output images", () => {
+    let calls = 0;
+    const truncated = Buffer.from(PNG_BASE64, "base64").subarray(0, 50);
+    const inputHarness = harness(() => {
+      calls++;
+      return Effect.succeed(httpResponse(200, sse([completed()])));
     });
-
-    const error = await rejectedError(executeImageTool(harness, { prompt: "draw" }));
-    const debug = await harness.getDebug(harness.ctx);
-
-    expect(error.message).toContain("Codex image error: bad");
-    expect(error.message).not.toContain("\u001b");
-    expect(error.message).not.toContain("sk-secretsecret");
-    expect(error.message).not.toContain("acct_1234567890abcdef");
-    expect(error.message.length).toBeLessThanOrEqual(520);
-    expect(debug.lastError).toContain("Codex image error: bad");
-    expect(debug.lastError).not.toContain("sk-secretsecret");
-    expect(debug.lastError).not.toContain("acct_1234567890abcdef");
-    expect(debug.lastError?.length).toBeLessThanOrEqual(500);
+    writeFileSync(join(inputHarness.cwd, "truncated.png"), truncated);
+    const outputHarness = harness(() =>
+      Effect.succeed(httpResponse(200, sse([completed(truncated.toString("base64"))]))),
+    );
+    return Effect.gen(function* () {
+      const inputError = yield* Effect.flip(
+        OpenAIImageService.use((service) =>
+          service.generate({ prompt: "x", images: ["truncated.png"] }),
+        ).pipe(inputHarness.effect),
+      );
+      expect(inputError.message).toContain("readable image");
+      expect(calls).toBe(0);
+      const outputError = yield* Effect.flip(
+        OpenAIImageService.use((service) => service.generate({ prompt: "x" })).pipe(
+          outputHarness.effect,
+        ),
+      );
+      expect(outputError.message).toContain("unreadable image data");
+    });
   });
 
-  test("masks image debug account identifiers", async () => {
-    const harness = createImageHarness({
-      registryCredentials: JSON.stringify({
-        access: "test-access",
-        accountId: "acct_1234567890abcdef",
+  it.effect("strictly rejects invalid base64 and output-format mismatches", () => {
+    const invalid = harness(() => Effect.succeed(httpResponse(200, sse([completed("%%%%")]))));
+    return Effect.gen(function* () {
+      const badBase64 = yield* Effect.flip(
+        OpenAIImageService.use((service) => service.generate({ prompt: "x" })).pipe(invalid.effect),
+      );
+      expect(badBase64.message).toContain("invalid image base64");
+
+      const jpeg = yield* Effect.tryPromise(() =>
+        sharp({ create: { width: 1, height: 1, channels: 3, background: "white" } })
+          .jpeg()
+          .toBuffer(),
+      );
+      const mismatch = harness(() =>
+        Effect.succeed(httpResponse(200, sse([completed(jpeg.toString("base64"))]))),
+      );
+      const wrongFormat = yield* Effect.flip(
+        OpenAIImageService.use((service) =>
+          service.generate({ prompt: "x", outputFormat: "png" }),
+        ).pipe(mismatch.effect),
+      );
+      expect(wrongFormat.message).toContain("when png was requested");
+    });
+  });
+
+  it.effect("fully decodes every animated GIF frame", () => {
+    let calls = 0;
+    const h = harness(() => {
+      calls++;
+      return Effect.succeed(httpResponse(200, sse([completed()])));
+    });
+    const corruptAnimatedGif = Buffer.from(
+      "R0lGODlhAQABAIAAAExpcf8AACH/C05FVFNDQVBFMi4wAwEAAAAh+QQFCgAAACwAAAAAAQABAAACAkwBACH5BAUKAAAALAAAAAABAAEAgExpcQAA/wIC/wEAIfkEBQoAAAAsAAAAAAEAAQCATGlxAP8AAgJMAQA7",
+      "base64",
+    );
+    writeFileSync(join(h.cwd, "corrupt-animated.gif"), corruptAnimatedGif);
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        OpenAIImageService.use((service) =>
+          service.generate({ prompt: "x", images: ["corrupt-animated.gif"] }),
+        ),
+      );
+      expect(error.message).toContain("readable image");
+      expect(calls).toBe(0);
+    }).pipe(h.effect);
+  });
+
+  it.effect("enforces the exact runtime parameter contract before path or HTTP work", () => {
+    let calls = 0;
+    const h = harness(() => {
+      calls++;
+      return Effect.succeed(httpResponse(200, sse([completed()])));
+    });
+    return Effect.gen(function* () {
+      const service = yield* OpenAIImageService;
+      const empty = yield* Effect.flip(service.generate({ prompt: "   " }));
+      expect(empty.operation).toBe("params");
+      const tooMany = yield* Effect.flip(
+        service.generate({ prompt: "x", images: ["a", "b", "c", "d", "e", "f"] }),
+      );
+      expect(tooMany.operation).toBe("params");
+      const unknown = yield* Effect.flip(service.generate({ prompt: "x", surprise: true }));
+      expect(unknown.operation).toBe("params");
+      const longModel = yield* Effect.flip(
+        service.generate({ prompt: "x", model: "m".repeat(257) }),
+      );
+      expect(longModel.operation).toBe("params");
+      expect(calls).toBe(0);
+    }).pipe(h.effect);
+  });
+
+  it.effect("drains non-2xx responses before returning a typed failure", () => {
+    let discarded = 0;
+    const h = harness(() =>
+      Effect.succeed({
+        status: 429,
+        body: Stream.never,
+        discard: Effect.sync(() => discarded++),
       }),
+    );
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        OpenAIImageService.use((service) => service.generate({ prompt: "x" })),
+      );
+      expect(error.message).toContain("429");
+      expect(discarded).toBe(1);
+    }).pipe(h.effect);
+  });
+
+  it.effect("rejects project output symlink escapes", () => {
+    const h = harness(() => Effect.succeed(httpResponse(200, sse([completed()]))));
+    const outside = temp();
+    mkdirSync(join(h.cwd, ".pi"), { recursive: true });
+    symlinkSync(outside, join(h.cwd, ".pi", "generated-images"));
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        OpenAIImageService.use((service) => service.generate({ prompt: "x", save: "project" })),
+      );
+      expect(error.message).toContain("escapes its protected root");
+      expect(readdirSync(outside)).toEqual([]);
+    }).pipe(h.effect);
+  });
+
+  it.effect("writes no image bytes when the output parent is swapped after temp open", () => {
+    const outside = temp();
+    let swapped = false;
+    const swappingFileSystem = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const built = yield* Layer.build(nodePlatformLayer);
+        const base = Context.get(built, FileSystem.FileSystem);
+        return FileSystem.FileSystem.of({
+          ...base,
+          open: (filePath, options) =>
+            base.open(filePath, options).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  if (swapped || !filePath.endsWith(".tmp")) return;
+                  swapped = true;
+                  const directory = dirname(filePath);
+                  const backup = `${directory}-original`;
+                  renameSync(directory, backup);
+                  symlinkSync(outside, directory);
+                }),
+              ),
+            ),
+        });
+      }),
+    );
+    const h = harness(
+      () => Effect.succeed(httpResponse(200, sse([completed()]))),
+      DEFAULT_IMAGE_CONFIG.timeoutMs,
+      swappingFileSystem,
+    );
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        OpenAIImageService.use((service) => service.generate({ prompt: "x", save: "project" })),
+      );
+      expect(error.message).toContain("verify image temporary path");
+      expect(swapped).toBe(true);
+      expect(readdirSync(outside)).toEqual([]);
+    }).pipe(h.effect);
+  });
+
+  it.effect("fails before HTTP when credentials are missing", () => {
+    let calls = 0;
+    const h = harness(() => {
+      calls++;
+      return Effect.succeed(httpResponse(200, sse([completed()])));
     });
+    rmSync(join(h.agentDir, "auth.json"));
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        OpenAIImageService.use((service) => service.generate({ prompt: "x" })),
+      );
+      expect(error.operation).toBe("auth");
+      expect(calls).toBe(0);
+    }).pipe(h.effect);
+  });
 
-    const debug = await harness.getDebug(harness.ctx);
+  it.effect("treats DONE without a completed image as a typed failure", () => {
+    const body = Stream.make(new TextEncoder().encode("data: [DONE]\r\r"));
+    const h = harness(() => Effect.succeed(httpResponse(200, body)));
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        OpenAIImageService.use((service) => service.generate({ prompt: "x" })),
+      );
+      expect(error.message).toContain("No completed image_generation_call");
+    }).pipe(h.effect);
+  });
 
-    expect(debug.accountId).toBe("acct...cdef");
-    expect(debug.accountId).not.toBe("acct_1234567890abcdef");
+  it.effect("surfaces sanitized response.failed events", () => {
+    const h = harness(() =>
+      Effect.succeed(
+        httpResponse(
+          200,
+          sse([
+            {
+              type: "response.failed",
+              response: { error: { message: "Bearer sk-secret accountId=acct_hidden failed" } },
+            },
+          ]),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        OpenAIImageService.use((service) => service.generate({ prompt: "x" })),
+      );
+      expect(error.message).not.toContain("sk-secret");
+      expect(error.message).not.toContain("acct_hidden");
+    }).pipe(h.effect);
+  });
+
+  it.effect("ignores provider data-URL MIME and enforces requested bytes", () => {
+    const h = harness(() =>
+      Effect.succeed(httpResponse(200, sse([completed(`data:image/jpeg;base64,${PNG_BASE64}`)]))),
+    );
+    return Effect.gen(function* () {
+      const result = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x", outputFormat: "png" }),
+      );
+      expect(result.mimeType).toBe("image/png");
+    }).pipe(h.effect);
+  });
+
+  it.effect("masks credential identifiers in image diagnostics", () => {
+    const h = harness(() => Effect.succeed(httpResponse(200, sse([completed()]))));
+    return Effect.gen(function* () {
+      const debug = yield* OpenAIImageService.use((service) => service.debug());
+      expect(debug.authFound).toBe(true);
+      expect(debug.accountId).toBe("found");
+      expect(debug).not.toHaveProperty("accessToken");
+    }).pipe(h.effect);
+  });
+
+  it.effect("bounds provider IDs in persisted filenames", () => {
+    const hugeId = `ig_${"x".repeat(5_000)}`;
+    const h = harness(() =>
+      Effect.succeed(
+        httpResponse(
+          200,
+          sse([
+            {
+              type: "response.output_item.done",
+              item: {
+                type: "image_generation_call",
+                id: hugeId,
+                status: "completed",
+                result: PNG_BASE64,
+              },
+            },
+          ]),
+        ),
+      ),
+    );
+    const outside = temp();
+    return Effect.gen(function* () {
+      const result = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x", save: "custom", saveDir: outside }),
+      );
+      expect(result.savedPath!.split("/").pop()!.length).toBeLessThan(180);
+    }).pipe(h.effect);
+  });
+
+  it.effect("returns the exact registered Pi tool contract and current callback context", () => {
+    type RegisteredTool = {
+      parameters: unknown;
+      execute(
+        id: string,
+        params: unknown,
+        signal: AbortSignal | undefined,
+        onUpdate: ((update: unknown) => void) | undefined,
+        ctx: ExtensionContext,
+      ): Promise<unknown>;
+    };
+    let registered: RegisteredTool | undefined;
+    let currentContext: ExtensionContext | undefined;
+    const pi = {
+      registerTool(tool: unknown) {
+        registered = tool as RegisteredTool;
+      },
+      registerCommand() {},
+      registerMessageRenderer() {},
+    } as unknown as ExtensionAPI;
+    const result: CodexImageResult = {
+      id: "ig_contract",
+      status: "completed",
+      prompt: "verbatim",
+      data: PNG_BASE64,
+      mimeType: "image/png",
+      model: "gpt-5.5",
+      action: "auto",
+      outputFormat: "png",
+    };
+    const run = <A, E>(_effect: Effect.Effect<A, E, OpenAIImageService>): Promise<A> =>
+      Promise.resolve(result as unknown as A);
+    registerOpenAIImage(pi, run, (ctx) => {
+      currentContext = ctx;
+    });
+    const ctx = { model: { id: "gpt-5.5" } } as ExtensionContext;
+    const onUpdate = vi.fn();
+    return Effect.gen(function* () {
+      const output = yield* Effect.tryPromise(() =>
+        registered!.execute("call", { prompt: "verbatim" }, undefined, onUpdate, ctx),
+      );
+      expect(currentContext).toBe(ctx);
+      expect(registered!.parameters).toEqual(_imageTest.TOOL_PARAMS);
+      expect(_imageTest.TOOL_PARAMS.properties.prompt).toMatchObject({
+        minLength: 1,
+        maxLength: 32_768,
+        pattern: "\\S",
+      });
+      expect(_imageTest.TOOL_PARAMS.properties.images).toMatchObject({
+        maxItems: 5,
+        items: { minLength: 1, maxLength: 4_096, pattern: "\\S" },
+      });
+      expect(_imageTest.TOOL_PARAMS.additionalProperties).toBe(false);
+      expect(onUpdate).toHaveBeenCalledWith({
+        content: [{ type: "text", text: expect.stringContaining("gpt-5.5") }],
+        details: undefined,
+      });
+      expect(output).toEqual({
+        content: [
+          { type: "text", text: expect.stringContaining("Prompt: verbatim") },
+          { type: "image", data: PNG_BASE64, mimeType: "image/png" },
+        ],
+        details: result,
+      });
+    });
+  });
+
+  it.effect("never clobbers an existing destination when nonce generation collides", () => {
+    const h = harness(() => Effect.succeed(httpResponse(200, sse([completed()]))));
+    const fixedRandom = {
+      nextIntUnsafe: () => 0,
+      nextDoubleUnsafe: () => 0,
+    };
+    const generate = OpenAIImageService.use((service) =>
+      service.generate({ prompt: "x", save: "project" }),
+    ).pipe(Effect.provideService(Random.Random, fixedRandom));
+    return Effect.gen(function* () {
+      const first = yield* generate;
+      const before = readFileSync(first.savedPath!);
+      const collision = yield* Effect.flip(generate);
+      expect(collision.message).toContain("without clobbering");
+      expect(readFileSync(first.savedPath!)).toEqual(before);
+      expect(readdirSync(join(h.cwd, ".pi", "generated-images"))).toHaveLength(1);
+    }).pipe(h.effect);
+  });
+
+  it.effect("supports arbitrary custom roots with atomic collision-safe names", () => {
+    const h = harness(() => Effect.succeed(httpResponse(200, sse([completed()]))));
+    const outside = temp();
+    return Effect.gen(function* () {
+      const service = yield* OpenAIImageService;
+      const first = yield* service.generate({
+        prompt: "x",
+        save: "custom",
+        saveDir: outside,
+      });
+      const second = yield* service.generate({
+        prompt: "x",
+        save: "custom",
+        saveDir: outside,
+      });
+      expect(first.savedPath).not.toBe(second.savedPath);
+      const names = readdirSync(outside);
+      expect(names).toHaveLength(2);
+      expect(names.every((name) => !name.endsWith(".tmp"))).toBe(true);
+    }).pipe(h.effect);
   });
 });

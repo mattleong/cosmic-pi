@@ -2,14 +2,17 @@ import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-ag
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
-import { JsonDocumentStore, JsonHttpClient } from "pi-cosmic-core";
+import {
+  JsonDocumentStore,
+  JsonHttpClient,
+  makeRefreshCoordinator,
+  type RefreshRequest,
+} from "pi-cosmic-core";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import { readXaiAuth } from "./auth.ts";
 import {
@@ -118,30 +121,13 @@ export class XaiBoundaryError extends Schema.TaggedErrorClass<XaiBoundaryError>(
   { operation: Schema.String, message: Schema.String },
 ) {}
 
-export interface RefreshOptions {
-  readonly notify?: boolean;
-  readonly force?: boolean;
-}
+export interface RefreshOptions extends RefreshRequest {}
 
 export interface XaiUsageServiceShape {
   readonly projection: MutableRef.MutableRef<XaiProjection>;
   readonly refresh: (options?: RefreshOptions) => Effect.Effect<void>;
   readonly updateSetting: (id: string, value: string) => Effect.Effect<void, XaiConfigError>;
 }
-
-interface RefreshCoordinator {
-  readonly active: Deferred.Deferred<void> | undefined;
-  readonly queued: RefreshOptions | undefined;
-  readonly acceptingFollowUp: boolean;
-}
-
-const mergeRefreshOptions = (
-  current: RefreshOptions | undefined,
-  next: RefreshOptions,
-): RefreshOptions => ({
-  notify: current?.notify === true || next.notify === true,
-  force: current?.force === true || next.force === true,
-});
 
 export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageServiceShape>()(
   "pi-better-xai/usage-controller/XaiUsageService",
@@ -161,12 +147,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
         const path = yield* Path.Path;
         const agentDir = options.agentDir ?? (yield* Effect.sync(() => getAgentDir()));
         const authPath = path.join(agentDir, "auth.json");
-        const coordinatorLock = yield* Semaphore.make(1);
-        const coordinator = MutableRef.make<RefreshCoordinator>({
-          active: undefined,
-          queued: undefined,
-          acceptingFollowUp: false,
-        });
+        const coordinator = yield* makeRefreshCoordinator();
         const dependencies = yield* Effect.context<
           Path.Path | JsonDocumentStore | JsonHttpClient
         >();
@@ -258,7 +239,9 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
           const snapshot = yield* requestXaiUsage(authPath, ctx).pipe(
             Effect.timeout("10 seconds"),
             Effect.catch((error) => {
-              const message = sanitizeDiagnosticError(error.message);
+              const message = sanitizeDiagnosticError(
+                typeof error.message === "string" ? error.message : "xAI usage request timed out.",
+              );
               const failed = MutableRef.get(projection);
               MutableRef.set(projection, {
                 ...failed,
@@ -306,68 +289,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
         });
 
         const refresh = (refreshOptions: RefreshOptions = {}) =>
-          Effect.gen(function* () {
-            const registration = yield* coordinatorLock.withPermits(1)(
-              Effect.gen(function* () {
-                const state = MutableRef.get(coordinator);
-                if (state.active) {
-                  if (state.acceptingFollowUp) {
-                    MutableRef.set(coordinator, {
-                      ...state,
-                      queued: mergeRefreshOptions(state.queued, refreshOptions),
-                    });
-                  }
-                  return { owner: false as const, done: state.active };
-                }
-                const done = yield* Deferred.make<void>();
-                MutableRef.set(coordinator, {
-                  active: done,
-                  queued: undefined,
-                  acceptingFollowUp: true,
-                });
-                return { owner: true as const, done };
-              }),
-            );
-            if (!registration.owner) return yield* Deferred.await(registration.done);
-
-            const run = Effect.gen(function* () {
-              yield* refreshOnce(refreshOptions);
-              const followUp = yield* coordinatorLock.withPermits(1)(
-                Effect.sync(() => {
-                  const state = MutableRef.get(coordinator);
-                  const queued = state.queued;
-                  MutableRef.set(coordinator, {
-                    ...state,
-                    queued: undefined,
-                    acceptingFollowUp: false,
-                  });
-                  return queued;
-                }),
-              );
-              if (followUp) yield* refreshOnce(followUp);
-            }).pipe(
-              Effect.ensuring(
-                coordinatorLock
-                  .withPermits(1)(
-                    Effect.sync(() => {
-                      const state = MutableRef.get(coordinator);
-                      if (state.active === registration.done) {
-                        MutableRef.set(coordinator, {
-                          active: undefined,
-                          queued: undefined,
-                          acceptingFollowUp: false,
-                        });
-                      }
-                    }),
-                  )
-                  .pipe(
-                    Effect.andThen(Deferred.succeed(registration.done, undefined)),
-                    Effect.asVoid,
-                  ),
-              ),
-            );
-            yield* run;
-          }).pipe(Effect.provideContext(dependencies));
+          coordinator.run(refreshOptions, refreshOnce).pipe(Effect.provideContext(dependencies));
 
         const updateSettingWithRequirements = Effect.fn("XaiUsageService.updateSetting")(function* (
           id: string,

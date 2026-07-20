@@ -1,7 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedConfig } from "../config.ts";
 import { supportsFast, type FastController } from "../fast-controller.ts";
-import type { UsageController } from "../usage-controller.ts";
+import type * as MutableRef from "effect/MutableRef";
+import { visibleStatusLine, type OpenAIProjection } from "../usage-controller.ts";
 import type { FooterTextPrimitive } from "./protocol.ts";
 
 export interface FastModeUiState {
@@ -25,7 +26,7 @@ export function fastModeUiState(
     desired: controller.desiredActive,
     active: controller.active,
     supported: supportsFast(ctx),
-    modelId: ctx.model?.id,
+    ...(ctx.model?.id ? { modelId: ctx.model.id } : {}),
   };
 }
 
@@ -45,10 +46,10 @@ export function fastModeFooterPrimitive(state: FastModeUiState): FooterTextPrimi
 export function openAIUsageUiState(
   ctx: ExtensionContext,
   cfg: ResolvedConfig,
-  controller: UsageController,
+  projection: MutableRef.MutableRef<OpenAIProjection>,
 ): OpenAIUsageUiState {
-  const text = controller.statusLine(ctx, cfg);
-  return { visible: Boolean(text), text };
+  const text = visibleStatusLine(ctx, cfg, projection);
+  return text ? { visible: true, text } : { visible: false };
 }
 
 export function openAIUsageFooterPrimitive(

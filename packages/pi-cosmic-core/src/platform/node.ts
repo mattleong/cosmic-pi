@@ -4,10 +4,13 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { JsonDocumentStore } from "./json-document.ts";
 import { JsonHttpClient } from "./json-http.ts";
+import { StreamingHttpClient } from "./streaming-http.ts";
 
 const fileSystemAndPath = Layer.merge(NodeFileSystem.layer, NodePath.layer);
 const documents = JsonDocumentStore.layer.pipe(Layer.provideMerge(fileSystemAndPath));
-const http = JsonHttpClient.layer.pipe(Layer.provideMerge(NodeHttpClient.layerUndici));
+const httpClient = NodeHttpClient.layerUndici;
+const http = JsonHttpClient.layer.pipe(Layer.provideMerge(httpClient));
+const streamingHttp = StreamingHttpClient.layer.pipe(Layer.provideMerge(httpClient));
 
 /** Narrow Node services used by cosmic-pi extensions. */
-export const layer = Layer.merge(documents, http);
+export const layer = Layer.mergeAll(fileSystemAndPath, documents, http, streamingHttp);

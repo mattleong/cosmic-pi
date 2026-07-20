@@ -1,0 +1,514 @@
+// @effect-diagnostics effect/strictEffectProvide:off
+// @effect-diagnostics effect/preferSchemaOverJson:off
+// @effect-diagnostics effect/newPromise:off
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as MutableRef from "effect/MutableRef";
+import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
+import {
+  JsonDocumentStore,
+  JsonHttpClient,
+  JsonHttpError,
+  type JsonDocumentStoreShape,
+  type JsonHttpClientShape,
+  type JsonObject,
+} from "pi-cosmic-core";
+import {
+  extractAccountIdFromJwt,
+  getCodexCredentials,
+  parseCodexRegistryCredentials,
+  readCodexAuth,
+} from "../src/codex-auth.ts";
+import {
+  DEFAULT_IMAGE_CONFIG,
+  applySettingToRawConfig,
+  readConfig,
+  resolveConfig,
+} from "../src/config.ts";
+import { FastController } from "../src/fast-controller.ts";
+import { openAIUsageUiState } from "../src/ui/primitives.ts";
+import {
+  OpenAIUsageService,
+  isOpenAISubscriptionModel,
+  makeProjection,
+  synchronizeProjectionContext,
+} from "../src/usage-controller.ts";
+import {
+  USAGE_URL,
+  formatUsageSnapshot,
+  parseUsageSnapshot,
+  requestCodexUsage,
+} from "../src/usage.ts";
+
+const NOW = 1_752_883_200_000;
+function documents(initial: Readonly<Record<string, JsonObject>> = {}) {
+  const values = new Map(Object.entries(initial));
+  const service: JsonDocumentStoreShape = {
+    exists: (path) => Effect.succeed(values.has(path)),
+    readObject: (path) => Effect.succeed(values.get(path)),
+    writeObject: (path, value) => Effect.sync(() => void values.set(path, value)),
+    updateObject: (path, update) =>
+      Effect.sync(() => {
+        const next = update(values.get(path) ?? {});
+        values.set(path, next);
+        return next;
+      }),
+  };
+  return { values, layer: Layer.succeed(JsonDocumentStore, service) };
+}
+const context = (token?: string, oauth = true) =>
+  ({
+    cwd: "/project",
+    hasUI: true,
+    model: { provider: "openai", id: "gpt-5.5" },
+    modelRegistry: {
+      getApiKeyForProvider: () => globalThis.Promise.resolve(token),
+      isUsingOAuth: () => oauth,
+    },
+    ui: { notify() {} },
+  }) as unknown as ExtensionContext;
+const jwt = (accountId: string) => {
+  const body = Buffer.from(
+    `{"https://api.openai.com/auth":{"chatgpt_account_id":"${accountId}"}}`,
+  ).toString("base64url");
+  return `header.${body}.signature`;
+};
+
+describe("OpenAI configuration and credentials", () => {
+  it.effect("decodes fields independently and merges project over global", () => {
+    const store = documents({
+      "/agent/extensions/pi-better-openai.json": {
+        usage: { enabled: false, refreshIntervalMs: 30_000, showResetTimes: false },
+        image: { defaultSave: "global", timeoutMs: 40_000 },
+      },
+      "/project/.pi/extensions/pi-better-openai.json": {
+        usage: { enabled: true, refreshIntervalMs: "bad" },
+        footer: { mode: "status" },
+        image: { outputFormat: "webp", defaultSave: "invalid" },
+      },
+    });
+    return Effect.gen(function* () {
+      const cfg = yield* resolveConfig("/project", "/agent");
+      expect(cfg.usage).toMatchObject({
+        enabled: true,
+        refreshIntervalMs: 30_000,
+        showResetTimes: false,
+      });
+      expect(cfg.footer.mode).toBe("status");
+      expect(cfg.image).toMatchObject({
+        defaultSave: "global",
+        outputFormat: "webp",
+        timeoutMs: 40_000,
+      });
+      const parsed = yield* readConfig("/project/.pi/extensions/pi-better-openai.json");
+      expect(parsed?.usage?.enabled).toBe(true);
+      expect(parsed?.usage?.refreshIntervalMs).toBeUndefined();
+    }).pipe(Effect.provide(Layer.merge(store.layer, Path.layer)));
+  });
+
+  it.effect("preserves unknown fields through settings patches", () =>
+    Effect.sync(() => {
+      expect(
+        applySettingToRawConfig({ unknown: 1, usage: { other: true } }, "usage.enabled", "false"),
+      ).toEqual({ unknown: 1, usage: { other: true, enabled: false } });
+      expect(DEFAULT_IMAGE_CONFIG.defaultSave).toBe("project");
+    }),
+  );
+
+  it.effect("interrupts a pending model-registry credential lookup", () => {
+    const pending = new globalThis.Promise<string | undefined>(() => undefined);
+    const store = documents();
+    const ctx = context();
+    ctx.modelRegistry.getApiKeyForProvider = () => pending;
+    return Effect.gen(function* () {
+      const fiber = yield* getCodexCredentials("/auth.json", ctx).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(fiber);
+      expect(true).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(store.layer));
+  });
+
+  it.effect("extracts JWT and registry credentials with auth-file fallback and expiry", () => {
+    const authPath = "/agent/auth.json";
+    const store = documents({
+      [authPath]: {
+        "openai-codex": {
+          type: "oauth",
+          access: "file-token",
+          accountId: "acct_file",
+          expires: 1_000,
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      expect(yield* extractAccountIdFromJwt(jwt("acct_jwt"))).toBe("acct_jwt");
+      expect(
+        yield* parseCodexRegistryCredentials(
+          JSON.stringify({ access: "registry", accountId: "acct_registry" }),
+        ),
+      ).toEqual({ accessToken: "registry", accountId: "acct_registry" });
+      expect(yield* readCodexAuth(authPath)).toEqual({
+        accessToken: "file-token",
+        accountId: "acct_file",
+      });
+      expect((yield* getCodexCredentials(authPath, context()))?.source).toBe("authFile");
+      expect(
+        (yield* getCodexCredentials(
+          authPath,
+          context(JSON.stringify({ access: "registry", accountId: "acct_registry" })),
+        ))?.source,
+      ).toBe("modelRegistry");
+      yield* TestClock.adjust("2 seconds");
+      expect(yield* readCodexAuth(authPath)).toBeUndefined();
+    }).pipe(Effect.provide(store.layer));
+  });
+});
+
+describe("usage payloads, visibility, and fast mode", () => {
+  const payload = {
+    rate_limit: {
+      allowed: true,
+      primary_window: { used_percent: 10, reset_after_seconds: 60 },
+      secondary_window: { used_percent: 20, reset_after_seconds: 3600 },
+    },
+  };
+  it.effect("parses standard, weekly-only, Spark, and malformed payloads", () =>
+    Effect.sync(() => {
+      const standard = parseUsageSnapshot(payload, "gpt-5.5", NOW);
+      expect(standard.fiveHourLeftPercent).toBe(90);
+      expect(standard.sevenDayLeftPercent).toBe(80);
+      expect(formatUsageSnapshot(standard, { showResetTimes: false }, NOW)).toBe(
+        "Usage: 5h: 90% | 7d: 80%",
+      );
+      expect(
+        parseUsageSnapshot({ rate_limit: { primary_window: { used_percent: 30 } } }, "gpt-5.5", NOW)
+          .sevenDayLeftPercent,
+      ).toBe(70);
+      expect(
+        parseUsageSnapshot(
+          {
+            rate_limit: payload.rate_limit,
+            additional_rate_limits: [
+              {
+                limit_name: "GPT-5.3-Codex-Spark",
+                rate_limit: { primary_window: { used_percent: 40 } },
+              },
+            ],
+          },
+          "gpt-5.3-codex-spark",
+          NOW,
+        ).sevenDayLeftPercent,
+      ).toBe(60);
+      expect(
+        parseUsageSnapshot({ rate_limit: "bad" }, undefined, NOW).sevenDayLeftPercent,
+      ).toBeNull();
+    }),
+  );
+
+  it.effect("uses credential headers and rejects malformed provider payloads", () => {
+    const store = documents();
+    let request: Parameters<JsonHttpClientShape["request"]>[0] | undefined;
+    const http = Layer.succeed(
+      JsonHttpClient,
+      JsonHttpClient.of({
+        request: (input) => {
+          request = input;
+          return Effect.succeed({ status: 200, body: payload });
+        },
+      }),
+    );
+    return Effect.gen(function* () {
+      const snapshot = yield* requestCodexUsage(
+        "/auth.json",
+        context(JSON.stringify({ access: "token", accountId: "acct" })),
+        "gpt-5.5",
+      );
+      expect(snapshot?.fiveHourLeftPercent).toBe(90);
+      expect(request?.url).toBe(USAGE_URL);
+      expect(request?.headers).toMatchObject({
+        authorization: "Bearer token",
+        "chatgpt-account-id": "acct",
+      });
+    }).pipe(Effect.provide(Layer.merge(store.layer, http)));
+  });
+
+  it.effect(
+    "coalesces concurrent forced refreshes into one active request and one follow-up",
+    () => {
+      const store = documents({
+        "/project/.pi/extensions/pi-better-openai.json": {
+          usage: { enabled: true, refreshIntervalMs: 60_000 },
+          footer: { mode: "off" },
+          image: { enabled: false },
+        },
+      });
+      let calls = 0;
+      const http = Layer.succeed(
+        JsonHttpClient,
+        JsonHttpClient.of({
+          request: () =>
+            Effect.gen(function* () {
+              calls++;
+              yield* Effect.yieldNow;
+              return { status: 200, body: payload };
+            }),
+        }),
+      );
+      const ctx = context(JSON.stringify({ access: "token", accountId: "acct" }));
+      const contextRef = MutableRef.make(ctx);
+      const projection = makeProjection();
+      const providers = Layer.mergeAll(store.layer, http, Path.layer);
+      const layer = OpenAIUsageService.layer({
+        context: contextRef,
+        cwd: "/project",
+        agentDir: "/agent",
+        projection,
+        onChange() {},
+        startPolling: false,
+      }).pipe(Layer.provide(providers));
+      return Effect.gen(function* () {
+        const fiber = yield* Effect.all(
+          Array.from({ length: 20 }, () =>
+            OpenAIUsageService.use((service) => service.refresh({ force: true })),
+          ),
+          { concurrency: "unbounded" },
+        ).pipe(Effect.forkScoped);
+        yield* Fiber.join(fiber);
+        expect(calls).toBeLessThanOrEqual(2);
+        expect(calls).toBeGreaterThan(0);
+        expect(MutableRef.get(projection)).toMatchObject({
+          authFound: true,
+          authSource: "modelRegistry",
+          accountId: "acct",
+        });
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("times out credential lookup and releases the refresh coordinator", () => {
+    const store = documents({
+      "/project/.pi/extensions/pi-better-openai.json": {
+        usage: { enabled: true, refreshIntervalMs: 60_000 },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      },
+    });
+    let lookupStarted = false;
+    let requests = 0;
+    const ctx = context();
+    ctx.modelRegistry.getApiKeyForProvider = () => {
+      lookupStarted = true;
+      return new globalThis.Promise<string | undefined>(() => undefined);
+    };
+    const http = Layer.succeed(
+      JsonHttpClient,
+      JsonHttpClient.of({
+        request: () => {
+          requests++;
+          return Effect.succeed({ status: 200, body: payload });
+        },
+      }),
+    );
+    const projection = makeProjection();
+    const layer = OpenAIUsageService.layer({
+      context: MutableRef.make(ctx),
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+      startPolling: false,
+    }).pipe(Layer.provide(Layer.mergeAll(store.layer, http, Path.layer)));
+    return Effect.gen(function* () {
+      const service = yield* OpenAIUsageService;
+      const timedOut = yield* service.refresh({ force: true }).pipe(Effect.forkScoped);
+      while (!lookupStarted) yield* Effect.yieldNow;
+      yield* TestClock.adjust("11 seconds");
+      yield* Fiber.join(timedOut);
+      expect(MutableRef.get(projection).error).toBeDefined();
+      expect(requests).toBe(0);
+
+      ctx.modelRegistry.getApiKeyForProvider = () =>
+        globalThis.Promise.resolve(JSON.stringify({ access: "token", accountId: "acct" }));
+      yield* service.refresh({ force: true });
+      expect(requests).toBe(1);
+      expect(MutableRef.get(projection).snapshot).toBeDefined();
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("wakes one production poller when a long interval is shortened", () => {
+    const store = documents({
+      "/project/.pi/extensions/pi-better-openai.json": {
+        usage: { enabled: true, refreshIntervalMs: 600_000 },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      },
+    });
+    let calls = 0;
+    const http = Layer.succeed(
+      JsonHttpClient,
+      JsonHttpClient.of({
+        request: () =>
+          Effect.sync(() => ({ status: 200, body: payload })).pipe(
+            Effect.tap(() => Effect.sync(() => calls++)),
+          ),
+      }),
+    );
+    const contextRef = MutableRef.make(
+      context(JSON.stringify({ access: "token", accountId: "acct" })),
+    );
+    const projection = makeProjection();
+    const layer = OpenAIUsageService.layer({
+      context: contextRef,
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+    }).pipe(Layer.provide(Layer.mergeAll(store.layer, http, Path.layer)));
+    return Effect.gen(function* () {
+      const service = yield* OpenAIUsageService;
+      while (calls < 1) yield* Effect.yieldNow;
+      yield* service.updateSetting("usage.refreshIntervalMs", "15000");
+      for (let index = 0; index < 50; index++) yield* Effect.yieldNow;
+      expect(calls).toBe(2);
+      yield* TestClock.adjust("14999 millis");
+      expect(calls).toBe(2);
+      yield* TestClock.adjust("1 millis");
+      while (calls < 3) yield* Effect.yieldNow;
+      expect(calls).toBe(3);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "records registry auth before a failed usage request and interrupts polling on release",
+    () => {
+      const store = documents({
+        "/project/.pi/extensions/pi-better-openai.json": {
+          usage: { enabled: true, refreshIntervalMs: 60_000 },
+          footer: { mode: "off" },
+          image: { enabled: false },
+        },
+      });
+      let started = false;
+      let released = 0;
+      const http = Layer.succeed(
+        JsonHttpClient,
+        JsonHttpClient.of({
+          request: () =>
+            Effect.sync(() => {
+              started = true;
+            }).pipe(Effect.andThen(Effect.never), Effect.ensuring(Effect.sync(() => released++))),
+        }),
+      );
+      const contextRef = MutableRef.make(
+        context(JSON.stringify({ access: "registry-secret", accountId: "acct_registry" })),
+      );
+      const projection = makeProjection();
+      const layer = OpenAIUsageService.layer({
+        context: contextRef,
+        cwd: "/project",
+        agentDir: "/agent",
+        projection,
+        onChange() {},
+      }).pipe(Layer.provide(Layer.mergeAll(store.layer, http, Path.layer)));
+      const program = Effect.gen(function* () {
+        yield* OpenAIUsageService;
+        while (!started) yield* Effect.yieldNow;
+        const state = MutableRef.get(projection);
+        expect(state.authFound).toBe(true);
+        expect(state.authSource).toBe("modelRegistry");
+        expect(state.accountId).toBe("acct_registry");
+        expect(state).not.toHaveProperty("accessToken");
+      }).pipe(Effect.provide(layer));
+      return program.pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            expect(released).toBe(1);
+          }),
+        ),
+      );
+    },
+  );
+
+  it.effect("transitions polling failures while retaining safe registry diagnostics", () => {
+    const store = documents({
+      "/project/.pi/extensions/pi-better-openai.json": {
+        usage: { enabled: true, refreshIntervalMs: 60_000 },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      },
+    });
+    let calls = 0;
+    const http = Layer.succeed(
+      JsonHttpClient,
+      JsonHttpClient.of({
+        request: () => {
+          calls++;
+          return Effect.fail(
+            new JsonHttpError({ operation: "request", message: "provider unavailable" }),
+          );
+        },
+      }),
+    );
+    const projection = makeProjection();
+    const layer = OpenAIUsageService.layer({
+      context: MutableRef.make(
+        context(JSON.stringify({ access: "registry-secret", accountId: "acct_registry" })),
+      ),
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+    }).pipe(Layer.provide(Layer.mergeAll(store.layer, http, Path.layer)));
+    return Effect.gen(function* () {
+      yield* OpenAIUsageService;
+      while (calls < 1 || !MutableRef.get(projection).error) yield* Effect.yieldNow;
+      const state = MutableRef.get(projection);
+      expect(state.statusText).toContain("unavailable");
+      expect(state.authFound).toBe(true);
+      expect(state.authSource).toBe("modelRegistry");
+      expect(state.accountId).toBe("acct_registry");
+      expect(state.statusText).not.toContain("registry-secret");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("gates usage and fast injection by model/auth", () =>
+    Effect.sync(() => {
+      const ctx = context(undefined, false);
+      const cfg = {
+        configPath: "/c",
+        projectConfigPath: "/p",
+        globalConfigPath: "/g",
+        projectConfigExists: true,
+        globalConfigExists: false,
+        persistState: true,
+        active: false,
+        desiredActive: false,
+        usage: {
+          enabled: true,
+          refreshIntervalMs: 60_000,
+          showOnlyOnSubscriptionModels: true,
+          showResetTimes: false,
+        },
+        footer: { mode: "status" as const },
+        image: DEFAULT_IMAGE_CONFIG,
+      };
+      expect(isOpenAISubscriptionModel(ctx, cfg)).toBe(false);
+      const projection = makeProjection();
+      MutableRef.set(projection, { ...MutableRef.get(projection), config: cfg });
+      synchronizeProjectionContext(projection, ctx, { clearUsage: true });
+      expect(openAIUsageUiState(ctx, cfg, projection).visible).toBe(false);
+      const fast = new FastController("priority");
+      fast.initializeForSession(ctx, { ...cfg, active: true, desiredActive: true }, false);
+      expect(fast.injectProviderPayload({ payload: { model: "gpt-5.5" } }, ctx)).toMatchObject({
+        service_tier: "priority",
+      });
+      ctx.model = { provider: "openai", id: "gpt-4.1" } as ExtensionContext["model"];
+      fast.applyDesiredState(ctx);
+      expect(fast.injectProviderPayload({ payload: {} }, ctx)).toBeUndefined();
+    }),
+  );
+});

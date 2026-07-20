@@ -23,7 +23,7 @@ The source is maintained in the [cosmic-pi monorepo](https://github.com/mattleon
 Usage display and image generation require pi's `openai-codex` OAuth credentials.
 
 1. In pi, run `/login openai-codex`.
-2. Verify subscription usage with `/openai-usage`, or open `/openai-settings` and check **Diagnostics**.
+2. Verify subscription usage with `/openai-usage`, or run `/openai-settings diagnostics`.
 3. The extension reads auth from pi's agent auth store, normally `~/.pi/agent/auth.json`. Do not copy, paste, or commit values from this file.
 4. If `PI_CODING_AGENT_DIR` is set, the auth store, global extension config, and global generated-image directory use that agent directory instead of `~/.pi/agent`. A leading `~/` is expanded to your home directory.
 
@@ -31,7 +31,7 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
 
 - Fast mode for supported OpenAI models, toggled with `/fast` or in `/openai-settings`.
 - OpenAI subscription usage display via `/openai-usage` and the footer.
-- Interactive settings picker via `/openai-settings`.
+- Interactive TUI settings picker via `/openai-settings`, plus scriptable updates via `/openai-settings <id> <value>`; run `/openai-settings help` for available keys.
 - Standalone footer customization for model, thinking, fast mode, usage, and token/cost context.
 - Public fast-mode and subscription-usage UI primitives from `pi-better-openai/ui`.
 - Automatic contribution of those primitives when `pi-cosmic-ui` is installed.
@@ -40,7 +40,7 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
   - `/fast` toggles fast mode.
   - `/openai-image <prompt>` generates an image directly.
   - `/openai-usage` shows current OpenAI subscription usage.
-  - `/openai-settings` opens settings, diagnostics, and config details.
+  - `/openai-settings` opens the interactive picker; `/openai-settings help` lists settings and `/openai-settings diagnostics` shows diagnostics.
 
 ## UI primitives
 
@@ -55,7 +55,9 @@ The extension reads JSON config from two locations:
 - Project config: `.pi/extensions/pi-better-openai.json`
 - Global config: `$PI_CODING_AGENT_DIR/extensions/pi-better-openai.json`, defaulting to `~/.pi/agent/extensions/pi-better-openai.json`
 
-Project overrides global. Global values fill fields omitted by the project file. Invalid enum values are ignored, and numeric settings are clamped to safe ranges.
+Project overrides global. Global values fill fields omitted by the project file. Known fields are decoded independently, invalid values fall back without discarding valid siblings, and numeric settings are clamped to safe ranges.
+
+The extension owns one scoped Effect runtime per Pi session. Repeated `session_start` replaces and disposes the previous runtime; usage polling and image streams are interrupted during replacement or `session_shutdown`.
 
 Fast-mode model support is controlled by the package and cannot be overridden in user configuration. The current allow-list is:
 

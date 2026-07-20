@@ -1,7 +1,3 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { extname, isAbsolute, join, resolve, sep } from "node:path";
 import {
   CONFIG_DIR_NAME,
   getAgentDir,
@@ -9,16 +5,27 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
-import sharp from "sharp";
+import * as Clock from "effect/Clock";
+import * as Config from "effect/Config";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as MutableRef from "effect/MutableRef";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Random from "effect/Random";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import { JsonDocumentStore, StreamingHttpClient, type StreamingHttpError } from "pi-cosmic-core";
+import { SafeFileAdapter } from "./boundary/safe-file.ts";
+import { SharpAdapter } from "./boundary/sharp.ts";
 import type { ResolvedConfig } from "./config.ts";
-import { isRecord } from "./config.ts";
-import {
-  extractAccountIdFromJwt,
-  getCodexCredentials,
-  type CodexCredentialsWithSource,
-} from "./codex-auth.ts";
+import { extractAccountIdFromJwt, getCodexCredentials } from "./codex-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
-import { resolveUserPath } from "./paths.ts";
+import type { OpenAIProjection } from "./usage-controller.ts";
+import { isRecord } from "./utils.ts";
 
 const OPENAI_IMAGE_TOOL = "openai_image";
 const OPENAI_IMAGE_COMMAND = "openai-image";
@@ -27,76 +34,65 @@ const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
 const MAX_IMAGE_INPUTS = 5;
 const MAX_TOTAL_IMAGE_INPUT_BYTES = 50 * 1024 * 1024;
+const MAX_IMAGE_RESPONSE_BYTES = 100 * 1024 * 1024;
+const MAX_SSE_EVENT_CHARS = 80 * 1024 * 1024;
+const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
 const SUPPORTED_INPUT_IMAGE_FORMATS = new Set(["png", "jpeg", "jpg", "webp", "gif"]);
-const SSE_EVENT_BOUNDARY = /\r?\n\r?\n/;
-
 export const IMAGE_SAVE_MODES = ["none", "project", "global", "custom"] as const;
 export const IMAGE_ACTIONS = ["auto", "generate", "edit"] as const;
 export const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
-
 export type ImageSaveMode = (typeof IMAGE_SAVE_MODES)[number];
 export type ImageAction = (typeof IMAGE_ACTIONS)[number];
 export type ImageOutputFormat = (typeof IMAGE_OUTPUT_FORMATS)[number];
 
+const NON_WHITESPACE_PATTERN = "\\S";
+const PROMPT_MAX_LENGTH = 32_768;
+const PATH_MAX_LENGTH = 4_096;
+const MODEL_MAX_LENGTH = 256;
+const boundedJsonString = (maximum: number) => ({
+  type: "string" as const,
+  minLength: 1,
+  maxLength: maximum,
+  pattern: NON_WHITESPACE_PATTERN,
+});
 const TOOL_PARAMS = {
   type: "object",
   properties: {
     prompt: {
-      type: "string",
+      ...boundedJsonString(PROMPT_MAX_LENGTH),
       description:
         "Image generation/editing prompt. Pass the user's wording verbatim unless they explicitly ask you to refine or expand it.",
     },
-    action: {
-      type: "string",
-      enum: IMAGE_ACTIONS,
-      description:
-        "Whether to generate a new image, edit/reference provided images, or let the model decide.",
-    },
+    action: { type: "string", enum: IMAGE_ACTIONS },
     images: {
       type: "array",
       maxItems: MAX_IMAGE_INPUTS,
-      items: { type: "string" },
-      description: "Local image paths to use as edit targets or references.",
+      items: boundedJsonString(PATH_MAX_LENGTH),
     },
-    model: {
-      type: "string",
-      description:
-        "OpenAI Codex model to drive the hosted image_generation tool. Defaults to current openai-codex model or config default.",
-    },
-    outputFormat: {
-      type: "string",
-      enum: IMAGE_OUTPUT_FORMATS,
-      description: "Generated image format.",
-    },
-    save: {
-      type: "string",
-      enum: IMAGE_SAVE_MODES,
-      description: "Where to save the generated image.",
-    },
-    saveDir: { type: "string", description: "Directory to save image when save=custom." },
+    model: boundedJsonString(MODEL_MAX_LENGTH),
+    outputFormat: { type: "string", enum: IMAGE_OUTPUT_FORMATS },
+    save: { type: "string", enum: IMAGE_SAVE_MODES },
+    saveDir: boundedJsonString(PATH_MAX_LENGTH),
   },
   required: ["prompt"],
   additionalProperties: false,
 } as const;
-
-type ToolParams = {
-  prompt: string;
-  action?: ImageAction;
-  images?: string[];
-  model?: string;
-  outputFormat?: ImageOutputFormat;
-  save?: ImageSaveMode;
-  saveDir?: string;
-};
-
-type CodexImageCredentials = CodexCredentialsWithSource;
-
-type ImageInput = {
-  path: string;
-  data: string;
-  mimeType: string;
-};
-
+const boundedString = (maximum: number) =>
+  Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(maximum), Schema.isPattern(/\S/));
+const ToolParamsSchema = Schema.Struct({
+  prompt: boundedString(PROMPT_MAX_LENGTH),
+  action: Schema.optional(Schema.Literals(IMAGE_ACTIONS)),
+  images: Schema.optional(
+    Schema.Array(boundedString(PATH_MAX_LENGTH)).check(Schema.isMaxLength(MAX_IMAGE_INPUTS)),
+  ),
+  model: Schema.optional(boundedString(MODEL_MAX_LENGTH)),
+  outputFormat: Schema.optional(Schema.Literals(IMAGE_OUTPUT_FORMATS)),
+  save: Schema.optional(Schema.Literals(IMAGE_SAVE_MODES)),
+  saveDir: Schema.optional(boundedString(PATH_MAX_LENGTH)),
+});
+const TOOL_PARAM_KEYS = new Set(Object.keys(TOOL_PARAMS.properties));
+type ToolParams = typeof ToolParamsSchema.Type;
+type ImageInput = { readonly path: string; readonly data: string; readonly mimeType: string };
 export type CodexImageResult = {
   id: string;
   status: string;
@@ -109,12 +105,10 @@ export type CodexImageResult = {
   action: ImageAction;
   outputFormat: ImageOutputFormat;
 };
-
 type ExtractedImageResult = Omit<
   CodexImageResult,
   "prompt" | "savedPath" | "model" | "action" | "outputFormat"
 >;
-
 export type ImageGenerationDebug = {
   authFound: boolean;
   authSource?: string;
@@ -126,15 +120,19 @@ export type ImageGenerationDebug = {
   lastStatus?: string;
   lastError?: string;
 };
-
-async function getCredentials(
-  ctx: ExtensionContext,
-  signal?: AbortSignal,
-): Promise<CodexImageCredentials> {
-  const credentials = await getCodexCredentials(ctx, signal);
-  if (credentials) return credentials;
-  throw new Error("Missing openai-codex OAuth credentials. Run /login openai-codex.");
+interface ImageState {
+  readonly lastStatus?: string;
+  readonly lastError?: string;
 }
+
+export class OpenAIImageError extends Schema.TaggedErrorClass<OpenAIImageError>()(
+  "OpenAIImageError",
+  {
+    operation: Schema.String,
+    message: Schema.String,
+  },
+) {}
+const fail = (operation: string, message: string) => new OpenAIImageError({ operation, message });
 
 function resolveModel(
   params: Pick<ToolParams, "model">,
@@ -143,146 +141,104 @@ function resolveModel(
 ): string {
   const model = params.model?.trim();
   if (model) return model.includes("/") ? model.split("/").pop() || model : model;
-  if (ctx.model?.provider === "openai-codex") return ctx.model.id;
-  return cfg.image.defaultModel;
+  return ctx.model?.provider === "openai-codex" ? ctx.model.id : cfg.image.defaultModel;
 }
-
 function resolveImageConfig(cfg: ResolvedConfig, params: ToolParams) {
-  const action = params.action ?? "auto";
-  const outputFormat = params.outputFormat ?? cfg.image.outputFormat;
-  const save = params.save ?? cfg.image.defaultSave;
-  return { action, outputFormat, save };
+  return {
+    action: params.action ?? "auto",
+    outputFormat: params.outputFormat ?? cfg.image.outputFormat,
+    save: params.save ?? cfg.image.defaultSave,
+  };
 }
-
 function imageMimeType(path: string, outputFormat?: string): string {
   if (outputFormat === "jpeg" || outputFormat === "jpg") return "image/jpeg";
   if (outputFormat === "webp") return "image/webp";
   if (outputFormat === "gif") return "image/gif";
   if (outputFormat === "png") return "image/png";
-  const ext = extname(path).toLowerCase();
-  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
-  if (ext === ".webp") return "image/webp";
-  if (ext === ".gif") return "image/gif";
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
   return "image/png";
 }
-
-function extensionForFormat(format: ImageOutputFormat): string {
-  return format === "jpeg" ? "jpg" : format;
-}
-
-function isInsideDirectory(root: string, child: string): boolean {
-  const normalizedRoot = resolve(root);
-  const normalizedChild = resolve(child);
+const extensionForFormat = (format: ImageOutputFormat) => (format === "jpeg" ? "jpg" : format);
+const isInside = (path: Path.Path, root: string, child: string) => {
+  const normalizedRoot = path.resolve(root);
+  const normalizedChild = path.resolve(child);
   return (
-    normalizedChild !== normalizedRoot && normalizedChild.startsWith(`${normalizedRoot}${sep}`)
+    normalizedChild !== normalizedRoot && normalizedChild.startsWith(`${normalizedRoot}${path.sep}`)
   );
+};
+function dataUrlParts(value: string, expectedMimeType: string): { data: string; mimeType: string } {
+  const match = /^data:[^;,]+;base64,(.*)$/s.exec(value);
+  return { data: (match?.[1] ?? value).trim(), mimeType: expectedMimeType };
 }
-
-async function validateImageInput(
-  path: string,
-  realWorkspaceRoot: string,
-): Promise<{ mimeType: string; path: string; size: number }> {
-  const realInputPath = await realpath(path).catch(() => undefined);
-  if (!realInputPath || !isInsideDirectory(realWorkspaceRoot, realInputPath))
-    throw new Error(
-      `Image input must be a file inside the current workspace: ${displayPath(path)}`,
-    );
-
-  const pathStats = await stat(realInputPath).catch(() => undefined);
-  if (!pathStats?.isFile())
-    throw new Error(
-      `Image input must be a file inside the current workspace: ${displayPath(path)}`,
-    );
-  if (pathStats.size > MAX_IMAGE_INPUT_BYTES)
-    throw new Error(`Image input is too large (max 20 MB): ${displayPath(path)}`);
-
-  const metadata = await sharp(realInputPath, { animated: false })
-    .metadata()
-    .catch(() => undefined);
-  if (!metadata?.format || !SUPPORTED_INPUT_IMAGE_FORMATS.has(metadata.format))
-    throw new Error(`Image input is not a readable image: ${displayPath(path)}`);
-  return {
-    mimeType: imageMimeType(path, metadata.format),
-    path: realInputPath,
-    size: pathStats.size,
-  };
+function decodeBase64(value: string): Uint8Array | undefined {
+  if (
+    value.length === 0 ||
+    value.length > Math.ceil(MAX_GENERATED_IMAGE_BYTES / 3) * 4 ||
+    value.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+  )
+    return undefined;
+  const bytes = Buffer.from(value, "base64");
+  return bytes.length <= MAX_GENERATED_IMAGE_BYTES ? bytes : undefined;
 }
-
-async function readImageInputs(paths: string[] | undefined, cwd: string): Promise<ImageInput[]> {
-  const validatedInputs: Array<{ path: string; mimeType: string }> = [];
-  const seenPaths = new Set<string>();
-  let totalBytes = 0;
-  const workspaceRoot = resolve(cwd);
-  let realWorkspaceRoot: string | undefined;
-  for (const rawPath of paths ?? []) {
-    const trimmed = rawPath.trim();
-    if (!trimmed) continue;
-    const path = isAbsolute(trimmed) ? resolve(trimmed) : resolve(workspaceRoot, trimmed);
-    if (!isInsideDirectory(workspaceRoot, path))
-      throw new Error(
-        `Image input must be a file inside the current workspace: ${displayPath(path)}`,
-      );
-    realWorkspaceRoot ??= await realpath(workspaceRoot).catch(() => workspaceRoot);
-    const input = await validateImageInput(path, realWorkspaceRoot);
-    if (seenPaths.has(input.path)) continue;
-    if (validatedInputs.length >= MAX_IMAGE_INPUTS)
-      throw new Error(`Too many image inputs (max ${MAX_IMAGE_INPUTS}).`);
-    totalBytes += input.size;
-    if (totalBytes > MAX_TOTAL_IMAGE_INPUT_BYTES)
-      throw new Error("Image inputs are too large in total (max 50 MB).");
-    seenPaths.add(input.path);
-    validatedInputs.push({ path: input.path, mimeType: input.mimeType });
+function asImageResultItem(
+  value: unknown,
+):
+  | { id?: string; status?: string; revised_prompt?: string; result?: string; b64_json?: string }
+  | undefined {
+  if (!isRecord(value) || value.type !== "image_generation_call") return undefined;
+  return value;
+}
+function extractImageFromEvent(
+  event: unknown,
+  fallbackMimeType: string,
+  fallbackId: string,
+): ExtractedImageResult | undefined {
+  if (!isRecord(event)) return undefined;
+  const item = asImageResultItem(event.item) ?? asImageResultItem(event);
+  if (item) {
+    const raw =
+      typeof item.result === "string" && item.result.trim()
+        ? item.result
+        : typeof item.b64_json === "string"
+          ? item.b64_json
+          : undefined;
+    if (!raw) return undefined;
+    const parts = dataUrlParts(raw, fallbackMimeType);
+    return {
+      id: typeof item.id === "string" ? item.id : fallbackId,
+      status: typeof item.status === "string" ? item.status : "completed",
+      ...(typeof item.revised_prompt === "string" ? { revisedPrompt: item.revised_prompt } : {}),
+      ...parts,
+    };
   }
-  return Promise.all(
-    validatedInputs.map(async (input) => ({
-      ...input,
-      data: (await readFile(input.path)).toString("base64"),
-    })),
-  );
+  const partial =
+    typeof event.partial_image_b64 === "string"
+      ? event.partial_image_b64
+      : typeof event.b64_json === "string"
+        ? event.b64_json
+        : undefined;
+  if (partial?.trim())
+    return { id: fallbackId, status: "partial", ...dataUrlParts(partial, fallbackMimeType) };
+  return undefined;
 }
-
-function resolveSaveDir(
-  mode: ImageSaveMode,
-  params: Pick<ToolParams, "saveDir">,
-  cwd: string,
-): string | undefined {
-  if (mode === "none") return undefined;
-  if (mode === "project") return join(cwd, CONFIG_DIR_NAME, "generated-images");
-  if (mode === "global") return join(getAgentDir(), "generated-images");
-  const dir = params.saveDir?.trim() || process.env.PI_IMAGE_SAVE_DIR?.trim();
-  if (!dir) throw new Error("save=custom requires saveDir or PI_IMAGE_SAVE_DIR.");
-  return resolveUserPath(dir, cwd);
-}
-
-async function saveImage(
-  data: string,
-  format: ImageOutputFormat,
-  outputDir: string,
-  id: string,
-): Promise<string> {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const safeId = id.replace(/[^a-zA-Z0-9_-]/g, "_") || randomUUID().slice(0, 8);
-  const path = join(outputDir, `openai-image-${timestamp}-${safeId}.${extensionForFormat(format)}`);
-  await mkdir(outputDir, { recursive: true });
-  await writeFile(path, Buffer.from(data, "base64"));
-  return path;
-}
-
 function buildRequest(
   params: ToolParams,
   model: string,
   cfg: ResolvedConfig,
-  images: ImageInput[],
+  images: readonly ImageInput[],
 ) {
   const { action, outputFormat } = resolveImageConfig(cfg, params);
   const content: Array<Record<string, unknown>> = [{ type: "input_text", text: params.prompt }];
-  for (const image of images) {
+  for (const image of images)
     content.push({
       type: "input_image",
       detail: "auto",
       image_url: `data:${image.mimeType};base64,${image.data}`,
     });
-  }
   const tool: Record<string, unknown> = { type: "image_generation", output_format: outputFormat };
   if (action !== "auto") tool.action = action;
   return {
@@ -299,196 +255,533 @@ function buildRequest(
   };
 }
 
-function dataUrlParts(value: string, fallbackMimeType: string): { data: string; mimeType: string } {
-  const match = value.match(/^data:([^;,]+);base64,(.*)$/s);
-  if (match)
-    return {
-      mimeType: match[1] || fallbackMimeType,
-      data: (match[2] ?? "").trim(),
-    };
-  return { data: value.trim(), mimeType: fallbackMimeType };
+export interface OpenAIImageServiceShape {
+  readonly generate: (params: unknown) => Effect.Effect<CodexImageResult, OpenAIImageError>;
+  readonly debug: () => Effect.Effect<ImageGenerationDebug>;
 }
+export class OpenAIImageService extends Context.Service<
+  OpenAIImageService,
+  OpenAIImageServiceShape
+>()("pi-better-openai/image/OpenAIImageService") {
+  static layer(options: {
+    readonly context: MutableRef.MutableRef<ExtensionContext>;
+    readonly projection: MutableRef.MutableRef<OpenAIProjection>;
+    readonly agentDir?: string;
+  }) {
+    return Layer.effect(
+      this,
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const http = yield* StreamingHttpClient;
+        const safeFile = yield* SafeFileAdapter;
+        const sharp = yield* SharpAdapter;
+        const documents = yield* JsonDocumentStore;
+        const agentDir = options.agentDir ?? getAgentDir();
+        const authPath = path.join(agentDir, "auth.json");
+        const customSaveDir = yield* Config.option(Config.string("PI_IMAGE_SAVE_DIR"));
+        const homeDirectory = yield* Config.option(Config.string("HOME"));
+        const state = MutableRef.make<ImageState>({});
+        const credentialsFor = (ctx: Pick<ExtensionContext, "modelRegistry">) =>
+          getCodexCredentials(authPath, ctx).pipe(
+            Effect.provideService(JsonDocumentStore, documents),
+          );
 
-function asImageResultItem(
-  value: unknown,
-):
-  | { id?: string; status?: string; revised_prompt?: string; result?: string; b64_json?: string }
-  | undefined {
-  if (!isRecord(value) || value.type !== "image_generation_call") return undefined;
-  return value as {
-    id?: string;
-    status?: string;
-    revised_prompt?: string;
-    result?: string;
-    b64_json?: string;
-  };
-}
-
-function isImageContent(
-  value: unknown,
-): value is { type: "image"; data: string; mimeType: string } {
-  return (
-    isRecord(value) &&
-    value.type === "image" &&
-    typeof value.data === "string" &&
-    typeof value.mimeType === "string"
-  );
-}
-
-function extractImageFromEvent(
-  event: unknown,
-  fallbackMimeType: string,
-): ExtractedImageResult | undefined {
-  if (!isRecord(event)) return undefined;
-  const item = asImageResultItem(event.item) ?? asImageResultItem(event);
-  if (item) {
-    const raw =
-      typeof item.result === "string" && item.result.trim()
-        ? item.result
-        : typeof item.b64_json === "string"
-          ? item.b64_json
-          : undefined;
-    if (!raw) return undefined;
-    const { data, mimeType } = dataUrlParts(raw, fallbackMimeType);
-    return {
-      id: typeof item.id === "string" ? item.id : `ig_${randomUUID().slice(0, 8)}`,
-      status: typeof item.status === "string" ? item.status : "completed",
-      revisedPrompt: typeof item.revised_prompt === "string" ? item.revised_prompt : undefined,
-      data,
-      mimeType,
-    };
-  }
-  const partial =
-    typeof event.partial_image_b64 === "string"
-      ? event.partial_image_b64
-      : typeof event.b64_json === "string"
-        ? event.b64_json
-        : undefined;
-  if (typeof partial === "string" && partial.trim()) {
-    const { data, mimeType } = dataUrlParts(partial, fallbackMimeType);
-    return { id: `ig_${randomUUID().slice(0, 8)}`, status: "partial", data, mimeType };
-  }
-  return undefined;
-}
-
-async function parseSseForImage(
-  response: Response,
-  fallbackMimeType: string,
-  signal?: AbortSignal,
-): Promise<ExtractedImageResult> {
-  if (!response.body) throw new Error("No response body from Codex image request.");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    while (true) {
-      if (signal?.aborted) throw new Error("Image request was aborted.");
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let boundary = SSE_EVENT_BOUNDARY.exec(buffer);
-      while (boundary) {
-        const idx = boundary.index;
-        const chunk = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + boundary[0].length);
-        const data = chunk
-          .split(/\r?\n/)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trim())
-          .join("\n")
-          .trim();
-        if (data && data !== "[DONE]") {
-          let event: unknown;
-          try {
-            event = JSON.parse(data);
-          } catch {
-            event = undefined;
-          }
-          const image = extractImageFromEvent(event, fallbackMimeType);
-          if (image?.data && image.status === "completed") {
-            await reader.cancel().catch(() => undefined);
-            return image;
-          }
-          if (isRecord(event) && event.type === "response.failed") {
-            const error =
-              isRecord(event.response) && isRecord(event.response.error)
-                ? event.response.error
-                : undefined;
-            const message = sanitizeDiagnosticError(
-              typeof error?.message === "string" ? error.message : "Codex image request failed.",
+        const imageError = (operation: string, message: string) => () => fail(operation, message);
+        const validateInput = Effect.fn("OpenAIImage.validateInput")(function* (
+          inputPath: string,
+          realWorkspace: string,
+        ) {
+          const realInput = yield* fs
+            .realPath(inputPath)
+            .pipe(
+              Effect.mapError(
+                imageError(
+                  "input",
+                  `Image input must be a file inside the current workspace: ${inputPath}`,
+                ),
+              ),
             );
-            throw new Error(message);
-          }
-          if (isRecord(event) && event.type === "error") {
-            const message = sanitizeDiagnosticError(
-              typeof event.message === "string" ? event.message : JSON.stringify(event),
+          if (!isInside(path, realWorkspace, realInput))
+            return yield* fail(
+              "input",
+              `Image input must be a file inside the current workspace: ${inputPath}`,
             );
-            throw new Error(`Codex image error: ${message}`);
+          const verified = yield* safeFile
+            .readContainedRegularFile(realInput, realWorkspace, MAX_IMAGE_INPUT_BYTES)
+            .pipe(
+              Effect.mapError((error) =>
+                fail(
+                  "input",
+                  error.operation === "size"
+                    ? `Image input is too large (max 20 MB): ${inputPath}`
+                    : `Image input changed during validation: ${inputPath}`,
+                ),
+              ),
+            );
+          const metadata = yield* sharp
+            .decode(verified.bytes)
+            .pipe(
+              Effect.mapError(
+                imageError("sharp", `Image input is not a readable image: ${inputPath}`),
+              ),
+            );
+          if (!metadata.format || !SUPPORTED_INPUT_IMAGE_FORMATS.has(metadata.format))
+            return yield* fail("input", `Image input is not a readable image: ${inputPath}`);
+          return {
+            path: verified.path,
+            data: verified.bytes,
+            size: verified.bytes.byteLength,
+            mimeType: imageMimeType(inputPath, metadata.format),
+          };
+        });
+        const readInputs = Effect.fn("OpenAIImage.readInputs")(function* (
+          rawPaths: readonly string[] | undefined,
+          cwd: string,
+        ) {
+          const workspace = path.resolve(cwd);
+          const realWorkspace = yield* fs
+            .realPath(workspace)
+            .pipe(Effect.catch(() => Effect.succeed(workspace)));
+          const seen = new Set<string>();
+          const validated: Array<{
+            path: string;
+            data: Uint8Array;
+            size: number;
+            mimeType: string;
+          }> = [];
+          let total = 0;
+          for (const raw of rawPaths ?? []) {
+            const trimmed = raw.trim();
+            if (!trimmed) continue;
+            const candidate = path.resolve(workspace, trimmed);
+            if (!isInside(path, workspace, candidate))
+              return yield* fail(
+                "input",
+                `Image input must be a file inside the current workspace: ${candidate}`,
+              );
+            const input = yield* validateInput(candidate, realWorkspace);
+            if (seen.has(input.path)) continue;
+            if (validated.length >= MAX_IMAGE_INPUTS)
+              return yield* fail("input", `Too many image inputs (max ${MAX_IMAGE_INPUTS}).`);
+            total += input.size;
+            if (total > MAX_TOTAL_IMAGE_INPUT_BYTES)
+              return yield* fail("input", "Image inputs are too large in total (max 50 MB).");
+            seen.add(input.path);
+            validated.push(input);
           }
-        }
-        boundary = SSE_EVENT_BOUNDARY.exec(buffer);
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  throw new Error("No completed image_generation_call result returned by Codex.");
-}
+          return validated.map((input) => ({
+            path: input.path,
+            mimeType: input.mimeType,
+            data: Buffer.from(input.data).toString("base64"),
+          }));
+        });
+        const parseSse = Effect.fn("OpenAIImage.parseSse")(function* (
+          body: Stream.Stream<Uint8Array, StreamingHttpError>,
+          mimeType: string,
+        ) {
+          const fallbackId = `ig_${(yield* Random.nextIntBetween(0, 0xffff_ffff)).toString(16).padStart(8, "0")}`;
+          let totalBytes = 0;
+          let buffer = "";
+          let previousWasCarriageReturn = false;
+          let completed: ExtractedImageResult | undefined;
+          let providerFailure: OpenAIImageError | undefined;
+          let terminated = false;
 
-async function requestCodexImage(
-  params: ToolParams,
-  ctx: ExtensionContext,
-  cfg: ResolvedConfig,
-  requestSignal?: AbortSignal,
-): Promise<CodexImageResult> {
-  if (!cfg.image.enabled) throw new Error("OpenAI image generation is disabled in config.");
-  const cwd = ctx.cwd || process.cwd();
-  const model = resolveModel(params, ctx, cfg);
-  const { action, outputFormat, save } = resolveImageConfig(cfg, params);
-  const saveDir = resolveSaveDir(save, params, cwd);
-  const timeoutSignal = AbortSignal.timeout(cfg.image.timeoutMs);
-  const baseSignal = requestSignal ?? ctx.signal;
-  const signal = baseSignal ? AbortSignal.any([baseSignal, timeoutSignal]) : timeoutSignal;
-  const credentials = await getCredentials(ctx, signal);
-  const images = await readImageInputs(params.images, cwd);
-  const request = buildRequest(params, model, cfg, images);
-  const response = await fetch(CODEX_RESPONSES_URL, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${credentials.accessToken}`,
-      "chatgpt-account-id": credentials.accountId,
-      "OpenAI-Beta": "responses=experimental",
-      accept: "text/event-stream",
-      "content-type": "application/json",
-      originator: "codex_cli_rs",
-      "User-Agent": "codex_cli_rs/0.0.0 (pi-better-openai)",
-    },
-    body: JSON.stringify(request),
-    signal,
-  });
-  if (!response.ok) {
-    const statusText = response.statusText
-      ? ` ${sanitizeDiagnosticError(response.statusText, 120)}`
-      : "";
-    throw new Error(`Codex image request failed (${response.status}${statusText}).`);
-  }
-  const parsed = await parseSseForImage(
-    response,
-    imageMimeType(`image.${outputFormat}`, outputFormat),
-    signal,
-  );
-  const savedPath = saveDir
-    ? await saveImage(parsed.data, outputFormat, saveDir, parsed.id)
-    : undefined;
-  return { ...parsed, prompt: params.prompt, savedPath, model, action, outputFormat };
-}
+          const processBlock = Effect.fn("OpenAIImage.processSseBlock")(function* (block: string) {
+            if (block.length > MAX_SSE_EVENT_CHARS)
+              return yield* fail("stream", "Codex image response event was too large.");
+            const data = block
+              .split(/\r\n|\n|\r/)
+              .filter((line) => !line.startsWith(":"))
+              .filter((line) => line === "data" || line.startsWith("data:"))
+              .map((line) => (line === "data" ? "" : line.slice(5).replace(/^ /, "")))
+              .join("\n")
+              .trim();
+            if (!data) return true;
+            if (data === "[DONE]") {
+              terminated = true;
+              return false;
+            }
+            const event = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+              data,
+            ).pipe(
+              Effect.mapError(() =>
+                fail("stream", "Codex image response contained malformed JSON."),
+              ),
+            );
+            const image = extractImageFromEvent(event, mimeType, fallbackId);
+            if (image?.data && image.status === "completed") {
+              completed = image;
+              return false;
+            }
+            if (isRecord(event) && event.type === "response.failed") {
+              const response = isRecord(event.response) ? event.response : undefined;
+              const error = isRecord(response?.error) ? response.error : undefined;
+              providerFailure = fail(
+                "response",
+                sanitizeDiagnosticError(
+                  typeof error?.message === "string"
+                    ? error.message
+                    : "Codex image request failed.",
+                ),
+              );
+              return false;
+            }
+            if (isRecord(event) && event.type === "error") {
+              providerFailure = fail(
+                "response",
+                `Codex image error: ${sanitizeDiagnosticError(typeof event.message === "string" ? event.message : "Codex image request failed.")}`,
+              );
+              return false;
+            }
+            return true;
+          });
 
-function displayPath(path: string): string {
-  const home = homedir();
-  if (!home) return path;
-  if (path === home) return "~";
-  const homePrefix = home.endsWith(sep) ? home : `${home}${sep}`;
-  return path.startsWith(homePrefix) ? `~/${path.slice(homePrefix.length)}` : path;
+          const appendNormalized = (chunk: string) => {
+            let normalized = "";
+            for (const character of chunk) {
+              if (character === "\r") {
+                normalized += "\n";
+                previousWasCarriageReturn = true;
+              } else if (character === "\n" && previousWasCarriageReturn) {
+                previousWasCarriageReturn = false;
+              } else {
+                normalized += character;
+                previousWasCarriageReturn = false;
+              }
+            }
+            buffer += normalized;
+          };
+          const drainCompleteEvents = Effect.fn("OpenAIImage.drainSseEvents")(function* () {
+            while (true) {
+              const separator = buffer.indexOf("\n\n");
+              if (separator < 0) break;
+              const block = buffer.slice(0, separator);
+              buffer = buffer.slice(separator + 2);
+              if (!(yield* processBlock(block))) return false;
+            }
+            if (buffer.length > MAX_SSE_EVENT_CHARS)
+              return yield* fail("stream", "Codex image response event was too large.");
+            return true;
+          });
+          const bounded = body.pipe(
+            Stream.mapEffect((bytes) => {
+              totalBytes += bytes.byteLength;
+              return totalBytes > MAX_IMAGE_RESPONSE_BYTES
+                ? Effect.fail(fail("stream", "Codex image response was too large."))
+                : Effect.succeed(bytes);
+            }),
+            Stream.decodeText,
+          );
+          yield* bounded.pipe(
+            Stream.runForEachWhile((chunk) =>
+              Effect.gen(function* () {
+                appendNormalized(chunk);
+                return yield* drainCompleteEvents();
+              }),
+            ),
+            Effect.mapError((error) =>
+              error instanceof OpenAIImageError
+                ? error
+                : fail("stream", "Codex image response stream failed."),
+            ),
+          );
+          if (!completed && !providerFailure && !terminated && buffer.trim())
+            yield* processBlock(buffer);
+          if (completed) return completed;
+          if (providerFailure) return yield* providerFailure;
+          return yield* fail(
+            "stream",
+            "No completed image_generation_call result returned by Codex.",
+          );
+        });
+        const validatedGeneratedImage = Effect.fn("OpenAIImage.validateGeneratedImage")(function* (
+          parsed: ExtractedImageResult,
+          outputFormat: ImageOutputFormat,
+        ) {
+          const bytes = decodeBase64(parsed.data);
+          if (!bytes) return yield* fail("response", "Codex returned invalid image base64.");
+          const metadata = yield* sharp
+            .decode(bytes)
+            .pipe(Effect.mapError(imageError("response", "Codex returned unreadable image data.")));
+          const expected = outputFormat === "jpeg" ? "jpeg" : outputFormat;
+          const actual = metadata.format === "jpg" ? "jpeg" : metadata.format;
+          if (actual !== expected)
+            return yield* fail(
+              "response",
+              `Codex returned ${actual ?? "unknown"} image data when ${expected} was requested.`,
+            );
+          return {
+            ...parsed,
+            data: Buffer.from(bytes).toString("base64"),
+            mimeType: imageMimeType(`image.${outputFormat}`, outputFormat),
+            bytes,
+          };
+        });
+        const persistImage = Effect.fn("OpenAIImage.persistImage")(function* (
+          requestedDirectory: string,
+          protectedBase: string | undefined,
+          bytes: Uint8Array,
+          outputFormat: ImageOutputFormat,
+          providerId: string,
+        ) {
+          let canonicalBase: string | undefined;
+          if (protectedBase) {
+            canonicalBase = yield* fs
+              .realPath(protectedBase)
+              .pipe(
+                Effect.mapError(imageError("save", "Unable to resolve protected output root.")),
+              );
+            const relative = path.relative(
+              path.resolve(protectedBase),
+              path.resolve(requestedDirectory),
+            );
+            if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`))
+              return yield* fail("save", "Image output directory escapes its protected root.");
+            let existingAncestor = path.resolve(requestedDirectory);
+            while (!(yield* fs.exists(existingAncestor))) {
+              const parent = path.dirname(existingAncestor);
+              if (parent === existingAncestor)
+                return yield* fail("save", "Unable to resolve image output directory.");
+              existingAncestor = parent;
+            }
+            const canonicalAncestor = yield* fs
+              .realPath(existingAncestor)
+              .pipe(Effect.mapError(imageError("save", "Unable to inspect image output path.")));
+            if (
+              canonicalAncestor !== canonicalBase &&
+              !isInside(path, canonicalBase, canonicalAncestor)
+            )
+              return yield* fail("save", "Image output directory escapes its protected root.");
+          }
+          yield* fs
+            .makeDirectory(requestedDirectory, { recursive: true })
+            .pipe(Effect.mapError(imageError("save", "Unable to create image output directory.")));
+          const canonicalDirectory = yield* fs
+            .realPath(requestedDirectory)
+            .pipe(Effect.mapError(imageError("save", "Unable to resolve image output directory.")));
+          if (
+            canonicalBase &&
+            canonicalDirectory !== canonicalBase &&
+            !isInside(path, canonicalBase, canonicalDirectory)
+          )
+            return yield* fail("save", "Image output directory escapes its protected root.");
+          const now = yield* Clock.currentTimeMillis;
+          const stamp = DateTime.formatIso(DateTime.makeUnsafe(now)).replace(/[:.]/g, "-");
+          const safeId = providerId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 48) || "image";
+          const nonce = [
+            yield* Random.nextIntBetween(0, 0xffff_ffff),
+            yield* Random.nextIntBetween(0, 0xffff_ffff),
+          ]
+            .map((value) => value.toString(16).padStart(8, "0"))
+            .join("");
+          const destination = path.join(
+            canonicalDirectory,
+            `openai-image-${stamp}-${safeId}-${nonce}.${extensionForFormat(outputFormat)}`,
+          );
+          const temporary = `${destination}.${nonce}.tmp`;
+          let cleanupPath = temporary;
+          yield* Effect.acquireUseRelease(
+            Effect.void,
+            () =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const file = yield* fs
+                    .open(temporary, { flag: "wx" })
+                    .pipe(
+                      Effect.mapError(imageError("save", "Unable to create image temporary file.")),
+                    );
+                  const opened = yield* file.stat;
+                  const openedInode = Option.getOrUndefined(opened.ino);
+                  if (opened.type !== "File" || openedInode === undefined)
+                    return yield* fail("save", "Unable to verify image temporary file identity.");
+                  const actualTemporary = yield* fs
+                    .realPath(temporary)
+                    .pipe(
+                      Effect.mapError(imageError("save", "Unable to verify image temporary path.")),
+                    );
+                  cleanupPath = actualTemporary;
+                  const visible = yield* fs
+                    .stat(actualTemporary)
+                    .pipe(
+                      Effect.mapError(imageError("save", "Unable to verify image temporary file.")),
+                    );
+                  const visibleInode = Option.getOrUndefined(visible.ino);
+                  if (
+                    visible.type !== "File" ||
+                    visibleInode === undefined ||
+                    visible.dev !== opened.dev ||
+                    visibleInode !== openedInode ||
+                    (canonicalBase && !isInside(path, canonicalBase, actualTemporary))
+                  )
+                    return yield* fail("save", "Image temporary file escaped its protected root.");
+                  yield* file
+                    .writeAll(bytes)
+                    .pipe(Effect.mapError(imageError("save", "Unable to save generated image.")));
+                  yield* file.sync.pipe(
+                    Effect.mapError(imageError("save", "Unable to sync generated image.")),
+                  );
+                }),
+              ).pipe(
+                Effect.andThen(
+                  fs
+                    .link(cleanupPath, destination)
+                    .pipe(
+                      Effect.mapError(
+                        imageError("save", "Unable to publish generated image without clobbering."),
+                      ),
+                    ),
+                ),
+                Effect.andThen(fs.remove(cleanupPath)),
+              ),
+            () => fs.remove(cleanupPath).pipe(Effect.catch(() => Effect.void)),
+          );
+          return destination;
+        });
+        const generate = Effect.fn("OpenAIImage.generate")(function* (rawParams: unknown) {
+          MutableRef.set(state, { lastStatus: "requesting" });
+          if (
+            !isRecord(rawParams) ||
+            Object.keys(rawParams).some((key) => !TOOL_PARAM_KEYS.has(key))
+          )
+            return yield* fail("params", "Invalid OpenAI image parameters.");
+          const params = yield* Schema.decodeUnknownEffect(ToolParamsSchema)(rawParams).pipe(
+            Effect.mapError(imageError("params", "Invalid OpenAI image parameters.")),
+          );
+          const ctx = MutableRef.get(options.context);
+          const cfg = MutableRef.get(options.projection).config;
+          if (!cfg) return yield* fail("config", "Better OpenAI session has not started.");
+          if (!cfg.image.enabled)
+            return yield* fail("config", "OpenAI image generation is disabled in config.");
+          const cwd = ctx.cwd;
+          const model = resolveModel(params, ctx, cfg);
+          const { action, outputFormat, save } = resolveImageConfig(cfg, params);
+          const customDirectory =
+            params.saveDir?.trim() || Option.getOrUndefined(customSaveDir)?.trim();
+          const resolveCustomDirectory = (directory: string | undefined) => {
+            if (!directory) return undefined;
+            const home = Option.getOrUndefined(homeDirectory);
+            if (directory === "~") return home;
+            if (directory.startsWith("~/"))
+              return home ? path.resolve(home, directory.slice(2)) : undefined;
+            return path.resolve(cwd, directory);
+          };
+          const saveDir =
+            save === "none"
+              ? undefined
+              : save === "project"
+                ? path.join(cwd, CONFIG_DIR_NAME, "generated-images")
+                : save === "global"
+                  ? path.join(agentDir, "generated-images")
+                  : resolveCustomDirectory(customDirectory);
+          if (save === "custom" && !saveDir)
+            return yield* fail("save", "save=custom requires saveDir or PI_IMAGE_SAVE_DIR.");
+          const credentials = yield* credentialsFor(ctx);
+          if (!credentials)
+            return yield* fail(
+              "auth",
+              "Missing openai-codex OAuth credentials. Run /login openai-codex.",
+            );
+          const inputs = yield* readInputs(params.images, cwd);
+          const response = yield* http
+            .request({
+              url: CODEX_RESPONSES_URL,
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${credentials.accessToken}`,
+                "chatgpt-account-id": credentials.accountId,
+                "OpenAI-Beta": "responses=experimental",
+                accept: "text/event-stream",
+                originator: "codex_cli_rs",
+                "User-Agent": "codex_cli_rs/0.0.0 (pi-better-openai)",
+              },
+              jsonBody: buildRequest(params, model, cfg, inputs),
+            })
+            .pipe(Effect.mapError(imageError("request", "Codex image request failed.")));
+          if (response.status < 200 || response.status >= 300) {
+            yield* response.discard.pipe(
+              Effect.timeout("1 second"),
+              Effect.catch(() => Effect.void),
+            );
+            return yield* fail("request", `Codex image request failed (${response.status}).`);
+          }
+          const parsed = yield* parseSse(
+            response.body,
+            imageMimeType(`image.${outputFormat}`, outputFormat),
+          );
+          const validated = yield* validatedGeneratedImage(parsed, outputFormat);
+          let savedPath: string | undefined;
+          if (saveDir) {
+            const protectedBase =
+              save === "project" ? cwd : save === "global" ? agentDir : undefined;
+            savedPath = yield* persistImage(
+              saveDir,
+              protectedBase,
+              validated.bytes,
+              outputFormat,
+              validated.id,
+            );
+          }
+          const { bytes: _bytes, ...image } = validated;
+          const result: CodexImageResult = {
+            ...image,
+            prompt: params.prompt,
+            ...(savedPath ? { savedPath } : {}),
+            model,
+            action,
+            outputFormat,
+          };
+          MutableRef.set(state, { lastStatus: `completed (${result.id})` });
+          return result;
+        });
+        const safeGenerate = (params: unknown) =>
+          Effect.suspend(() =>
+            generate(params).pipe(
+              Effect.timeout(
+                MutableRef.get(options.projection).config?.image.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+              ),
+            ),
+          ).pipe(
+            Effect.mapError((error) => {
+              const message = sanitizeDiagnosticError(
+                "message" in error && typeof error.message === "string"
+                  ? error.message
+                  : "OpenAI image request timed out.",
+              );
+              MutableRef.set(state, { lastStatus: "error", lastError: message });
+              return fail(
+                "operation" in error && typeof error.operation === "string"
+                  ? error.operation
+                  : "timeout",
+                message,
+              );
+            }),
+          );
+        const debug = Effect.fn("OpenAIImage.debug")(function* () {
+          const ctx = MutableRef.get(options.context);
+          const cfg = MutableRef.get(options.projection).config;
+          const credentials = yield* credentialsFor(ctx);
+          const image = cfg?.image;
+          const accountId = maskIdentifier(credentials?.accountId);
+          return {
+            authFound: credentials !== undefined,
+            ...(credentials ? { authSource: credentials.source } : {}),
+            ...(accountId ? { accountId } : {}),
+            endpoint: CODEX_RESPONSES_URL,
+            defaultModel:
+              ctx.model?.provider === "openai-codex"
+                ? ctx.model.id
+                : (image?.defaultModel ?? "gpt-5.5"),
+            defaultSave: image?.defaultSave ?? "project",
+            enabled: image?.enabled ?? false,
+            ...MutableRef.get(state),
+          } satisfies ImageGenerationDebug;
+        });
+        return OpenAIImageService.of({ generate: safeGenerate, debug });
+      }),
+    );
+  }
 }
 
 function resultText(result: CodexImageResult): string {
@@ -498,56 +791,36 @@ function resultText(result: CodexImageResult): string {
     `Prompt: ${result.prompt}`,
   ];
   if (result.revisedPrompt) parts.push(`Revised prompt: ${result.revisedPrompt}`);
-  if (result.savedPath) parts.push(`Saved: ${displayPath(result.savedPath)}`);
+  if (result.savedPath) parts.push(`Saved: ${result.savedPath}`);
   return parts.join("\n");
 }
+const isImageContent = (
+  value: unknown,
+): value is { type: "image"; data: string; mimeType: string } =>
+  isRecord(value) &&
+  value.type === "image" &&
+  typeof value.data === "string" &&
+  typeof value.mimeType === "string";
 
 export function registerOpenAIImage(
   pi: ExtensionAPI,
-  getConfig: (ctx: ExtensionContext) => ResolvedConfig,
-): { getDebug: (ctx: ExtensionContext) => Promise<ImageGenerationDebug> } {
-  let lastStatus: string | undefined;
-  let lastError: string | undefined;
-
-  async function generate(
-    params: ToolParams,
-    ctx: ExtensionContext,
-    requestSignal?: AbortSignal,
-  ): Promise<CodexImageResult> {
-    try {
-      lastStatus = "requesting";
-      lastError = undefined;
-      const result = await requestCodexImage(params, ctx, getConfig(ctx), requestSignal);
-      lastStatus = `completed (${result.id})`;
-      return result;
-    } catch (error) {
-      lastStatus = "error";
-      lastError = sanitizeDiagnosticError(error instanceof Error ? error.message : String(error));
-      throw error;
-    }
-  }
-
-  async function getDebug(ctx: ExtensionContext): Promise<ImageGenerationDebug> {
-    const cfg = getConfig(ctx);
-    let credentials: CodexImageCredentials | undefined;
-    try {
-      credentials = await getCredentials(ctx);
-    } catch {
-      credentials = undefined;
-    }
-    return {
-      authFound: credentials !== undefined,
-      authSource: credentials?.source,
-      accountId: maskIdentifier(credentials?.accountId),
-      endpoint: CODEX_RESPONSES_URL,
-      defaultModel: ctx.model?.provider === "openai-codex" ? ctx.model.id : cfg.image.defaultModel,
-      defaultSave: cfg.image.defaultSave,
-      enabled: cfg.image.enabled,
-      lastStatus,
-      lastError,
-    };
-  }
-
+  run: <A, E>(effect: Effect.Effect<A, E, OpenAIImageService>, signal?: AbortSignal) => Promise<A>,
+  updateContext: (ctx: ExtensionContext) => void,
+) {
+  const generate = (params: unknown, ctx: ExtensionContext, signal?: AbortSignal) => {
+    updateContext(ctx);
+    return run(
+      OpenAIImageService.use((service) => service.generate(params)),
+      signal,
+    );
+  };
+  const getDebug = (ctx: ExtensionContext) => {
+    updateContext(ctx);
+    return run(
+      OpenAIImageService.use((service) => service.debug()),
+      ctx.signal,
+    );
+  };
   pi.registerMessageRenderer<CodexImageResult>("openai-image", (message, _options, theme) => {
     const result = message.details;
     const text =
@@ -565,21 +838,20 @@ export function registerOpenAIImage(
       isRecord(result) &&
       typeof result.data === "string" &&
       typeof result.mimeType === "string"
-    ) {
+    )
       image = {
         data: result.data,
         mimeType: result.mimeType,
-        savedPath: typeof result.savedPath === "string" ? result.savedPath : undefined,
+        ...(typeof result.savedPath === "string" ? { savedPath: result.savedPath } : {}),
       };
-    } else if (Array.isArray(message.content)) {
-      const imagePart = message.content.find(isImageContent);
-      if (imagePart) image = { data: imagePart.data, mimeType: imagePart.mimeType };
+    else if (Array.isArray(message.content)) {
+      const part = message.content.find(isImageContent);
+      if (part) image = part;
     }
-
     const container = new Container();
     const box = new Box(1, 1, (line) => theme.bg("customMessageBg", line));
     box.addChild(new Text(`${theme.fg("accent", theme.bold("[openai-image]"))}\n\n${text}`, 0, 0));
-    if (image) {
+    if (image)
       box.addChild(
         new Image(
           image.data,
@@ -588,79 +860,63 @@ export function registerOpenAIImage(
           {
             maxWidthCells: 80,
             maxHeightCells: 24,
-            filename:
-              "savedPath" in image && typeof image.savedPath === "string"
-                ? image.savedPath
-                : undefined,
+            ...(image.savedPath ? { filename: image.savedPath } : {}),
           },
         ),
       );
-    }
     container.addChild(box);
     return container;
   });
-
   pi.registerCommand(OPENAI_IMAGE_COMMAND, {
     description: "Generate an image with OpenAI Codex image generation",
-    handler: async (args, ctx) => {
+    handler: (args, ctx) => {
       const prompt = args.trim();
       if (!prompt) {
         ctx.ui.notify("Usage: /openai-image <prompt>", "error");
-        return;
+        return Promise.resolve();
       }
       ctx.ui.notify("Requesting OpenAI image...", "info");
-      const result = await generate({ prompt }, ctx);
-      pi.sendMessage({
-        customType: "openai-image",
-        content: [
-          { type: "text", text: resultText(result) },
-          { type: "image", data: result.data, mimeType: result.mimeType },
-        ],
-        display: true,
-        details: result,
-      });
+      return generate({ prompt }, ctx, ctx.signal).then((result) =>
+        pi.sendMessage({
+          customType: "openai-image",
+          content: [
+            { type: "text", text: resultText(result) },
+            { type: "image", data: result.data, mimeType: result.mimeType },
+          ],
+          display: true,
+          details: result,
+        }),
+      );
     },
   });
-
   pi.registerTool({
     name: OPENAI_IMAGE_TOOL,
     label: "OpenAI image",
     description:
-      "Generate or edit images through OpenAI Codex subscription auth using the hosted image_generation tool. Supports local reference/edit images and saves to the project by default.",
+      "Generate or edit images through OpenAI Codex subscription auth using the hosted image_generation tool.",
     promptSnippet: "Generate or edit raster images via OpenAI Codex subscription auth.",
     promptGuidelines: [
-      "Use openai_image when the user asks to generate or edit a raster image, photo, illustration, mockup, texture, sprite, or bitmap asset.",
-      "Pass the user's image prompt verbatim. Do not embellish, rewrite, add camera/style details, or add negative prompt terms unless the user explicitly asks you to refine the prompt.",
-      "Use openai_image with images for local reference images or edit targets; save project assets into the workspace when requested.",
+      "Use openai_image when the user asks to generate or edit a raster image.",
+      "Pass the user's image prompt verbatim. Do not embellish or rewrite it unless explicitly requested.",
     ],
     parameters: TOOL_PARAMS,
-    async execute(_toolCallId, params: ToolParams, signal, onUpdate, ctx) {
-      const cfg = getConfig(ctx);
-      const model = resolveModel(params, ctx, cfg);
-      onUpdate?.({
-        content: [
-          {
-            type: "text",
-            text: `Requesting OpenAI image_generation via openai-codex/${model}...`,
-          },
-        ],
-        details: undefined,
-      });
-      const result = await generate(params, ctx, signal);
-      return {
+    execute(_id, params, signal, onUpdate, ctx) {
+      const projectionText = `Requesting OpenAI image_generation via ${ctx.model?.id ?? "configured model"}...`;
+      onUpdate?.({ content: [{ type: "text", text: projectionText }], details: undefined });
+      return generate(params, ctx, signal).then((result) => ({
         content: [
           { type: "text", text: resultText(result) },
-          { type: "image", data: result.data, mimeType: result.mimeType },
+          { type: "image" as const, data: result.data, mimeType: result.mimeType },
         ],
         details: result,
-      };
+      }));
     },
   });
-
   return { getDebug };
 }
 
 export const _imageTest = {
+  TOOL_PARAMS,
   CODEX_RESPONSES_URL,
   DEFAULT_TIMEOUT_MS,
   OPENAI_IMAGE_TOOL,
@@ -672,6 +928,5 @@ export const _imageTest = {
   imageMimeType,
   dataUrlParts,
   extractImageFromEvent,
-  displayPath,
   buildRequest,
 };

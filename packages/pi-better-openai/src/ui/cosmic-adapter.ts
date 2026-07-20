@@ -1,7 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedConfig } from "../config.ts";
 import type { FastController } from "../fast-controller.ts";
-import type { UsageController } from "../usage-controller.ts";
+import type * as MutableRef from "effect/MutableRef";
+import type { OpenAIProjection } from "../usage-controller.ts";
 import {
   fastModeFooterPrimitive,
   fastModeUiState,
@@ -28,9 +29,9 @@ export interface CosmicUiAdapter {
 export function createCosmicUiAdapter(options: {
   pi: ExtensionAPI;
   fastController: FastController;
-  usageController: UsageController;
+  projection: MutableRef.MutableRef<OpenAIProjection>;
 }): CosmicUiAdapter {
-  const { pi, fastController, usageController } = options;
+  const { pi, fastController, projection } = options;
   const events = (pi as ExtensionAPI & { events?: ExtensionAPI["events"] }).events;
   let hostActive = false;
 
@@ -66,7 +67,7 @@ export function createCosmicUiAdapter(options: {
     update(ctx, cfg) {
       if (!hostActive) return;
       const fast = fastModeFooterPrimitive(fastModeUiState(ctx, fastController));
-      const usage = openAIUsageFooterPrimitive(openAIUsageUiState(ctx, cfg, usageController));
+      const usage = openAIUsageFooterPrimitive(openAIUsageUiState(ctx, cfg, projection));
       if (fast) upsert(fast);
       else remove("openai.fast");
       if (usage) upsert(usage);

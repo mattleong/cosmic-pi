@@ -16,6 +16,9 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "skipLibCheck": true,
+    "paths": {
+      "pi-cosmic-core": ["./packages/pi-cosmic-core/index.ts"]
+    },
     "types": ["node"],
     "verbatimModuleSyntax": true,
     "plugins": [

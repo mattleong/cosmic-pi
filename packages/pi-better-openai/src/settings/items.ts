@@ -29,7 +29,7 @@ export function settingsItemsFromDescriptors(
       id: descriptor.id,
       label: descriptor.label,
       currentValue: override.currentValue ?? descriptor.currentValue(cfg),
-      values: values ? [...values] : undefined,
+      ...(values ? { values: [...values] } : {}),
       description: override.description ?? descriptor.description,
     };
   });

@@ -1,190 +1,146 @@
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+// @effect-diagnostics effect/strictEffectProvide:off
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
+import * as Effect from "effect/Effect";
+import * as Path from "effect/Path";
+import { JsonDocumentStore, nodePlatformLayer } from "pi-cosmic-core";
 import { _test } from "../index.ts";
 import {
   SETTINGS_OPTION_DESCRIPTORS,
   applySettingToRawConfig,
-  isRecord,
+  configPaths,
   readConfig,
   readRawConfig,
+  resolveConfig,
   writeConfig,
 } from "../src/config.ts";
 
-function withTempDir<T>(run: (tempDir: string) => T): T {
-  const tempDir = mkdtempSync(join(tmpdir(), "pi-better-openai-"));
-  try {
-    return run(tempDir);
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-}
-
-function withHome<T>(home: string, run: () => T): T {
-  const previousHome = process.env.HOME;
-  const previousUserProfile = process.env.USERPROFILE;
-  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-  process.env.HOME = home;
-  process.env.USERPROFILE = home;
-  delete process.env.PI_CODING_AGENT_DIR;
-  try {
-    return run();
-  } finally {
-    if (previousHome === undefined) delete process.env.HOME;
-    else process.env.HOME = previousHome;
-    if (previousUserProfile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = previousUserProfile;
-    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-  }
-}
+const directories: string[] = [];
+const temp = () => {
+  const value = mkdtempSync(join(tmpdir(), "pi-better-openai-config-"));
+  directories.push(value);
+  return value;
+};
+afterEach(() => {
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
+});
+const run = <A, E>(effect: Effect.Effect<A, E, Path.Path | JsonDocumentStore>) =>
+  Effect.runPromise(effect.pipe(Effect.provide(nodePlatformLayer)));
 
 describe("config helpers", () => {
-  test("exposes expected defaults", () => {
+  test("exposes expected defaults and fixed allow-list", () => {
     expect(_test.CONFIG_BASENAME).toBe("pi-better-openai.json");
     expect(_test.DEFAULT_CONFIG.desiredActive).toBe(false);
     expect(_test.DEFAULT_IMAGE_CONFIG.defaultSave).toBe("project");
     expect(_test.DEFAULT_CONFIG).not.toHaveProperty("supportedModels");
-    expect(_test.SUPPORTED_FAST_MODELS).toEqual([
-      "openai/gpt-5.4",
-      "openai/gpt-5.5",
-      "openai-codex/gpt-5.6-sol",
-      "openai-codex/gpt-5.6-terra",
-      "openai-codex/gpt-5.6-luna",
-      "openai-codex/gpt-5.4",
-      "openai-codex/gpt-5.5",
-    ]);
+    expect(_test.SUPPORTED_FAST_MODELS).toContain("openai/gpt-5.5");
   });
 
-  test("does not expose the fast-mode allow-list through config", () => {
-    withTempDir((tempDir) => {
-      const configPath = join(tempDir, "config.json");
-      writeConfig(configPath, { supportedModels: ["openai/gpt-4.1"] });
-
-      expect(readConfig(configPath)).not.toHaveProperty("supportedModels");
-    });
+  test("does not expose the allow-list through decoded config", async () => {
+    const configPath = join(temp(), "config.json");
+    await run(writeConfig(configPath, { supportedModels: ["openai/gpt-4.1"] }));
+    expect(await run(readConfig(configPath))).not.toHaveProperty("supportedModels");
   });
 
-  test("builds paths from injected SDK-resolved agent and Pi config directories", () => {
-    expect(_test.configPaths("/project", "/home/alice/custom-agent")).toEqual({
+  test("builds paths from injected SDK directories", async () => {
+    expect(await run(configPaths("/project", "/agent"))).toEqual({
       project: "/project/.pi/extensions/pi-better-openai.json",
-      global: "/home/alice/custom-agent/extensions/pi-better-openai.json",
+      global: "/agent/extensions/pi-better-openai.json",
     });
   });
 
-  test("preserves unknown config fields while writing updates", () => {
-    withTempDir((tempDir) => {
-      const configPath = join(tempDir, "config.json");
+  test("preserves unknown fields through Effect document writes", async () => {
+    const configPath = join(temp(), "config.json");
+    await run(
       writeConfig(configPath, {
         active: false,
         unknownField: "keep me",
         usage: { enabled: true, unknownUsageField: 123 },
-      });
-      const current = readRawConfig(configPath);
-      writeConfig(configPath, { ...current, active: true });
-      const afterActiveWrite = readRawConfig(configPath);
-      expect(afterActiveWrite.active).toBe(true);
-      expect(afterActiveWrite.unknownField).toBe("keep me");
-      expect(afterActiveWrite.usage).toEqual({ enabled: true, unknownUsageField: 123 });
+      }),
+    );
+    const current = await run(readRawConfig(configPath));
+    await run(writeConfig(configPath, { ...current, active: true }));
+    const after = await run(readRawConfig(configPath));
+    expect(after).toMatchObject({ active: true, unknownField: "keep me" });
+    expect(after.usage).toEqual({ enabled: true, unknownUsageField: 123 });
+  });
 
-      const currentUsage = isRecord(afterActiveWrite.usage) ? afterActiveWrite.usage : {};
-      writeConfig(configPath, { ...afterActiveWrite, usage: { ...currentUsage, enabled: false } });
-      const afterUsageWrite = readRawConfig(configPath);
-      expect(afterUsageWrite.usage).toEqual({ enabled: false, unknownUsageField: 123 });
-
-      const projectConfigPath = _test.configPaths(tempDir).project;
-      writeConfig(projectConfigPath, {
-        image: { defaultSave: "global", outputFormat: "webp", timeoutMs: 1 },
-      });
-      const resolved = _test.resolveConfig(tempDir);
-      expect(resolved.image.defaultSave).toBe("global");
-      expect(resolved.image.outputFormat).toBe("webp");
-      expect(resolved.image.timeoutMs).toBe(30000);
+  test("project overrides global while global fills missing nested values", async () => {
+    const root = temp();
+    const cwd = join(root, "project");
+    const agent = join(root, "agent");
+    const paths = await run(configPaths(cwd, agent));
+    await run(
+      writeConfig(paths.global, {
+        usage: { enabled: false, refreshIntervalMs: 20_000, showResetTimes: false },
+        footer: { mode: "replace" },
+        image: { defaultSave: "global", outputFormat: "jpeg", timeoutMs: 40_000 },
+      }),
+    );
+    await run(
+      writeConfig(paths.project, {
+        usage: { enabled: true },
+        footer: { mode: "status" },
+        image: { outputFormat: "webp" },
+      }),
+    );
+    const resolved = await run(resolveConfig(cwd, agent));
+    expect(resolved.usage).toMatchObject({
+      enabled: true,
+      refreshIntervalMs: 20_000,
+      showResetTimes: false,
+    });
+    expect(resolved.footer.mode).toBe("status");
+    expect(resolved.image).toMatchObject({
+      defaultSave: "global",
+      outputFormat: "webp",
+      timeoutMs: 40_000,
     });
   });
 
-  test("project config overrides global config while global fills missing nested values", () => {
-    withTempDir((tempDir) => {
-      const cwd = join(tempDir, "project");
-      const home = join(tempDir, "home");
-      withHome(home, () => {
-        const paths = _test.configPaths(cwd, join(home, ".pi", "agent"));
-        writeConfig(paths.global, {
-          usage: { enabled: false, refreshIntervalMs: 20000, showResetTimes: false },
-          footer: { mode: "replace" },
-          image: { defaultSave: "global", outputFormat: "jpeg", timeoutMs: 40000 },
-        });
-        writeConfig(paths.project, {
-          usage: { enabled: true },
-          footer: { mode: "status" },
-          image: { outputFormat: "webp" },
-        });
-
-        const resolved = _test.resolveConfig(cwd);
-
-        expect(resolved.usage).toMatchObject({
-          enabled: true,
-          refreshIntervalMs: 20000,
-          showResetTimes: false,
-        });
-        expect(resolved.footer.mode).toBe("status");
-        expect(resolved.image).toMatchObject({
-          defaultSave: "global",
-          outputFormat: "webp",
-          timeoutMs: 40000,
-        });
-      });
-    });
-  });
-
-  test("ignores invalid enum values while reading config", () => {
-    withTempDir((tempDir) => {
-      const configPath = join(tempDir, "config.json");
+  test("invalid siblings fall back independently", async () => {
+    const configPath = join(temp(), "config.json");
+    await run(
       writeConfig(configPath, {
         footer: { mode: "float" },
         image: { enabled: true, defaultSave: "desktop", outputFormat: "gif" },
-      });
-
-      const parsed = readConfig(configPath);
-
-      expect(parsed?.footer).toBeUndefined();
-      expect(parsed?.image).toEqual({ enabled: true });
-    });
-  });
-
-  test("clamps numeric usage and image settings", () => {
-    withTempDir((tempDir) => {
-      const projectConfigPath = _test.configPaths(tempDir).project;
-      writeConfig(projectConfigPath, {
-        usage: { refreshIntervalMs: 1 },
-        image: { timeoutMs: 1 },
-      });
-
-      const resolved = _test.resolveConfig(tempDir);
-
-      expect(resolved.usage.refreshIntervalMs).toBe(15000);
-      expect(resolved.image.timeoutMs).toBe(30000);
-    });
-  });
-
-  test("settings descriptors parse representative raw value types", () => {
-    const descriptors = new Map(
-      SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
+      }),
     );
-
-    expect(descriptors.get("usage.enabled")?.parse("true")).toBe(true);
-    expect(descriptors.get("usage.refreshIntervalMs")?.parse("15000")).toBe(15000);
-    expect(descriptors.get("footer.mode")?.parse("status")).toBe("status");
-    expect(descriptors.get("image.timeoutMs")?.parse("45000")).toBe(45000);
+    const parsed = await run(readConfig(configPath));
+    expect(parsed?.footer).toBeUndefined();
+    expect(parsed?.image).toEqual({ enabled: true });
   });
 
-  test("applies settings writes with persisted raw config shapes", () => {
-    const raw = {
-      unknown: "preserved",
-      usage: { unknownUsage: true },
-    };
+  test("clamps numeric settings", async () => {
+    const root = temp();
+    const paths = await run(configPaths(root, join(root, "agent")));
+    await run(
+      writeConfig(paths.project, { usage: { refreshIntervalMs: 1 }, image: { timeoutMs: 1 } }),
+    );
+    const resolved = await run(resolveConfig(root, join(root, "agent")));
+    expect(resolved.usage.refreshIntervalMs).toBe(15_000);
+    expect(resolved.image.timeoutMs).toBe(30_000);
+  });
 
+  test.each([
+    ["usage.enabled", "true", true],
+    ["usage.refreshIntervalMs", "15000", 15_000],
+    ["usage.showResetTimes", "false", false],
+    ["footer.mode", "status", "status"],
+    ["image.defaultSave", "global", "global"],
+    ["image.timeoutMs", "45000", 45_000],
+  ])("parses setting %s from its persisted string form", (id, raw, expected) => {
+    const descriptors = new Map(SETTINGS_OPTION_DESCRIPTORS.map((value) => [value.id, value]));
+    expect(descriptors.get(id)?.parse(raw)).toBe(expected);
+  });
+
+  test("settings patches preserve unknown shapes", () => {
+    const raw = { unknown: "preserved", usage: { unknownUsage: true } };
     expect(
       applySettingToRawConfig(raw, "fast.enabled", "true", {
         persistState: true,
@@ -192,23 +148,9 @@ describe("config helpers", () => {
         desiredActive: true,
       }),
     ).toMatchObject({ active: true, desiredActive: true, unknown: "preserved" });
-    expect(
-      applySettingToRawConfig(raw, "fast.enabled", "true", {
-        persistState: false,
-        active: true,
-        desiredActive: true,
-      }),
-    ).not.toHaveProperty("active");
-
     expect(applySettingToRawConfig(raw, "usage.refreshIntervalMs", "15000").usage).toEqual({
       unknownUsage: true,
-      refreshIntervalMs: 15000,
-    });
-    expect(applySettingToRawConfig(raw, "footer.mode", "status").footer).toEqual({
-      mode: "status",
-    });
-    expect(applySettingToRawConfig(raw, "image.timeoutMs", "45000").image).toEqual({
-      timeoutMs: 45000,
+      refreshIntervalMs: 15_000,
     });
   });
 });

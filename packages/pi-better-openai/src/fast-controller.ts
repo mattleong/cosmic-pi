@@ -1,21 +1,15 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as MutableRef from "effect/MutableRef";
 import type { ResolvedConfig } from "./config.ts";
 import { isRecord } from "./config.ts";
 import { fastModelKey, SUPPORTED_FAST_MODELS, supportsFastModel } from "./fast-models.ts";
 
 export { SUPPORTED_FAST_MODELS } from "./fast-models.ts";
-
-export function currentModelKey(ctx: ExtensionContext): string {
-  return ctx.model ? fastModelKey(ctx.model.provider, ctx.model.id) : "none";
-}
-
-export function supportsFast(ctx: ExtensionContext): boolean {
-  return supportsFastModel(ctx.model?.provider, ctx.model?.id);
-}
-
-export function modelList(): string {
-  return SUPPORTED_FAST_MODELS.join(", ");
-}
+export const currentModelKey = (ctx: ExtensionContext): string =>
+  ctx.model ? fastModelKey(ctx.model.provider, ctx.model.id) : "none";
+export const supportsFast = (ctx: ExtensionContext): boolean =>
+  supportsFastModel(ctx.model?.provider, ctx.model?.id);
+export const modelList = (): string => SUPPORTED_FAST_MODELS.join(", ");
 
 export function fastStateText(
   ctx: ExtensionContext,
@@ -24,77 +18,82 @@ export function fastStateText(
 ): string {
   const model = currentModelKey(ctx);
   if (active) return `Fast mode is on for ${model}.`;
-  if (desiredActive) {
+  if (desiredActive)
     return `Fast mode is requested, but inactive for unsupported model ${model}. Supported models: ${modelList()}.`;
-  }
   return `Fast mode is off. Current model: ${model}.`;
 }
 
-export class FastController {
-  desiredActive = false;
-  active = false;
-  private lastInjectedAt: number | undefined;
-  private lastInjectedModel: string | undefined;
-  private lastInjectedTier: string | undefined;
-  private readonly serviceTier: string;
+interface FastState {
+  readonly desiredActive: boolean;
+  readonly active: boolean;
+  readonly lastInjectedModel?: string;
+  readonly lastInjectedTier?: string;
+}
 
+export class FastController {
+  private readonly state = MutableRef.make<FastState>({ desiredActive: false, active: false });
+  private readonly serviceTier: string;
   constructor(serviceTier: string) {
     this.serviceTier = serviceTier;
   }
-
+  get desiredActive() {
+    return MutableRef.get(this.state).desiredActive;
+  }
+  get active() {
+    return MutableRef.get(this.state).active;
+  }
   applyDesiredState(ctx: ExtensionContext): void {
-    this.active = this.desiredActive && supportsFast(ctx);
+    const current = MutableRef.get(this.state);
+    MutableRef.set(this.state, { ...current, active: current.desiredActive && supportsFast(ctx) });
   }
-
   initializeForSession(ctx: ExtensionContext, cfg: ResolvedConfig, flagActive: boolean): void {
-    this.desiredActive = cfg.persistState ? cfg.desiredActive : false;
-    if (flagActive) this.desiredActive = true;
-    this.applyDesiredState(ctx);
+    const desiredActive = flagActive || (cfg.persistState ? cfg.desiredActive : false);
+    MutableRef.set(this.state, { desiredActive, active: desiredActive && supportsFast(ctx) });
   }
-
-  setDesired(ctx: ExtensionContext, next: boolean): void {
-    this.desiredActive = next;
-    this.applyDesiredState(ctx);
+  setDesired(ctx: ExtensionContext, desiredActive: boolean): void {
+    const current = MutableRef.get(this.state);
+    MutableRef.set(this.state, {
+      ...current,
+      desiredActive,
+      active: desiredActive && supportsFast(ctx),
+    });
   }
-
   stateText(ctx: ExtensionContext): string {
     return fastStateText(ctx, this.desiredActive, this.active);
   }
-
   unsupportedRequestMessage(ctx: ExtensionContext): string {
     return `Fast mode requested, but ${currentModelKey(ctx)} is unsupported. It will activate automatically when you switch to a supported model: ${modelList()}.`;
   }
-
   inactiveForModelMessage(ctx: ExtensionContext): string {
     return `Fast mode inactive for unsupported model ${currentModelKey(ctx)}.`;
   }
-
   settingsSummary(ctx: ExtensionContext): string {
     if (this.active) return "on";
     if (this.desiredActive) return supportsFast(ctx) ? "requested" : "requested inactive";
     return "off";
   }
-
   statusSegment(ctx: ExtensionContext): string | undefined {
     return this.active && supportsFast(ctx) ? `${ctx.model?.id ?? "model"} fast` : undefined;
   }
-
   injectProviderPayload(event: { payload?: unknown }, ctx: ExtensionContext): unknown {
     if (!this.active || !supportsFast(ctx) || !isRecord(event.payload)) return undefined;
-    this.lastInjectedAt = Date.now();
-    this.lastInjectedModel = currentModelKey(ctx);
-    this.lastInjectedTier = this.serviceTier;
+    const current = MutableRef.get(this.state);
+    MutableRef.set(this.state, {
+      ...current,
+      lastInjectedModel: currentModelKey(ctx),
+      lastInjectedTier: this.serviceTier,
+    });
     return { ...event.payload, service_tier: this.serviceTier };
   }
-
   debugLines(ctx: ExtensionContext): string[] {
+    const state = MutableRef.get(this.state);
     return [
-      `Fast desired: ${this.desiredActive}`,
-      `Fast active: ${this.active}`,
+      `Fast desired: ${state.desiredActive}`,
+      `Fast active: ${state.active}`,
       `Current model: ${currentModelKey(ctx)}`,
       `Supported model: ${supportsFast(ctx)}`,
       `Configured service_tier: ${this.serviceTier}`,
-      `Last injected: ${this.lastInjectedAt ? `${new Date(this.lastInjectedAt).toLocaleTimeString()} (${this.lastInjectedModel}, ${this.lastInjectedTier})` : "never"}`,
+      `Last injected: ${state.lastInjectedModel ? `${state.lastInjectedModel}, ${state.lastInjectedTier}` : "never"}`,
     ];
   }
 }

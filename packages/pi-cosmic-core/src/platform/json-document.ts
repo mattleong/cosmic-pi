@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Semaphore from "effect/Semaphore";
+import * as Random from "effect/Random";
 import { JsonDocumentError } from "./errors.ts";
 
 export type JsonObject = Record<string, unknown>;
@@ -88,15 +89,16 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
           .pipe(
             Effect.mapError(mapError("mkdir", path, "Unable to create JSON document directory.")),
           );
-        const temporary = yield* fs
-          .makeTempFile({
-            directory,
-            prefix: `.${pathService.basename(path)}.`,
-            suffix: ".tmp",
-          })
-          .pipe(
-            Effect.mapError(mapError("temp", path, "Unable to create temporary JSON document.")),
-          );
+        const nonce = [
+          yield* Random.nextIntBetween(0, 0xffff_ffff),
+          yield* Random.nextIntBetween(0, 0xffff_ffff),
+        ]
+          .map((value) => value.toString(16).padStart(8, "0"))
+          .join("");
+        const temporary = pathService.join(
+          directory,
+          `.${pathService.basename(path)}.${nonce}.tmp`,
+        );
         yield* Effect.acquireUseRelease(
           Effect.succeed(temporary),
           (temporaryPath) =>

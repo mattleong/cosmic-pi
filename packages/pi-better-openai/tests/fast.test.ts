@@ -1,3 +1,9 @@
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+// @effect-diagnostics effect/processEnv:off
+// @effect-diagnostics effect/globalDate:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/floatingEffect:off
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

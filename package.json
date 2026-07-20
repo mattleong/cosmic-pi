@@ -15,7 +15,7 @@
   "type": "module",
   "scripts": {
     "build": "pnpm -r --if-present build",
-    "check": "pnpm typecheck && pnpm effect:lsp:verify && pnpm lint && pnpm format:check && pnpm architecture:check",
+    "check": "pnpm typecheck && pnpm effect:lsp:verify && pnpm effect:diagnostics && pnpm lint && pnpm format:check && pnpm architecture:check",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint --deny-warnings scripts && pnpm -r lint",
@@ -25,7 +25,7 @@
     "effect:lsp:patch": "effect-language-service patch",
     "effect:lsp:check": "effect-language-service check",
     "effect:lsp:verify": "node scripts/verify-effect-lsp.mjs",
-    "effect:diagnostics": "effect-language-service diagnostics --project packages/pi-cosmic-core/tsconfig.json && effect-language-service diagnostics --project packages/pi-better-xai/tsconfig.json",
+    "effect:diagnostics": "effect-language-service diagnostics --project packages/pi-cosmic-core/tsconfig.json && effect-language-service diagnostics --project packages/pi-better-xai/tsconfig.json && effect-language-service diagnostics --project packages/pi-better-openai/tsconfig.json",
     "architecture:check": "node scripts/check-effect-architecture.mjs",
     "pack:smoke": "node scripts/verify-packed-core.mjs",
     "prepare": "effect-language-service patch",
