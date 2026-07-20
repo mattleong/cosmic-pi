@@ -72,7 +72,7 @@ export class AdvisorFindingDedupe {
       }
       const entry: AdvisorFindingDedupeRollbackEntry = {
         key,
-        previous,
+        ...(previous === undefined ? {} : { previous }),
         wasNew: previous === undefined,
         evicted: [],
       };

@@ -1,4 +1,8 @@
+import { stringifyJson } from "./boundary/json.ts";
 import { createHash } from "node:crypto";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { snapshotData, snapshotDataRecord } from "./boundary/safe-data.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   isValidAdvisorFindingRecord,
@@ -16,13 +20,74 @@ export const ADVISOR_CHECKPOINT_ENTRY_TYPE = "pi-advisor-checkpoint";
 export const ADVISOR_CHECKPOINT_PROTOCOL_VERSION = 2;
 export const MAX_LEDGER_EMISSION_HASHES = 32;
 
-const SEVERITIES = ["nit", "concern", "blocker"] as const satisfies readonly AdvisorSeverity[];
-const CATEGORIES = [
-  "intent",
-  "correctness",
-  "completeness",
-  "evidence",
-] as const satisfies readonly AdvisorFindingCategory[];
+const BoundedCountSchema = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isBetween({ minimum: 0, maximum: 5 }),
+);
+const ReviewSummaryWireSchema = Schema.Struct({
+  verdict: Schema.Literals(["none", "pass", "revise"]),
+  severityCounts: Schema.Struct({
+    nit: BoundedCountSchema,
+    concern: BoundedCountSchema,
+    blocker: BoundedCountSchema,
+  }),
+  categoryCounts: Schema.Struct({
+    intent: BoundedCountSchema,
+    correctness: BoundedCountSchema,
+    completeness: BoundedCountSchema,
+    evidence: BoundedCountSchema,
+  }),
+});
+const NonNegativeIntSchema = Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
+const FindingLifecycleWireSchema = Schema.Struct({
+  id: Schema.String.check(Schema.isPattern(/^af_[a-f\d]{32}$/)),
+  key: Schema.String.check(Schema.isPattern(/^[a-f\d]{64}$/)),
+  generation: NonNegativeIntSchema,
+  category: Schema.Literals(["intent", "correctness", "completeness", "evidence"]),
+  severity: Schema.Literals(["nit", "concern", "blocker"]),
+  status: Schema.Literals(["open", "acknowledged", "resolved", "superseded"]),
+  firstSeenTurn: NonNegativeIntSchema,
+  lastSeenTurn: NonNegativeIntSchema,
+});
+const InterventionBudgetWireSchema = Schema.Struct({
+  delivered: NonNegativeIntSchema,
+  correctionUsed: Schema.Boolean,
+  highestSeverity: Schema.optional(Schema.Literals(["nit", "concern", "blocker"])),
+});
+const AdvisorCheckpointLedgerInputSchema = Schema.Struct({
+  protocolVersion: Schema.Literal(2),
+  fingerprint: Schema.String.check(Schema.isPattern(/^[a-f\d]{64}$/i)),
+  anchorId: Schema.String.check(Schema.isNonEmpty()),
+  reviewSummary: ReviewSummaryWireSchema,
+  routing: Schema.Struct({
+    cancellationLatched: Schema.Boolean,
+    completedPrimaryTurns: Schema.optional(NonNegativeIntSchema),
+    immunityUntilCompletedTurn: NonNegativeIntSchema,
+  }),
+  emissionHashes: Schema.Array(
+    Schema.String.check(Schema.isPattern(/^(?:nit|concern|blocker):[a-f\d]{64}$/i)),
+  ).check(Schema.isMaxLength(MAX_LEDGER_EMISSION_HASHES)),
+});
+export const AdvisorCheckpointLedgerWireSchema = Schema.Struct({
+  protocolVersion: Schema.Literal(2),
+  fingerprint: Schema.String.check(Schema.isPattern(/^[a-f\d]{64}$/i)),
+  anchorId: Schema.String.check(Schema.isNonEmpty()),
+  reviewSummary: ReviewSummaryWireSchema,
+  routing: Schema.Struct({
+    cancellationLatched: Schema.Boolean,
+    completedPrimaryTurns: NonNegativeIntSchema,
+    immunityUntilCompletedTurn: NonNegativeIntSchema,
+    interventionBudget: Schema.optional(InterventionBudgetWireSchema),
+  }),
+  findingLifecycle: Schema.optional(
+    Schema.Array(FindingLifecycleWireSchema).check(
+      Schema.isMaxLength(MAX_FINDING_LIFECYCLE_RECORDS),
+    ),
+  ),
+  emissionHashes: Schema.Array(
+    Schema.String.check(Schema.isPattern(/^(?:nit|concern|blocker):[a-f\d]{64}$/i)),
+  ).check(Schema.isMaxLength(MAX_LEDGER_EMISSION_HASHES)),
+});
 
 export interface AdvisorDurableReviewSummary {
   verdict: "none" | "pass" | "revise";
@@ -57,7 +122,7 @@ export interface LedgerFingerprintInput {
 export function createLedgerFingerprint(input: LedgerFingerprintInput): string {
   return createHash("sha256")
     .update(
-      JSON.stringify({
+      stringifyJson({
         provider: input.provider,
         model: input.model,
         cwd: input.cwd,
@@ -83,7 +148,7 @@ export function summarizeAdvisorReview(review?: AdvisorReview): AdvisorDurableRe
 
 /** Render only extension-owned closed enums and bounded counts for child re-prime context. */
 export function renderDurableReviewSummary(summary: AdvisorDurableReviewSummary): string {
-  return JSON.stringify(summary);
+  return stringifyJson(summary);
 }
 
 export function createCheckpointLedger(input: {
@@ -141,55 +206,54 @@ export function restoreCheckpointLedger(
 }
 
 export function parseLedger(value: unknown): AdvisorCheckpointLedger | undefined {
-  if (!isRecord(value)) return undefined;
-  if (value.protocolVersion !== ADVISOR_CHECKPOINT_PROTOCOL_VERSION) return undefined;
-  if (typeof value.fingerprint !== "string" || !/^[a-f\d]{64}$/i.test(value.fingerprint))
-    return undefined;
-  if (typeof value.anchorId !== "string" || !value.anchorId) return undefined;
-  const reviewSummary = parseReviewSummary(value.reviewSummary);
-  if (!reviewSummary || !isRecord(value.routing)) return undefined;
-  if (typeof value.routing.cancellationLatched !== "boolean") return undefined;
-  const completedPrimaryTurns = value.routing.completedPrimaryTurns ?? 0;
-  if (
-    typeof completedPrimaryTurns !== "number" ||
-    !Number.isSafeInteger(completedPrimaryTurns) ||
-    completedPrimaryTurns < 0
-  )
-    return undefined;
-  if (
-    typeof value.routing.immunityUntilCompletedTurn !== "number" ||
-    !Number.isSafeInteger(value.routing.immunityUntilCompletedTurn) ||
-    value.routing.immunityUntilCompletedTurn < 0
-  )
-    return undefined;
-  if (
-    !Array.isArray(value.emissionHashes) ||
-    value.emissionHashes.length > MAX_LEDGER_EMISSION_HASHES ||
-    !value.emissionHashes.every(isEmissionRecord)
-  )
-    return undefined;
-  return {
-    protocolVersion: ADVISOR_CHECKPOINT_PROTOCOL_VERSION,
-    fingerprint: value.fingerprint,
-    anchorId: value.anchorId,
-    reviewSummary,
+  const snapshot = snapshotDataRecord(value);
+  if (!snapshot) return undefined;
+  const routing = snapshotDataRecord(snapshot.routing);
+  if (!routing) return undefined;
+  const schemaInput = {
+    protocolVersion: snapshot.protocolVersion,
+    fingerprint: snapshot.fingerprint,
+    anchorId: snapshot.anchorId,
+    reviewSummary: snapshot.reviewSummary,
     routing: {
-      cancellationLatched: value.routing.cancellationLatched,
-      completedPrimaryTurns,
-      immunityUntilCompletedTurn: value.routing.immunityUntilCompletedTurn,
-      ...(isRecord(value.routing.interventionBudget)
+      cancellationLatched: routing.cancellationLatched,
+      completedPrimaryTurns: routing.completedPrimaryTurns,
+      immunityUntilCompletedTurn: routing.immunityUntilCompletedTurn,
+    },
+    emissionHashes: snapshot.emissionHashes,
+  };
+  const decoded = Schema.decodeUnknownOption(AdvisorCheckpointLedgerInputSchema, {
+    onExcessProperty: "error",
+  })(schemaInput);
+  if (Option.isNone(decoded)) return undefined;
+  const input = decoded.value;
+  const routingSnapshot = routing;
+  const lifecycleSnapshot = snapshotData(snapshot.findingLifecycle);
+  const ledger: AdvisorCheckpointLedger = {
+    protocolVersion: ADVISOR_CHECKPOINT_PROTOCOL_VERSION,
+    fingerprint: input.fingerprint,
+    anchorId: input.anchorId,
+    reviewSummary: input.reviewSummary,
+    routing: {
+      cancellationLatched: input.routing.cancellationLatched,
+      completedPrimaryTurns: input.routing.completedPrimaryTurns ?? 0,
+      immunityUntilCompletedTurn: input.routing.immunityUntilCompletedTurn,
+      ...(snapshotDataRecord(routingSnapshot?.interventionBudget)
         ? {
             interventionBudget: sanitizeInterventionBudgetSnapshot(
-              value.routing.interventionBudget,
+              snapshotDataRecord(routingSnapshot?.interventionBudget)!,
             ),
           }
         : {}),
     },
-    ...(Array.isArray(value.findingLifecycle)
-      ? { findingLifecycle: sanitizeFindingLifecycle(value.findingLifecycle) }
+    ...(Array.isArray(lifecycleSnapshot)
+      ? { findingLifecycle: sanitizeFindingLifecycle(lifecycleSnapshot) }
       : {}),
-    emissionHashes: [...value.emissionHashes],
+    emissionHashes: [...input.emissionHashes],
   };
+  return Option.isSome(Schema.decodeUnknownOption(AdvisorCheckpointLedgerWireSchema)(ledger))
+    ? ledger
+    : undefined;
 }
 
 function emptyReviewSummary(
@@ -209,40 +273,8 @@ function sanitizeReviewSummary(
 }
 
 function parseReviewSummary(value: unknown): AdvisorDurableReviewSummary | undefined {
-  if (!isRecord(value)) return undefined;
-  if (value.verdict !== "none" && value.verdict !== "pass" && value.verdict !== "revise") {
-    return undefined;
-  }
-  if (!isRecord(value.severityCounts) || !isRecord(value.categoryCounts)) return undefined;
-  if (!hasExactCountKeys(value.severityCounts, SEVERITIES)) return undefined;
-  if (!hasExactCountKeys(value.categoryCounts, CATEGORIES)) return undefined;
-  return {
-    verdict: value.verdict,
-    severityCounts: {
-      nit: Number(value.severityCounts.nit),
-      concern: Number(value.severityCounts.concern),
-      blocker: Number(value.severityCounts.blocker),
-    },
-    categoryCounts: {
-      intent: Number(value.categoryCounts.intent),
-      correctness: Number(value.categoryCounts.correctness),
-      completeness: Number(value.categoryCounts.completeness),
-      evidence: Number(value.categoryCounts.evidence),
-    },
-  };
-}
-
-function hasExactCountKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return (
-    actual.length === expected.length &&
-    expected.every((key, index) => (key === actual[index] ? isBoundedCount(value[key]) : false))
-  );
-}
-
-function isBoundedCount(value: unknown): boolean {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 5;
+  const decoded = Schema.decodeUnknownOption(ReviewSummaryWireSchema)(snapshotData(value));
+  return Option.isSome(decoded) ? decoded.value : undefined;
 }
 
 function sanitizeFindingLifecycle(values: readonly unknown[]): AdvisorFindingRecord[] {

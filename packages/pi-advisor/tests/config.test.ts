@@ -1,4 +1,15 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// Test harness boundary: only the diagnostics used by this file are suppressed.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
@@ -16,6 +27,7 @@ import {
   patchAdvisorConfig,
   readRawAdvisorConfig,
   writeAdvisorConfigPatch,
+  writeAdvisorConfigPatchAsync,
   writeRawAdvisorConfig,
 } from "../src/config.ts";
 
@@ -29,6 +41,49 @@ function withTempDir<T>(run: (tempDir: string) => T): T {
 }
 
 describe("advisor config", () => {
+  test("serializes exported async patches across Layers and protects new paths", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "pi-advisor-config-async-"));
+    const path = join(tempDir, "private", "advisor.json");
+    const previousUmask = process.umask(0);
+    try {
+      await Promise.all([
+        writeAdvisorConfigPatchAsync({ enabled: false }, path),
+        writeAdvisorConfigPatchAsync({ provider: "p" }, path),
+        writeAdvisorConfigPatchAsync({ model: "m" }, path),
+      ]);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+        enabled: false,
+        provider: "p",
+        model: "m",
+      });
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      expect(statSync(join(tempDir, "private")).mode & 0o777).toBe(0o700);
+    } finally {
+      process.umask(previousUmask);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("tightens existing config directories in Effect and sync compatibility writes", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "pi-advisor-config-mode-"));
+    const directory = join(tempDir, "extensions");
+    const path = join(directory, "advisor.json");
+    try {
+      mkdirSync(directory, { recursive: true, mode: 0o777 });
+      chmodSync(directory, 0o777);
+      await writeAdvisorConfigPatchAsync({ enabled: false }, path);
+      expect(statSync(directory).mode & 0o777).toBe(0o700);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+
+      chmodSync(directory, 0o777);
+      writeAdvisorConfigPatch({ model: "m" }, path);
+      expect(statSync(directory).mode & 0o777).toBe(0o700);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("uses capability-first review defaults", () => {
     expect(DEFAULT_ADVISOR_CONFIG).toEqual({
       enabled: true,
@@ -45,6 +100,31 @@ describe("advisor config", () => {
       "/home/alice/.pi/agent/extensions/pi-advisor.json",
     );
     expect(getAdvisorConfigPath("/var/lib/pi")).toBe("/var/lib/pi/extensions/pi-advisor.json");
+  });
+
+  test("ignores accessors and hostile Proxy traps before field Schema decoding", () => {
+    const accessor = Object.defineProperty({}, "provider", {
+      enumerable: true,
+      get() {
+        throw new Error("getter executed");
+      },
+    });
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("proxy trap executed");
+        },
+      },
+    );
+    expect(normalizeAdvisorConfig(accessor, "/tmp/config")).toMatchObject({
+      configured: false,
+      ...DEFAULT_ADVISOR_CONFIG,
+    });
+    expect(normalizeAdvisorConfig(hostile, "/tmp/config")).toMatchObject({
+      configured: false,
+      ...DEFAULT_ADVISOR_CONFIG,
+    });
   });
 
   test("applies defaults when config is absent or invalid", () => {
@@ -175,6 +255,21 @@ describe("advisor config", () => {
       expect(() => writeAdvisorConfigPatch({ enabled: false }, path)).toThrow();
       expect(readFileSync(path, "utf8")).toBe("{not-json");
     });
+  });
+
+  test("ignores accessor properties without invoking untrusted getters", () => {
+    const getter = vi.fn(() => {
+      throw new Error("getter must not run");
+    });
+    const raw = Object.defineProperty({ provider: "p", model: "m" }, "enabled", {
+      enumerable: true,
+      get: getter,
+    });
+    expect(normalizeAdvisorConfig(raw, "/tmp/advisor.json")).toMatchObject({
+      enabled: true,
+      configured: true,
+    });
+    expect(getter).not.toHaveBeenCalled();
   });
 
   test("patches known fields without discarding unknown fields", () => {

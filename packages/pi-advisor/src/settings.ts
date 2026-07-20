@@ -13,7 +13,7 @@ import {
   type AdvisorConfigPatch,
   type AdvisorReviewPolicy,
   type ResolvedAdvisorConfig,
-  writeAdvisorConfigPatch,
+  writeAdvisorConfigPatchAsync,
 } from "./config.ts";
 import type { AdvisorReviewFocus } from "./review.ts";
 
@@ -44,12 +44,14 @@ export interface AdvisorConfigState {
   get(): ResolvedAdvisorConfig;
   getMetrics(): Readonly<AdvisorSessionMetrics>;
   update(config: ResolvedAdvisorConfig): void;
+  /** Session-owned persistence adapter; omitted only by standalone compatibility tests. */
+  persist?(patch: AdvisorConfigPatch, path: string): Promise<ResolvedAdvisorConfig>;
 }
 
 export type AdvisorReviewRequestResult = "started" | "unavailable" | "cancelled";
 
 export interface AdvisorCommandActions {
-  cancel(ctx: ExtensionCommandContext): boolean;
+  cancel(ctx: ExtensionCommandContext): boolean | Promise<boolean>;
   pause(ctx: ExtensionCommandContext): void;
   resume(ctx: ExtensionCommandContext): void;
   reviewLast(
@@ -183,104 +185,101 @@ export function registerAdvisorCommands(
         .map((value) => ({ value, label: value }));
       return matches.length > 0 ? matches : null;
     },
-    handler: async (args, ctx) => handleAdvisorCommand(args, ctx, state, actions),
+    handler: (args, ctx) => handleAdvisorCommand(args, ctx, state, actions),
   });
   pi.registerCommand(SETTINGS_COMMAND, {
     description: "Configure automatic advisor supervision",
-    handler: async (_args, ctx) => openAdvisorSettings(ctx, state),
+    handler: (_args, ctx) => openAdvisorSettings(ctx, state),
   });
   pi.registerCommand(STATUS_COMMAND, {
     description: "Show advisor model and configuration status",
-    handler: async (args, ctx) =>
-      showAdvisorStatus(ctx, state.get(), state.getMetrics(), isVerbose(args)),
+    handler: (args, ctx) => {
+      showAdvisorStatus(ctx, state.get(), state.getMetrics(), isVerbose(args));
+      return Promise.resolve();
+    },
   });
   pi.registerCommand(USAGE_COMMAND, {
     description: "Show advisor usage for this session",
-    handler: async (_args, ctx) => showAdvisorUsage(ctx, state.get(), state.getMetrics()),
+    handler: (_args, ctx) => {
+      showAdvisorUsage(ctx, state.get(), state.getMetrics());
+      return Promise.resolve();
+    },
   });
 }
 
-async function handleAdvisorCommand(
+function handleAdvisorCommand(
   args: string,
   ctx: ExtensionCommandContext,
   state: AdvisorConfigState,
   actions: AdvisorCommandActions,
 ): Promise<void> {
   const command = args.trim().toLowerCase();
-  if (!command) {
-    await openAdvisorDashboard(ctx, state, actions);
-    return;
-  }
-
+  if (!command) return openAdvisorDashboard(ctx, state, actions);
   if (command === "once") {
     actions.reviewNext(ctx);
     ctx.ui.notify("Advisor will review the next completed response.", "info");
-    return;
+    return Promise.resolve();
   }
   if (command === "review-last" || command === "verify-last") {
     const focus = command === "verify-last" ? "verification" : "standard";
-    const result = await actions.reviewLast(ctx, focus);
-    if (result === "unavailable") {
-      ctx.ui.notify("No completed response is available to review.", "warning");
-    } else if (result === "started") {
-      ctx.ui.notify(
-        focus === "verification"
-          ? "Started an evidence-focused transcript review of the last response."
-          : "Started a review of the last response.",
-        "info",
-      );
-    }
-    return;
+    return Promise.resolve(actions.reviewLast(ctx, focus)).then((result) => {
+      if (result === "unavailable")
+        ctx.ui.notify("No completed response is available to review.", "warning");
+      else if (result === "started")
+        ctx.ui.notify(
+          focus === "verification"
+            ? "Started an evidence-focused transcript review of the last response."
+            : "Started a review of the last response.",
+          "info",
+        );
+    });
   }
   if (command === "pause") {
     actions.pause(ctx);
     ctx.ui.notify("Advisor paused for this session.", "info");
-    return;
+    return Promise.resolve();
   }
   if (command === "resume") {
     actions.resume(ctx);
     ctx.ui.notify("Advisor resumed for this session.", "info");
-    return;
+    return Promise.resolve();
   }
   if (command === "cancel") {
-    ctx.ui.notify(
-      actions.cancel(ctx) ? "Cancelled pending advisor work." : "No advisor review is active.",
-      "info",
-    );
-    return;
+    return Promise.resolve(actions.cancel(ctx)).then((cancelled) => {
+      ctx.ui.notify(
+        cancelled ? "Cancelled pending advisor work." : "No advisor review is active.",
+        "info",
+      );
+    });
   }
   if (command === "on" || command === "off") {
     const enabled = command === "on";
-    if (updateConfig(ctx, state, { enabled })) {
-      ctx.ui.notify(`Automatic advisor review ${enabled ? "enabled" : "disabled"}.`, "info");
-    }
-    return;
+    return updateConfig(ctx, state, { enabled }).then((saved) => {
+      if (saved)
+        ctx.ui.notify(`Automatic advisor review ${enabled ? "enabled" : "disabled"}.`, "info");
+    });
   }
-  if (command === "settings") {
-    await openAdvisorSettings(ctx, state);
-    return;
-  }
+  if (command === "settings") return openAdvisorSettings(ctx, state);
   if (command === "status" || command === "status --verbose" || command === "status -v") {
-    await showAdvisorStatus(ctx, state.get(), state.getMetrics(), command !== "status");
-    return;
+    showAdvisorStatus(ctx, state.get(), state.getMetrics(), command !== "status");
+    return Promise.resolve();
   }
-
   ctx.ui.notify(
     "Usage: /advisor [once|review-last|verify-last|pause|resume|cancel|on|off|settings|status [--verbose]]",
     "error",
   );
+  return Promise.resolve();
 }
 
-async function openAdvisorDashboard(
+function openAdvisorDashboard(
   ctx: ExtensionCommandContext,
   state: AdvisorConfigState,
   actions: AdvisorCommandActions,
 ): Promise<void> {
   if (!ctx.hasUI) {
-    await showAdvisorStatus(ctx, state.get(), state.getMetrics(), false);
-    return;
+    showAdvisorStatus(ctx, state.get(), state.getMetrics(), false);
+    return Promise.resolve();
   }
-
   const config = state.get();
   const metrics = state.getMetrics();
   const pauseOption = metrics.paused ? "Resume for this session" : "Pause for this session";
@@ -294,46 +293,46 @@ async function openAdvisorDashboard(
     "Status",
     "Done",
   ];
-  const choice = await ctx.ui.select(
-    `Advisor · ${formatPolicy(config.reviewPolicy)} · persistent read-only · ${formatModel(config)}`,
-    choices,
-  );
-
-  if (choice === "Review next response") {
-    actions.reviewNext(ctx);
-    ctx.ui.notify("Advisor will review the next completed response.", "info");
-  } else if (choice === "Review last response" || choice === "Verify last response") {
-    const focus = choice === "Verify last response" ? "verification" : "standard";
-    if (await actions.reviewLast(ctx, focus)) {
-      ctx.ui.notify(
-        focus === "verification"
-          ? "Started an evidence-focused transcript review."
-          : "Started review.",
-        "info",
-      );
-    }
-  } else if (choice === pauseOption) {
-    if (metrics.paused) actions.resume(ctx);
-    else actions.pause(ctx);
-  } else if (choice === enableOption) {
-    updateConfig(ctx, state, { enabled: !config.enabled });
-  } else if (choice === "Settings") {
-    await openAdvisorSettings(ctx, state);
-  } else if (choice === "Status") {
-    await showAdvisorStatus(ctx, state.get(), state.getMetrics(), false);
-  }
+  return ctx.ui
+    .select(
+      `Advisor · ${formatPolicy(config.reviewPolicy)} · persistent read-only · ${formatModel(config)}`,
+      choices,
+    )
+    .then((choice) => {
+      if (choice === "Review next response") {
+        actions.reviewNext(ctx);
+        ctx.ui.notify("Advisor will review the next completed response.", "info");
+      } else if (choice === "Review last response" || choice === "Verify last response") {
+        const focus = choice === "Verify last response" ? "verification" : "standard";
+        return Promise.resolve(actions.reviewLast(ctx, focus)).then((result) => {
+          if (result)
+            ctx.ui.notify(
+              focus === "verification"
+                ? "Started an evidence-focused transcript review."
+                : "Started review.",
+              "info",
+            );
+        });
+      } else if (choice === pauseOption) {
+        if (metrics.paused) actions.resume(ctx);
+        else actions.pause(ctx);
+      } else if (choice === enableOption)
+        return updateConfig(ctx, state, { enabled: !config.enabled }).then(() => undefined);
+      else if (choice === "Settings") return openAdvisorSettings(ctx, state);
+      else if (choice === "Status") showAdvisorStatus(ctx, state.get(), state.getMetrics(), false);
+      return undefined;
+    });
 }
 
-async function openAdvisorSettings(
+function openAdvisorSettings(
   ctx: ExtensionCommandContext,
   state: AdvisorConfigState,
 ): Promise<void> {
   if (!ctx.hasUI) {
     ctx.ui.notify("/advisor-settings requires interactive UI.", "error");
-    return;
+    return Promise.resolve();
   }
-
-  while (true) {
+  const step = (): Promise<void> => {
     const current = state.get();
     const enabledOption = `Advisor supervision: ${current.enabled ? "on" : "off"}`;
     const policyOption = `Behavior: ${formatPolicy(current.reviewPolicy)}`;
@@ -342,81 +341,89 @@ async function openAdvisorSettings(
     const thinkingOption = `Reasoning level: ${current.thinkingLevel}`;
     const timeoutOption = `Advisor operation timeout: ${formatDuration(current.timeoutMs)}`;
     const contextOption = `Context cap: ${current.maxContextChars.toLocaleString()} characters`;
-    const choice = await ctx.ui.select("Advisor settings · changes apply immediately", [
-      enabledOption,
-      policyOption,
-      modelOption,
-      fastModeOption,
-      thinkingOption,
-      timeoutOption,
-      contextOption,
-      "Done",
-    ]);
-
-    if (!choice || choice === "Done") return;
-    if (choice === enabledOption) {
-      updateConfig(ctx, state, { enabled: !current.enabled });
-    } else if (choice === policyOption) {
-      const next = await choosePolicy(ctx, current.reviewPolicy);
-      if (next && next !== current.reviewPolicy) updateConfig(ctx, state, { reviewPolicy: next });
-    } else if (choice === modelOption) {
-      const next = await chooseAdvisorModel(ctx, current);
-      if (
-        next.provider !== current.provider ||
-        next.model !== current.model ||
-        next.thinkingLevel !== current.thinkingLevel
-      ) {
-        updateConfig(ctx, state, {
-          provider: next.provider,
-          model: next.model,
-          thinkingLevel: next.thinkingLevel,
-        });
-      }
-    } else if (choice === fastModeOption) {
-      updateConfig(ctx, state, { fastMode: !current.fastMode });
-    } else if (choice === thinkingOption) {
-      const thinkingLevel = await chooseThinkingLevel(ctx, current);
-      if (thinkingLevel && thinkingLevel !== current.thinkingLevel) {
-        updateConfig(ctx, state, { thinkingLevel });
-      }
-    } else if (choice === timeoutOption) {
-      const timeoutMs = await chooseNumericSetting(
-        ctx,
-        "Advisor operation timeout",
-        TIMEOUT_OPTIONS.map((item) => ({ label: formatDuration(item), value: item })),
-      );
-      if (timeoutMs !== undefined && timeoutMs !== current.timeoutMs) {
-        updateConfig(ctx, state, { timeoutMs });
-      }
-    } else if (choice === contextOption) {
-      const maxContextChars = await chooseNumericSetting(
-        ctx,
-        "Advisor context cap",
-        CONTEXT_OPTIONS.map((item) => ({
-          label: `${item.toLocaleString()} characters`,
-          value: item,
-        })),
-      );
-      if (maxContextChars !== undefined && maxContextChars !== current.maxContextChars) {
-        updateConfig(ctx, state, { maxContextChars });
-      }
-    }
-  }
+    return ctx.ui
+      .select("Advisor settings · changes apply immediately", [
+        enabledOption,
+        policyOption,
+        modelOption,
+        fastModeOption,
+        thinkingOption,
+        timeoutOption,
+        contextOption,
+        "Done",
+      ])
+      .then((choice) => {
+        if (!choice || choice === "Done") return false;
+        if (choice === enabledOption)
+          return updateConfig(ctx, state, { enabled: !current.enabled }).then(() => true);
+        if (choice === policyOption)
+          return choosePolicy(ctx, current.reviewPolicy).then((next) =>
+            next && next !== current.reviewPolicy
+              ? updateConfig(ctx, state, { reviewPolicy: next }).then(() => true)
+              : true,
+          );
+        if (choice === modelOption)
+          return chooseAdvisorModel(ctx, current).then((next) =>
+            next.provider !== current.provider ||
+            next.model !== current.model ||
+            next.thinkingLevel !== current.thinkingLevel
+              ? updateConfig(ctx, state, {
+                  provider: next.provider,
+                  model: next.model,
+                  thinkingLevel: next.thinkingLevel,
+                }).then(() => true)
+              : true,
+          );
+        if (choice === fastModeOption)
+          return updateConfig(ctx, state, { fastMode: !current.fastMode }).then(() => true);
+        if (choice === thinkingOption)
+          return chooseThinkingLevel(ctx, current).then((value) =>
+            value && value !== current.thinkingLevel
+              ? updateConfig(ctx, state, { thinkingLevel: value }).then(() => true)
+              : true,
+          );
+        if (choice === timeoutOption)
+          return chooseNumericSetting(
+            ctx,
+            "Advisor operation timeout",
+            TIMEOUT_OPTIONS.map((item) => ({ label: formatDuration(item), value: item })),
+          ).then((value) =>
+            value !== undefined && value !== current.timeoutMs
+              ? updateConfig(ctx, state, { timeoutMs: value }).then(() => true)
+              : true,
+          );
+        return chooseNumericSetting(
+          ctx,
+          "Advisor context cap",
+          CONTEXT_OPTIONS.map((item) => ({
+            label: `${item.toLocaleString()} characters`,
+            value: item,
+          })),
+        ).then((value) =>
+          value !== undefined && value !== current.maxContextChars
+            ? updateConfig(ctx, state, { maxContextChars: value }).then(() => true)
+            : true,
+        );
+      })
+      .then((continueEditing) => (continueEditing === false ? undefined : step()));
+  };
+  return step();
 }
 
-async function choosePolicy(
+function choosePolicy(
   ctx: ExtensionCommandContext,
   current: AdvisorReviewPolicy,
 ): Promise<AdvisorReviewPolicy | undefined> {
   const labels = POLICY_OPTIONS.map(({ label, value }) =>
     value === current ? `${label} (current)` : label,
   );
-  const selected = await ctx.ui.select("Advisor behavior", labels);
-  const normalized = selected?.replace(" (current)", "");
-  return POLICY_OPTIONS.find(({ label }) => label === normalized)?.value;
+  return ctx.ui.select("Advisor behavior", labels).then((selected) => {
+    const normalized = selected?.replace(" (current)", "");
+    return POLICY_OPTIONS.find(({ label }) => label === normalized)?.value;
+  });
 }
 
-async function chooseAdvisorModel(
+function chooseAdvisorModel(
   ctx: ExtensionCommandContext,
   draft: ResolvedAdvisorConfig,
 ): Promise<ResolvedAdvisorConfig> {
@@ -426,41 +433,42 @@ async function chooseAdvisorModel(
     .sort((left, right) => left.label.localeCompare(right.label));
   if (models.length === 0) {
     if (draft.configured) {
-      const selection = await ctx.ui.select("Dedicated advisor model", [CLEAR_MODEL_OPTION]);
-      if (selection === CLEAR_MODEL_OPTION) {
-        return { ...draft, provider: undefined, model: undefined, configured: false };
-      }
-      return draft;
+      return ctx.ui
+        .select("Dedicated advisor model", [CLEAR_MODEL_OPTION])
+        .then((selection) =>
+          selection === CLEAR_MODEL_OPTION
+            ? { ...draft, provider: undefined, model: undefined, configured: false }
+            : draft,
+        );
     }
     ctx.ui.notify(
       "No authenticated models are available. Configure a provider in pi first.",
       "warning",
     );
-    return draft;
+    return Promise.resolve(draft);
   }
 
-  const selection = await selectAdvisorModel(
+  return selectAdvisorModel(
     ctx,
     models.map(({ model }) => model),
     draft,
-  );
-  if (!selection) return draft;
-  if (selection === CLEAR_MODEL_OPTION) {
-    return { ...draft, provider: undefined, model: undefined, configured: false };
-  }
-
-  const selected = models.find(({ label }) => label === selection)?.model;
-  if (!selected) return draft;
-  return {
-    ...draft,
-    provider: selected.provider,
-    model: selected.id,
-    configured: true,
-    thinkingLevel: clampThinkingLevel(selected, draft.thinkingLevel),
-  };
+  ).then((selection) => {
+    if (!selection) return draft;
+    if (selection === CLEAR_MODEL_OPTION)
+      return { ...draft, provider: undefined, model: undefined, configured: false };
+    const selected = models.find(({ label }) => label === selection)?.model;
+    if (!selected) return draft;
+    return {
+      ...draft,
+      provider: selected.provider,
+      model: selected.id,
+      configured: true,
+      thinkingLevel: clampThinkingLevel(selected, draft.thinkingLevel),
+    };
+  });
 }
 
-async function chooseThinkingLevel(
+function chooseThinkingLevel(
   ctx: ExtensionCommandContext,
   config: ResolvedAdvisorConfig,
 ): Promise<ModelThinkingLevel | undefined> {
@@ -469,44 +477,51 @@ async function chooseThinkingLevel(
       ? ctx.modelRegistry.find(config.provider, config.model)
       : undefined;
   const levels = model ? getSupportedThinkingLevels(model) : THINKING_LEVELS;
-  const selection = await ctx.ui.select("Advisor reasoning level", [...levels]);
-  return selection && THINKING_LEVELS.includes(selection as ModelThinkingLevel)
-    ? (selection as ModelThinkingLevel)
-    : undefined;
+  return ctx.ui
+    .select("Advisor reasoning level", [...levels])
+    .then((selection) =>
+      selection && THINKING_LEVELS.includes(selection as ModelThinkingLevel)
+        ? (selection as ModelThinkingLevel)
+        : undefined,
+    );
 }
 
-async function chooseNumericSetting(
+function chooseNumericSetting(
   ctx: ExtensionCommandContext,
   title: string,
   options: Array<{ label: string; value: number }>,
 ): Promise<number | undefined> {
-  const selected = await ctx.ui.select(
-    title,
-    options.map(({ label }) => label),
-  );
-  return options.find(({ label }) => label === selected)?.value;
+  return ctx.ui
+    .select(
+      title,
+      options.map(({ label }) => label),
+    )
+    .then((selected) => options.find(({ label }) => label === selected)?.value);
 }
 
 function updateConfig(
   ctx: ExtensionCommandContext,
   state: AdvisorConfigState,
   patch: AdvisorConfigPatch,
-): boolean {
-  try {
-    state.update(writeAdvisorConfigPatch(patch, state.get().configPath));
-    return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    ctx.ui.notify(`Could not save advisor settings: ${message}`, "error");
-    return false;
-  }
+): Promise<boolean> {
+  const path = state.get().configPath;
+  return (state.persist ? state.persist(patch, path) : writeAdvisorConfigPatchAsync(patch, path))
+    .then((next) => {
+      state.update(next);
+      return true;
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(`Could not save advisor settings: ${message}`, "error");
+      return false;
+    });
 }
 
-async function showAdvisorUsage(
+function showAdvisorUsage(
   ctx: ExtensionCommandContext,
   config: ResolvedAdvisorConfig,
   metrics: Readonly<AdvisorSessionMetrics>,
-): Promise<void> {
+): void {
   const model =
     config.provider && config.model
       ? ctx.modelRegistry.find(config.provider, config.model)
@@ -571,12 +586,12 @@ async function showAdvisorUsage(
   ctx.ui.notify(lines.join("\n"), "info");
 }
 
-async function showAdvisorStatus(
+function showAdvisorStatus(
   ctx: ExtensionCommandContext,
   config: ResolvedAdvisorConfig,
   metrics: Readonly<AdvisorSessionMetrics>,
   verbose: boolean,
-): Promise<void> {
+): void {
   const model =
     config.provider && config.model
       ? ctx.modelRegistry.find(config.provider, config.model)

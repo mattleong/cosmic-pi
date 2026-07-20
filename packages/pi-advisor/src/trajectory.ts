@@ -1,3 +1,4 @@
+import { stringifyJson } from "./boundary/json.ts";
 const MAX_PENDING_CHARS = 600;
 const MIN_SEGMENT_CHARS = 80;
 const RECENT_SEGMENT_LIMIT = 8;
@@ -266,7 +267,7 @@ function boundedStableValue(value: unknown): string {
     );
   };
   try {
-    return JSON.stringify(visit(value, 0)).slice(0, MAX_TOOL_FINGERPRINT_INPUT_CHARS);
+    return stringifyJson(visit(value, 0)).slice(0, MAX_TOOL_FINGERPRINT_INPUT_CHARS);
   } catch {
     return "[unavailable]";
   }

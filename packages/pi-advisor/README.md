@@ -13,6 +13,8 @@ pnpm install
 pi install "$PWD/packages/pi-advisor"
 ```
 
+The workspace `prepare` step builds the local `pi-cosmic-core` runtime dependency, so the extension is loadable from a clean clone without pre-existing generated output.
+
 For one development session:
 
 ```bash
@@ -72,7 +74,7 @@ The child uses a no-discovery resource loader, an explicit safe tool-name list, 
 
 **Exact guarantee:** the Advisor capability path has no process-launch capability and no filesystem-mutation capability. It cannot run commands or activate bash, write, edit, patch, exec, process, provider, custom, `all`, or future inherited tools. Prompt text, repository text, provider metadata, extension registries, and unknown configuration cannot widen this set. There is no tool allowlist/grant configuration.
 
-Read-only does not mean data-free: files under the project root that the Advisor chooses to inspect are sent to the configured Advisor provider as bounded evidence. Credentials are not deliberately included, but users should select a project root and provider appropriate for their data policy.
+Read-only does not mean data-free: files under the project root that the Advisor chooses to inspect are sent to the configured Advisor provider as bounded evidence. Confinement is path-based: a regular file reached through an in-root hard-link directory entry is an in-root file and is readable, while symlink traversal and paths resolving outside the root are rejected. Credentials are not deliberately included, but users should select a project root and provider appropriate for their data policy.
 
 ## Commands and status
 

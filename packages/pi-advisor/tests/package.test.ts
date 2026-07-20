@@ -1,3 +1,6 @@
+// Test harness boundary: only the diagnostics used by this file are suppressed.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -36,7 +39,10 @@ describe("pi package manifest", () => {
       await readFile(resolve(packageDirectory, "package.json"), "utf8"),
     ) as PackageManifest;
     expect(manifest.dependencies).toEqual({
+      "@effect/platform-node": "catalog:",
+      effect: "catalog:",
       "pi-better-openai": "workspace:*",
+      "pi-cosmic-core": "workspace:*",
       typebox: "1.1.38",
     });
     expect(Object.keys(manifest.dependencies ?? {})).not.toEqual(

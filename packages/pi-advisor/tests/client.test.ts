@@ -1,3 +1,5 @@
+// Test harness boundary: only the diagnostics used by this file are suppressed.
+// @effect-diagnostics effect/asyncFunction:off
 import { ModelRuntime, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { _clientTest, AdvisorModelError, createAdvisorChildModel } from "../src/client.ts";
@@ -111,6 +113,17 @@ describe("advisor child model construction", () => {
       service_tier: "priority",
     });
     expect(_clientTest.applyFastServiceTier("invalid")).toBeUndefined();
+  });
+
+  test("rejects hostile authentication accessors before Schema access", async () => {
+    const auth = Object.defineProperty({}, "ok", {
+      enumerable: true,
+      get() {
+        throw new Error("getter executed");
+      },
+    });
+    const { ctx } = harness({ auth });
+    await expect(createAdvisorChildModel(ctx, config())).rejects.toThrow(/invalid response/i);
   });
 
   test("fails open for missing models and parent authentication failures", async () => {

@@ -1,12 +1,15 @@
-import { constants } from "node:fs";
-import { lstat, open, opendir, realpath, stat } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import * as Effect from "effect/Effect";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { Type } from "typebox";
+import { standaloneAdvisorExecutor, type AdvisorEffectExecutor } from "./boundary/executor.ts";
+import { ReadOnlyFileSystem, type AdvisorProjectRoot } from "./boundary/read-only-fs.ts";
+
+// Stable file reads use isSymbolicLink checks and O_NOFOLLOW in the capability-narrow adapter.
 
 export const ADVISOR_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
 export type AdvisorToolName = (typeof ADVISOR_TOOL_NAMES)[number];
-
 export const ADVISOR_TOOL_LIMITS = Object.freeze({
   maxBytesPerFile: 256_000,
   maxDirectoryEntries: 500,
@@ -20,35 +23,42 @@ export const ADVISOR_TOOL_LIMITS = Object.freeze({
   maxVisitedDirectories: 128,
   maxVisitedEntries: 4_096,
 });
-
 const PACKAGE_TOOL_IDENTITY = Symbol("pi-advisor-read-only-tool");
-
 type ToolDetails = { root: string; truncated: boolean };
 type AdvisorToolDefinition = ToolDefinition & { readonly [PACKAGE_TOOL_IDENTITY]: true };
 
-export class AdvisorToolSafetyError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AdvisorToolSafetyError";
-  }
-}
+export class AdvisorToolSafetyError extends Schema.TaggedErrorClass<AdvisorToolSafetyError>()(
+  "AdvisorToolSafetyError",
+  { message: Schema.String },
+) {}
+const safety = (message: string) => new AdvisorToolSafetyError({ message });
 
-export async function createAdvisorTools(cwd: string): Promise<readonly AdvisorToolDefinition[]> {
-  const root = await realpath(cwd);
-  const tools = [
-    createReadTool(root),
-    createGrepTool(root),
-    createFindTool(root),
-    createLsTool(root),
-  ];
-  return Object.freeze(tools);
+export const createAdvisorToolsEffect = Effect.fn("AdvisorTools.create")(function* (
+  cwd: string,
+  executor: AdvisorEffectExecutor,
+) {
+  const files = yield* ReadOnlyFileSystem;
+  const root = yield* files
+    .pinRoot(cwd)
+    .pipe(Effect.mapError(() => safety("Advisor project root is unavailable.")));
+  return Object.freeze([
+    createReadTool(root, executor),
+    createGrepTool(root, executor),
+    createFindTool(root, executor),
+    createLsTool(root, executor),
+  ]);
+});
+export function createAdvisorTools(cwd: string): Promise<readonly AdvisorToolDefinition[]> {
+  return standaloneAdvisorExecutor.run(createAdvisorToolsEffect(cwd, standaloneAdvisorExecutor));
 }
-
 export function isPackageAdvisorTool(value: ToolDefinition | undefined): boolean {
   return Boolean(value && PACKAGE_TOOL_IDENTITY in value);
 }
 
-function createReadTool(root: string): AdvisorToolDefinition {
+function createReadTool(
+  root: AdvisorProjectRoot,
+  executor: AdvisorEffectExecutor,
+): AdvisorToolDefinition {
   return mark(
     defineTool({
       name: "read",
@@ -63,33 +73,38 @@ function createReadTool(root: string): AdvisorToolDefinition {
         offset: Type.Optional(Type.Integer({ minimum: 1 })),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: ADVISOR_TOOL_LIMITS.maxLines })),
       }),
-      async execute(_id, params, signal) {
-        const path = await confinedPath(root, params.path, "file", signal);
-        const { buffer, truncated: byteTruncated } = await readBounded(
-          path,
-          ADVISOR_TOOL_LIMITS.maxBytesPerFile,
+      execute(_id, params, signal) {
+        return executor.run(
+          Effect.gen(function* () {
+            const path = yield* confinedPath(root, params.path, "file");
+            const files = yield* ReadOnlyFileSystem;
+            const bounded = yield* files
+              .readBounded(path, root, ADVISOR_TOOL_LIMITS.maxBytesPerFile)
+              .pipe(Effect.mapError(() => safety("Unable to read stable project file.")));
+            const source = new TextDecoder().decode(bounded.bytes);
+            const lines = source.split(/\r?\n/);
+            const offset = Math.max(0, (params.offset ?? 1) - 1);
+            const limit = Math.min(
+              params.limit ?? ADVISOR_TOOL_LIMITS.maxLines,
+              ADVISOR_TOOL_LIMITS.maxLines,
+            );
+            const selected = lines.slice(offset, offset + limit);
+            return textResult(
+              selected.map((line, index) => `${offset + index + 1}: ${line}`).join("\n"),
+              root,
+              bounded.truncated || offset > 0 || offset + selected.length < lines.length,
+            );
+          }).pipe(Effect.withSpan("pi-advisor.tool.read")),
           signal,
-        );
-        const source = buffer.toString("utf8");
-        const lines = source.split(/\r?\n/);
-        const offset = Math.max(0, (params.offset ?? 1) - 1);
-        const limit = Math.min(
-          params.limit ?? ADVISOR_TOOL_LIMITS.maxLines,
-          ADVISOR_TOOL_LIMITS.maxLines,
-        );
-        const selected = lines.slice(offset, offset + limit);
-        const truncated = byteTruncated || offset > 0 || offset + selected.length < lines.length;
-        return textResult(
-          selected.map((line, index) => `${offset + index + 1}: ${line}`).join("\n"),
-          root,
-          truncated,
         );
       },
     }),
   );
 }
-
-function createLsTool(root: string): AdvisorToolDefinition {
+function createLsTool(
+  root: AdvisorProjectRoot,
+  executor: AdvisorEffectExecutor,
+): AdvisorToolDefinition {
   return mark(
     defineTool({
       name: "ls",
@@ -101,32 +116,32 @@ function createLsTool(root: string): AdvisorToolDefinition {
           Type.String({ default: ".", maxLength: ADVISOR_TOOL_LIMITS.maxPathChars }),
         ),
       }),
-      async execute(_id, params, signal) {
-        const path = await confinedPath(root, params.path ?? ".", "directory", signal);
-        const directory = await opendir(path);
-        const output: string[] = [];
-        let truncated = false;
-        try {
-          for await (const entry of directory) {
-            throwIfAborted(signal);
-            if (output.length >= ADVISOR_TOOL_LIMITS.maxDirectoryEntries) {
-              truncated = true;
-              break;
-            }
-            const suffix = entry.isDirectory() ? "/" : entry.isSymbolicLink() ? "@" : "";
-            output.push(`${entry.name}${suffix}`);
-          }
-        } finally {
-          await directory.close().catch(() => undefined);
-        }
-        output.sort((a, b) => a.localeCompare(b));
-        return textResult(output.join("\n") || "[empty directory]", root, truncated);
+      execute(_id, params, signal) {
+        return executor.run(
+          Effect.gen(function* () {
+            const target = yield* confinedPath(root, params.path ?? ".", "directory");
+            const files = yield* ReadOnlyFileSystem;
+            const listing = yield* files
+              .readDirectory(target, root, ADVISOR_TOOL_LIMITS.maxDirectoryEntries)
+              .pipe(Effect.mapError(() => safety("Unable to list project directory.")));
+            const output = listing.entries
+              .map(
+                (entry) =>
+                  `${entry.name}${entry.type === "directory" ? "/" : entry.type === "symlink" ? "@" : ""}`,
+              )
+              .sort((a, b) => a.localeCompare(b));
+            return textResult(output.join("\n") || "[empty directory]", root, listing.truncated);
+          }).pipe(Effect.withSpan("pi-advisor.tool.ls")),
+          signal,
+        );
       },
     }),
   );
 }
-
-function createFindTool(root: string): AdvisorToolDefinition {
+function createFindTool(
+  root: AdvisorProjectRoot,
+  executor: AdvisorEffectExecutor,
+): AdvisorToolDefinition {
   return mark(
     defineTool({
       name: "find",
@@ -141,21 +156,30 @@ function createFindTool(root: string): AdvisorToolDefinition {
           Type.String({ default: "**", maxLength: ADVISOR_TOOL_LIMITS.maxPatternChars }),
         ),
       }),
-      async execute(_id, params, signal) {
-        const base = await confinedPath(root, params.path ?? ".", "directory", signal);
-        const pattern = params.pattern ?? "**";
-        const matcher = globMatcher(pattern);
-        const scan = await walk(root, base, signal);
-        const allMatched = scan.paths.filter((path) => matcher(path));
-        const matched = allMatched.slice(0, ADVISOR_TOOL_LIMITS.maxMatches);
-        const truncated = scan.truncated || matched.length < allMatched.length;
-        return textResult(matched.join("\n") || "No files found.", root, truncated);
+      execute(_id, params, signal) {
+        return executor.run(
+          Effect.gen(function* () {
+            const base = yield* confinedPath(root, params.path ?? ".", "directory");
+            const matcher = globMatcher(params.pattern ?? "**");
+            const scan = yield* walk(root, base);
+            const all = scan.paths.filter(matcher);
+            const matched = all.slice(0, ADVISOR_TOOL_LIMITS.maxMatches);
+            return textResult(
+              matched.join("\n") || "No files found.",
+              root,
+              scan.truncated || matched.length < all.length,
+            );
+          }).pipe(Effect.withSpan("pi-advisor.tool.find")),
+          signal,
+        );
       },
     }),
   );
 }
-
-function createGrepTool(root: string): AdvisorToolDefinition {
+function createGrepTool(
+  root: AdvisorProjectRoot,
+  executor: AdvisorEffectExecutor,
+): AdvisorToolDefinition {
   return mark(
     defineTool({
       name: "grep",
@@ -169,95 +193,97 @@ function createGrepTool(root: string): AdvisorToolDefinition {
         ),
         ignoreCase: Type.Optional(Type.Boolean({ default: false })),
       }),
-      async execute(_id, params, signal) {
-        assertBoundedPattern(params.pattern, "Grep patterns");
-        const needle = params.ignoreCase ? params.pattern.toLocaleLowerCase() : params.pattern;
-        const target = await confinedPath(root, params.path ?? ".", "any", signal);
-        const targetStat = await stat(target);
-        const relativeTarget = projectRelative(root, target);
-        const scan = targetStat.isDirectory()
-          ? await walk(root, target, signal)
-          : { paths: [relativeTarget], truncated: false };
-        const matches: string[] = [];
-        let bytes = 0;
-        let truncated = scan.truncated;
-        for (const projectPath of scan.paths) {
-          throwIfAborted(signal);
-          if (
-            matches.length >= ADVISOR_TOOL_LIMITS.maxMatches ||
-            bytes >= ADVISOR_TOOL_LIMITS.maxTotalScanBytes
-          ) {
-            truncated = true;
-            break;
-          }
-          const absolute = resolve(root, projectPath);
-          const fileStat = await stat(absolute);
-          if (!fileStat.isFile()) continue;
-          const remaining = Math.min(
-            ADVISOR_TOOL_LIMITS.maxBytesPerFile,
-            ADVISOR_TOOL_LIMITS.maxTotalScanBytes - bytes,
-          );
-          const bounded = await readBounded(absolute, remaining, signal);
-          const data = bounded.buffer;
-          bytes += data.byteLength;
-          if (data.includes(0)) continue;
-          const source = data.toString("utf8");
-          if (bounded.truncated) truncated = true;
-          const lines = source.split(/\r?\n/);
-          for (let index = 0; index < lines.length; index += 1) {
-            const line = lines[index] ?? "";
-            const haystack = params.ignoreCase ? line.toLocaleLowerCase() : line;
-            if (!haystack.includes(needle)) continue;
-            matches.push(`${projectPath}:${index + 1}:${line}`);
-            if (matches.length >= ADVISOR_TOOL_LIMITS.maxMatches) {
-              truncated = true;
-              break;
+      execute(_id, params, signal) {
+        return executor.run(
+          Effect.gen(function* () {
+            assertBoundedPattern(params.pattern, "Grep patterns");
+            const needle = params.ignoreCase ? params.pattern.toLocaleLowerCase() : params.pattern;
+            const target = yield* confinedPath(root, params.path ?? ".", "any");
+            const files = yield* ReadOnlyFileSystem;
+            const targetInfo = yield* files
+              .stat(target)
+              .pipe(Effect.mapError(() => safety("Unable to inspect grep target.")));
+            const relativeTarget = yield* projectRelative(root.path, target);
+            const scan =
+              targetInfo.type === "directory"
+                ? yield* walk(root, target)
+                : { paths: [relativeTarget], truncated: false };
+            const matches: string[] = [];
+            let bytes = 0;
+            let truncated = scan.truncated;
+            const pathService = yield* Path.Path;
+            for (const projectPath of scan.paths) {
+              if (
+                matches.length >= ADVISOR_TOOL_LIMITS.maxMatches ||
+                bytes >= ADVISOR_TOOL_LIMITS.maxTotalScanBytes
+              ) {
+                truncated = true;
+                break;
+              }
+              const absolute = pathService.resolve(root.path, projectPath);
+              const info = yield* files.stat(absolute).pipe(Effect.catch(() => Effect.void));
+              if (info?.type !== "file") continue;
+              const remaining = Math.min(
+                ADVISOR_TOOL_LIMITS.maxBytesPerFile,
+                ADVISOR_TOOL_LIMITS.maxTotalScanBytes - bytes,
+              );
+              const bounded = yield* files
+                .readBounded(absolute, root, remaining)
+                .pipe(Effect.catch(() => Effect.void));
+              if (!bounded) continue;
+              bytes += bounded.bytes.byteLength;
+              if (bounded.bytes.includes(0)) continue;
+              if (bounded.truncated) truncated = true;
+              const lines = new TextDecoder().decode(bounded.bytes).split(/\r?\n/);
+              for (let index = 0; index < lines.length; index++) {
+                const line = lines[index] ?? "";
+                const haystack = params.ignoreCase ? line.toLocaleLowerCase() : line;
+                if (!haystack.includes(needle)) continue;
+                matches.push(`${projectPath}:${index + 1}:${line}`);
+                if (matches.length >= ADVISOR_TOOL_LIMITS.maxMatches) {
+                  truncated = true;
+                  break;
+                }
+              }
             }
-          }
-        }
-        return textResult(matches.join("\n") || "No matches found.", root, truncated);
+            return textResult(matches.join("\n") || "No matches found.", root, truncated);
+          }).pipe(Effect.withSpan("pi-advisor.tool.grep")),
+          signal,
+        );
       },
     }),
   );
 }
 
-async function confinedPath(
-  root: string,
+const confinedPath = Effect.fn("AdvisorTools.confinedPath")(function* (
+  root: AdvisorProjectRoot,
   input: string,
   kind: "any" | "directory" | "file",
-  signal?: AbortSignal,
-): Promise<string> {
-  throwIfAborted(signal);
-  if (input.length > ADVISOR_TOOL_LIMITS.maxPathChars) {
-    throw new AdvisorToolSafetyError(
-      `Paths may not exceed ${ADVISOR_TOOL_LIMITS.maxPathChars} characters.`,
-    );
-  }
-  if (input.includes("\0")) throw new AdvisorToolSafetyError("Paths may not contain NUL bytes.");
-  const lexical = isAbsolute(input) ? resolve(input) : resolve(root, input);
-  assertInside(root, lexical);
-  await assertNoSymlinkComponents(root, lexical);
-  let canonical: string;
-  try {
-    canonical = await realpath(lexical);
-  } catch {
-    throw new AdvisorToolSafetyError("Requested path does not exist inside the project.");
-  }
-  assertInside(root, canonical);
-  const valueStat = await stat(canonical);
-  if (kind === "file" && !valueStat.isFile())
-    throw new AdvisorToolSafetyError("Requested path is not a file.");
-  if (kind === "directory" && !valueStat.isDirectory())
-    throw new AdvisorToolSafetyError("Requested path is not a directory.");
-  throwIfAborted(signal);
+) {
+  if (input.length > ADVISOR_TOOL_LIMITS.maxPathChars)
+    return yield* safety(`Paths may not exceed ${ADVISOR_TOOL_LIMITS.maxPathChars} characters.`);
+  if (input.includes("\0")) return yield* safety("Paths may not contain NUL bytes.");
+  const path = yield* Path.Path;
+  const lexical = path.isAbsolute(input) ? path.resolve(input) : path.resolve(root.path, input);
+  assertInside(path, root.path, lexical);
+  yield* assertNoSymlinkComponents(root.path, lexical);
+  const files = yield* ReadOnlyFileSystem;
+  const canonical = yield* files
+    .realPath(lexical)
+    .pipe(Effect.mapError(() => safety("Requested path does not exist inside the project.")));
+  assertInside(path, root.path, canonical);
+  const info = yield* files
+    .stat(canonical)
+    .pipe(Effect.mapError(() => safety("Requested path is unavailable.")));
+  if (kind === "file" && info.type !== "file")
+    return yield* safety("Requested path is not a file.");
+  if (kind === "directory" && info.type !== "directory")
+    return yield* safety("Requested path is not a directory.");
   return canonical;
-}
-
-async function walk(
-  root: string,
-  base: string,
-  signal?: AbortSignal,
-): Promise<{ paths: string[]; truncated: boolean }> {
+});
+const walk = Effect.fn("AdvisorTools.walk")(function* (root: AdvisorProjectRoot, base: string) {
+  const path = yield* Path.Path;
+  const files = yield* ReadOnlyFileSystem;
   const paths: string[] = [];
   const queue: Array<{ depth: number; path: string }> = [{ depth: 0, path: base }];
   let filesScanned = 0;
@@ -265,81 +291,82 @@ async function walk(
   let visitedEntries = 0;
   let truncated = false;
   while (queue.length > 0) {
-    throwIfAborted(signal);
-    if (visitedDirectories >= ADVISOR_TOOL_LIMITS.maxVisitedDirectories) {
+    if (visitedDirectories >= ADVISOR_TOOL_LIMITS.maxVisitedDirectories)
       return { paths, truncated: true };
-    }
     const current = queue.shift();
     if (!current) break;
-    visitedDirectories += 1;
-    await assertNoSymlinkComponents(root, current.path);
-    const canonicalDirectory = await realpath(current.path);
-    assertInside(root, canonicalDirectory);
-    const directory = await opendir(canonicalDirectory);
-    try {
-      for await (const entry of directory) {
-        throwIfAborted(signal);
-        visitedEntries += 1;
-        if (visitedEntries > ADVISOR_TOOL_LIMITS.maxVisitedEntries) {
-          truncated = true;
-          return { paths, truncated };
-        }
-        const absolute = resolve(current.path, entry.name);
-        assertInside(root, absolute);
-        const projectPath = projectRelative(root, absolute);
-        if (entry.isSymbolicLink()) continue;
-        if (entry.isDirectory()) {
-          if (current.depth < ADVISOR_TOOL_LIMITS.maxRecursionDepth) {
-            queue.push({ depth: current.depth + 1, path: absolute });
-          } else {
-            truncated = true;
-          }
-          continue;
-        }
-        if (!entry.isFile()) continue;
+    visitedDirectories++;
+    yield* assertNoSymlinkComponents(root.path, current.path);
+    const canonical = yield* files
+      .realPath(current.path)
+      .pipe(Effect.mapError(() => safety("Directory changed during scan.")));
+    assertInside(path, root.path, canonical);
+    const remaining = ADVISOR_TOOL_LIMITS.maxVisitedEntries - visitedEntries;
+    const listing = yield* files
+      .readDirectory(canonical, root, Math.max(0, remaining))
+      .pipe(Effect.mapError(() => safety("Unable to scan project directory.")));
+    if (listing.truncated) truncated = true;
+    for (const entry of listing.entries) {
+      visitedEntries++;
+      const absolute = path.resolve(canonical, entry.name);
+      assertInside(path, root.path, absolute);
+      const projectPath = yield* projectRelative(root.path, absolute);
+      if (entry.type === "symlink") continue;
+      if (entry.type === "directory") {
+        if (current.depth < ADVISOR_TOOL_LIMITS.maxRecursionDepth)
+          queue.push({ depth: current.depth + 1, path: absolute });
+        else truncated = true;
+      } else if (entry.type === "file") {
         paths.push(projectPath);
-        filesScanned += 1;
-        if (filesScanned >= ADVISOR_TOOL_LIMITS.maxFilesScanned) {
-          truncated = true;
-          return { paths, truncated };
-        }
+        filesScanned++;
+        if (filesScanned >= ADVISOR_TOOL_LIMITS.maxFilesScanned) return { paths, truncated: true };
       }
-    } finally {
-      await directory.close().catch(() => undefined);
     }
   }
   return { paths, truncated };
+});
+const assertNoSymlinkComponents = Effect.fn("AdvisorTools.noSymlink")(function* (
+  root: string,
+  candidate: string,
+) {
+  const path = yield* Path.Path;
+  const files = yield* ReadOnlyFileSystem;
+  const relation = path.relative(root, candidate);
+  if (!relation) return;
+  let current = root;
+  for (const component of relation.split(path.sep)) {
+    current = path.resolve(current, component);
+    const info = yield* files.lstat(current).pipe(Effect.catch(() => Effect.void));
+    if (!info) return;
+    if (info.type === "symlink")
+      return yield* safety("Symbolic-link paths are not allowed for Advisor tools.");
+  }
+});
+function assertInside(path: Path.Path, root: string, candidate: string): void {
+  const relation = path.relative(root, candidate);
+  if (
+    relation === "" ||
+    (relation !== ".." && !relation.startsWith(`..${path.sep}`) && !path.isAbsolute(relation))
+  )
+    return;
+  throw safety("Requested path escapes the project root.");
 }
-
-function assertInside(root: string, candidate: string): void {
-  const relation = relative(root, candidate);
-  if (relation === "" || (!relation.startsWith("..") && !isAbsolute(relation))) return;
-  throw new AdvisorToolSafetyError("Requested path escapes the project root.");
-}
-
-function projectRelative(root: string, value: string): string {
-  const path = relative(root, value).replaceAll("\\", "/");
-  return path || ".";
-}
-
+const projectRelative = Effect.fn("AdvisorTools.relative")(function* (root: string, value: string) {
+  const path = yield* Path.Path;
+  return path.relative(root, value).replaceAll("\\", "/") || ".";
+});
 function globMatcher(pattern: string): (path: string) => boolean {
   assertBoundedPattern(pattern, "Find patterns");
-  const normalized = pattern.replaceAll("\\", "/").replace(/^\.\//, "");
-  const components = normalized.split("/").filter(Boolean);
+  const components = pattern.replaceAll("\\", "/").replace(/^\.\//, "").split("/").filter(Boolean);
   return (path) => matchGlobComponents(components, path.split("/").filter(Boolean));
 }
-
-/**
- * Bounded glob NFA. Pattern state is hard-capped, so matching is linear in the
- * candidate path and never delegates untrusted patterns to a regular-expression engine.
- */
 function matchGlobComponents(pattern: readonly string[], path: readonly string[]): boolean {
   let states = new Uint8Array(pattern.length + 1);
   states[0] = 1;
   closeGlobStars(states, pattern);
   for (const component of path) {
     const next = new Uint8Array(pattern.length + 1);
-    for (let index = 0; index < pattern.length; index += 1) {
+    for (let index = 0; index < pattern.length; index++) {
       if (states[index] !== 1) continue;
       const token = pattern[index];
       if (token === "**") next[index] = 1;
@@ -350,101 +377,48 @@ function matchGlobComponents(pattern: readonly string[], path: readonly string[]
   }
   return states[pattern.length] === 1;
 }
-
-function closeGlobStars(states: Uint8Array, pattern: readonly string[]): void {
-  for (let index = 0; index < pattern.length; index += 1) {
+function closeGlobStars(states: Uint8Array, pattern: readonly string[]) {
+  for (let index = 0; index < pattern.length; index++)
     if (states[index] === 1 && pattern[index] === "**") states[index + 1] = 1;
-  }
 }
-
-/** Greedy wildcard matching for one path component: O(pattern + value). */
 function matchGlobComponent(pattern: string, value: string): boolean {
-  let patternIndex = 0;
-  let valueIndex = 0;
-  let starIndex = -1;
-  let starValueIndex = -1;
-  while (valueIndex < value.length) {
-    const token = pattern[patternIndex];
-    if (token === "?" || token === value[valueIndex]) {
-      patternIndex += 1;
-      valueIndex += 1;
+  let pi = 0,
+    vi = 0,
+    star = -1,
+    starValue = -1;
+  while (vi < value.length) {
+    const token = pattern[pi];
+    if (token === "?" || token === value[vi]) {
+      pi++;
+      vi++;
     } else if (token === "*") {
-      starIndex = patternIndex;
-      starValueIndex = valueIndex;
-      patternIndex += 1;
-    } else if (starIndex >= 0) {
-      patternIndex = starIndex + 1;
-      starValueIndex += 1;
-      valueIndex = starValueIndex;
-    } else {
-      return false;
-    }
+      star = pi++;
+      starValue = vi;
+    } else if (star >= 0) {
+      pi = star + 1;
+      vi = ++starValue;
+    } else return false;
   }
-  while (pattern[patternIndex] === "*") patternIndex += 1;
-  return patternIndex === pattern.length;
+  while (pattern[pi] === "*") pi++;
+  return pi === pattern.length;
 }
-
-async function readBounded(
-  path: string,
-  maxBytes: number,
-  signal?: AbortSignal,
-): Promise<{ buffer: Buffer; truncated: boolean }> {
-  throwIfAborted(signal);
-  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
-  const handle = await open(path, constants.O_RDONLY | noFollow);
-  try {
-    const opened = await handle.stat();
-    if (!opened.isFile()) throw new AdvisorToolSafetyError("Requested path is not a file.");
-    const allocation = Buffer.allocUnsafe(maxBytes + 1);
-    const { bytesRead } = await handle.read(allocation, 0, allocation.length, 0);
-    throwIfAborted(signal);
-    return {
-      buffer: allocation.subarray(0, Math.min(bytesRead, maxBytes)),
-      truncated: bytesRead > maxBytes,
-    };
-  } finally {
-    await handle.close();
-  }
+function assertBoundedPattern(pattern: string, label: string) {
+  if (pattern.length > ADVISOR_TOOL_LIMITS.maxPatternChars)
+    throw safety(`${label} may not exceed ${ADVISOR_TOOL_LIMITS.maxPatternChars} characters.`);
+  if (pattern.includes("\0")) throw safety(`${label} may not contain NUL bytes.`);
 }
-
-async function assertNoSymlinkComponents(root: string, candidate: string): Promise<void> {
-  const relation = relative(root, candidate);
-  if (!relation) return;
-  let current = root;
-  for (const component of relation.split(sep)) {
-    current = resolve(current, component);
-    const value = await lstat(current).catch(() => undefined);
-    if (!value) return;
-    if (value.isSymbolicLink()) {
-      throw new AdvisorToolSafetyError("Symbolic-link paths are not allowed for Advisor tools.");
-    }
-  }
-}
-
-function assertBoundedPattern(pattern: string, label: string): void {
-  if (pattern.length > ADVISOR_TOOL_LIMITS.maxPatternChars) {
-    throw new AdvisorToolSafetyError(
-      `${label} may not exceed ${ADVISOR_TOOL_LIMITS.maxPatternChars} characters.`,
-    );
-  }
-  if (pattern.includes("\0")) {
-    throw new AdvisorToolSafetyError(`${label} may not contain NUL bytes.`);
-  }
-}
-
-function textResult(text: string, root: string, truncated: boolean) {
-  const suffix = truncated ? "\n[... output truncated by pi-advisor ...]" : "";
+function textResult(text: string, root: AdvisorProjectRoot, truncated: boolean) {
   return {
-    content: [{ type: "text" as const, text: `${text}${suffix}` }],
-    details: { root, truncated } satisfies ToolDetails,
+    content: [
+      {
+        type: "text" as const,
+        text: `${text}${truncated ? "\n[... output truncated by pi-advisor ...]" : ""}`,
+      },
+    ],
+    details: { root: root.path, truncated } satisfies ToolDetails,
   };
 }
-
 function mark<T extends ToolDefinition>(tool: T): T & { readonly [PACKAGE_TOOL_IDENTITY]: true } {
   Object.defineProperty(tool, PACKAGE_TOOL_IDENTITY, { value: true, enumerable: false });
   return tool as T & { readonly [PACKAGE_TOOL_IDENTITY]: true };
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  signal?.throwIfAborted();
 }

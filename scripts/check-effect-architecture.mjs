@@ -1,12 +1,10 @@
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const packageRoot = join(root, "packages");
-const baselinePath = join(root, "scripts", "effect-migration-baseline.json");
-const writeBaseline = process.argv.includes("--write-baseline");
 const rules = [
   "abortController",
   "asyncFunction",
@@ -47,21 +45,10 @@ const packageNames = (await readdir(packageRoot, { withFileTypes: true }))
   .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name)
   .sort();
-const existingBaseline = writeBaseline
-  ? undefined
-  : JSON.parse(await readFile(baselinePath, "utf8"));
-const migratedPackages = existingBaseline?.migratedPackages ?? ["pi-cosmic-core"];
-
 for (const packageName of packageNames) {
   const configPath = join(packageRoot, packageName, "tsconfig.json");
   const config = JSON.parse(await readFile(configPath, "utf8"));
-  if (
-    config.extends !== "../../tsconfig.base.json" &&
-    config.extends !== "../../tsconfig.effect.json"
-  ) {
-    throw new Error(`${packageName}/tsconfig.json must extend a shared root TypeScript config.`);
-  }
-  if (migratedPackages.includes(packageName) && config.extends !== "../../tsconfig.effect.json") {
+  if (config.extends !== "../../tsconfig.effect.json") {
     throw new Error(`${packageName}/tsconfig.json must use the strict Effect configuration.`);
   }
 
@@ -100,9 +87,23 @@ function approved(rule, path) {
   if (rule === "effectRunner") {
     return path.includes("/boundary/") || path === "packages/pi-cosmic-core/src/runtime.ts";
   }
-  if (rule === "directFileSystem") return path.startsWith("packages/pi-cosmic-core/src/platform/");
-  if (rule === "globalDate") return path === "packages/pi-code-previews/src/boundary/clock.ts";
-  if (rule === "rawJson") return path === "packages/pi-code-previews/src/boundary/json.ts";
+  if (rule === "directFileSystem")
+    return (
+      path.startsWith("packages/pi-cosmic-core/src/platform/") ||
+      path.startsWith("packages/pi-advisor/src/boundary/")
+    );
+  if (rule === "globalDate")
+    return (
+      path === "packages/pi-code-previews/src/boundary/clock.ts" ||
+      path === "packages/pi-advisor/src/boundary/clock.ts" ||
+      path === "packages/pi-advisor/src/boundary/node.ts"
+    );
+  if (rule === "globalConsole") return path === "packages/pi-advisor/src/boundary/node.ts";
+  if (rule === "rawJson")
+    return (
+      path === "packages/pi-code-previews/src/boundary/json.ts" ||
+      path === "packages/pi-advisor/src/boundary/json.ts"
+    );
   return false;
 }
 
@@ -211,34 +212,11 @@ for (const packageName of packageNames) {
   current[packageName] = packageCounts;
 }
 
-if (writeBaseline) {
-  const baseline = {
-    effectVersion: expectedEffectVersion,
-    migratedPackages: ["pi-cosmic-core"],
-    counts: current,
-  };
-  await writeFile(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`, "utf8");
-  console.log(`Wrote Effect migration baseline to ${relative(root, baselinePath)}.`);
-  process.exit(0);
-}
-
-const baseline = existingBaseline;
-if (baseline.effectVersion !== expectedEffectVersion) {
-  throw new Error(
-    `Effect migration baseline targets ${baseline.effectVersion}; update it deliberately for ${expectedEffectVersion}.`,
-  );
-}
 for (const packageName of packageNames) {
-  const expected = baseline.counts[packageName];
-  if (!expected) throw new Error(`Effect migration baseline is missing ${packageName}.`);
   for (const rule of rules) {
-    if (!Number.isInteger(expected[rule]) || expected[rule] < 0) {
-      throw new Error(`Effect migration baseline is missing numeric ${packageName}.${rule}.`);
-    }
-    const limit = baseline.migratedPackages.includes(packageName) ? 0 : expected[rule];
-    if (current[packageName][rule] > limit) {
+    if (current[packageName][rule] > 0) {
       throw new Error(
-        `${packageName} increased ${rule} violations from ${limit} to ${current[packageName][rule]}.`,
+        `${packageName} has ${current[packageName][rule]} unapproved ${rule} violation(s).`,
       );
     }
   }

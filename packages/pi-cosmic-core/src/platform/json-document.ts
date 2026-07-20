@@ -12,6 +12,12 @@ import { JsonDocumentError } from "./errors.ts";
 
 export type JsonObject = Record<string, unknown>;
 
+/**
+ * Process-wide coordination is intentional shared persistence infrastructure, not
+ * session state. Separate extension runtimes can update the same document.
+ */
+const processWriteLock = Semaphore.makeUnsafe(1);
+
 const UnknownFromPrettyJsonString = Schema.String.pipe(
   Schema.decodeTo(
     Schema.Unknown,
@@ -46,7 +52,6 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
-      const writeLock = yield* Semaphore.make(1);
 
       const mapError = (operation: string, path: string, message: string) => () =>
         new JsonDocumentError({ operation, path, message });
@@ -85,7 +90,7 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
         const source = yield* encodeObject(path, document);
         const directory = pathService.dirname(path);
         yield* fs
-          .makeDirectory(directory, { recursive: true })
+          .makeDirectory(directory, { recursive: true, mode: 0o700 })
           .pipe(
             Effect.mapError(mapError("mkdir", path, "Unable to create JSON document directory.")),
           );
@@ -103,10 +108,22 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
           Effect.succeed(temporary),
           (temporaryPath) =>
             fs
-              .writeFileString(temporaryPath, `${source}\n`)
+              .writeFileString(temporaryPath, `${source}\n`, {
+                flag: "wx",
+                mode: 0o600,
+              })
               .pipe(
                 Effect.mapError(
                   mapError("write", path, "Unable to write temporary JSON document."),
+                ),
+                Effect.andThen(
+                  fs
+                    .chmod(temporaryPath, 0o600)
+                    .pipe(
+                      Effect.mapError(
+                        mapError("chmod", path, "Unable to protect temporary JSON document."),
+                      ),
+                    ),
                 ),
                 Effect.andThen(
                   fs
@@ -115,6 +132,13 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
                       Effect.mapError(
                         mapError("rename", path, "Unable to replace JSON document atomically."),
                       ),
+                    ),
+                ),
+                Effect.andThen(
+                  fs
+                    .chmod(path, 0o600)
+                    .pipe(
+                      Effect.mapError(mapError("chmod", path, "Unable to protect JSON document.")),
                     ),
                 ),
               ),
@@ -126,14 +150,14 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
         path: string,
         document: JsonObject,
       ) {
-        yield* writeLock.withPermits(1)(writeObjectUnlocked(path, document));
+        yield* processWriteLock.withPermits(1)(writeObjectUnlocked(path, document));
       });
 
       const updateObject = Effect.fn("JsonDocumentStore.updateObject")(function* (
         path: string,
         update: (document: JsonObject) => JsonObject,
       ) {
-        return yield* writeLock.withPermits(1)(
+        return yield* processWriteLock.withPermits(1)(
           Effect.gen(function* () {
             const current = (yield* readObjectUnlocked(path)) ?? {};
             const next = yield* Effect.try({

@@ -1,3 +1,6 @@
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { stringifyJson } from "./boundary/json.ts";
 import { redactSensitiveText } from "./observation-protocol.ts";
 import { isRecord } from "./utils.ts";
 export type AdvisorVerdict = "pass" | "suggest" | "revise";
@@ -33,6 +36,47 @@ export const MAX_ADVISOR_RECOMMENDATION_CHARS = 2_000;
 export const MAX_ADVISOR_SUGGESTION_CHARS = 2_000;
 export const MAX_ADVISOR_RATIONALE_CHARS = 2_000;
 
+const boundedNonEmpty = (maximum: number) =>
+  Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(maximum));
+const FingerprintWireSchema = boundedNonEmpty(MAX_ADVISOR_FINGERPRINT_CHARS);
+export const AdvisorSuggestionWireSchema = Schema.Struct({
+  fingerprint: FingerprintWireSchema,
+  kind: Schema.Literals([
+    "alternative",
+    "investigation",
+    "verification",
+    "simplification",
+    "tradeoff",
+    "edge-case",
+  ]),
+  suggestion: boundedNonEmpty(MAX_ADVISOR_SUGGESTION_CHARS),
+  rationale: boundedNonEmpty(MAX_ADVISOR_RATIONALE_CHARS),
+  relevance: Schema.Literals(["possible", "likely", "high"]),
+});
+export const AdvisorFindingWireSchema = Schema.Struct({
+  fingerprint: FingerprintWireSchema,
+  category: Schema.Literals(["intent", "correctness", "completeness", "evidence"]),
+  severity: Schema.Literals(["nit", "concern", "blocker"]),
+  confidence: Schema.Literals(["low", "medium", "high"]),
+  evidenceBasis: Schema.Literals(["none", "inferred", "direct"]),
+  issue: boundedNonEmpty(MAX_ADVISOR_ISSUE_CHARS),
+  evidence: boundedNonEmpty(MAX_ADVISOR_EVIDENCE_CHARS),
+  recommendation: boundedNonEmpty(MAX_ADVISOR_RECOMMENDATION_CHARS),
+});
+const ReviewFields = {
+  verdict: Schema.Literals(["pass", "suggest", "revise"]),
+  summary: boundedNonEmpty(MAX_ADVISOR_SUMMARY_CHARS),
+  findings: Schema.Array(AdvisorFindingWireSchema).check(Schema.isMaxLength(MAX_ADVISOR_FINDINGS)),
+};
+export const AdvisorReviewWireSchema = Schema.Union([
+  Schema.Struct({
+    ...ReviewFields,
+    suggestions: Schema.Array(AdvisorSuggestionWireSchema).check(
+      Schema.isMaxLength(MAX_ADVISOR_SUGGESTIONS),
+    ),
+  }),
+  Schema.Struct(ReviewFields),
+]);
 export interface AdvisorSuggestion {
   fingerprint?: string;
   kind: AdvisorSuggestionKind;
@@ -44,8 +88,8 @@ export interface AdvisorSuggestion {
 export interface AdvisorFinding {
   category: AdvisorFindingCategory;
   severity: AdvisorSeverity;
-  confidence?: AdvisorConfidence;
-  evidenceBasis?: AdvisorEvidenceBasis;
+  confidence?: AdvisorConfidence | undefined;
+  evidenceBasis?: AdvisorEvidenceBasis | undefined;
   fingerprint?: string;
   id?: string;
   status?: AdvisorFindingStatus;
@@ -62,12 +106,12 @@ export interface AdvisorReview {
   findings: AdvisorFinding[];
 }
 
-export class AdvisorReviewParseError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AdvisorReviewParseError";
-  }
-}
+export class AdvisorReviewParseError extends Schema.TaggedErrorClass<AdvisorReviewParseError>()(
+  "AdvisorReviewParseError",
+  { message: Schema.String },
+) {}
+const reviewError = (value: string | { readonly message: string }) =>
+  new AdvisorReviewParseError(typeof value === "string" ? { message: value } : value);
 
 export const ADVISOR_SYSTEM_PROMPT = `You are an independent advisor supervising an assistant's active work and completed responses against the user's actual request and the supplied conversation evidence.
 
@@ -109,46 +153,63 @@ The bounded stateSummary may retain conclusions and routing context, but never r
 /** Parse and validate one strict advisor JSON response. */
 export function parseAdvisorReview(raw: string): AdvisorReview {
   if (raw.length > MAX_ADVISOR_REVIEW_CHARS) {
-    throw new AdvisorReviewParseError("Advisor review exceeds the maximum response size.");
+    throw reviewError("Advisor review exceeds the maximum response size.");
   }
   const jsonText = unwrapJson(raw);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText) as unknown;
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : "invalid JSON";
-    throw new AdvisorReviewParseError(`Advisor returned malformed JSON: ${reason}`);
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(AdvisorReviewWireSchema), {
+    onExcessProperty: "error",
+  })(jsonText);
+  if (Option.isNone(decoded)) {
+    // Preserve the established granular diagnostics, but no manually parsed
+    // value can cross the boundary when the domain Schema rejects it.
+    diagnoseAdvisorReview(raw);
+    throw reviewError("Advisor review failed schema validation.");
   }
+  return normalizeDecodedAdvisorReview(decoded.value);
+}
+
+function normalizeDecodedAdvisorReview(value: unknown) {
+  return diagnoseAdvisorReview(stringifyJson(value));
+}
+
+function diagnoseAdvisorReview(raw: string): AdvisorReview {
+  if (raw.length > MAX_ADVISOR_REVIEW_CHARS) {
+    throw reviewError("Advisor review exceeds the maximum response size.");
+  }
+  const jsonText = unwrapJson(raw);
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(jsonText);
+  if (Option.isNone(decoded)) {
+    throw reviewError({ message: "Advisor returned malformed JSON." });
+  }
+  const parsed = decoded.value;
 
   if (
     !isRecord(parsed) ||
     (!hasExactKeys(parsed, ["verdict", "summary", "suggestions", "findings"]) &&
       !hasExactKeys(parsed, ["verdict", "summary", "findings"]))
   ) {
-    throw new AdvisorReviewParseError(
+    throw reviewError(
       "Advisor review must contain exactly verdict, summary, suggestions, and findings.",
     );
   }
   if (parsed.verdict !== "pass" && parsed.verdict !== "suggest" && parsed.verdict !== "revise") {
-    throw new AdvisorReviewParseError('Advisor verdict must be "pass", "suggest", or "revise".');
+    throw reviewError('Advisor verdict must be "pass", "suggest", or "revise".');
   }
   const summary = requireBoundedString(parsed.summary, "summary", MAX_ADVISOR_SUMMARY_CHARS);
   const rawSuggestions = parsed.suggestions ?? [];
   if (!Array.isArray(rawSuggestions)) {
-    throw new AdvisorReviewParseError("Advisor suggestions must be an array.");
+    throw reviewError("Advisor suggestions must be an array.");
   }
   if (rawSuggestions.length > MAX_ADVISOR_SUGGESTIONS) {
-    throw new AdvisorReviewParseError(
+    throw reviewError(
       `Advisor review must contain at most ${MAX_ADVISOR_SUGGESTIONS} suggestions.`,
     );
   }
   if (!Array.isArray(parsed.findings)) {
-    throw new AdvisorReviewParseError("Advisor findings must be an array.");
+    throw reviewError("Advisor findings must be an array.");
   }
   if (parsed.findings.length > MAX_ADVISOR_FINDINGS) {
-    throw new AdvisorReviewParseError(
-      `Advisor review must contain at most ${MAX_ADVISOR_FINDINGS} findings.`,
-    );
+    throw reviewError(`Advisor review must contain at most ${MAX_ADVISOR_FINDINGS} findings.`);
   }
 
   const suggestions = rawSuggestions.map((suggestion, index) => parseSuggestion(suggestion, index));
@@ -161,35 +222,35 @@ export function parseAdvisorReview(raw: string): AdvisorReview {
     for (const value of values) {
       const canonical = canonicalAdvisorFindingFingerprint(value.fingerprint ?? "");
       if (!canonical || fingerprints.has(canonical)) {
-        throw new AdvisorReviewParseError(`Advisor ${label} must use distinct fingerprints.`);
+        throw reviewError(`Advisor ${label} must use distinct fingerprints.`);
       }
       fingerprints.add(canonical);
     }
   }
   if (parsed.verdict === "pass" && (suggestions.length > 0 || parsedFindings.length > 0)) {
-    throw new AdvisorReviewParseError(
+    throw reviewError(
       suggestions.length > 0
         ? "A pass verdict requires empty suggestions and findings arrays."
         : "A pass verdict requires an empty findings array.",
     );
   }
   if (parsed.verdict === "suggest" && (suggestions.length === 0 || parsedFindings.length > 0)) {
-    throw new AdvisorReviewParseError(
-      "A suggest verdict requires suggestions and an empty findings array.",
-    );
+    throw reviewError("A suggest verdict requires suggestions and an empty findings array.");
   }
   if (parsed.verdict === "revise" && (parsedFindings.length === 0 || suggestions.length > 0)) {
-    throw new AdvisorReviewParseError(
-      "A revise verdict requires findings and an empty suggestions array.",
-    );
+    throw reviewError("A revise verdict requires findings and an empty suggestions array.");
   }
 
-  return {
+  const candidate: AdvisorReview = {
     verdict: parsed.verdict,
     summary,
     ...(parsed.suggestions !== undefined || suggestions.length > 0 ? { suggestions } : {}),
     findings: parsedFindings,
   };
+  if (Option.isNone(Schema.decodeUnknownOption(AdvisorReviewWireSchema)(candidate))) {
+    throw reviewError("Advisor review failed schema validation.");
+  }
+  return candidate;
 }
 
 /** Format the complete structured critique for display. */
@@ -316,12 +377,12 @@ export function buildRevisionSteer(review: AdvisorReview): string {
 
 function unwrapJson(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) throw new AdvisorReviewParseError("Advisor returned an empty response.");
+  if (!trimmed) throw reviewError("Advisor returned an empty response.");
   if (!trimmed.startsWith("```")) return trimmed;
 
   const fenced = /^```(?:json)?[\t ]*\r?\n([\s\S]*?)\r?\n```$/i.exec(trimmed);
   if (!fenced?.[1]?.trim()) {
-    throw new AdvisorReviewParseError("Advisor returned an invalid fenced JSON response.");
+    throw reviewError("Advisor returned an invalid fenced JSON response.");
   }
   return fenced[1].trim();
 }
@@ -331,19 +392,19 @@ function parseSuggestion(value: unknown, index: number): AdvisorSuggestion {
     !isRecord(value) ||
     !hasExactKeys(value, ["fingerprint", "kind", "suggestion", "rationale", "relevance"])
   ) {
-    throw new AdvisorReviewParseError(
+    throw reviewError(
       `Advisor suggestion ${index + 1} must contain exactly fingerprint, kind, suggestion, rationale, and relevance.`,
     );
   }
   if (!isSuggestionKind(value.kind)) {
-    throw new AdvisorReviewParseError(`Advisor suggestion ${index + 1} has an invalid kind.`);
+    throw reviewError(`Advisor suggestion ${index + 1} has an invalid kind.`);
   }
   if (
     value.relevance !== "possible" &&
     value.relevance !== "likely" &&
     value.relevance !== "high"
   ) {
-    throw new AdvisorReviewParseError(`Advisor suggestion ${index + 1} has invalid relevance.`);
+    throw reviewError(`Advisor suggestion ${index + 1} has invalid relevance.`);
   }
   return {
     fingerprint: requireBoundedString(
@@ -380,25 +441,25 @@ function parseFinding(value: unknown, index: number): AdvisorFinding {
       "recommendation",
     ])
   ) {
-    throw new AdvisorReviewParseError(
+    throw reviewError(
       `Advisor finding ${index + 1} must contain exactly fingerprint, category, severity, confidence, evidenceBasis, issue, evidence, and recommendation.`,
     );
   }
   if (!isFindingCategory(value.category)) {
-    throw new AdvisorReviewParseError(`Advisor finding ${index + 1} has an invalid category.`);
+    throw reviewError(`Advisor finding ${index + 1} has an invalid category.`);
   }
   if (value.severity !== "nit" && value.severity !== "concern" && value.severity !== "blocker") {
-    throw new AdvisorReviewParseError(`Advisor finding ${index + 1} has an invalid severity.`);
+    throw reviewError(`Advisor finding ${index + 1} has an invalid severity.`);
   }
   if (value.confidence !== "low" && value.confidence !== "medium" && value.confidence !== "high") {
-    throw new AdvisorReviewParseError(`Advisor finding ${index + 1} has invalid confidence.`);
+    throw reviewError(`Advisor finding ${index + 1} has invalid confidence.`);
   }
   if (
     value.evidenceBasis !== "none" &&
     value.evidenceBasis !== "inferred" &&
     value.evidenceBasis !== "direct"
   ) {
-    throw new AdvisorReviewParseError(`Advisor finding ${index + 1} has invalid evidenceBasis.`);
+    throw reviewError(`Advisor finding ${index + 1} has invalid evidenceBasis.`);
   }
   return {
     fingerprint: requireBoundedString(
@@ -446,11 +507,11 @@ function isFindingCategory(value: unknown): value is AdvisorFindingCategory {
 
 function requireBoundedString(value: unknown, field: string, maxChars: number): string {
   if (typeof value !== "string" || !value.trim()) {
-    throw new AdvisorReviewParseError(`Advisor ${field} must be a non-empty string.`);
+    throw reviewError(`Advisor ${field} must be a non-empty string.`);
   }
   const trimmed = value.trim();
   if (trimmed.length > maxChars) {
-    throw new AdvisorReviewParseError(`Advisor ${field} exceeds ${maxChars} characters.`);
+    throw reviewError(`Advisor ${field} exceeds ${maxChars} characters.`);
   }
   return trimmed;
 }

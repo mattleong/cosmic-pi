@@ -31,7 +31,7 @@ export class AdvisorInterventionBudget {
   get snapshot(): AdvisorInterventionBudgetSnapshot {
     return {
       delivered: this.#delivered,
-      highestSeverity: this.#highestSeverity,
+      ...(this.#highestSeverity === undefined ? {} : { highestSeverity: this.#highestSeverity }),
       correctionUsed: this.#correctionUsed,
     };
   }

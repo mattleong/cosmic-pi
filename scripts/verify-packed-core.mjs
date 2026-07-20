@@ -22,6 +22,9 @@ const cosmicUiManifest = JSON.parse(
 const codePreviewsManifest = JSON.parse(
   await readFile(join(root, "packages/pi-code-previews/package.json"), "utf8"),
 );
+const advisorManifest = JSON.parse(
+  await readFile(join(root, "packages/pi-advisor/package.json"), "utf8"),
+);
 const piVersion = coreManifest.devDependencies["@earendil-works/pi-coding-agent"];
 const tuiVersion = xaiManifest.peerDependencies["@earendil-works/pi-tui"];
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "cosmic-pi-pack-"));
@@ -47,6 +50,7 @@ try {
     "pi-better-openai",
     "pi-cosmic-ui",
     "pi-code-previews",
+    "pi-advisor",
   ]) {
     run("pnpm", ["--filter", packageName, "pack", "--pack-destination", temporaryDirectory], root);
   }
@@ -56,16 +60,18 @@ try {
   const openaiTarballName = tarballs.find((name) => name.startsWith("pi-better-openai-"));
   const cosmicUiTarballName = tarballs.find((name) => name.startsWith("pi-cosmic-ui-"));
   const codePreviewsTarballName = tarballs.find((name) => name.startsWith("pi-code-previews-"));
+  const advisorTarballName = tarballs.find((name) => name.startsWith("pi-advisor-"));
   if (
     !coreTarballName ||
     !xaiTarballName ||
     !openaiTarballName ||
     !cosmicUiTarballName ||
     !codePreviewsTarballName ||
-    tarballs.length !== 5
+    !advisorTarballName ||
+    tarballs.length !== 6
   ) {
     throw new Error(
-      `Expected core, xAI, OpenAI, Cosmic UI, and code-preview tarballs, found: ${tarballs.join(", ")}.`,
+      `Expected core, xAI, OpenAI, Cosmic UI, code-preview, and advisor tarballs, found: ${tarballs.join(", ")}.`,
     );
   }
 
@@ -74,6 +80,7 @@ try {
   const openaiTarball = join(temporaryDirectory, openaiTarballName);
   const cosmicUiTarball = join(temporaryDirectory, cosmicUiTarballName);
   const codePreviewsTarball = join(temporaryDirectory, codePreviewsTarballName);
+  const advisorTarball = join(temporaryDirectory, advisorTarballName);
   await writeFile(
     join(temporaryDirectory, "package.json"),
     `${JSON.stringify(
@@ -90,10 +97,12 @@ try {
           "pi-cosmic-core": `file:${coreTarball}`,
           "pi-cosmic-ui": `file:${cosmicUiTarball}`,
           "pi-code-previews": `file:${codePreviewsTarball}`,
+          "pi-advisor": `file:${advisorTarball}`,
         },
         pnpm: {
           overrides: {
             "pi-cosmic-core": `file:${coreTarball}`,
+            "pi-better-openai": `file:${openaiTarball}`,
           },
         },
       },
@@ -122,7 +131,7 @@ try {
     [
       "--input-type=module",
       "--eval",
-      "import { createJiti } from 'jiti'; const jiti = createJiti(import.meta.url); const xai = await jiti.import('pi-better-xai'); const openai = await jiti.import('pi-better-openai'); const cosmicUi = await jiti.import('pi-cosmic-ui'); const protocol = await jiti.import('pi-cosmic-ui/protocol'); const previews = await import('pi-code-previews'); if (typeof xai.default !== 'function') throw new Error('missing xAI extension export'); if (typeof openai.default !== 'function') throw new Error('missing OpenAI extension export'); if (typeof cosmicUi.default !== 'function') throw new Error('missing Cosmic UI extension export'); if (typeof previews.default !== 'function' || typeof previews.loadCodePreviewSettings !== 'function' || typeof previews.withCodePreviewShell !== 'function') throw new Error('missing code-preview public exports'); if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== 'function') throw new Error('missing Cosmic UI protocol exports');",
+      "import { createJiti } from 'jiti'; const jiti = createJiti(import.meta.url); const xai = await jiti.import('pi-better-xai'); const openai = await jiti.import('pi-better-openai'); const cosmicUi = await jiti.import('pi-cosmic-ui'); const advisor = await jiti.import('pi-advisor'); const protocol = await jiti.import('pi-cosmic-ui/protocol'); const previews = await import('pi-code-previews'); if (typeof xai.default !== 'function') throw new Error('missing xAI extension export'); if (typeof openai.default !== 'function') throw new Error('missing OpenAI extension export'); if (typeof cosmicUi.default !== 'function') throw new Error('missing Cosmic UI extension export'); if (typeof advisor.default !== 'function') throw new Error('missing advisor extension export'); if (typeof previews.default !== 'function' || typeof previews.loadCodePreviewSettings !== 'function' || typeof previews.withCodePreviewShell !== 'function') throw new Error('missing code-preview public exports'); if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== 'function') throw new Error('missing Cosmic UI protocol exports');",
     ],
     temporaryDirectory,
   );
@@ -178,8 +187,19 @@ try {
     throw new Error("Packed pi-code-previews dependencies are not synchronized.");
   }
 
+  const packedAdvisorManifest = JSON.parse(
+    await readFile(join(temporaryDirectory, "node_modules/pi-advisor/package.json"), "utf8"),
+  );
+  if (
+    packedAdvisorManifest.dependencies.effect !== expectedEffectVersion ||
+    packedAdvisorManifest.dependencies["pi-cosmic-core"] !== coreManifest.version ||
+    packedAdvisorManifest.version !== advisorManifest.version
+  ) {
+    throw new Error("Packed pi-advisor dependencies are not synchronized.");
+  }
+
   console.log(
-    "Packed core, xAI, OpenAI, Cosmic UI, and code-preview packages install and import in a clean consumer.",
+    "Packed core, xAI, OpenAI, Cosmic UI, code-preview, and advisor packages install and import in a clean consumer.",
   );
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });

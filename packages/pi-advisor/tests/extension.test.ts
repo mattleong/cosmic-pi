@@ -1,3 +1,9 @@
+// Test harness boundary: only the diagnostics used by this file are suppressed.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+// @effect-diagnostics effect/globalDate:off
+// @effect-diagnostics effect/globalTimers:off
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,6 +53,7 @@ function harness(
   options: {
     runtimeStartError?: Error;
     runtimeStartPromises?: Array<Promise<void> | undefined>;
+    runtimeDisposePromises?: Array<Promise<void> | undefined>;
     catchUpTimeoutMs?: number;
     branch?: Array<Record<string, unknown>>;
     withoutSessionId?: boolean;
@@ -81,7 +88,9 @@ function harness(
       steer: vi.fn(async () => true),
       reprime: vi.fn(async () => undefined),
       abort: vi.fn(async () => undefined),
-      dispose: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => {
+        await options.runtimeDisposePromises?.[runtimeIndex];
+      }),
     };
     runtimes.push({ driver, requests, pending });
     return driver;
@@ -423,9 +432,16 @@ describe("persistent extension cutover", () => {
     await value.emitAwait("turn_end", finalTurn("timeout candidate"));
     const current = value.runtimes[0]!;
     expect(current.requests).toHaveLength(1);
+    expect(current.driver.abort).toHaveBeenCalledOnce();
     current.pending[0]!.resolve(revise(current.requests[0]!, "blocker", "late blocker"));
     await tick();
+    expect(current.requests).toHaveLength(1);
     expect(value.sendMessage).not.toHaveBeenCalled();
+    await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
+    await tick();
+    expect(current.requests).toHaveLength(2);
+    current.pending[1]!.resolve(pass(current.requests[1]!));
+    await tick();
     await value.commands.get("advisor-status")!.handler("--verbose", value.ctx as never);
     expect(String((value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.lastCall?.[0])).toContain(
       "timeouts 1",
@@ -533,6 +549,22 @@ describe("persistent extension cutover", () => {
     expect(value.appended).toHaveLength(2);
   });
 
+  test("keeps separately registered advisor factories runtime-isolated", async () => {
+    const first = harness();
+    const second = harness();
+    await Promise.all([
+      first.emit("session_start", { type: "session_start" }),
+      second.emit("session_start", { type: "session_start" }),
+    ]);
+    await first.emit("session_shutdown", { type: "session_shutdown" });
+    await second.emit("session_tree", { type: "session_tree" });
+
+    expect(first.runtimes).toHaveLength(1);
+    expect(first.runtimes[0]!.driver.dispose).toHaveBeenCalledOnce();
+    expect(second.runtimes).toHaveLength(2);
+    expect(second.runtimes[1]!.driver.start).toHaveBeenCalledOnce();
+  });
+
   test("starts once per parent session and disposes on shutdown", async () => {
     const value = harness();
     await value.emit("session_start", { type: "session_start" });
@@ -540,6 +572,39 @@ describe("persistent extension cutover", () => {
     expect(current?.driver.start).toHaveBeenCalledOnce();
     await value.emit("session_shutdown", { type: "session_shutdown" });
     expect(current?.driver.dispose).toHaveBeenCalledOnce();
+  });
+
+  test("throwing status UI cannot skip child shutdown disposal", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    const current = value.runtimes[0]!;
+    (value.ctx.ui.setStatus as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error("status failed");
+    });
+
+    await expect(
+      value.emit("session_shutdown", { type: "session_shutdown" }),
+    ).resolves.toBeUndefined();
+    expect(current.driver.dispose).toHaveBeenCalledOnce();
+  });
+
+  test("serializes overlapping child replacements behind prior disposal", async () => {
+    const disposal = deferred<void>();
+    const value = harness({}, { runtimeDisposePromises: [disposal.promise, undefined] });
+    await value.emit("session_start", { type: "session_start" });
+    const first = value.runtimes[0]!;
+
+    const tree = value.emitAwait("session_tree", { type: "session_tree" });
+    await tick();
+    const compact = value.emitAwait("session_compact", { type: "session_compact" });
+    await tick();
+    expect(value.runtimes).toHaveLength(1);
+    expect(first.driver.dispose).toHaveBeenCalledOnce();
+
+    disposal.resolve();
+    await Promise.all([tree, compact]);
+    expect(value.runtimes).toHaveLength(2);
+    expect(value.runtimes[1]!.driver.start).toHaveBeenCalledOnce();
   });
 
   test.each(["session_tree", "session_compact"])(
@@ -2285,9 +2350,8 @@ describe("persistent extension cutover", () => {
     }
   });
 
-  test("review-last startup cannot cross a tree restart", async () => {
-    const restart = deferred<void>();
-    const value = harness({}, { runtimeStartPromises: [undefined, restart.promise, undefined] });
+  test("review-last cannot start unmanaged work after shutdown or a tree callback", async () => {
+    const value = harness({}, { runtimeStartPromises: [undefined] });
     await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("candidate"));
     await tick();
@@ -2301,14 +2365,13 @@ describe("persistent extension cutover", () => {
 
     const review = command.handler("review-last", value.ctx as never);
     await tick();
-    expect(value.runtimes).toHaveLength(2);
+    expect(value.runtimes).toHaveLength(1);
     await value.emit("session_tree", { type: "session_tree" });
-    expect(value.runtimes).toHaveLength(3);
-    restart.resolve();
+    expect(value.runtimes).toHaveLength(1);
     await review;
     await tick();
 
-    expect(value.runtimes[2]!.requests).toHaveLength(0);
+    expect(value.runtimes[0]!.requests).toHaveLength(1);
     expect(notify).not.toHaveBeenCalledWith(
       "No completed response is available to review.",
       "warning",
@@ -2345,9 +2408,8 @@ describe("persistent extension cutover", () => {
     }
   });
 
-  test("once startup cannot cross a tree restart", async () => {
-    const restart = deferred<void>();
-    const value = harness({}, { runtimeStartPromises: [undefined, restart.promise, undefined] });
+  test("once cannot start unmanaged work after shutdown or a tree callback", async () => {
+    const value = harness({}, { runtimeStartPromises: [undefined] });
     await value.emit("session_start", { type: "session_start" });
     await value.emit("session_shutdown", { type: "session_shutdown" });
     const command = value.commands.get("advisor")!;
@@ -2355,14 +2417,13 @@ describe("persistent extension cutover", () => {
 
     const turn = value.emitAwait("turn_end", finalTurn("stale once candidate"));
     await tick();
-    expect(value.runtimes).toHaveLength(2);
+    expect(value.runtimes).toHaveLength(1);
     await value.emit("session_tree", { type: "session_tree" });
-    expect(value.runtimes).toHaveLength(3);
+    expect(value.runtimes).toHaveLength(1);
 
-    restart.resolve();
     await turn;
     await tick();
-    expect(value.runtimes[2]!.requests).toHaveLength(0);
+    expect(value.runtimes[0]!.requests).toHaveLength(0);
   });
 
   test("cancel stops once while its runtime is starting", async () => {

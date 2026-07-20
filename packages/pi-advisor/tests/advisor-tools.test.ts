@@ -1,8 +1,11 @@
+// Test harness boundary: only the diagnostics used by this file are suppressed.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
 import childProcess from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   ADVISOR_TOOL_LIMITS,
@@ -11,6 +14,7 @@ import {
   createAdvisorTools,
   isPackageAdvisorTool,
 } from "../src/advisor-tools.ts";
+import { _readOnlyFileSystemTest } from "../src/boundary/read-only-fs.ts";
 
 const directories: string[] = [];
 
@@ -48,6 +52,77 @@ afterEach(async () => {
 });
 
 describe("package-owned Advisor tools", () => {
+  test("uses platform-relative containment for Windows paths", () => {
+    expect(
+      _readOnlyFileSystemTest.isContainedPathWith(
+        win32,
+        "C:\\project",
+        "C:\\project\\src\\file.ts",
+      ),
+    ).toBe(true);
+    expect(
+      _readOnlyFileSystemTest.isContainedPathWith(
+        win32,
+        "C:\\project",
+        "C:\\project-sibling\\secret.txt",
+      ),
+    ).toBe(false);
+  });
+
+  test("filters outside-only names after a directory swap and restore", async () => {
+    const root = await fixture();
+    const scan = join(root, "scan");
+    const outside = await mkdtemp(join(tmpdir(), "pi-advisor-directory-swap-"));
+    directories.push(outside);
+    await mkdir(scan);
+    await writeFile(join(scan, "inside.txt"), "inside");
+    await writeFile(join(outside, "outside-only-secret.txt"), "outside");
+    const saved = `${scan}-saved`;
+    _readOnlyFileSystemTest.setDirectoryHooks({
+      beforeOpen: async (path) => {
+        await rename(path, saved);
+        await symlink(outside, path, "dir");
+      },
+      afterRead: async (path) => {
+        await rm(path);
+        await rename(saved, path);
+      },
+    });
+    try {
+      const result = await execute(root, "ls", { path: "scan" });
+      expect(resultText(result)).not.toContain("outside-only-secret.txt");
+    } finally {
+      _readOnlyFileSystemTest.setDirectoryHooks();
+    }
+  });
+
+  test("rejects a pinned project root replaced by an outside symlink", async () => {
+    const root = await fixture();
+    const tools = await createAdvisorTools(root);
+    const moved = `${root}-moved`;
+    const outside = await mkdtemp(join(tmpdir(), "pi-advisor-outside-"));
+    directories.push(moved, outside);
+    await writeFile(join(outside, "secret.txt"), "outside secret");
+    await rename(root, moved);
+    await symlink(outside, root, "dir");
+    const read = tools.find((tool) => tool.name === "read");
+    await expect(
+      read?.execute("call", { path: "secret.txt" }, undefined, undefined, {} as never),
+    ).rejects.toThrow(/root|exist|escape|project/i);
+  });
+
+  test("treats an in-root hard-link directory entry as an in-root file", async () => {
+    const root = await fixture();
+    const outside = await mkdtemp(join(tmpdir(), "pi-advisor-hardlink-"));
+    directories.push(outside);
+    const source = join(outside, "source.txt");
+    await writeFile(source, "hard-link content");
+    await link(source, join(root, "linked.txt"));
+    expect(resultText(await execute(root, "read", { path: "linked.txt" }))).toContain(
+      "hard-link content",
+    );
+  });
+
   test("exposes exactly read, grep, find and ls with package identity", async () => {
     const tools = await createAdvisorTools(await fixture());
     expect(tools.map((tool) => tool.name)).toEqual(ADVISOR_TOOL_NAMES);
@@ -186,6 +261,26 @@ describe("package-owned Advisor tools", () => {
     }
     const result = await execute(root, "find", { path: ".", pattern: "**" });
     expect(resultText(result)).toContain("output truncated");
+  });
+
+  test("rejects an already-aborted tool execution without opening content", async () => {
+    const root = await fixture();
+    const read = (await createAdvisorTools(root)).find((tool) => tool.name === "read");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      read?.execute("call", { path: "README.md" }, controller.signal, undefined, {} as never),
+    ).rejects.toThrow();
+  });
+
+  test.runIf(process.platform !== "win32")("rejects FIFO reads without blocking", async () => {
+    const root = await fixture();
+    const fifo = join(root, "pipe");
+    const created = childProcess.spawnSync("mkfifo", [fifo]);
+    expect(created.status).toBe(0);
+    const started = performance.now();
+    await expect(execute(root, "read", { path: "pipe" })).rejects.toThrow();
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   test("bounds bytes and marks oversized evidence as truncated", async () => {

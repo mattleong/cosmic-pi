@@ -1,3 +1,5 @@
+// Test harness boundary: only the diagnostics used by this file are suppressed.
+// @effect-diagnostics effect/asyncFunction:off
 import { describe, expect, test, vi } from "vitest";
 import {
   CLEAR_MODEL_OPTION,

@@ -1,3 +1,7 @@
+// Test harness boundary: only the diagnostics used by this file are suppressed.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

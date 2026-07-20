@@ -1,35 +1,45 @@
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import { JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
+import { parseJson, stringifyJson } from "./boundary/json.ts";
+import {
+  nodeJoin,
+  readTextFileOptionalSync,
+  warnSyncBoundary,
+  writeTextFileAtomicSync,
+} from "./boundary/node.ts";
+import { standaloneAdvisorExecutor } from "./boundary/executor.ts";
+import { snapshotDataRecord } from "./boundary/safe-data.ts";
 import { isRecord } from "./utils.ts";
 export { isRecord } from "./utils.ts";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 
 export const ADVISOR_CONFIG_BASENAME = "pi-advisor.json";
-
 export const MIN_TIMEOUT_MS = 10_000;
 export const MAX_TIMEOUT_MS = 180_000;
 export const MIN_CONTEXT_CHARS = 16_000;
 export const MAX_CONTEXT_CHARS = 240_000;
 
 export type AdvisorReviewPolicy = "corrective" | "guardrail" | "advisory";
-
 export interface AdvisorConfig {
-  enabled?: boolean;
-  provider?: string;
-  model?: string;
-  fastMode?: boolean;
-  thinkingLevel?: ModelThinkingLevel;
-  reviewPolicy?: AdvisorReviewPolicy;
-  timeoutMs?: number;
-  maxContextChars?: number;
+  enabled?: boolean | undefined;
+  provider?: string | undefined;
+  model?: string | undefined;
+  fastMode?: boolean | undefined;
+  thinkingLevel?: ModelThinkingLevel | undefined;
+  reviewPolicy?: AdvisorReviewPolicy | undefined;
+  timeoutMs?: number | undefined;
+  maxContextChars?: number | undefined;
 }
-
 export interface ResolvedAdvisorConfig {
   configPath: string;
   enabled: boolean;
-  provider?: string;
-  model?: string;
+  provider?: string | undefined;
+  model?: string | undefined;
   fastMode: boolean;
   thinkingLevel: ModelThinkingLevel;
   reviewPolicy: AdvisorReviewPolicy;
@@ -37,8 +47,41 @@ export interface ResolvedAdvisorConfig {
   maxContextChars: number;
   configured: boolean;
 }
-
 export type AdvisorConfigPatch = Partial<AdvisorConfig>;
+
+export const AdvisorThinkingLevelSchema = Schema.Literals([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+export const AdvisorReviewPolicySchema = Schema.Literals(["corrective", "guardrail", "advisory"]);
+export const ResolvedAdvisorConfigSchema = Schema.Struct({
+  configPath: Schema.String,
+  enabled: Schema.Boolean,
+  provider: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
+  model: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
+  fastMode: Schema.Boolean,
+  thinkingLevel: AdvisorThinkingLevelSchema,
+  reviewPolicy: AdvisorReviewPolicySchema,
+  timeoutMs: Schema.Number.check(
+    Schema.isInt(),
+    Schema.isBetween({ minimum: MIN_TIMEOUT_MS, maximum: MAX_TIMEOUT_MS }),
+  ),
+  maxContextChars: Schema.Number.check(
+    Schema.isInt(),
+    Schema.isBetween({ minimum: MIN_CONTEXT_CHARS, maximum: MAX_CONTEXT_CHARS }),
+  ),
+  configured: Schema.Boolean,
+});
+
+export class AdvisorConfigError extends Schema.TaggedErrorClass<AdvisorConfigError>()(
+  "AdvisorConfigError",
+  { operation: Schema.String, path: Schema.String, message: Schema.String },
+) {}
 
 export const DEFAULT_ADVISOR_CONFIG = {
   enabled: true,
@@ -55,13 +98,11 @@ export const DEFAULT_ADVISOR_CONFIG = {
 >;
 
 export function getAdvisorConfigPath(agentDir = getAgentDir()): string {
-  return join(agentDir, "extensions", ADVISOR_CONFIG_BASENAME);
+  return nodeJoin(agentDir, "extensions", ADVISOR_CONFIG_BASENAME);
 }
-
 export function clampTimeoutMs(value: unknown): number {
   return clampInteger(value, DEFAULT_ADVISOR_CONFIG.timeoutMs, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
 }
-
 export function clampContextChars(value: unknown): number {
   return clampInteger(
     value,
@@ -70,81 +111,107 @@ export function clampContextChars(value: unknown): number {
     MAX_CONTEXT_CHARS,
   );
 }
-
 export function isAdvisorConfigured(
   config: Pick<ResolvedAdvisorConfig, "provider" | "model">,
 ): boolean {
   return Boolean(config.provider && config.model);
 }
-
 export function normalizeAdvisorConfig(
   raw: unknown,
   configPath = getAdvisorConfigPath(),
 ): ResolvedAdvisorConfig {
-  const record = migrateLegacyReviewPolicy(isRecord(raw) ? raw : {});
-  const provider = nonEmptyString(record.provider);
-  const model = nonEmptyString(record.model);
+  const record = migrateLegacyReviewPolicy(safeDataRecord(raw));
+  const provider = nonEmptyString(decodeField(record, "provider", Schema.String));
+  const model = nonEmptyString(decodeField(record, "model", Schema.String));
   const normalized: ResolvedAdvisorConfig = {
     configPath,
-    enabled: typeof record.enabled === "boolean" ? record.enabled : DEFAULT_ADVISOR_CONFIG.enabled,
-    fastMode:
-      typeof record.fastMode === "boolean" ? record.fastMode : DEFAULT_ADVISOR_CONFIG.fastMode,
-    thinkingLevel: normalizeThinkingLevel(record.thinkingLevel),
-    reviewPolicy: normalizeReviewPolicy(record.reviewPolicy),
-    timeoutMs: clampTimeoutMs(record.timeoutMs),
-    maxContextChars: clampContextChars(record.maxContextChars),
+    enabled: decodeField(record, "enabled", Schema.Boolean) ?? DEFAULT_ADVISOR_CONFIG.enabled,
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    fastMode: decodeField(record, "fastMode", Schema.Boolean) ?? DEFAULT_ADVISOR_CONFIG.fastMode,
+    thinkingLevel: normalizeThinkingLevel(
+      decodeField(record, "thinkingLevel", AdvisorThinkingLevelSchema),
+    ),
+    reviewPolicy: normalizeReviewPolicy(
+      decodeField(record, "reviewPolicy", AdvisorReviewPolicySchema),
+    ),
+    timeoutMs: clampTimeoutMs(decodeField(record, "timeoutMs", Schema.Number)),
+    maxContextChars: clampContextChars(decodeField(record, "maxContextChars", Schema.Number)),
     configured: Boolean(provider && model),
   };
-  if (provider) normalized.provider = provider;
-  if (model) normalized.model = model;
+  if (Option.isNone(Schema.decodeUnknownOption(ResolvedAdvisorConfigSchema)(normalized))) {
+    throw new AdvisorConfigError({
+      operation: "normalize",
+      path: configPath,
+      message: "Unable to normalize Advisor configuration.",
+    });
+  }
   return normalized;
 }
 
-function readExistingAdvisorConfig(path: string): Record<string, unknown> {
-  if (!existsSync(path)) return {};
-  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-  if (!isRecord(parsed)) throw new Error(`Advisor config must contain a JSON object: ${path}`);
-  return parsed;
-}
+const mapError = (operation: string, path: string) => () =>
+  new AdvisorConfigError({
+    operation,
+    path,
+    message: `Unable to ${operation} Advisor configuration.`,
+  });
 
-export function readRawAdvisorConfig(path = getAdvisorConfigPath()): Record<string, unknown> {
+export const readRawAdvisorConfigEffect = Effect.fn("AdvisorConfig.readRaw")(function* (
+  path = getAdvisorConfigPath(),
+) {
+  const documents = yield* JsonDocumentStore;
+  return yield* documents.readObject(path).pipe(
+    Effect.map((value) => value ?? {}),
+    Effect.catch((error) =>
+      Effect.logWarning(`Advisor config read failed (${error.operation}) at ${path}.`).pipe(
+        Effect.as({} as JsonObject),
+      ),
+    ),
+  );
+});
+export function readRawAdvisorConfig(path = getAdvisorConfigPath()): JsonObject {
+  const source = readTextFileOptionalSync(path);
+  if (source === undefined) return {};
   try {
-    return readExistingAdvisorConfig(path);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[pi-advisor] Failed to read ${path}: ${message}`);
-    return {};
+    const decoded = parseJson(source);
+    if (isRecord(decoded)) return decoded;
+  } catch {
+    // Report malformed existing files while keeping reads fail-open.
   }
+  warnSyncBoundary(`Advisor config read failed at ${path}.`);
+  return {};
 }
-
+export function readRawAdvisorConfigAsync(path = getAdvisorConfigPath()): Promise<JsonObject> {
+  return standaloneAdvisorExecutor.run(readRawAdvisorConfigEffect(path));
+}
+export const loadAdvisorConfigEffect = Effect.fn("AdvisorConfig.load")(function* (
+  path = getAdvisorConfigPath(),
+) {
+  return normalizeAdvisorConfig(yield* readRawAdvisorConfigEffect(path), path);
+});
 export function loadAdvisorConfig(path = getAdvisorConfigPath()): ResolvedAdvisorConfig {
   return normalizeAdvisorConfig(readRawAdvisorConfig(path), path);
 }
+export function loadAdvisorConfigAsync(
+  path = getAdvisorConfigPath(),
+): Promise<ResolvedAdvisorConfig> {
+  return standaloneAdvisorExecutor.run(loadAdvisorConfigEffect(path));
+}
 
-export function patchAdvisorConfig(
-  raw: unknown,
-  patch: AdvisorConfigPatch,
-): Record<string, unknown> {
-  const next: Record<string, unknown> = isRecord(raw) ? { ...raw } : {};
-
-  if ("enabled" in patch) {
-    if (typeof patch.enabled === "boolean") next.enabled = patch.enabled;
-    else delete next.enabled;
-  }
+export function patchAdvisorConfig(raw: unknown, patch: AdvisorConfigPatch): JsonObject {
+  const next: JsonObject = safeDataRecord(raw);
+  if ("enabled" in patch) setOptionalBoolean(next, "enabled", patch.enabled);
   if ("provider" in patch) patchOptionalString(next, "provider", patch.provider);
   if ("model" in patch) patchOptionalString(next, "model", patch.model);
-  if ("fastMode" in patch) {
-    if (typeof patch.fastMode === "boolean") next.fastMode = patch.fastMode;
-    else delete next.fastMode;
-  }
+  if ("fastMode" in patch) setOptionalBoolean(next, "fastMode", patch.fastMode);
   if ("thinkingLevel" in patch) {
-    const thinkingLevel = validThinkingLevel(patch.thinkingLevel);
-    if (thinkingLevel) next.thinkingLevel = thinkingLevel;
+    const value = validThinkingLevel(patch.thinkingLevel);
+    if (value) next.thinkingLevel = value;
     else delete next.thinkingLevel;
   }
   if ("reviewPolicy" in patch) {
-    const reviewPolicy = validReviewPolicy(patch.reviewPolicy);
-    if (reviewPolicy) next.reviewPolicy = reviewPolicy;
+    const value = validReviewPolicy(patch.reviewPolicy);
+    if (value) next.reviewPolicy = value;
     else delete next.reviewPolicy;
   }
   if ("timeoutMs" in patch) {
@@ -155,87 +222,138 @@ export function patchAdvisorConfig(
     if (patch.maxContextChars === undefined) delete next.maxContextChars;
     else next.maxContextChars = clampContextChars(patch.maxContextChars);
   }
-
   return next;
 }
 
-export function writeRawAdvisorConfig(
-  raw: Record<string, unknown>,
-  path = getAdvisorConfigPath(),
-): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
-}
+const protectAdvisorConfigDirectoryEffect = Effect.fn("AdvisorConfig.protectDirectory")(function* (
+  path: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  const directory = paths.dirname(path);
+  const existed = yield* fs.exists(directory);
+  yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
+  if (!existed || paths.basename(directory) === "extensions") {
+    yield* fs.chmod(directory, 0o700);
+  }
+});
 
+export const writeRawAdvisorConfigEffect = Effect.fn("AdvisorConfig.writeRaw")(function* (
+  raw: JsonObject,
+  path = getAdvisorConfigPath(),
+) {
+  const documents = yield* JsonDocumentStore;
+  yield* protectAdvisorConfigDirectoryEffect(path).pipe(
+    Effect.mapError(mapError("protect directory", path)),
+  );
+  yield* documents.writeObject(path, raw).pipe(Effect.mapError(mapError("write", path)));
+});
+export function writeRawAdvisorConfig(raw: JsonObject, path = getAdvisorConfigPath()): void {
+  writeTextFileAtomicSync(path, `${stringifyJson(raw)}\n`);
+}
+export function writeRawAdvisorConfigAsync(
+  raw: JsonObject,
+  path = getAdvisorConfigPath(),
+): Promise<void> {
+  return standaloneAdvisorExecutor.run(writeRawAdvisorConfigEffect(raw, path));
+}
+export const writeAdvisorConfigPatchEffect = Effect.fn("AdvisorConfig.patch")(function* (
+  patch: AdvisorConfigPatch,
+  path = getAdvisorConfigPath(),
+) {
+  const documents = yield* JsonDocumentStore;
+  yield* protectAdvisorConfigDirectoryEffect(path).pipe(
+    Effect.mapError(mapError("protect directory", path)),
+  );
+  let next: JsonObject | undefined;
+  yield* documents
+    .updateObject(path, (raw) => {
+      next = patchAdvisorConfig(migrateLegacyReviewPolicy(raw), patch);
+      return next;
+    })
+    .pipe(Effect.mapError(mapError("update", path)));
+  return normalizeAdvisorConfig(next ?? {}, path);
+});
 export function writeAdvisorConfigPatch(
   patch: AdvisorConfigPatch,
   path = getAdvisorConfigPath(),
 ): ResolvedAdvisorConfig {
-  const raw = migrateLegacyReviewPolicy(readExistingAdvisorConfig(path));
-  const next = patchAdvisorConfig(raw, patch);
+  const source = readTextFileOptionalSync(path);
+  let raw: JsonObject = {};
+  if (source !== undefined) {
+    const decoded = parseJson(source);
+    if (!isRecord(decoded))
+      throw new AdvisorConfigError({
+        operation: "update",
+        path,
+        message: "Unable to update Advisor configuration.",
+      });
+    raw = decoded;
+  }
+  const next = patchAdvisorConfig(migrateLegacyReviewPolicy(raw), patch);
   writeRawAdvisorConfig(next, path);
   return normalizeAdvisorConfig(next, path);
 }
-
-function clampInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  return Math.max(minimum, Math.min(maximum, Math.trunc(value)));
+export function writeAdvisorConfigPatchAsync(
+  patch: AdvisorConfigPatch,
+  path = getAdvisorConfigPath(),
+): Promise<ResolvedAdvisorConfig> {
+  return standaloneAdvisorExecutor.run(writeAdvisorConfigPatchEffect(patch, path));
 }
 
+function safeDataRecord(value: unknown): JsonObject {
+  return snapshotDataRecord(value) ?? {};
+}
+function decodeField<A>(record: JsonObject, key: string, schema: Schema.Decoder<A>): A | undefined {
+  const decoded = Schema.decodeUnknownOption(schema)(record[key]);
+  return Option.isSome(decoded) ? decoded.value : undefined;
+}
+function setOptionalBoolean(target: JsonObject, key: string, value: boolean | undefined) {
+  if (typeof value === "boolean") target[key] = value;
+  else delete target[key];
+}
+function clampInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(minimum, Math.min(maximum, Math.trunc(value)))
+    : fallback;
+}
 function normalizeThinkingLevel(value: unknown): ModelThinkingLevel {
   return validThinkingLevel(value) ?? DEFAULT_ADVISOR_CONFIG.thinkingLevel;
 }
-
 function normalizeReviewPolicy(value: unknown): AdvisorReviewPolicy {
   return validReviewPolicy(value) ?? DEFAULT_ADVISOR_CONFIG.reviewPolicy;
 }
-
 function validReviewPolicy(value: unknown): AdvisorReviewPolicy | undefined {
-  switch (value) {
-    case "corrective":
-    case "guardrail":
-    case "advisory":
-      return value;
-    default:
-      return undefined;
-  }
+  return value === "corrective" || value === "guardrail" || value === "advisory"
+    ? value
+    : undefined;
 }
-
-function migrateLegacyReviewPolicy(raw: Record<string, unknown>): Record<string, unknown> {
+function migrateLegacyReviewPolicy(raw: JsonObject): JsonObject {
   if (raw.reviewPolicy === "strict") return { ...raw, reviewPolicy: "corrective" };
   if (raw.reviewPolicy === "advice") return { ...raw, reviewPolicy: "advisory" };
-  if (raw.reviewPolicy === "manual") {
-    return { ...raw, enabled: false, reviewPolicy: "advisory" };
-  }
+  if (raw.reviewPolicy === "manual") return { ...raw, enabled: false, reviewPolicy: "advisory" };
   return raw;
 }
-
 function validThinkingLevel(value: unknown): ModelThinkingLevel | undefined {
-  switch (value) {
-    case "off":
-    case "minimal":
-    case "low":
-    case "medium":
-    case "high":
-    case "xhigh":
-    case "max":
-      return value;
-    default:
-      return undefined;
-  }
+  return value === "off" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "max"
+    ? value
+    : undefined;
 }
-
 function nonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  return value.trim() || undefined;
 }
-
 function patchOptionalString(
-  target: Record<string, unknown>,
+  target: JsonObject,
   key: "provider" | "model",
   value: string | undefined,
-): void {
+) {
   const normalized = nonEmptyString(value);
   if (normalized) target[key] = normalized;
   else delete target[key];

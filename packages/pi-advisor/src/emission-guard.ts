@@ -95,7 +95,7 @@ export class AdvisorEmissionGuard {
       checkpointId,
       checkpointEvicted: [],
       hash,
-      previousSeverity,
+      ...(previousSeverity === undefined ? {} : { previousSeverity }),
       wasNewHash: previousSeverity === undefined,
       hashEvicted: [],
     };

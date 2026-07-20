@@ -4,9 +4,58 @@ import {
   MAX_OBSERVATION_CHANNEL_CHARS,
   MAX_OBSERVATION_RECORDS,
   OBSERVATION_OMISSION_MARKER,
+  stringifyRedactedObservation,
 } from "../src/observation-protocol.ts";
 
 describe("observation protocol", () => {
+  test("does not invoke accessors or Proxy traps while snapshotting observations", () => {
+    const accessor = Object.defineProperty({}, "secret", {
+      enumerable: true,
+      get() {
+        throw new Error("getter executed");
+      },
+    });
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("proxy trap executed");
+        },
+      },
+    );
+    expect(stringifyRedactedObservation(accessor)).toBe("{}");
+    expect(stringifyRedactedObservation(hostile)).toBe("[unavailable]");
+  });
+  test("fails observation ingress closed without invoking accessors or leaking Proxy errors", () => {
+    const buffer = new AdvisorObservationBuffer();
+    let getterCalls = 0;
+    const accessor = Object.defineProperties(
+      {},
+      {
+        type: { enumerable: true, value: "assistant_text_delta" },
+        text: {
+          enumerable: true,
+          get() {
+            getterCalls += 1;
+            throw new Error("getter executed");
+          },
+        },
+      },
+    );
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("proxy trap executed");
+        },
+      },
+    );
+
+    expect(() => buffer.ingest(1, accessor as never)).toThrow(/observation/i);
+    expect(getterCalls).toBe(0);
+    expect(() => buffer.ingest(1, hostile as never)).toThrow(/observation/i);
+  });
+
   test("assigns monotonic sequence and coalesces text and thinking by channel", () => {
     const buffer = new AdvisorObservationBuffer(7);
     buffer.ingest(1, { type: "assistant_thinking_delta", text: "reason " });

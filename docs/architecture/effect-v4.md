@@ -35,10 +35,9 @@ Compiler tooling lives at the workspace root. Runtime dependencies are declared 
 ## Enforcement
 
 - `tsconfig.base.json` enables core language-service correctness diagnostics for every package.
-- `tsconfig.effect.json` enables Effect-native and anti-pattern diagnostics for migrated packages.
-- `scripts/effect-migration-baseline.json` records legacy violations.
-- `scripts/check-effect-architecture.mjs` rejects increases and requires zero violations in migrated packages.
-- The baseline is deleted when all packages reach zero.
+- `tsconfig.effect.json` enables Effect-native and anti-pattern diagnostics for every workspace package.
+- `scripts/check-effect-architecture.mjs` directly requires zero unapproved violations in every package that extends `tsconfig.effect.json`.
+- The temporary migration baseline was deleted after the final package cutover.
 
 ## Upgrade procedure
 

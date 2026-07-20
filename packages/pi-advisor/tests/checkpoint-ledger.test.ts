@@ -1,3 +1,5 @@
+// Test harness boundary: only the diagnostics used by this file are suppressed.
+// @effect-diagnostics effect/globalDate:off
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
 import { advisorFindingId } from "../src/finding-lifecycle.ts";
@@ -56,6 +58,24 @@ function reviewSummary() {
 }
 
 describe("checkpoint ledger", () => {
+  test("rejects accessors and hostile Proxy traps without invoking them", () => {
+    const accessor = Object.defineProperty({}, "protocolVersion", {
+      enumerable: true,
+      get() {
+        throw new Error("getter executed");
+      },
+    });
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("proxy trap executed");
+        },
+      },
+    );
+    expect(parseLedger(accessor)).toBeUndefined();
+    expect(parseLedger(hostile)).toBeUndefined();
+  });
   test("stores only categorical review metadata and restores the latest active-branch entry", () => {
     const fingerprint = createLedgerFingerprint({
       provider: "p",

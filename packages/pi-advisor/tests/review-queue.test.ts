@@ -1,3 +1,7 @@
+// Test harness boundary: only the diagnostics used by this file are suppressed.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/globalTimers:off
 import { describe, expect, test, vi } from "vitest";
 import type {
   AdvisorCheckpoint,
@@ -126,6 +130,41 @@ describe("AdvisorReviewQueue", () => {
     await catchUp;
   });
 
+  test("drains an observation that arrives while live steering is unresolved", async () => {
+    const harness = runtimeHarness();
+    const firstSteer = deferred<boolean>();
+    const secondSteer = deferred<boolean>();
+    (harness.runtime.steer as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => firstSteer.promise)
+      .mockImplementationOnce(() => secondSteer.promise);
+    const queue = new AdvisorReviewQueue(harness.runtime);
+    queue.ingest(1, { type: "assistant_text_delta", text: "checkpoint seed" });
+    const checkpoint = queue.checkpoint({
+      checkpointId: "one",
+      focus: "standard",
+      parentTurnId: 1,
+    });
+    await tick();
+
+    queue.ingest(1, { type: "assistant_text_delta", text: "first live delta" });
+    await tick();
+    expect(harness.runtime.steer).toHaveBeenCalledOnce();
+    queue.ingest(1, { type: "assistant_text_delta", text: "second in-flight delta" });
+    firstSteer.resolve(true);
+    await tick();
+
+    expect(harness.runtime.steer).toHaveBeenCalledTimes(2);
+    expect(harness.runtime.steer).toHaveBeenLastCalledWith(
+      expect.stringContaining("second in-flight delta"),
+    );
+    secondSteer.resolve(true);
+    const request = harness.requests[0];
+    if (!request) throw new Error("missing request");
+    harness.pending[0]?.resolve(result(request));
+    await checkpoint;
+    await queue.dispose();
+  });
+
   test("freezes exact pre-pump checkpoint barriers across a seq1/seq2 coalescing race", async () => {
     const harness = runtimeHarness();
     const queue = new AdvisorReviewQueue(harness.runtime);
@@ -210,6 +249,18 @@ describe("AdvisorReviewQueue", () => {
     expect(queue.processedThrough).toBe(1_001);
   });
 
+  test("preserves typed provider failure text for parent classification", async () => {
+    const harness = runtimeHarness();
+    (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("Advisor authentication failed; credential unavailable."),
+    );
+    const queue = new AdvisorReviewQueue(harness.runtime);
+    queue.ingest(1, { type: "user", text: "request" });
+    await expect(
+      queue.checkpoint({ checkpointId: "auth", focus: "standard", parentTurnId: 1 }),
+    ).rejects.toThrow(/authentication.*credential/i);
+  });
+
   test("re-primes at the current cursor and bounds overflow retry to one", async () => {
     const harness = runtimeHarness();
     let attempt = 0;
@@ -283,6 +334,7 @@ describe("AdvisorReviewQueue", () => {
     await tick();
 
     expect(harness.runtime.checkpoint).toHaveBeenCalledOnce();
+    expect(harness.runtime.abort).toHaveBeenCalledOnce();
     expect(harness.runtime.reprime).not.toHaveBeenCalled();
   });
 

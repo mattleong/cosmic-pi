@@ -1,7 +1,15 @@
+// Test harness boundary: only the diagnostics used by this file are suppressed.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/globalTimers:off
 import type { AgentSession, CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import { describe, expect, test, vi } from "vitest";
 import {
   AdvisorRuntime,
+  AdvisorRuntimeService,
+  advisorRuntimeServiceLayer,
   MAX_ADVISOR_CHECKPOINT_CHARS,
   MAX_ADVISOR_CHECKPOINT_ID_CHARS,
   MAX_ADVISOR_STREAM_CHARS,
@@ -11,6 +19,7 @@ import {
   type AdvisorCheckpointRequest,
 } from "../src/advisor-runtime.ts";
 import { ADVISOR_TOOL_NAMES, createAdvisorTools } from "../src/advisor-tools.ts";
+import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
 import type { AdvisorUsageTelemetry } from "../src/client.ts";
 import type { ResolvedAdvisorConfig } from "../src/config.ts";
 
@@ -53,6 +62,7 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
   });
   const actions: string[] = [];
   const messages: unknown[] = [];
+  const unsubscribe = vi.fn();
   const session = {
     sessionFile: undefined,
     agent: { state: { messages } },
@@ -68,7 +78,7 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
     ),
     subscribe: vi.fn((next: (event: never) => void) => {
       listener = next;
-      return vi.fn();
+      return unsubscribe;
     }),
     prompt: vi.fn(async (text: string) => {
       promptCount += 1;
@@ -142,6 +152,7 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
     getOptions: () => options,
     actions,
     releaseAnalysis,
+    unsubscribe,
     emit: (event: unknown) => listener?.(event as never),
   };
 }
@@ -152,6 +163,7 @@ async function start(
   runtimeOptions: {
     instructions?: string;
     onUsage?: (usage: AdvisorUsageTelemetry) => void;
+    onDiagnostic?: (message: string) => void;
     seed?: string;
   } = {},
 ) {
@@ -161,6 +173,7 @@ async function start(
     seed: runtimeOptions.seed ?? "parent seed",
     instructions: runtimeOptions.instructions,
     onUsage: runtimeOptions.onUsage,
+    onDiagnostic: runtimeOptions.onDiagnostic,
   });
 }
 
@@ -310,6 +323,40 @@ describe("AdvisorRuntime", () => {
     });
   });
 
+  test("ignores hostile and non-finite usage payloads", async () => {
+    const value = harness();
+    const onUsage = vi.fn();
+    await start(value.runtime, {}, { onUsage });
+    const hostileUsage = Object.defineProperty({}, "input", {
+      enumerable: true,
+      get() {
+        throw new Error("getter executed");
+      },
+    });
+    value.emit({
+      type: "message_end",
+      message: { role: "assistant", content: [], stopReason: "stop", usage: hostileUsage },
+    });
+    value.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "stop",
+        usage: { input: Number.NaN, output: Number.POSITIVE_INFINITY, totalTokens: -1 },
+      },
+    });
+    expect(onUsage).toHaveBeenCalledOnce();
+    expect(onUsage).toHaveBeenCalledWith({
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cost: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    });
+  });
+
   test("retains complete Advisor thinking across a second checkpoint", async () => {
     const { runtime } = harness();
     await start(runtime);
@@ -330,12 +377,128 @@ describe("AdvisorRuntime", () => {
     expect(JSON.stringify(runtime.childSession?.messages)).toContain("private-thinking-2");
   });
 
-  test("fails closed and disposes on an unsafe active tool", async () => {
-    const { runtime, session } = harness();
+  test("fails closed and finalizes an unsafe child exactly once", async () => {
+    const { runtime, session, unsubscribe } = harness();
     (session.getActiveToolNames as ReturnType<typeof vi.fn>).mockReturnValue(["read", "bash"]);
     await expect(start(runtime)).rejects.toThrow("safety check failed");
+    await runtime.dispose();
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    expect(session.dispose).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(runtime.childSession).toBeUndefined();
+  });
+
+  test("finalizes a child when event subscription acquisition throws", async () => {
+    const { runtime, session } = harness();
+    (session.subscribe as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error("subscribe failed");
+    });
+    await expect(start(runtime)).rejects.toThrow(/subscription/i);
+    await runtime.dispose();
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    expect(session.dispose).toHaveBeenCalledTimes(1);
+    expect(runtime.childSession).toBeUndefined();
+  });
+
+  test("persistent child rejection and abort failure still dispose exactly once", async () => {
+    const { runtime, session, unsubscribe } = harness();
+    (session as { sessionFile: string | undefined }).sessionFile = "/tmp/forbidden.jsonl";
+    (session.abort as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("abort failed"));
+    await expect(start(runtime)).rejects.toThrow(/persistent file/i);
+    await runtime.dispose();
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    expect(session.dispose).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(runtime.childSession).toBeUndefined();
+  });
+
+  test("throwing diagnostics cannot skip unsafe-tool cleanup", async () => {
+    const { runtime, session } = harness();
+    (session.getActiveToolNames as ReturnType<typeof vi.fn>).mockReturnValue(["read", "bash"]);
+    await expect(
+      start(
+        runtime,
+        {},
+        {
+          onDiagnostic: () => {
+            throw new Error("UI failed");
+          },
+        },
+      ),
+    ).rejects.toThrow("safety check failed");
     expect(session.abort).toHaveBeenCalled();
     expect(session.dispose).toHaveBeenCalled();
+  });
+
+  test("a stale service startup cannot dispose its live replacement", async () => {
+    let resolveFirst!: (value: {
+      modelRuntime: never;
+      model: never;
+      thinkingLevel: "medium";
+    }) => void;
+    const firstModel = new Promise<{
+      modelRuntime: never;
+      model: never;
+      thinkingLevel: "medium";
+    }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    let modelCalls = 0;
+    const unsubscribe = vi.fn();
+    const session = {
+      sessionFile: undefined,
+      messages: [],
+      isStreaming: false,
+      getActiveToolNames: vi.fn(() => []),
+      getToolDefinition: vi.fn(),
+      subscribe: vi.fn(() => unsubscribe),
+      prompt: vi.fn(async () => undefined),
+      steer: vi.fn(async () => undefined),
+      followUp: vi.fn(async () => undefined),
+      abort: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    } as unknown as AgentSession;
+    const layer = advisorRuntimeServiceLayer(standaloneAdvisorExecutor, {
+      createChildModel: vi.fn(() => {
+        modelCalls += 1;
+        return modelCalls === 1
+          ? firstModel
+          : Promise.resolve({
+              modelRuntime: {} as never,
+              model: { provider: "p", id: "m" } as never,
+              thinkingLevel: "medium" as const,
+            });
+      }),
+      createTools: vi.fn(async () => []),
+      createSession: vi.fn(async () => ({ session, extensionsResult: {} as never })),
+    }).pipe(Layer.provideMerge(advisorPlatformLayer));
+    const managed = ManagedRuntime.make(layer);
+    try {
+      const service = await managed.runPromise(AdvisorRuntimeService);
+      const options = {
+        ctx: { cwd: process.cwd(), modelRegistry: {} as never },
+        config: config(),
+        seed: "seed",
+      };
+      const first = managed.runPromise(service.start(options));
+      await vi.waitFor(() => expect(modelCalls).toBe(1));
+      await managed.runPromise(service.start(options));
+      expect(service.activeToolNames()).toEqual([]);
+      expect(session.dispose).not.toHaveBeenCalled();
+
+      resolveFirst({
+        modelRuntime: {} as never,
+        model: { provider: "p", id: "m" } as never,
+        thinkingLevel: "medium",
+      });
+      await expect(first).rejects.toThrow(/stale/i);
+      expect(service.activeToolNames()).toEqual([]);
+      expect(session.dispose).not.toHaveBeenCalled();
+      await managed.runPromise(service.dispose());
+      expect(session.dispose).toHaveBeenCalledOnce();
+    } finally {
+      await managed.dispose();
+    }
   });
 
   test("bounds auth/model startup and rejects without creating a session", async () => {

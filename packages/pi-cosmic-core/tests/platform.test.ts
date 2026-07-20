@@ -10,6 +10,7 @@ function documentLayer(initial: Readonly<Record<string, string>>) {
   const files = new Map(Object.entries(initial));
   let sequence = 0;
   const fileSystem = FileSystem.layerNoop({
+    chmod: () => Effect.void,
     exists: (path) => Effect.succeed(files.has(String(path))),
     makeDirectory: () => Effect.void,
     makeTempFile: () => Effect.sync(() => `/tmp/document-${sequence++}.json`),

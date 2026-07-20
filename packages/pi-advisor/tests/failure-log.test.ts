@@ -1,8 +1,26 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+// Test harness boundary: only the diagnostics used by this file are suppressed.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, test } from "vitest";
-import { getAdvisorFailureLogPath, logAdvisorFailure } from "../src/failure-log.ts";
+import { standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
+import {
+  getAdvisorFailureLogPath,
+  logAdvisorFailure,
+  logAdvisorFailureAsync,
+  logAdvisorFailureEffect,
+} from "../src/failure-log.ts";
 
 const tempDirectories: string[] = [];
 
@@ -45,6 +63,26 @@ describe("advisor failure log", () => {
     expect(entry.timestamp).toEqual(expect.any(String));
     expect(JSON.stringify(entry)).not.toContain("prompt");
     expect(JSON.stringify(entry)).not.toContain("credential");
+  });
+
+  test("does not invoke hostile error accessors", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-hostile-log-"));
+    tempDirectories.push(agentDir);
+    const configPath = join(agentDir, "extensions", "pi-advisor.json");
+    const error = Object.defineProperty({}, "message", {
+      get() {
+        throw new Error("getter executed");
+      },
+    });
+    expect(() =>
+      logAdvisorFailure(configPath, {
+        contextChars: 1,
+        durationMs: 2,
+        error,
+        timeoutMs: 3,
+      }),
+    ).not.toThrow();
+    expect(readFileSync(getAdvisorFailureLogPath(configPath), "utf8")).toContain("Unknown error.");
   });
 
   test("redacts and clips provider and model labels before persistence", () => {
@@ -91,6 +129,86 @@ describe("advisor failure log", () => {
       /abc\.def\.ghi|sk-abcdefghijklmnop|generic-secret-value|sk-secondsecretvalue|name-secret-value/,
     );
     expect(persisted).toContain("REDACTED");
+  });
+
+  test("serializes concurrent production appends and enforces private mode", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-concurrent-log-"));
+    tempDirectories.push(agentDir);
+    const configPath = join(agentDir, "extensions", "pi-advisor.json");
+    await standaloneAdvisorExecutor.run(
+      Effect.forEach(
+        Array.from({ length: 50 }, (_, index) => index),
+        (index) =>
+          logAdvisorFailureEffect(configPath, {
+            contextChars: index,
+            durationMs: index,
+            error: new Error(`failure-${index}`),
+            timeoutMs: 30_000,
+          }),
+        { concurrency: "unbounded" },
+      ),
+    );
+    const path = getAdvisorFailureLogPath(configPath);
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    expect(lines).toHaveLength(50);
+    expect(lines.every((line) => JSON.parse(line))).toBe(true);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  test("serializes exported helpers across separately provided Layers", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-exported-log-"));
+    tempDirectories.push(agentDir);
+    const configPath = join(agentDir, "extensions", "pi-advisor.json");
+    const paths = await Promise.all(
+      Array.from({ length: 30 }, (_, index) =>
+        logAdvisorFailureAsync(configPath, {
+          contextChars: index,
+          durationMs: index,
+          error: new Error(`exported-${index}`),
+          timeoutMs: 30_000,
+        }),
+      ),
+    );
+    expect(paths.every(Boolean)).toBe(true);
+    const lines = readFileSync(getAdvisorFailureLogPath(configPath), "utf8").trim().split("\n");
+    expect(lines).toHaveLength(30);
+  });
+
+  test("tightens existing log directories and legacy rotated files in Effect and sync paths", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-advisor-legacy-log-"));
+    tempDirectories.push(agentDir);
+    const configPath = join(agentDir, "extensions", "pi-advisor.json");
+    const logPath = getAdvisorFailureLogPath(configPath);
+    const logDirectory = join(agentDir, "logs");
+    mkdirSync(logDirectory, { recursive: true, mode: 0o777 });
+    chmodSync(logDirectory, 0o777);
+    writeFileSync(logPath, "x".repeat(1_000_000), { mode: 0o644 });
+    chmodSync(logPath, 0o644);
+
+    await logAdvisorFailureAsync(configPath, {
+      contextChars: 1,
+      durationMs: 2,
+      error: new Error("effect rotation"),
+      timeoutMs: 3,
+    });
+    expect(statSync(logDirectory).mode & 0o777).toBe(0o700);
+    expect(statSync(`${logPath}.1`).mode & 0o777).toBe(0o600);
+    expect(statSync(logPath).mode & 0o777).toBe(0o600);
+
+    writeFileSync(logPath, "y".repeat(1_000_000));
+    chmodSync(logDirectory, 0o777);
+    chmodSync(logPath, 0o644);
+    expect(
+      logAdvisorFailure(configPath, {
+        contextChars: 1,
+        durationMs: 2,
+        error: new Error("sync rotation"),
+        timeoutMs: 3,
+      }),
+    ).toBe(logPath);
+    expect(statSync(logDirectory).mode & 0o777).toBe(0o700);
+    expect(statSync(`${logPath}.1`).mode & 0o777).toBe(0o600);
+    expect(statSync(logPath).mode & 0o777).toBe(0o600);
   });
 
   test("derives the log alongside the agent extensions directory", () => {

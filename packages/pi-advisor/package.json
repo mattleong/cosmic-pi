@@ -23,22 +23,29 @@
   "type": "module",
   "scripts": {
     "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "pretypecheck": "pnpm --filter pi-cosmic-core build",
     "validate": "pnpm check && pnpm test",
+    "bench:queue": "node --experimental-strip-types bench/queue.ts",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --deny-warnings .",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
+    "pretest": "pnpm --filter pi-cosmic-core build",
     "test": "vitest run"
   },
   "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
     "pi-better-openai": "workspace:*",
+    "pi-cosmic-core": "workspace:*",
     "typebox": "1.1.38"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.80.8",
     "@earendil-works/pi-coding-agent": "0.80.8",
     "@earendil-works/pi-tui": "0.80.8",
+    "@effect/vitest": "catalog:",
     "@types/node": "~22.19.0",
     "oxfmt": "^0.47.0",
     "oxlint": "^1.62.0",

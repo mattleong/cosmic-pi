@@ -37,7 +37,7 @@ export function createAdvisorModelChoices(
   });
 }
 
-export async function selectAdvisorModel(
+export function selectAdvisorModel(
   ctx: ExtensionCommandContext,
   models: readonly Model<Api>[],
   config: Pick<ResolvedAdvisorConfig, "provider" | "model">,
@@ -45,9 +45,13 @@ export async function selectAdvisorModel(
   const choices = createAdvisorModelChoices(models, config);
   if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
     const labels = [...choices.map((choice) => choice.item.label), CLEAR_MODEL_OPTION];
-    const selected = await ctx.ui.select("Dedicated advisor model", labels);
-    if (selected === CLEAR_MODEL_OPTION) return CLEAR_MODEL_OPTION;
-    return choices.find((choice) => choice.item.label === selected)?.rawValue;
+    return ctx.ui
+      .select("Dedicated advisor model", labels)
+      .then((selected) =>
+        selected === CLEAR_MODEL_OPTION
+          ? CLEAR_MODEL_OPTION
+          : choices.find((choice) => choice.item.label === selected)?.rawValue,
+      );
   }
 
   const currentValue =
@@ -60,8 +64,8 @@ export async function selectAdvisorModel(
     searchText: CLEAR_MODEL_OPTION,
   });
 
-  return (
-    (await ctx.ui.custom<string | null>((tui, theme, keybindings, done) => {
+  return ctx.ui
+    .custom<string | null>((tui, theme, keybindings, done) => {
       const input = new Input();
       const topBorder = new DynamicBorder((text: string) => theme.fg("accent", text));
       const bottomBorder = new DynamicBorder((text: string) => theme.fg("accent", text));
@@ -134,8 +138,8 @@ export async function selectAdvisorModel(
           tui.requestRender();
         },
       };
-    })) ?? undefined
-  );
+    })
+    .then((value) => value ?? undefined);
 }
 
 export function buildModelSelectList(
