@@ -2,6 +2,7 @@
 // @effect-diagnostics effect/strictEffectProvide:off
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -12,28 +13,20 @@ import {
   AgentDirectory,
   JsonDocumentStore,
   PiApi,
-  type JsonDocumentStoreShape,
+  type AtomicJsonDocumentStoreShape,
   type JsonObject,
 } from "pi-cosmic-core";
+import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
+import { HostCallbackBoundary, makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import { CosmicUiConfigRepository } from "../src/config/repository.ts";
+import type { FooterTotals } from "../src/footer/component.ts";
 import { CosmicUiService, makeProjection } from "../src/host-service.ts";
 import { PiExec } from "../src/probe/pi-exec.ts";
 import { RepositoryProbe } from "../src/probe/repository-probe.ts";
 
 function documents(initial: Readonly<Record<string, JsonObject>> = {}) {
-  const values = new Map(Object.entries(initial));
-  const service: JsonDocumentStoreShape = {
-    exists: (path) => Effect.succeed(values.has(path)),
-    readObject: (path) => Effect.succeed(values.get(path)),
-    writeObject: (path, value) => Effect.sync(() => void values.set(path, value)),
-    updateObject: (path, update) =>
-      Effect.sync(() => {
-        const next = update(values.get(path) ?? {});
-        values.set(path, next);
-        return next;
-      }),
-  };
-  return { values, layer: Layer.succeed(JsonDocumentStore, service) };
+  const memory = makeInMemoryDocuments(initial);
+  return { values: memory.documents, layer: memory.layer };
 }
 
 const context = (cwd = "/project") =>
@@ -49,11 +42,14 @@ function serviceLayer(
     startPolling?: boolean;
     context?: MutableRef.MutableRef<ExtensionContext>;
     documents?: Readonly<Record<string, JsonObject>>;
+    store?: ReturnType<typeof documents>;
+    initialTotals?: FooterTotals;
   } = {},
 ) {
   const projection = makeProjection();
   const contextRef = options.context ?? MutableRef.make(context());
-  const store = documents(options.documents);
+  const callbacks = makeHostCallbackBoundary();
+  const store = options.store ?? documents(options.documents);
   const platform = Layer.mergeAll(store.layer, Path.layer, AgentDirectory.layer("/agent"));
   const repository = CosmicUiConfigRepository.layer.pipe(Layer.provide(platform));
   const probe = RepositoryProbe.layer.pipe(
@@ -63,14 +59,27 @@ function serviceLayer(
   const layer = CosmicUiService.layer({
     context: contextRef,
     cwd: "/project",
+    ...(options.initialTotals === undefined ? {} : { initialTotals: options.initialTotals }),
     projection,
     onChange() {},
     startPolling: options.startPolling ?? false,
-  }).pipe(Layer.provide(Layer.merge(repository, probe)));
-  return { layer, projection, contextRef, documents: store.values };
+  }).pipe(Layer.provide(Layer.mergeAll(repository, probe, HostCallbackBoundary.layer(callbacks))));
+  return { layer, projection, contextRef, callbacks, documents: store.values };
 }
 
 describe("Cosmic UI host service", () => {
+  it.effect("initializes totals from the session-owned snapshot", () => {
+    const initialTotals = { input: 41, output: 42, cacheRead: 43, cacheWrite: 44, cost: 4.5 };
+    const { layer, projection } = serviceLayer(
+      () => Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false }),
+      { initialTotals },
+    );
+    return Effect.gen(function* () {
+      yield* CosmicUiService;
+      expect(MutableRef.get(projection).totals).toEqual(initialTotals);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("handles Git/gh nonzero results, parses diffs, and throttles pull requests", () => {
     let calls = 0;
     const { layer, projection } = serviceLayer((command, args) => {
@@ -144,6 +153,48 @@ describe("Cosmic UI host service", () => {
       yield* service.refreshAll(true);
       expect(MutableRef.get(projection).gitStatus).toBeUndefined();
       expect(MutableRef.get(projection).pullRequestNumber).toBeUndefined();
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps polling after hostile live context getters recover", () => {
+    const contextRef = MutableRef.make(
+      Object.defineProperty(
+        {
+          sessionManager: {
+            getCwd() {
+              throw new Error("cwd host failure");
+            },
+          },
+        },
+        "mode",
+        {
+          get() {
+            throw new Error("mode host failure");
+          },
+        },
+      ) as unknown as ExtensionContext,
+    );
+    const cwds: string[] = [];
+    const { layer, callbacks } = serviceLayer(
+      (_command, _args, options) => {
+        cwds.push(options?.cwd ?? "");
+        return Promise.resolve({ stdout: "## main\n", stderr: "", code: 0, killed: false });
+      },
+      { context: contextRef, startPolling: true },
+    );
+    return Effect.gen(function* () {
+      yield* CosmicUiService;
+      yield* TestClock.adjust("2 seconds");
+      while (callbacks.diagnostics().length < 2) yield* Effect.yieldNow;
+      expect(cwds).toEqual([]);
+
+      MutableRef.set(contextRef, context("/recovered"));
+      yield* TestClock.adjust("2 seconds");
+      while (cwds.length === 0) yield* Effect.yieldNow;
+      expect(cwds.every((cwd) => cwd === "/recovered")).toBe(true);
+      expect(callbacks.diagnostics().every(({ operation }) => operation === "host-query")).toBe(
+        true,
+      );
     }).pipe(Effect.provide(layer));
   });
 
@@ -247,6 +298,57 @@ describe("Cosmic UI host service", () => {
       expect([...(saved?.hidden ?? [])].sort()).toEqual(["metrics", "session"]);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect("publishes a committed config before honoring interruption", () =>
+    Effect.gen(function* () {
+      const commitStarted = yield* Deferred.make<void>();
+      const releaseCommit = yield* Deferred.make<void>();
+      const configPath = "/project/.pi/extensions/pi-cosmic-ui.json";
+      const memory = makeInMemoryDocuments({
+        [configPath]: { footer: { density: "comfortable" } },
+      });
+      const modifyObject: AtomicJsonDocumentStoreShape["modifyObject"] = (path, modify) =>
+        memory.service.modifyObject(path, (document) =>
+          modify(document).pipe(
+            Effect.map((modification) => ({
+              ...modification,
+              afterCommit: Deferred.succeed(commitStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseCommit)),
+                Effect.andThen(modification.afterCommit ?? Effect.void),
+              ),
+            })),
+          ),
+        );
+      const gated = { ...memory.service, modifyObject } satisfies AtomicJsonDocumentStoreShape;
+      const store = {
+        values: memory.documents,
+        layer: Layer.succeed(JsonDocumentStore, gated),
+      };
+      const { layer, projection } = serviceLayer(
+        () => Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false }),
+        { store },
+      );
+
+      yield* Effect.gen(function* () {
+        const service = yield* CosmicUiService;
+        const update = yield* service
+          .updateFooterConfig({ density: "compact" })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(commitStarted);
+        const saved = memory.documents.get(configPath)?.footer as { density?: string } | undefined;
+        expect(saved?.density).toBe("compact");
+        expect(MutableRef.get(projection).config?.footer.density).toBe("comfortable");
+
+        const interruption = yield* Fiber.interrupt(update).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        expect(MutableRef.get(projection).config?.footer.density).toBe("comfortable");
+        yield* Deferred.succeed(releaseCommit, undefined);
+        yield* Fiber.join(interruption);
+
+        expect(MutableRef.get(projection).config?.footer.density).toBe("compact");
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
 
   it.effect(
     "polls on the Effect clock, recovers from failures, and interrupts in-flight probes",

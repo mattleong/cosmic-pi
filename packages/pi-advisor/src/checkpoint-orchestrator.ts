@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -23,6 +24,8 @@ interface ActiveCheckpoint {
   readonly hooks: AdvisorCheckpointHooks;
   fiber: Fiber.Fiber<unknown, unknown> | undefined;
   cancellationFiber: Fiber.Fiber<void, never> | undefined;
+  readonly cancellationDone: Deferred.Deferred<void>;
+  cancellationClaimed: boolean;
   cancellationFinalized: boolean;
 }
 
@@ -45,8 +48,9 @@ export class CheckpointOrchestrator extends Context.Service<
 /** Owns checkpoint fibers and their exact-once cancellation bookkeeping. */
 export const makeCheckpointOrchestrator = (
   executor: AdvisorEffectExecutor,
-): Effect.Effect<CheckpointOrchestratorShape, never, Scope.Scope> =>
+): Effect.Effect<CheckpointOrchestratorShape, never, Scope.Scope | AdvisorPlatform> =>
   Effect.gen(function* () {
+    const platform = yield* Effect.context<AdvisorPlatform>();
     let nextId = 0;
     const active = new Map<number, ActiveCheckpoint>();
     const cancelling = new Set<ActiveCheckpoint>();
@@ -54,17 +58,45 @@ export const makeCheckpointOrchestrator = (
     const finalize = (entry: ActiveCheckpoint): void => {
       if (entry.cancellationFinalized) return;
       entry.cancellationFinalized = true;
-      entry.hooks.finalizeCancellation();
+      try {
+        entry.hooks.finalizeCancellation();
+      } catch {
+        // Caller bookkeeping cannot prevent owned fiber cleanup.
+      }
     };
-    const beginCancellation = (entry: ActiveCheckpoint): Fiber.Fiber<void, never> => {
+    const runCancellation = (entry: ActiveCheckpoint): Effect.Effect<void> =>
+      Effect.suspend(() => {
+        if (entry.cancellationClaimed) return Deferred.await(entry.cancellationDone);
+        entry.cancellationClaimed = true;
+        try {
+          entry.hooks.invalidate();
+        } catch {
+          // Invalidation is synchronous advisory bookkeeping; cancellation still owns cleanup.
+        }
+        cancelling.add(entry);
+        return entry.hooks.cancelActive.pipe(
+          Effect.provide(platform),
+          Effect.catchCause(() => Effect.void),
+          Effect.ensuring(
+            Effect.sync(() => {
+              cancelling.delete(entry);
+            }).pipe(
+              Effect.andThen(Deferred.succeed(entry.cancellationDone, undefined)),
+              Effect.asVoid,
+            ),
+          ),
+        );
+      });
+    const beginCancellation = (entry: ActiveCheckpoint): Fiber.Fiber<void, never> | undefined => {
       if (entry.cancellationFiber) return entry.cancellationFiber;
-      entry.hooks.invalidate();
-      cancelling.add(entry);
-      const cancellationFiber = executor.fork(
-        entry.hooks.cancelActive.pipe(Effect.ensuring(Effect.sync(() => cancelling.delete(entry)))),
-      );
-      entry.cancellationFiber = cancellationFiber;
-      return cancellationFiber;
+      try {
+        const cancellationFiber = executor.fork(runCancellation(entry));
+        entry.cancellationFiber = cancellationFiber;
+        return cancellationFiber;
+      } catch {
+        // Scope finalization can still execute the unclaimed cancellation inline.
+        return undefined;
+      }
     };
     const start: CheckpointOrchestratorShape["start"] = (effect, hooks) => {
       const id = ++nextId;
@@ -72,6 +104,8 @@ export const makeCheckpointOrchestrator = (
         hooks,
         fiber: undefined,
         cancellationFiber: undefined,
+        cancellationDone: Deferred.makeUnsafe<void>(),
+        cancellationClaimed: false,
         cancellationFinalized: false,
       };
       active.set(id, entry);
@@ -90,24 +124,30 @@ export const makeCheckpointOrchestrator = (
         cancel: () => {
           beginCancellation(entry);
         },
-        cancelEffect: Effect.suspend(() => Fiber.join(beginCancellation(entry))),
+        cancelEffect: Effect.suspend(() => {
+          const cancellationFiber = beginCancellation(entry);
+          return cancellationFiber
+            ? Fiber.await(cancellationFiber).pipe(Effect.asVoid)
+            : runCancellation(entry);
+        }),
         settlement: Fiber.await(fiber),
       };
     };
     const cancelAll = (): Effect.Effect<void> =>
       Effect.suspend(() => {
         const entries = [...active.values()];
-        const cancellations = new Set(
-          [...cancelling].flatMap((entry) =>
-            entry.cancellationFiber ? [entry.cancellationFiber] : [],
-          ),
-        );
-        for (const entry of entries) cancellations.add(beginCancellation(entry));
+        const cancellationEntries = new Set([...cancelling, ...entries]);
         const checkpointFibers = entries.flatMap((entry) => (entry.fiber ? [entry.fiber] : []));
-        const awaitCancellations = Effect.forEach(cancellations, (fiber) => Fiber.join(fiber), {
-          discard: true,
-          concurrency: "unbounded",
-        });
+        // Layer finalization runs after the outer slot deactivates, so cancellation must be able
+        // to execute inline without asking the deactivated executor to fork another fiber.
+        const awaitCancellations = Effect.forEach(
+          cancellationEntries,
+          (entry) =>
+            entry.cancellationFiber
+              ? Fiber.await(entry.cancellationFiber).pipe(Effect.asVoid)
+              : runCancellation(entry),
+          { discard: true, concurrency: "unbounded" },
+        );
         const interruptCheckpoints =
           checkpointFibers.length === 0
             ? Effect.void

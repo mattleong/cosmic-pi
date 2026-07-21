@@ -63,7 +63,7 @@ function harness(dependencies?: BetterXaiExtensionDependencies) {
 
   if (dependencies) betterXaiWithDependencies(pi, dependencies);
   else betterXai(pi);
-  return { handlers, commands, ctx, notify, setStatus, setFooter };
+  return { handlers, commands, ctx, cwd, notify, setStatus, setFooter };
 }
 
 function stalledStartup() {
@@ -97,6 +97,189 @@ describe("Better xAI Effect boundary", () => {
     expect(h.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
 
     await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+    await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+  });
+
+  test("contains hostile terminal-UI getters without aborting activation", async () => {
+    const h = harness();
+    Object.defineProperties(h.ctx, {
+      mode: {
+        configurable: true,
+        get() {
+          throw new Error("host-mode-secret");
+        },
+      },
+      hasUI: {
+        configurable: true,
+        get() {
+          throw new Error("host-ui-secret");
+        },
+      },
+    });
+
+    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
+
+    expect(h.notify).not.toHaveBeenCalledWith("Better xAI failed to start.", "warning");
+    await invoke(h.commands.get("xai-usage")?.("", h.ctx));
+    expect(h.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
+    await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+  });
+
+  test("materializes session cwd and signal exactly once", async () => {
+    const h = harness();
+    const controller = new AbortController();
+    let cwdReads = 0;
+    let signalReads = 0;
+    Object.defineProperties(h.ctx, {
+      cwd: {
+        configurable: true,
+        get() {
+          cwdReads++;
+          if (cwdReads > 1) throw new Error("host-cwd-reread-secret");
+          return h.cwd;
+        },
+      },
+      signal: {
+        configurable: true,
+        get() {
+          signalReads++;
+          if (signalReads > 1) throw new Error("host-signal-reread-secret");
+          return controller.signal;
+        },
+      },
+    });
+
+    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
+
+    expect(cwdReads).toBe(1);
+    expect(signalReads).toBe(1);
+    expect(h.notify).not.toHaveBeenCalledWith("Better xAI failed to start.", "warning");
+    await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+  });
+
+  test("fails closed when session cwd cannot be materialized", async () => {
+    const h = harness();
+    Object.defineProperty(h.ctx, "cwd", {
+      configurable: true,
+      get() {
+        throw new Error("host-cwd-secret");
+      },
+    });
+
+    let startup: unknown;
+    expect(() => {
+      startup = h.handlers.get("session_start")?.({}, h.ctx);
+    }).not.toThrow();
+    await invoke(startup);
+
+    expect(h.notify).toHaveBeenCalledWith("Better xAI failed to start.", "warning");
+    await invoke(h.commands.get("xai-usage")?.("", h.ctx));
+    expect(h.notify).toHaveBeenCalledWith("xAI usage is unavailable.", "warning");
+  });
+
+  test("contains hostile signal getters at command and event boundaries", async () => {
+    const h = harness();
+    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
+    Object.defineProperty(h.ctx, "signal", {
+      configurable: true,
+      get() {
+        throw new Error("host-signal-secret");
+      },
+    });
+
+    let usage: unknown;
+    expect(() => {
+      usage = h.commands.get("xai-usage")?.("", h.ctx);
+    }).not.toThrow();
+    await invoke(usage);
+    expect(h.notify).toHaveBeenCalledWith("xAI usage is unavailable.", "warning");
+
+    let settings: unknown;
+    expect(() => {
+      settings = h.commands.get("xai-settings")?.("usage.showResetTimes false", h.ctx);
+    }).not.toThrow();
+    await invoke(settings);
+    expect(h.notify).toHaveBeenCalledWith("Better xAI settings are unavailable.", "warning");
+
+    expect(() => h.handlers.get("turn_end")?.({}, h.ctx)).not.toThrow();
+    expect(() => h.handlers.get("model_select")?.({}, h.ctx)).not.toThrow();
+    await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+  });
+
+  test("serves safe settings feedback before startup and after startup failure", async () => {
+    const h = harness({ startupEffect: () => Effect.die("startup-secret") });
+    const settings = h.commands.get("xai-settings");
+
+    const help = settings?.("help", h.ctx);
+    expect(h.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("Better xAI settings"),
+      "info",
+    );
+    await invoke(help);
+
+    const diagnostics = settings?.("diagnostics", h.ctx);
+    expect(h.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("Usage enabled: false"),
+      "info",
+    );
+    await invoke(diagnostics);
+
+    const usage = settings?.("usage.enabled", h.ctx);
+    expect(h.notify).toHaveBeenLastCalledWith("Usage: /xai-settings <id> <value>", "error");
+    await invoke(usage);
+
+    const unknown = settings?.("unknown value", h.ctx);
+    expect(h.notify).toHaveBeenLastCalledWith("Unknown setting: unknown", "error");
+    await invoke(unknown);
+
+    const invalid = settings?.("usage.enabled maybe", h.ctx);
+    expect(h.notify).toHaveBeenLastCalledWith(
+      "Invalid value for usage.enabled. Expected one of: true, false",
+      "error",
+    );
+    await invoke(invalid);
+
+    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
+    expect(h.notify).toHaveBeenCalledWith("Better xAI failed to start.", "warning");
+    h.notify.mockClear();
+
+    const afterFailure = settings?.("unknown value", h.ctx);
+    expect(h.notify).toHaveBeenCalledWith("Unknown setting: unknown", "error");
+    await invoke(afterFailure);
+
+    h.notify.mockImplementation(() => {
+      throw new Error("host-notification-secret");
+    });
+    await invoke(settings?.("help", h.ctx));
+    await invoke(settings?.("diagnostics", h.ctx));
+    await invoke(settings?.("unknown value", h.ctx));
+  });
+
+  test("recovers when settings success and validation notifications throw", async () => {
+    const h = harness();
+    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
+    h.notify.mockImplementation(() => {
+      throw new Error("host-notification-secret");
+    });
+
+    await invoke(h.commands.get("xai-settings")?.("usage.showResetTimes false", h.ctx));
+    await invoke(h.commands.get("xai-settings")?.("unknown value", h.ctx));
+
+    await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
+  });
+
+  test("recovers when settings error notification throws", async () => {
+    const h = harness();
+    await invoke(h.handlers.get("session_start")?.({}, h.ctx));
+    const configPath = join(h.ctx.cwd, ".pi", "extensions", "pi-better-xai.json");
+    rmSync(configPath);
+    mkdirSync(configPath);
+    h.notify.mockImplementation(() => {
+      throw new Error("host-notification-secret");
+    });
+
+    await invoke(h.commands.get("xai-settings")?.("usage.showResetTimes false", h.ctx));
+
     await invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
   });
 
@@ -149,6 +332,9 @@ describe("Better xAI Effect boundary", () => {
 
     expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
     expect(h.notify).toHaveBeenCalledWith("Better xAI failed to start.", "warning");
+    h.notify.mockImplementation(() => {
+      throw new Error("host-notification-secret");
+    });
     await invoke(h.commands.get("xai-usage")?.("", h.ctx));
     expect(h.notify).toHaveBeenCalledWith("xAI usage is unavailable.", "warning");
   });

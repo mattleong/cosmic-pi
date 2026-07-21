@@ -3,7 +3,42 @@ import type * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import type * as Types from "effect/Types";
 import { PiApi } from "./pi-api.ts";
+
+declare const PiManagedRuntimeRuntimeError: unique symbol;
+
+interface OwnedAbortSignal {
+  readonly signal: AbortSignal;
+  readonly release: () => void;
+}
+
+/** Never exposes a guarded host signal to Effect's runner after the fiber has started. */
+const ownAbortSignal = (source: AbortSignal): OwnedAbortSignal => {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  let removePending = true;
+  const release = () => {
+    if (!removePending) return;
+    removePending = false;
+    try {
+      source.removeEventListener("abort", abort);
+    } catch {
+      // A hostile host signal cannot prevent Effect-owned fiber cleanup.
+    }
+  };
+  try {
+    source.addEventListener("abort", abort, { once: true });
+    if (source.aborted) {
+      controller.abort();
+      release();
+    }
+  } catch {
+    controller.abort();
+    release();
+  }
+  return { signal: controller.signal, release };
+};
 
 /**
  * Creates one host-owned Effect runtime for a pi extension.
@@ -25,7 +60,8 @@ export function makePiRuntime<R, E>(pi: ExtensionAPI, applicationLayer?: Layer.L
 }
 
 /** The only runtime operations exposed to Pi host-boundary adapters. */
-export interface PiManagedRuntime<R, RuntimeError = never> {
+export interface PiManagedRuntime<R, RuntimeError = unknown> {
+  readonly [PiManagedRuntimeRuntimeError]?: Types.Covariant<RuntimeError>;
   readonly run: <A, E>(effect: Effect.Effect<A, E, PiApi | R>, signal?: AbortSignal) => Promise<A>;
   readonly fork: <A, E>(
     effect: Effect.Effect<A, E, PiApi | R>,
@@ -43,11 +79,32 @@ export function makePiManagedRuntime<R, E>(
   const runtime = makePiRuntime(pi, applicationLayer);
   let disposal: Promise<void> | undefined;
   return {
-    run: (effect, signal) => runtime.runPromise(effect, signal ? { signal } : undefined),
-    fork: (effect, signal) => runtime.runFork(effect, signal ? { signal } : undefined),
+    run: (effect, signal) => {
+      const owned = signal ? ownAbortSignal(signal) : undefined;
+      try {
+        const result = Promise.resolve(
+          runtime.runPromise(effect, owned ? { signal: owned.signal } : undefined),
+        );
+        return owned ? result.finally(owned.release) : result;
+      } catch (error) {
+        owned?.release();
+        return Promise.reject(error);
+      }
+    },
+    fork: (effect, signal) => {
+      const owned = signal ? ownAbortSignal(signal) : undefined;
+      try {
+        const fiber = runtime.runFork(effect, owned ? { signal: owned.signal } : undefined);
+        if (owned) fiber.addObserver(owned.release);
+        return fiber;
+      } catch (error) {
+        owned?.release();
+        throw error;
+      }
+    },
     runSync: (effect) => runtime.runSync(effect),
     dispose: () => {
-      disposal ??= runtime.dispose();
+      disposal ??= Promise.resolve().then(() => runtime.dispose());
       return disposal;
     },
   };

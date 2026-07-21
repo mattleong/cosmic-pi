@@ -3,50 +3,39 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import {
-  AgentDirectory,
-  JsonDocumentStore,
-  type JsonDocumentStoreShape,
-  type JsonObject,
-} from "pi-cosmic-core";
+import { AgentDirectory } from "pi-cosmic-core";
+import { makeCapturedTracer, makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { CosmicUiConfigRepository } from "../src/config/repository.ts";
 
 describe("CosmicUiConfigRepository", () => {
   it.effect("retains unknown document fields across updates", () => {
-    const values = new Map<string, JsonObject>([
-      [
-        "/project/.pi/extensions/pi-cosmic-ui.json",
-        { future: true, footer: { enabled: true, futureFooter: 1 } },
-      ],
-    ]);
-    const documents: JsonDocumentStoreShape = {
-      exists: (path) => Effect.succeed(values.has(path)),
-      readObject: (path) => Effect.succeed(values.get(path)),
-      writeObject: (path, value) => Effect.sync(() => void values.set(path, value)),
-      updateObject: (path, update) =>
-        Effect.sync(() => {
-          const next = update(values.get(path) ?? {});
-          values.set(path, next);
-          return next;
-        }),
-    };
-    const layer = CosmicUiConfigRepository.layer.pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          AgentDirectory.layer("/agent"),
-          Layer.succeed(JsonDocumentStore, documents),
-          Path.layer,
-        ),
-      ),
+    const memory = makeInMemoryDocuments({
+      "/project/.pi/extensions/pi-cosmic-ui.json": {
+        future: true,
+        footer: { enabled: true, futureFooter: 1 },
+      },
+    });
+    const captured = makeCapturedTracer();
+    const repository = CosmicUiConfigRepository.layer.pipe(
+      Layer.provide(Layer.mergeAll(AgentDirectory.layer("/agent"), memory.layer, Path.layer)),
     );
+    const layer = Layer.merge(repository, captured.layer);
     return Effect.gen(function* () {
       const repository = yield* CosmicUiConfigRepository;
       const current = yield* repository.resolve("/project");
-      yield* repository.updateFooter("/project", current, { density: "compact" });
-      expect(values.get(current.configPath)).toEqual({
+      yield* repository.updateFooter("/project", { density: "compact" });
+      expect(memory.documents.get(current.configPath)).toEqual({
         future: true,
         footer: { enabled: true, futureFooter: 1, density: "compact" },
       });
+      const spanNames = captured.spans.map((span) => span.name);
+      expect(spanNames).toEqual(
+        expect.arrayContaining([
+          "pi-cosmic-ui.config.resolve",
+          "pi-cosmic-ui.config.update-footer",
+        ]),
+      );
+      expect(spanNames.some((name) => name.startsWith("CosmicUiConfig."))).toBe(false);
     }).pipe(Effect.provide(layer));
   });
 });

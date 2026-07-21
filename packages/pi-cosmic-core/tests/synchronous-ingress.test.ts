@@ -50,6 +50,67 @@ it.effect("coalesces overflow to the latest value", () =>
   }),
 );
 
+it.effect("keeps the latest coalesced value behind already queued work", () =>
+  Effect.gen(function* () {
+    const firstStarted = yield* Deferred.make<void>();
+    const releaseFirst = yield* Deferred.make<void>();
+    const secondStarted = yield* Deferred.make<void>();
+    const releaseSecond = yield* Deferred.make<void>();
+    const handledLatest = yield* Deferred.make<void>();
+    const values: number[] = [];
+    const ingress = yield* makeSynchronousIngress<number, never, never>({
+      capacity: 1,
+      overflow: "coalesce-latest",
+      handle: (value) =>
+        Effect.gen(function* () {
+          values.push(value);
+          if (value === 1) {
+            yield* Deferred.succeed(firstStarted, undefined);
+            yield* Deferred.await(releaseFirst);
+          } else if (value === 2) {
+            yield* Deferred.succeed(secondStarted, undefined);
+            yield* Deferred.await(releaseSecond);
+          } else if (value === 4) {
+            yield* Deferred.succeed(handledLatest, undefined);
+          }
+        }),
+    });
+
+    expect(ingress.offer(1)).toBe("accepted");
+    yield* Deferred.await(firstStarted);
+    expect(ingress.offer(2)).toBe("accepted");
+    expect(ingress.offer(3)).toBe("coalesced");
+    yield* Deferred.succeed(releaseFirst, undefined);
+    yield* Deferred.await(secondStarted);
+    expect(ingress.offer(4)).toBe("coalesced");
+    yield* Deferred.succeed(releaseSecond, undefined);
+    yield* Deferred.await(handledLatest);
+    yield* Effect.yieldNow;
+
+    expect(values).toEqual([1, 2, 4]);
+    yield* ingress.shutdown;
+  }),
+);
+
+it.effect("rejects non-finite and non-integer capacities", () =>
+  Effect.gen(function* () {
+    for (const capacity of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      1.5,
+      Number.MAX_SAFE_INTEGER + 1,
+    ]) {
+      const result = yield* makeSynchronousIngress<number, never, never>({
+        capacity,
+        overflow: "drop",
+        handle: () => Effect.void,
+      }).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+    }
+  }),
+);
+
 it.effect("isolates callback and failure-observer failures", () =>
   Effect.gen(function* () {
     const handled: number[] = [];
@@ -72,6 +133,27 @@ it.effect("isolates callback and failure-observer failures", () =>
     });
     yield* yieldUntil(() => handled.length >= 1);
     expect(failures).toEqual(["expected"]);
+    expect(handled).toEqual([2]);
+    yield* ingress.shutdown;
+  }),
+);
+
+it.effect("keeps draining after a handler throws while constructing its Effect", () =>
+  Effect.gen(function* () {
+    const handled: number[] = [];
+    const ingress = yield* makeSynchronousIngress<number, never, never>({
+      capacity: 2,
+      overflow: "drop",
+      handle: (value) => {
+        if (value === 1) throw new Error("hostile handler factory");
+        return Effect.sync(() => void handled.push(value));
+      },
+    });
+
+    expect(ingress.offer(1)).toBe("accepted");
+    expect(ingress.offer(2)).toBe("accepted");
+    yield* yieldUntil(() => handled.length === 1);
+
     expect(handled).toEqual([2]);
     yield* ingress.shutdown;
   }),

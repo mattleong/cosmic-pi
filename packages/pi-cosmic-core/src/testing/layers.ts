@@ -2,10 +2,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import {
+  type AtomicJsonDocumentStoreShape,
   JsonDocumentStore,
+  type JsonDocumentModification,
   type JsonDocumentStoreShape,
   type JsonObject,
 } from "../platform/json-document.ts";
@@ -15,7 +18,7 @@ import {
   type JsonHttpRequest,
   type JsonHttpRequestInput,
 } from "../platform/json-http.ts";
-import { JsonHttpError, StreamingHttpError } from "../platform/errors.ts";
+import { JsonDocumentError, JsonHttpError, StreamingHttpError } from "../platform/errors.ts";
 import {
   encodeStreamingJsonBody,
   StreamingHttpClient,
@@ -25,34 +28,165 @@ import {
 } from "../platform/streaming-http.ts";
 
 export interface InMemoryDocuments {
+  /** Mutable compatibility handle for simulating external document changes in tests. */
   readonly documents: Map<string, JsonObject>;
-  readonly service: JsonDocumentStoreShape;
+  readonly service: AtomicJsonDocumentStoreShape;
   readonly layer: Layer.Layer<JsonDocumentStore>;
 }
+
+const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
+const JsonObjectFromString = Schema.fromJsonString(JsonObjectSchema);
+
+const cloneInitialDocument = (document: JsonObject): JsonObject => {
+  const source = Schema.encodeUnknownSync(JsonObjectFromString)(document);
+  return Schema.decodeUnknownSync(JsonObjectFromString)(source);
+};
+
+class JsonDocumentMapView implements Map<string, JsonObject> {
+  readonly [Symbol.toStringTag] = "Map";
+  private readonly stored: Map<string, JsonObject>;
+
+  constructor(stored: Map<string, JsonObject>) {
+    this.stored = stored;
+  }
+
+  get size(): number {
+    return this.stored.size;
+  }
+
+  get(path: string): JsonObject | undefined {
+    const document = this.stored.get(path);
+    return document === undefined ? undefined : cloneInitialDocument(document);
+  }
+
+  has(path: string): boolean {
+    return this.stored.has(path);
+  }
+
+  set(path: string, document: JsonObject): this {
+    this.stored.set(path, cloneInitialDocument(document));
+    return this;
+  }
+
+  delete(path: string): boolean {
+    return this.stored.delete(path);
+  }
+
+  clear(): void {
+    this.stored.clear();
+  }
+
+  entries(): MapIterator<[string, JsonObject]> {
+    return new Map(
+      Array.from(
+        this.stored,
+        ([path, document]) => [path, cloneInitialDocument(document)] as const,
+      ),
+    ).entries();
+  }
+
+  keys(): MapIterator<string> {
+    return this.stored.keys();
+  }
+
+  values(): MapIterator<JsonObject> {
+    return new Map(
+      Array.from(
+        this.stored,
+        ([path, document]) => [path, cloneInitialDocument(document)] as const,
+      ),
+    ).values();
+  }
+
+  forEach(
+    callback: (value: JsonObject, key: string, map: Map<string, JsonObject>) => void,
+    thisArg?: unknown,
+  ): void {
+    for (const [path, document] of this.entries()) callback.call(thisArg, document, path, this);
+  }
+
+  [Symbol.iterator](): MapIterator<[string, JsonObject]> {
+    return this.entries();
+  }
+}
+
+const cloneDocument = (operation: string, path: string, document: unknown) =>
+  Schema.encodeUnknownEffect(JsonObjectFromString)(document).pipe(
+    Effect.flatMap((source) => Schema.decodeUnknownEffect(JsonObjectFromString)(source)),
+    Effect.mapError(
+      () =>
+        new JsonDocumentError({
+          operation,
+          path,
+          message: "Unable to clone JSON document.",
+        }),
+    ),
+  );
 
 export function makeInMemoryDocuments(
   initial: Readonly<Record<string, JsonObject>> = {},
 ): InMemoryDocuments {
-  const documents = new Map(
-    Object.entries(initial).map(([path, document]) => [path, { ...document }]),
+  const storedDocuments = new Map(
+    Object.entries(initial).map(([path, document]) => [path, cloneInitialDocument(document)]),
   );
-  const service: JsonDocumentStoreShape = {
-    exists: (path) => Effect.succeed(documents.has(path)),
+  const documents = new JsonDocumentMapView(storedDocuments);
+  const pathSemaphores = new Map<string, Semaphore.Semaphore>();
+  const semaphoreFor = (path: string): Semaphore.Semaphore => {
+    const existing = pathSemaphores.get(path);
+    if (existing !== undefined) return existing;
+    const created = Semaphore.makeUnsafe(1);
+    pathSemaphores.set(path, created);
+    return created;
+  };
+  const modifyObject: AtomicJsonDocumentStoreShape["modifyObject"] = (path, modify) =>
+    semaphoreFor(path).withPermit(
+      Effect.gen(function* () {
+        const current = storedDocuments.get(path);
+        const isolated =
+          current === undefined ? ({} as JsonObject) : yield* cloneDocument("read", path, current);
+        const { value, document, afterCommit } = yield* modify(isolated);
+        const stored = yield* cloneDocument("update", path, document);
+        yield* Effect.sync(() => void storedDocuments.set(path, stored)).pipe(
+          Effect.andThen(afterCommit ?? Effect.void),
+          Effect.uninterruptible,
+        );
+        return value;
+      }),
+    );
+  const updateObject: JsonDocumentStoreShape["updateObject"] = (path, update) =>
+    modifyObject(path, (document) =>
+      Effect.try({
+        try: () => {
+          const next = update(document);
+          return {
+            value: next,
+            document: next,
+          } satisfies JsonDocumentModification<JsonObject>;
+        },
+        catch: () =>
+          new JsonDocumentError({
+            operation: "update",
+            path,
+            message: "Unable to update JSON document.",
+          }),
+      }),
+    );
+  const service: AtomicJsonDocumentStoreShape = {
+    exists: (path) => Effect.succeed(storedDocuments.has(path)),
     readObject: (path) =>
-      Effect.sync(() => {
-        const value = documents.get(path);
-        return value ? { ...value } : undefined;
+      Effect.gen(function* () {
+        const value = storedDocuments.get(path);
+        if (value === undefined) return undefined;
+        return yield* cloneDocument("read", path, value);
       }),
     writeObject: (path, document) =>
-      Effect.sync(() => {
-        documents.set(path, { ...document });
-      }),
-    updateObject: (path, update) =>
-      Effect.sync(() => {
-        const next = update({ ...documents.get(path) });
-        documents.set(path, { ...next });
-        return { ...next };
-      }),
+      semaphoreFor(path).withPermit(
+        cloneDocument("write", path, document).pipe(
+          Effect.map((stored) => void storedDocuments.set(path, stored)),
+        ),
+      ),
+    modifyObject,
+    updateObject,
   };
   return {
     documents,

@@ -4,6 +4,7 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
@@ -75,6 +76,7 @@ export interface QueuedCheckpoint {
   readonly target: number;
   readonly epoch: number;
   readonly done: Deferred.Deferred<AdvisorCheckpoint, AdvisorReviewQueueError>;
+  phase: "queued" | "active" | "settled";
   cancelled: boolean;
 }
 
@@ -92,7 +94,7 @@ export interface AdvisorReviewQueueOptions {
 export class AdvisorReviewQueue {
   private readonly runtime: AdvisorRuntimeServiceShape;
   private readonly options: AdvisorReviewQueueOptions;
-  private readonly resourceScope: Scope.Scope;
+  private readonly resourceScope: Scope.Closeable;
   private readonly state: SynchronizedRef.SynchronizedRef<ReviewQueueState>;
   private readonly requestQueue: Queue.Queue<QueuedCheckpoint>;
   private readonly observations = new AdvisorObservationBuffer();
@@ -105,7 +107,7 @@ export class AdvisorReviewQueue {
   constructor(
     runtime: AdvisorRuntimeServiceShape,
     options: AdvisorReviewQueueOptions,
-    resourceScope: Scope.Scope,
+    resourceScope: Scope.Closeable,
     state: SynchronizedRef.SynchronizedRef<ReviewQueueState>,
     requestQueue: Queue.Queue<QueuedCheckpoint>,
   ) {
@@ -149,20 +151,25 @@ export class AdvisorReviewQueue {
 
   checkpointEffect(request: ReviewQueueCheckpointRequest) {
     const self = this;
-    return Effect.gen(function* () {
-      const target = self.observations.freezeThrough(
-        request.targetSequence ?? self.observations.sequence,
-      );
-      const waiter: QueuedCheckpoint = {
-        request,
-        target,
-        epoch: MutableRef.get(self.stateProjection).epoch,
-        done: yield* Deferred.make<AdvisorCheckpoint, AdvisorReviewQueueError>(),
-        cancelled: false,
-      };
-      yield* self.admit(waiter);
-      return yield* Deferred.await(waiter.done);
-    });
+    return Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const target = self.observations.freezeThrough(
+          request.targetSequence ?? self.observations.sequence,
+        );
+        const waiter: QueuedCheckpoint = {
+          request,
+          target,
+          epoch: MutableRef.get(self.stateProjection).epoch,
+          done: yield* Deferred.make<AdvisorCheckpoint, AdvisorReviewQueueError>(),
+          phase: "queued",
+          cancelled: false,
+        };
+        yield* self.admit(waiter);
+        return yield* restore(Deferred.await(waiter.done)).pipe(
+          Effect.onInterrupt(() => self.cancelWaiterEffect(waiter)),
+        );
+      }),
+    );
   }
 
   resetEffect(seed: string, stateSummary?: string) {
@@ -199,6 +206,10 @@ export class AdvisorReviewQueue {
   }
 
   disposeEffect() {
+    return Scope.close(this.resourceScope, Exit.void);
+  }
+
+  private shutdownEffect() {
     const self = this;
     return Effect.gen(function* () {
       const before = MutableRef.get(self.stateProjection);
@@ -230,37 +241,51 @@ export class AdvisorReviewQueue {
         (candidate) => candidate.request.checkpointId === checkpointId,
       );
       if (!waiter) return;
-      const error = new AdvisorQueueCancelledError({
-        message: "Advisor checkpoint was cancelled.",
-      });
-      const disposition = yield* SynchronizedRef.modifyEffect(self.state, (current) =>
-        Effect.gen(function* () {
-          if (current.active?.checkpointId === checkpointId)
-            return ["active" as const, current] as const;
-          if (!self.requests.has(waiter)) return ["settled" as const, current] as const;
-          waiter.cancelled = true;
-          self.requests.delete(waiter);
-          self.observations.releaseBarrier(waiter.target);
-          yield* Deferred.fail(waiter.done, error);
-          yield* self.compactRequestQueue();
-          const next = cancelQueuedCheckpoint(current);
-          self.publish(next);
-          return ["queued" as const, next] as const;
-        }),
-      );
-      if (disposition !== "active") return;
-
-      waiter.cancelled = true;
-      yield* Deferred.fail(waiter.done, error);
-      const worker = self.checkpointFiber;
-      self.checkpointFiber = undefined;
-      if (worker) yield* interruptFiberWithin(worker);
-      self.requests.delete(waiter);
-      self.observations.releaseBarrier(waiter.target);
-      yield* self.transition((state) => settleCheckpoint(state, checkpointId));
-      isolate(() => self.options.onCheckpointSettled?.(waiter.request));
-      if (!MutableRef.get(self.stateProjection).disposed) yield* self.startCheckpointWorker();
+      yield* self.cancelWaiterEffect(waiter);
     });
+  }
+
+  private cancelWaiterEffect(waiter: QueuedCheckpoint) {
+    const self = this;
+    return Effect.uninterruptible(
+      Effect.gen(function* () {
+        const checkpointId = waiter.request.checkpointId;
+        const error = new AdvisorQueueCancelledError({
+          message: "Advisor checkpoint was cancelled.",
+        });
+        const disposition = yield* SynchronizedRef.modifyEffect(self.state, (current) =>
+          Effect.gen(function* () {
+            if (!self.requests.has(waiter) || waiter.phase === "settled" || waiter.cancelled)
+              return ["settled" as const, current] as const;
+            if (waiter.phase === "active") {
+              waiter.phase = "settled";
+              waiter.cancelled = true;
+              self.requests.delete(waiter);
+              yield* Deferred.fail(waiter.done, error);
+              return ["active" as const, current] as const;
+            }
+            waiter.phase = "settled";
+            waiter.cancelled = true;
+            self.requests.delete(waiter);
+            self.observations.releaseBarrier(waiter.target);
+            yield* Deferred.fail(waiter.done, error);
+            yield* self.compactRequestQueue();
+            const next = cancelQueuedCheckpoint(current);
+            self.publish(next);
+            return ["queued" as const, next] as const;
+          }),
+        );
+        if (disposition !== "active") return;
+
+        const worker = self.checkpointFiber;
+        self.checkpointFiber = undefined;
+        if (worker) yield* interruptFiberWithin(worker);
+        self.observations.releaseBarrier(waiter.target);
+        yield* self.transition((state) => settleCheckpoint(state, checkpointId));
+        isolate(() => self.options.onCheckpointSettled?.(waiter.request));
+        if (!MutableRef.get(self.stateProjection).disposed) yield* self.startCheckpointWorker();
+      }),
+    );
   }
 
   initializeEffect() {
@@ -275,7 +300,14 @@ export class AdvisorReviewQueue {
           handle: () => self.flushActiveSteering(),
         }).pipe(Effect.provideService(Scope.Scope, self.resourceScope), Effect.orDie);
         yield* self.startCheckpointWorker();
-      });
+        yield* Scope.addFinalizer(self.resourceScope, self.shutdownEffect());
+      }).pipe(
+        Effect.onExit((exit) =>
+          exit._tag === "Failure"
+            ? Scope.close(self.resourceScope, exit).pipe(Effect.andThen(self.runtime.dispose()))
+            : Effect.void,
+        ),
+      );
     });
   }
 
@@ -298,6 +330,7 @@ export class AdvisorReviewQueue {
     return SynchronizedRef.modifyEffect(self.state, (current) =>
       Effect.gen(function* () {
         if (current.disposed) {
+          waiter.phase = "settled";
           self.observations.releaseBarrier(waiter.target);
           return yield* new AdvisorQueueDisposedError({
             message: "Advisor review queue is disposed.",
@@ -309,6 +342,7 @@ export class AdvisorReviewQueue {
         if (mustEvict) {
           const evicted = Option.getOrUndefined(yield* Queue.poll(self.requestQueue));
           if (evicted) {
+            evicted.phase = "settled";
             self.requests.delete(evicted);
             self.observations.releaseBarrier(evicted.target);
             if (!evicted.cancelled) {
@@ -325,6 +359,7 @@ export class AdvisorReviewQueue {
         }
         self.requests.add(waiter);
         if (!(yield* Queue.offer(self.requestQueue, waiter))) {
+          waiter.phase = "settled";
           self.requests.delete(waiter);
           self.observations.releaseBarrier(waiter.target);
           return yield* new AdvisorQueueBacklogExceededError({
@@ -342,8 +377,15 @@ export class AdvisorReviewQueue {
     const self = this;
     return Effect.gen(function* () {
       const claim = yield* SynchronizedRef.modify(self.state, (current) => {
-        if (waiter.cancelled || !self.requests.has(waiter)) return ["cancelled", current] as const;
-        if (current.disposed || current.epoch !== waiter.epoch) return ["stale", current] as const;
+        if (waiter.cancelled || waiter.phase !== "queued" || !self.requests.has(waiter))
+          return ["cancelled", current] as const;
+        if (current.disposed || current.epoch !== waiter.epoch) {
+          waiter.phase = "settled";
+          self.requests.delete(waiter);
+          self.observations.releaseBarrier(waiter.target);
+          return ["stale", current] as const;
+        }
+        waiter.phase = "active";
         const next = beginCheckpoint(
           current,
           waiter.request.checkpointId,
@@ -355,8 +397,6 @@ export class AdvisorReviewQueue {
       });
       if (claim === "cancelled") return;
       if (claim === "stale") {
-        self.requests.delete(waiter);
-        self.observations.releaseBarrier(waiter.target);
         yield* Deferred.fail(
           waiter.done,
           new AdvisorQueueStaleEpochError({
@@ -379,45 +419,44 @@ export class AdvisorReviewQueue {
       const result = yield* self
         .checkpointWithBoundedRecovery(runtimeRequest, waiter.epoch)
         .pipe(Effect.exit);
+      let settled = false;
       if (result._tag === "Success") {
         const checkpoint = result.value;
         const latest = MutableRef.get(self.stateProjection);
         if (waiter.epoch !== latest.epoch || latest.disposed) {
-          yield* Deferred.fail(
-            waiter.done,
-            new AdvisorQueueStaleEpochError({
-              message: "Advisor checkpoint completed for a stale queue epoch.",
-            }),
-          );
+          settled = yield* self.settleClaimedWaiterEffect(waiter);
+          if (settled)
+            yield* Deferred.fail(
+              waiter.done,
+              new AdvisorQueueStaleEpochError({
+                message: "Advisor checkpoint completed for a stale queue epoch.",
+              }),
+            );
         } else if (
           checkpoint.checkpointId !== waiter.request.checkpointId ||
           checkpoint.processedThrough !== waiter.target
         ) {
-          yield* Deferred.fail(
-            waiter.done,
-            new AdvisorQueueCorrelationMismatchError({
-              message: "Advisor checkpoint correlation mismatch.",
-            }),
-          );
+          settled = yield* self.settleClaimedWaiterEffect(waiter);
+          if (settled)
+            yield* Deferred.fail(
+              waiter.done,
+              new AdvisorQueueCorrelationMismatchError({
+                message: "Advisor checkpoint correlation mismatch.",
+              }),
+            );
         } else {
-          self.observations.commitThrough(checkpoint.processedThrough);
-          yield* self.transition((state) =>
-            settleCheckpoint(state, waiter.request.checkpointId, checkpoint.processedThrough),
-          );
-          yield* Deferred.succeed(waiter.done, checkpoint);
+          settled = yield* self.settleClaimedWaiterEffect(waiter, checkpoint.processedThrough);
+          if (settled) yield* Deferred.succeed(waiter.done, checkpoint);
         }
       } else {
         const failure = Option.getOrUndefined(Cause.findErrorOption(result.cause));
         const error = isAdvisorReviewQueueError(failure)
           ? failure
           : new AdvisorQueueError({ message: "Advisor checkpoint failed." });
-        yield* Deferred.fail(waiter.done, error);
+        settled = yield* self.settleClaimedWaiterEffect(waiter);
+        if (settled) yield* Deferred.fail(waiter.done, error);
       }
-      const after = MutableRef.get(self.stateProjection);
-      if (after.active?.checkpointId === waiter.request.checkpointId)
-        yield* self.transition((state) => settleCheckpoint(state, waiter.request.checkpointId));
-      self.requests.delete(waiter);
-      isolate(() => self.options.onCheckpointSettled?.(waiter.request));
+      if (settled) isolate(() => self.options.onCheckpointSettled?.(waiter.request));
     });
   }
 
@@ -511,6 +550,19 @@ export class AdvisorReviewQueue {
     });
   }
 
+  private settleClaimedWaiterEffect(waiter: QueuedCheckpoint, processedThrough?: number) {
+    const self = this;
+    return SynchronizedRef.modify(self.state, (current) => {
+      if (waiter.phase !== "active" || !self.requests.has(waiter)) return [false, current] as const;
+      waiter.phase = "settled";
+      self.requests.delete(waiter);
+      if (processedThrough !== undefined) self.observations.commitThrough(processedThrough);
+      const next = settleCheckpoint(current, waiter.request.checkpointId, processedThrough);
+      self.publish(next);
+      return [true, next] as const;
+    });
+  }
+
   private publish(state: ReviewQueueState) {
     MutableRef.set(this.stateProjection, state);
   }
@@ -518,7 +570,9 @@ export class AdvisorReviewQueue {
   private findActive(state: ReviewQueueState): QueuedCheckpoint | undefined {
     const checkpointId = state.active?.checkpointId;
     return checkpointId
-      ? [...this.requests].find((waiter) => waiter.request.checkpointId === checkpointId)
+      ? [...this.requests].find(
+          (waiter) => waiter.phase === "active" && waiter.request.checkpointId === checkpointId,
+        )
       : undefined;
   }
 
@@ -529,6 +583,7 @@ export class AdvisorReviewQueue {
       (waiter) =>
         Effect.gen(function* () {
           self.observations.releaseBarrier(waiter.target);
+          waiter.phase = "settled";
           waiter.cancelled = true;
           yield* Deferred.fail(waiter.done, error);
         }),
@@ -543,7 +598,8 @@ export class AdvisorReviewQueue {
       while (true) {
         const next = yield* Queue.poll(self.requestQueue);
         if (Option.isNone(next)) break;
-        if (!next.value.cancelled && self.requests.has(next.value)) live.push(next.value);
+        if (next.value.phase === "queued" && !next.value.cancelled && self.requests.has(next.value))
+          live.push(next.value);
       }
       for (const waiter of live) {
         if (!(yield* Queue.offer(self.requestQueue, waiter))) {
@@ -559,6 +615,7 @@ export class AdvisorReviewQueue {
       while (true) {
         const next = yield* Queue.poll(self.requestQueue);
         if (Option.isNone(next)) break;
+        next.value.phase = "settled";
         self.requests.delete(next.value);
       }
     });
@@ -585,8 +642,14 @@ export const advisorReviewQueueServiceLayer = Layer.effect(
         Effect.gen(function* () {
           const state = yield* SynchronizedRef.make(initialReviewQueueState());
           const requestQueue = yield* Queue.dropping<QueuedCheckpoint>(MAX_PENDING_CHECKPOINTS + 1);
-          const queue = new AdvisorReviewQueue(runtime, options, scope, state, requestQueue);
-          yield* Scope.addFinalizer(scope, queue.disposeEffect());
+          const resourceScope = yield* Scope.fork(scope);
+          const queue = new AdvisorReviewQueue(
+            runtime,
+            options,
+            resourceScope,
+            state,
+            requestQueue,
+          );
           yield* queue.initializeEffect();
           return queue;
         }),

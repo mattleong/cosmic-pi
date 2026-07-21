@@ -73,7 +73,12 @@ const cloneAndFreeze = (value: unknown, seen: WeakMap<object, unknown>, path: st
     if (!descriptor) return unsupported(childPath(path, key), "missing property descriptor");
     if (!("value" in descriptor)) return unsupported(childPath(path, key), "accessor");
     if (!descriptor.enumerable) return unsupported(childPath(path, key), "non-enumerable property");
-    clone[key] = cloneAndFreeze(descriptor.value, seen, childPath(path, key));
+    Object.defineProperty(clone, key, {
+      value: cloneAndFreeze(descriptor.value, seen, childPath(path, key)),
+      configurable: true,
+      enumerable: true,
+      writable: true,
+    });
   }
   return Object.freeze(clone);
 };

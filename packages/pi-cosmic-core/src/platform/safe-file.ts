@@ -25,6 +25,23 @@ export interface SafeFileShape {
   ) => Effect.Effect<SafeFileResult, SafeFileError>;
 }
 
+interface FileHandleWithClose {
+  readonly close: () => Promise<void>;
+}
+
+/** Internal Promise adapter kept exported for focused typed-error regression coverage. */
+export const closeSafeFileHandle = (
+  handle: FileHandleWithClose,
+): Effect.Effect<void, SafeFileError> =>
+  Effect.tryPromise({
+    try: () => handle.close(),
+    catch: () =>
+      new SafeFileError({
+        operation: "close",
+        message: "Unable to close a stable regular file.",
+      }),
+  });
+
 const isStrictlyInside = (root: string, candidate: string): boolean => {
   const relative = nodePath.relative(root, candidate);
   return (
@@ -112,7 +129,7 @@ export class SafeFile extends Context.Service<SafeFile, SafeFileShape>()(
                     message: "Unable to read a stable contained regular file.",
                   }),
               }),
-            ({ handle }) => Effect.promise(() => handle.close()).pipe(Effect.ignore),
+            ({ handle }) => closeSafeFileHandle(handle).pipe(Effect.catch(() => Effect.void)),
           ),
       }),
     ).pipe(Effect.withSpan("pi-cosmic-core.safe-file.initialize")),

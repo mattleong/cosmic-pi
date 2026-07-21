@@ -62,3 +62,68 @@ it.effect("wakes polling so a shortened interval takes effect immediately", () =
     yield* Fiber.interrupt(poller);
   }).pipe(Effect.scoped),
 );
+
+it.effect("serializes final validation and commit with invalidation", () =>
+  Effect.gen(function* () {
+    const validationStarted = yield* Deferred.make<void>();
+    const releaseValidation = yield* Deferred.make<void>();
+    const invalidationFinished = yield* Deferred.make<void>();
+    const events: string[] = [];
+    let keyReads = 0;
+    const refresh = yield* makeSubscriptionRefresh({
+      mergeRequest: merge,
+      currentKey: Effect.suspend(() => {
+        keyReads++;
+        return keyReads === 2
+          ? Deferred.succeed(validationStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseValidation)),
+              Effect.as("key"),
+            )
+          : Effect.succeed("key");
+      }),
+      interval: Effect.succeed(60_000),
+      fetch: () => Effect.succeed(1),
+      commit: () => Effect.sync(() => events.push("commit")),
+    });
+
+    const request = yield* refresh.request({}).pipe(Effect.forkScoped);
+    yield* Deferred.await(validationStarted);
+    const invalidation = yield* refresh.invalidate.pipe(
+      Effect.andThen(Effect.sync(() => events.push("invalidate"))),
+      Effect.andThen(Deferred.succeed(invalidationFinished, undefined)),
+      Effect.forkScoped,
+    );
+    yield* Effect.yieldNow;
+    expect(yield* Deferred.isDone(invalidationFinished)).toBe(false);
+
+    yield* Deferred.succeed(releaseValidation, undefined);
+    yield* Fiber.join(request);
+    yield* Fiber.join(invalidation);
+    expect(events).toEqual(["commit", "invalidate"]);
+    expect(yield* refresh.revision).toBe(1);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("allows a commit to invalidate the refresh without deadlocking its gate", () =>
+  Effect.gen(function* () {
+    const committed = yield* Deferred.make<void>();
+    let invalidate: Effect.Effect<void> = Effect.void;
+    const refresh = yield* makeSubscriptionRefresh({
+      mergeRequest: merge,
+      currentKey: Effect.succeed("key"),
+      interval: Effect.succeed(60_000),
+      fetch: () => Effect.succeed(1),
+      commit: () =>
+        invalidate.pipe(Effect.andThen(Deferred.succeed(committed, undefined)), Effect.asVoid),
+    });
+    invalidate = refresh.invalidate;
+
+    const request = yield* refresh.request({}).pipe(Effect.forkScoped);
+    for (let turn = 0; turn < 10 && !(yield* Deferred.isDone(committed)); turn++)
+      yield* Effect.yieldNow;
+
+    expect(yield* Deferred.isDone(committed)).toBe(true);
+    yield* Fiber.join(request);
+    expect(yield* refresh.revision).toBe(1);
+  }).pipe(Effect.scoped),
+);

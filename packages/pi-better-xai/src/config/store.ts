@@ -6,12 +6,12 @@ import {
   JsonDocumentStore,
   scopedDocumentPaths,
   selectScopedDocument,
+  type JsonDocumentModification,
   type JsonObject,
 } from "pi-cosmic-core";
 import { CONFIG_BASENAME } from "../identity.ts";
 import {
   FooterModeSchema,
-  DEFAULT_CONFIG,
   DEFAULT_FOOTER_CONFIG,
   DEFAULT_USAGE_CONFIG,
   type ResolvedConfig,
@@ -80,6 +80,54 @@ function decodeConfig(value: unknown) {
   };
 }
 
+type ResolvedConfigValues = Pick<ResolvedConfig, "usage" | "footer">;
+type DecodedConfig = ReturnType<typeof decodeConfig>;
+
+const defaultConfigValues = (): ResolvedConfigValues => ({
+  usage: { ...DEFAULT_USAGE_CONFIG },
+  footer: { ...DEFAULT_FOOTER_CONFIG },
+});
+
+function overlayConfigValues(
+  primary: DecodedConfig | void,
+  fallback: ResolvedConfigValues,
+): ResolvedConfigValues {
+  return {
+    usage: {
+      enabled: primary?.usage?.enabled ?? fallback.usage.enabled,
+      refreshIntervalMs: Math.max(
+        5_000,
+        primary?.usage?.refreshIntervalMs ?? fallback.usage.refreshIntervalMs,
+      ),
+      showOnlyOnSubscriptionModels:
+        primary?.usage?.showOnlyOnSubscriptionModels ?? fallback.usage.showOnlyOnSubscriptionModels,
+      showResetTimes: primary?.usage?.showResetTimes ?? fallback.usage.showResetTimes,
+    },
+    footer: {
+      mode: primary?.footer?.mode ?? fallback.footer.mode,
+    },
+  };
+}
+
+/** Resolves an atomically committed selected document without another filesystem read. */
+export function resolveCommittedConfig(
+  current: ResolvedConfig,
+  committedDocument: JsonObject,
+  globalFallback: JsonObject | undefined,
+): ResolvedConfig {
+  const fallback =
+    current.configPath === current.projectConfigPath
+      ? overlayConfigValues(
+          globalFallback === undefined ? undefined : decodeConfig(globalFallback),
+          defaultConfigValues(),
+        )
+      : defaultConfigValues();
+  return {
+    ...current,
+    ...overlayConfigValues(decodeConfig(committedDocument), fallback),
+  };
+}
+
 export const readConfig = Effect.fn("XaiConfig.readConfig")(function* (path: string) {
   const documents = yield* JsonDocumentStore;
   const raw = yield* documents
@@ -96,9 +144,33 @@ export const writeConfig = Effect.fn("XaiConfig.writeConfig")(function* (
   yield* documents.writeObject(path, config).pipe(Effect.mapError(mapDocumentError("write", path)));
 });
 
+export const updateConfig = Effect.fn("XaiConfig.updateConfig")(function* (
+  // The callback is part of the store's narrow, uninterruptible rename commit region.
+  path: string,
+  update: (document: JsonObject) => JsonObject,
+  afterCommit: (document: JsonObject) => Effect.Effect<void>,
+) {
+  const documents = yield* JsonDocumentStore;
+  const modifyObject = documents.modifyObject;
+  if (!modifyObject) return yield* mapDocumentError("write", path)();
+  return yield* modifyObject(path, (current) =>
+    Effect.try({
+      try: () => {
+        const next = update(current);
+        return {
+          value: next,
+          document: next,
+          afterCommit: afterCommit(next),
+        } satisfies JsonDocumentModification<JsonObject>;
+      },
+      catch: mapDocumentError("write", path),
+    }),
+  ).pipe(Effect.mapError(mapDocumentError("write", path)));
+});
+
 const defaultDocument = (): JsonObject => ({
-  usage: { ...DEFAULT_CONFIG.usage },
-  footer: { ...DEFAULT_CONFIG.footer },
+  usage: { ...DEFAULT_USAGE_CONFIG },
+  footer: { ...DEFAULT_FOOTER_CONFIG },
 });
 
 export const resolveConfig = Effect.fn("XaiConfig.resolveConfig")(function* (
@@ -123,31 +195,15 @@ export const resolveConfig = Effect.fn("XaiConfig.resolveConfig")(function* (
       ? readConfig(path).pipe(
           Effect.catch(() =>
             Effect.logWarning("Unable to read a Better xAI configuration document.").pipe(
-              Effect.asVoid,
+              Effect.as(undefined),
             ),
           ),
         )
       : Effect.void;
   const project = yield* readOrDefault(paths.project, projectExists);
   const global = yield* readOrDefault(paths.global, globalExists);
-  const usage = {
-    enabled: project?.usage?.enabled ?? global?.usage?.enabled ?? DEFAULT_USAGE_CONFIG.enabled,
-    refreshIntervalMs:
-      project?.usage?.refreshIntervalMs ??
-      global?.usage?.refreshIntervalMs ??
-      DEFAULT_USAGE_CONFIG.refreshIntervalMs,
-    showOnlyOnSubscriptionModels:
-      project?.usage?.showOnlyOnSubscriptionModels ??
-      global?.usage?.showOnlyOnSubscriptionModels ??
-      DEFAULT_USAGE_CONFIG.showOnlyOnSubscriptionModels,
-    showResetTimes:
-      project?.usage?.showResetTimes ??
-      global?.usage?.showResetTimes ??
-      DEFAULT_USAGE_CONFIG.showResetTimes,
-  };
-  const footer = {
-    mode: project?.footer?.mode ?? global?.footer?.mode ?? DEFAULT_FOOTER_CONFIG.mode,
-  };
+  const globalValues = overlayConfigValues(global, defaultConfigValues());
+  const resolved = overlayConfigValues(project, globalValues);
 
   return {
     configPath: projectExists ? paths.project : paths.global,
@@ -155,12 +211,7 @@ export const resolveConfig = Effect.fn("XaiConfig.resolveConfig")(function* (
     globalConfigPath: paths.global,
     projectConfigExists: projectExists,
     globalConfigExists: globalExists,
-    usage: {
-      enabled: usage.enabled,
-      refreshIntervalMs: Math.max(5_000, usage.refreshIntervalMs),
-      showOnlyOnSubscriptionModels: usage.showOnlyOnSubscriptionModels,
-      showResetTimes: usage.showResetTimes,
-    },
-    footer: { mode: footer.mode },
+    usage: resolved.usage,
+    footer: resolved.footer,
   } satisfies ResolvedConfig;
 });

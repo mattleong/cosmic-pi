@@ -93,3 +93,23 @@ test("cache replacement cancels obsolete deferred publication and compares exact
   assert.equal(invalidations, 1);
   assert.match(current.render(80).join("\n"), /current/);
 });
+
+test("deferred publication isolates a throwing host invalidation callback", async () => {
+  installTestCapability();
+  const state = {};
+  const current = cachedDeferredPreview(
+    state,
+    "key",
+    "component",
+    "deferred-key",
+    "x".repeat(20_000),
+    "loading",
+    testTheme(),
+    () => component("ready"),
+    () => {
+      throw new Error("host invalidation failed");
+    },
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(current.render(80).join("\n"), /ready/);
+});

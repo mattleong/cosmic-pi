@@ -12,9 +12,14 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import * as MutableRef from "effect/MutableRef";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterOpenAI, { _test } from "../index.ts";
+import { initialFastSnapshot } from "../src/fast-controller.ts";
+import { createFooterController } from "../src/footer/controller.ts";
 import { textPanel } from "../src/settings/picker.ts";
+import { makeProjection } from "../src/usage-controller.ts";
+import { makeResolvedConfig } from "./helpers.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => void | Promise<void>;
 type CommandHandler = (args: string, ctx: ExtensionContext) => void | Promise<void>;
@@ -27,8 +32,10 @@ type Harness = {
   notify: ReturnType<typeof vi.fn>;
   getEntries: ReturnType<typeof vi.fn>;
   getLeafId: ReturnType<typeof vi.fn>;
+  getCwd: ReturnType<typeof vi.fn>;
   getContextUsage: ReturnType<typeof vi.fn>;
   getSessionName: ReturnType<typeof vi.fn>;
+  getThinkingLevel: ReturnType<typeof vi.fn>;
   setFooter: ReturnType<typeof vi.fn>;
   setStatus: ReturnType<typeof vi.fn>;
   cosmicEvents: Array<{ channel: string; data: unknown }>;
@@ -74,10 +81,12 @@ function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Har
   const commands = new Map<string, CommandHandler>();
   const custom = vi.fn();
   const notify = vi.fn();
-  const getEntries = vi.fn(() => []);
+  const getEntries = vi.fn((): unknown[] => []);
   const getLeafId = vi.fn(() => "leaf-1");
+  const getCwd = vi.fn(() => cwd);
   const getContextUsage = vi.fn(() => ({ contextWindow: 100_000, percent: 12.5 }));
   const getSessionName = vi.fn(() => undefined);
+  const getThinkingLevel = vi.fn(() => "off");
   const setFooter = vi.fn();
   const setStatus = vi.fn();
 
@@ -107,7 +116,7 @@ function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Har
     registerMessageRenderer: vi.fn(),
     sendMessage: vi.fn(),
     getFlag: vi.fn(() => false),
-    getThinkingLevel: vi.fn(() => "off"),
+    getThinkingLevel,
     events: {
       emit(channel: string, data: unknown) {
         cosmicEvents.push({ channel, data });
@@ -137,7 +146,7 @@ function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Har
     sessionManager: {
       getEntries,
       getLeafId,
-      getCwd: vi.fn(() => cwd),
+      getCwd,
       getSessionName,
     },
     modelRegistry: {
@@ -156,8 +165,10 @@ function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Har
     notify,
     getEntries,
     getLeafId,
+    getCwd,
     getContextUsage,
     getSessionName,
+    getThinkingLevel,
     setFooter,
     setStatus,
     cosmicEvents,
@@ -254,6 +265,206 @@ describe("footer mode ownership", () => {
     footer.dispose();
   });
 
+  test("keeps synchronous footer rendering total when OAuth lookup throws", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "replace");
+    const harness = createHarness(cwd);
+    Object.assign(harness.ctx, {
+      model: { provider: "openai", id: "gpt-5.5", contextWindow: 200_000 },
+    });
+    harness.ctx.modelRegistry.isUsingOAuth = () => {
+      throw new Error("host registry failed");
+    };
+
+    await emit(harness, "session_start");
+    const footerFactory = harness.setFooter.mock.calls[0]?.[0];
+    const footer = footerFactory(
+      { requestRender: vi.fn() },
+      { fg: (_color: string, value: string) => value },
+      {},
+    );
+
+    expect(() => footer.render(100)).not.toThrow();
+    expect(footer.render(100).join("\n")).not.toContain("(sub)");
+    footer.dispose();
+  });
+
+  test("retries a failed footer installation without activating its stale factory", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "replace");
+    const harness = createHarness(cwd);
+    const staleRequest = vi.fn();
+    const activeRequest = vi.fn();
+    let staleFooter: { dispose(): void; render(width: number): string[] } | undefined;
+    let activeFooter: { dispose(): void } | undefined;
+
+    harness.setFooter
+      .mockImplementationOnce((factory) => {
+        staleFooter = factory(
+          { requestRender: staleRequest },
+          { fg: (_color: string, value: string) => value },
+          { onBranchChange: vi.fn() },
+        );
+        throw new Error("host rejected footer");
+      })
+      .mockImplementationOnce((factory) => {
+        activeFooter = factory(
+          { requestRender: activeRequest },
+          { fg: (_color: string, value: string) => value },
+          { onBranchChange: vi.fn() },
+        );
+      });
+
+    await expect(emit(harness, "session_start")).resolves.toBeUndefined();
+    expect(harness.setFooter).toHaveBeenCalledTimes(1);
+    expect(staleRequest).not.toHaveBeenCalled();
+    expect(staleFooter?.render(100)).toEqual([]);
+
+    await emit(harness, "agent_start");
+    expect(harness.setFooter).toHaveBeenCalledTimes(2);
+    staleFooter?.dispose();
+
+    await emit(harness, "agent_start");
+    expect(harness.setFooter).toHaveBeenCalledTimes(2);
+    expect(staleRequest).not.toHaveBeenCalled();
+    expect(activeRequest).toHaveBeenCalledTimes(1);
+    activeFooter?.dispose();
+  });
+
+  test("returns an empty footer when host-owned render getters throw", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "replace");
+    const harness = createHarness(cwd);
+    const model = {
+      provider: "openai",
+      id: "gpt-5.5",
+      reasoning: true,
+      contextWindow: 200_000,
+    };
+    Object.assign(harness.ctx, { model });
+    const getAvailableProviderCount = vi.fn(() => 2);
+    const getGitBranch = vi.fn(() => "main");
+    const getExtensionStatuses = vi.fn(() => new Map([["test", "ready"]]));
+    const fg = vi.fn((_color: string, value: string) => value);
+
+    await emit(harness, "session_start");
+    const footerFactory = harness.setFooter.mock.calls[0]?.[0];
+    const footer = footerFactory(
+      { requestRender: vi.fn() },
+      { fg },
+      { getAvailableProviderCount, getGitBranch, getExtensionStatuses },
+    );
+    const safe = footer.render(100);
+    expect(safe).not.toEqual([]);
+    expect(safe.join("\n")).toContain(cwd);
+
+    harness.getLeafId.mockImplementationOnce(() => {
+      throw new Error("leaf unavailable");
+    });
+    expect(footer.render(100)).toEqual([]);
+
+    Object.assign(harness.ctx, {
+      model: { ...model, id: "gpt-session-b" },
+    });
+    harness.getCwd.mockImplementationOnce(() => {
+      throw new Error("cwd unavailable");
+    });
+    expect(footer.render(100)).toEqual([]);
+    Object.assign(harness.ctx, { model });
+
+    harness.getLeafId.mockReturnValue("leaf-2");
+    harness.getSessionName.mockImplementationOnce(() => {
+      throw new Error("session name unavailable");
+    });
+    expect(footer.render(100)).toEqual([]);
+    expect(footer.render(100)).toEqual(safe);
+    expect(harness.getSessionName).toHaveBeenCalledTimes(3);
+
+    await emit(harness, "message_update");
+    harness.getContextUsage.mockImplementationOnce(() => {
+      throw new Error("context unavailable");
+    });
+    expect(footer.render(100)).toEqual([]);
+
+    await emit(harness, "message_update");
+    harness.getContextUsage.mockReturnValueOnce({
+      contextWindow: 100_000,
+      get percent() {
+        throw new Error("percent unavailable");
+      },
+    });
+    expect(footer.render(100)).toEqual([]);
+    expect(footer.render(100)).toEqual(safe);
+
+    harness.getThinkingLevel.mockImplementationOnce(() => {
+      throw new Error("thinking unavailable");
+    });
+    expect(footer.render(100)).toEqual([]);
+    getAvailableProviderCount.mockImplementationOnce(() => {
+      throw new Error("providers unavailable");
+    });
+    expect(footer.render(100)).toEqual([]);
+    getGitBranch.mockImplementationOnce(() => {
+      throw new Error("branch unavailable");
+    });
+    expect(footer.render(100)).toEqual([]);
+    getExtensionStatuses.mockImplementationOnce(() => {
+      throw new Error("statuses unavailable");
+    });
+    expect(footer.render(100)).toEqual([]);
+    fg.mockImplementationOnce(() => {
+      throw new Error("theme unavailable");
+    });
+    expect(footer.render(100)).toEqual([]);
+
+    const firstFailure = footerFactory(
+      { requestRender: vi.fn() },
+      {
+        fg: () => {
+          throw new Error("theme unavailable");
+        },
+      },
+      {},
+    );
+    expect(firstFailure.render(100)).toEqual([]);
+    expect(firstFailure.render(0)).toEqual([]);
+    expect(firstFailure.render(Number.NaN)).toEqual([]);
+    expect(firstFailure.render(Number.POSITIVE_INFINITY)).toEqual([]);
+    expect(() => firstFailure.dispose()).not.toThrow();
+    expect(() => footer.dispose()).not.toThrow();
+  });
+
+  test("isolates branch subscription, render request, and disposal callbacks", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "replace");
+    const harness = createHarness(cwd);
+    const requestRender = vi.fn(() => {
+      throw new Error("render request failed");
+    });
+    const unsubscribe = vi.fn(() => {
+      throw new Error("unsubscribe failed");
+    });
+    let branchChanged: (() => void) | undefined;
+
+    await emit(harness, "session_start");
+    const footerFactory = harness.setFooter.mock.calls[0]?.[0];
+    const footer = footerFactory(
+      { requestRender },
+      { fg: (_color: string, value: string) => value },
+      {
+        onBranchChange(callback: () => void) {
+          branchChanged = callback;
+          return unsubscribe;
+        },
+      },
+    );
+
+    expect(() => branchChanged?.()).not.toThrow();
+    await expect(emit(harness, "agent_start")).resolves.toBeUndefined();
+    expect(() => footer.dispose()).not.toThrow();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
   test("adds completed-turn usage without rescanning the full session", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, "replace");
@@ -282,6 +493,43 @@ describe("footer mode ownership", () => {
       {},
     );
     expect(footer.render(100).join("\n")).toContain("↑1.2k ↓300 R400 W50 $0.250");
+    footer.dispose();
+  });
+
+  test("does not retain prior-session totals when a new session scan throws", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "replace");
+    const harness = createHarness(cwd);
+    harness.getEntries.mockReturnValue([
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          usage: {
+            input: 1_200,
+            output: 300,
+            cacheRead: 400,
+            cacheWrite: 50,
+            cost: { total: 0.25 },
+          },
+        },
+      },
+    ]);
+
+    await emit(harness, "session_start");
+    const footerFactory = harness.setFooter.mock.calls[0]?.[0];
+    const footer = footerFactory(
+      { requestRender: vi.fn() },
+      { fg: (_color: string, value: string) => value },
+      {},
+    );
+    expect(footer.render(100).join("\n")).toContain("↑1.2k");
+
+    harness.getEntries.mockImplementation(() => {
+      throw new Error("new session entries unavailable");
+    });
+    await expect(emit(harness, "session_start")).resolves.toBeUndefined();
+    expect(footer.render(100).join("\n")).not.toContain("↑1.2k");
     footer.dispose();
   });
 
@@ -418,6 +666,136 @@ describe("footer mode ownership", () => {
 
     expect(harness.setFooter).toHaveBeenCalledTimes(2);
     expect(harness.setFooter).toHaveBeenLastCalledWith(undefined);
+  });
+
+  test("retries footer removal only after the host accepts it", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "replace");
+    const harness = createHarness(cwd);
+
+    await emit(harness, "session_start");
+    harness.setFooter.mockImplementationOnce(() => {
+      throw new Error("footer removal failed");
+    });
+    writeProjectConfig(cwd, "off");
+
+    await expect(emit(harness, "session_start")).resolves.toBeUndefined();
+    expect(harness.setFooter).toHaveBeenCalledTimes(2);
+    expect(harness.setFooter).toHaveBeenLastCalledWith(undefined);
+
+    await emit(harness, "agent_start");
+    expect(harness.setFooter).toHaveBeenCalledTimes(3);
+    expect(harness.setFooter).toHaveBeenLastCalledWith(undefined);
+    await emit(harness, "agent_start");
+    expect(harness.setFooter).toHaveBeenCalledTimes(3);
+  });
+
+  test("does not retry removal after the host disposed the owned footer before throwing", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "replace");
+    const harness = createHarness(cwd);
+
+    await emit(harness, "session_start");
+    const footerFactory = harness.setFooter.mock.calls[0]?.[0];
+    const footer = footerFactory(
+      { requestRender: vi.fn() },
+      { fg: (_color: string, value: string) => value },
+      {},
+    );
+    harness.setFooter.mockImplementationOnce(() => {
+      footer.dispose();
+      throw new Error("host failed after disposal");
+    });
+    writeProjectConfig(cwd, "off");
+
+    await expect(emit(harness, "session_start")).resolves.toBeUndefined();
+    expect(harness.setFooter).toHaveBeenCalledTimes(2);
+    await emit(harness, "agent_start");
+    expect(harness.setFooter).toHaveBeenCalledTimes(2);
+  });
+
+  test("preserves a reentrant replacement installed while the prior footer clears", () => {
+    let mode: "replace" | "off" = "replace";
+    let reenter = false;
+    let component: { dispose(): void } | undefined;
+    const requestRender = vi.fn();
+    let controller: ReturnType<typeof createFooterController>;
+    const setFooter = vi.fn((factory) => {
+      if (typeof factory === "function") {
+        component = factory(
+          { requestRender },
+          { fg: (_color: string, value: string) => value },
+          {},
+        );
+        return;
+      }
+      if (!reenter) return;
+      reenter = false;
+      component?.dispose();
+      mode = "replace";
+      controller.update(ctx);
+    });
+    const ctx = {
+      mode: "tui",
+      hasUI: true,
+      model: undefined,
+      ui: { setFooter, setStatus: vi.fn() },
+      sessionManager: {
+        getEntries: () => [],
+        getLeafId: () => null,
+        getCwd: () => "/project",
+        getSessionName: () => undefined,
+      },
+      modelRegistry: { isUsingOAuth: () => false },
+      getContextUsage: () => ({ contextWindow: 100_000, percent: 0 }),
+    } as unknown as ExtensionContext;
+    controller = createFooterController({
+      pi: { getThinkingLevel: () => "off" } as ExtensionAPI,
+      config: () => makeResolvedConfig({ footer: { mode } }),
+      fastProjection: MutableRef.make(initialFastSnapshot()),
+      projection: makeProjection(),
+      hasTerminalUI: () => true,
+    });
+
+    controller.update(ctx);
+    mode = "off";
+    reenter = true;
+    controller.update(ctx);
+
+    expect(controller.installed).toBe(true);
+    expect(setFooter).toHaveBeenCalledTimes(3);
+    controller.update(ctx);
+    expect(setFooter).toHaveBeenCalledTimes(3);
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  test("retries status mutations without blocking footer installation", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, "status", { fastEnabled: true });
+    const harness = createHarness(cwd);
+    Object.assign(harness.ctx, {
+      model: { provider: "openai", id: "gpt-5.5", contextWindow: 200_000 },
+    });
+    harness.setStatus.mockImplementationOnce(() => {
+      throw new Error("status set failed");
+    });
+
+    await expect(emit(harness, "session_start")).resolves.toBeUndefined();
+    expect(harness.setStatus).toHaveBeenCalledTimes(1);
+    await emit(harness, "agent_start");
+    expect(harness.setStatus).toHaveBeenCalledTimes(2);
+
+    harness.setStatus.mockImplementationOnce(() => {
+      throw new Error("status clear failed");
+    });
+    writeProjectConfig(cwd, "replace");
+    await expect(emit(harness, "session_start")).resolves.toBeUndefined();
+    expect(harness.setFooter).toHaveBeenCalledTimes(1);
+    expect(harness.setStatus).toHaveBeenCalledTimes(3);
+
+    await emit(harness, "agent_start");
+    expect(harness.setStatus).toHaveBeenCalledTimes(4);
+    expect(harness.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
   });
 
   test("off mode does not clear a footer after Better OpenAI's footer was disposed", async () => {

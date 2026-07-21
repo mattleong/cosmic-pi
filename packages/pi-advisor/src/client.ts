@@ -46,7 +46,11 @@ export const createAdvisorChildModelEffect = Effect.fn("AdvisorClient.createChil
 ) {
   if (!config.provider || !config.model)
     return yield* modelError("Advisor model is not configured.");
-  const parentModel = ctx.modelRegistry.find(config.provider, config.model);
+  const providerId = config.provider;
+  const modelId = config.model;
+  const parentModel = yield* tryModelSync("Advisor model lookup failed.", () =>
+    ctx.modelRegistry.find(providerId, modelId),
+  );
   if (!parentModel)
     return yield* modelError(
       `Configured advisor model ${config.provider}/${config.model} is unavailable.`,
@@ -67,40 +71,47 @@ export const createAdvisorChildModelEffect = Effect.fn("AdvisorClient.createChil
     try: () => ModelRuntime.create(),
     catch: () => modelError("Advisor child model runtime could not be created."),
   });
-  let selectedProviderRegistered = false;
-  for (const providerId of ctx.modelRegistry.getRegisteredProviderIds()) {
-    const provider = ctx.modelRegistry.getRegisteredProviderConfig(providerId);
-    if (!provider) continue;
-    if (providerId === config.provider) selectedProviderRegistered = true;
-    modelRuntime.registerProvider(
-      providerId,
-      providerId === config.provider && parentAuth.headers
-        ? { ...provider, headers: { ...provider.headers, ...parentAuth.headers } }
-        : provider,
-    );
-  }
-  const selectedProvider = ctx.modelRegistry.getRegisteredProviderConfig(config.provider);
-  if (config.fastMode && supportsFastModel(config.provider, config.model)) {
-    modelRuntime.registerProvider(config.provider, {
-      ...selectedProvider,
-      api: parentModel.api,
-      headers: { ...selectedProvider?.headers, ...parentAuth.headers },
-      streamSimple: (model, context, options) =>
-        streamSimple(model, context, { ...options, onPayload: applyFastServiceTier }),
-    });
-  } else if (!selectedProviderRegistered && (selectedProvider || parentAuth.headers)) {
-    modelRuntime.registerProvider(config.provider, {
-      ...selectedProvider,
-      headers: { ...selectedProvider?.headers, ...parentAuth.headers },
-    });
-  }
-  if (parentAuth.apiKey && !ctx.modelRegistry.isUsingOAuth(parentModel)) {
+  yield* tryModelSync("Advisor provider registration failed.", () => {
+    let selectedProviderRegistered = false;
+    for (const registeredProviderId of ctx.modelRegistry.getRegisteredProviderIds()) {
+      const provider = ctx.modelRegistry.getRegisteredProviderConfig(registeredProviderId);
+      if (!provider) continue;
+      if (registeredProviderId === providerId) selectedProviderRegistered = true;
+      modelRuntime.registerProvider(
+        registeredProviderId,
+        registeredProviderId === providerId && parentAuth.headers
+          ? { ...provider, headers: { ...provider.headers, ...parentAuth.headers } }
+          : provider,
+      );
+    }
+    const selectedProvider = ctx.modelRegistry.getRegisteredProviderConfig(providerId);
+    if (config.fastMode && supportsFastModel(providerId, modelId)) {
+      modelRuntime.registerProvider(providerId, {
+        ...selectedProvider,
+        api: parentModel.api,
+        headers: { ...selectedProvider?.headers, ...parentAuth.headers },
+        streamSimple: (model, context, options) =>
+          streamSimple(model, context, { ...options, onPayload: applyFastServiceTier }),
+      });
+    } else if (!selectedProviderRegistered && (selectedProvider || parentAuth.headers)) {
+      modelRuntime.registerProvider(providerId, {
+        ...selectedProvider,
+        headers: { ...selectedProvider?.headers, ...parentAuth.headers },
+      });
+    }
+  });
+  const usingOAuth = yield* tryModelSync("Advisor authentication mode lookup failed.", () =>
+    ctx.modelRegistry.isUsingOAuth(parentModel),
+  );
+  if (parentAuth.apiKey && !usingOAuth) {
     yield* Effect.tryPromise({
-      try: () => modelRuntime.setRuntimeApiKey(config.provider!, parentAuth.apiKey!),
+      try: () => modelRuntime.setRuntimeApiKey(providerId, parentAuth.apiKey!),
       catch: () => modelError("Advisor runtime authentication could not be installed."),
     });
   }
-  const model = modelRuntime.getModel(config.provider, config.model);
+  const model = yield* tryModelSync("Advisor child model lookup failed.", () =>
+    modelRuntime.getModel(providerId, modelId),
+  );
   if (!model)
     return yield* modelError(
       `Configured advisor model ${config.provider}/${config.model} is unavailable in the child runtime.`,
@@ -117,10 +128,13 @@ export const createAdvisorChildModelEffect = Effect.fn("AdvisorClient.createChil
         : "Advisor authentication is unavailable in the child runtime.",
     );
   }
+  const thinkingLevel = yield* tryModelSync("Advisor thinking level selection failed.", () =>
+    clampThinkingLevel(model, config.thinkingLevel),
+  );
   return {
     modelRuntime,
     model,
-    thinkingLevel: clampThinkingLevel(model, config.thinkingLevel),
+    thinkingLevel,
   } satisfies AdvisorChildModel;
 });
 export function createAdvisorChildModel(
@@ -134,4 +148,6 @@ function applyFastServiceTier(payload: unknown): unknown | undefined {
     ? { ...payload, service_tier: FAST_SERVICE_TIER }
     : undefined;
 }
+const tryModelSync = <A>(message: string, operation: () => A) =>
+  Effect.try({ try: operation, catch: () => modelError(message) });
 export const _clientTest = { applyFastServiceTier };

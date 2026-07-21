@@ -137,6 +137,39 @@ describe("advisor child model construction", () => {
     );
   });
 
+  test.each([
+    "find",
+    "getRegisteredProviderIds",
+    "getRegisteredProviderConfig",
+    "isUsingOAuth",
+  ] as const)("maps a throwing model-registry %s callback to AdvisorModelError", async (method) => {
+    const secret = `sensitive-${method}`;
+    const { ctx } = harness();
+    const registry = ctx.modelRegistry as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    registry[method]?.mockImplementation(() => {
+      throw new Error(secret);
+    });
+
+    const failure = createAdvisorChildModel(ctx, config());
+    await expect(failure).rejects.toThrow(AdvisorModelError);
+    await expect(failure).rejects.not.toThrow(secret);
+  });
+
+  test.each(["registerProvider", "getModel"] as const)(
+    "maps a throwing child-runtime %s callback to AdvisorModelError",
+    async (method) => {
+      const secret = `sensitive-${method}`;
+      const { ctx, runtime } = harness();
+      runtime[method].mockImplementation(() => {
+        throw new Error(secret);
+      });
+
+      const failure = createAdvisorChildModel(ctx, config());
+      await expect(failure).rejects.toThrow(AdvisorModelError);
+      await expect(failure).rejects.not.toThrow(secret);
+    },
+  );
+
   test("reports runtime-only auth that public child APIs cannot resolve", async () => {
     const { ctx } = harness({
       auth: { ok: true, env: { PRIVATE_RUNTIME_VALUE: "secret" } },

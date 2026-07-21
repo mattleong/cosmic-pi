@@ -8,6 +8,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as TestClock from "effect/testing/TestClock";
@@ -22,7 +23,11 @@ import {
   type QueuedCheckpoint,
 } from "../src/review-queue.ts";
 import { initialReviewQueueState } from "../src/review-queue-state.ts";
-import { AdvisorRuntime, type AdvisorRuntimeServiceShape } from "../src/advisor-runtime.ts";
+import {
+  AdvisorRuntime,
+  AdvisorRuntimeResetRequiredError,
+  type AdvisorRuntimeServiceShape,
+} from "../src/advisor-runtime.ts";
 
 const assertExactDelay = (milliseconds: number) =>
   Effect.gen(function* () {
@@ -65,7 +70,8 @@ describe("advisor Effect clock boundaries", () => {
 
   it.effect("interrupts the real queue checkpoint at catch-up timeout and advances", () =>
     Effect.gen(function* () {
-      const scope = yield* Effect.scope;
+      const parentScope = yield* Effect.scope;
+      const scope = yield* Scope.fork(parentScope);
       let attempts = 0;
       let interrupted = false;
       const effects: AdvisorRuntimeServiceShape = {
@@ -205,9 +211,117 @@ describe("advisor Effect clock boundaries", () => {
     }),
   );
 
-  it.effect("keeps queue disposal blocked until the owned abort settles", () =>
+  it.effect("bounds a stuck AgentSession abort and requires a clean re-prime", () =>
     Effect.gen(function* () {
       const scope = yield* Effect.scope;
+      const makeSession = (abort: () => Promise<void>) =>
+        ({
+          sessionFile: undefined,
+          messages: [],
+          isStreaming: false,
+          getActiveToolNames: () => [],
+          getToolDefinition: () => undefined,
+          subscribe: () => () => undefined,
+          prompt: () => Promise.resolve(),
+          steer: () => Promise.resolve(),
+          followUp: () => Promise.resolve(),
+          abort: vi.fn(abort),
+          dispose: vi.fn(),
+        }) as unknown as AgentSession;
+      const stuck = makeSession(() => new Promise<void>(() => undefined));
+      const fresh = makeSession(() => Promise.resolve());
+      const sessions = [stuck, fresh];
+      const runtime = new AdvisorRuntime(
+        {
+          createChildModel: () =>
+            Promise.resolve({
+              modelRuntime: {} as never,
+              model: { provider: "p", id: "m" } as never,
+              thinkingLevel: "medium" as const,
+            }),
+          createTools: () => Promise.resolve([]),
+          createSession: () =>
+            Promise.resolve({
+              session: sessions.shift()!,
+              extensionsResult: {} as never,
+            }),
+        },
+        standaloneAdvisorExecutor,
+        scope,
+        { offer: () => "accepted", shutdown: Effect.void, awaitShutdown: Effect.void },
+        (yield* SynchronizedRef.make(undefined)) as never,
+        yield* Semaphore.make(1),
+      );
+      const options = {
+        ctx: { cwd: process.cwd(), modelRegistry: {} as never },
+        config: {
+          configPath: "/tmp/config",
+          enabled: true,
+          provider: "p",
+          model: "m",
+          fastMode: false,
+          thinkingLevel: "medium" as const,
+          reviewPolicy: "guardrail" as const,
+          timeoutMs: 25,
+          maxContextChars: 48_000,
+          configured: true,
+        },
+        seed: "seed",
+      };
+      yield* runtime.startEffect(options).pipe(Effect.provide(advisorPlatformLayer));
+      let completed = false;
+      const abort = yield* runtime.abortEffect().pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            completed = true;
+          }),
+        ),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust(24);
+      expect(completed).toBe(false);
+      expect(stuck.dispose).not.toHaveBeenCalled();
+      yield* TestClock.adjust(1);
+      yield* Fiber.join(abort);
+      expect(completed).toBe(true);
+      expect(stuck.abort).toHaveBeenCalledOnce();
+      expect(stuck.dispose).toHaveBeenCalledOnce();
+      expect(runtime.childSession).toBeUndefined();
+
+      const failure = yield* runtime
+        .checkpointEffect({
+          checkpointId: "must-reprime",
+          processedThrough: 1,
+          observations: "batch",
+          focus: "standard",
+        })
+        .pipe(Effect.flip);
+      expect(failure).toBeInstanceOf(AdvisorRuntimeResetRequiredError);
+
+      yield* runtime.reprimeEffect("fresh").pipe(Effect.provide(advisorPlatformLayer));
+      expect(runtime.childSession).toBe(fresh);
+      (fresh.abort as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        () => new Promise<void>(() => undefined),
+      );
+      const interruptedAbort = yield* runtime
+        .abortEffect()
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(interruptedAbort);
+      expect(runtime.childSession).toBeUndefined();
+      expect(fresh.abort).toHaveBeenCalledOnce();
+      expect(fresh.dispose).toHaveBeenCalledOnce();
+      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+      expect(stuck.dispose).toHaveBeenCalledOnce();
+      expect(fresh.dispose).toHaveBeenCalledOnce();
+    }),
+  );
+
+  it.effect("keeps queue disposal blocked until the owned abort settles", () =>
+    Effect.gen(function* () {
+      const parentScope = yield* Effect.scope;
+      const scope = yield* Scope.fork(parentScope);
       const abortGate = yield* Deferred.make<void>();
       let disposed = 0;
       const effects: AdvisorRuntimeServiceShape = {
@@ -277,6 +391,29 @@ describe("advisor Effect clock boundaries", () => {
       expect(frames).toBe(1);
       yield* TestClock.adjust(120);
       expect(frames).toBe(2);
+      yield* Fiber.interrupt(fiber);
+    }),
+  );
+
+  it.effect("recovers when a delayed timer callback throws", () =>
+    Effect.gen(function* () {
+      const fiber = yield* advisorDelayEffect(120, () => {
+        throw new Error("sensitive delayed callback failure");
+      }).pipe(Effect.forkChild({ startImmediately: true }));
+      yield* TestClock.adjust(120);
+      yield* Fiber.join(fiber);
+    }),
+  );
+
+  it.effect("keeps polling after an interval callback throws", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const fiber = yield* advisorIntervalEffect(120, () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("sensitive interval callback failure");
+      }).pipe(Effect.forkChild({ startImmediately: true }));
+      yield* TestClock.adjust(240);
+      expect(attempts).toBe(2);
       yield* Fiber.interrupt(fiber);
     }),
   );

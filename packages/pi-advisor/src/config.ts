@@ -5,7 +5,12 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
-import { decodeTolerantFields, JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
+import {
+  decodeTolerantFields,
+  JsonDocumentStore,
+  type JsonDocumentModification,
+  type JsonObject,
+} from "pi-cosmic-core";
 import { parseJson, stringifyJson } from "./boundary/json.ts";
 import {
   nodeJoin,
@@ -15,7 +20,6 @@ import {
 } from "./boundary/node.ts";
 import { standaloneAdvisorExecutor } from "./boundary/executor.ts";
 import { snapshotDataRecord } from "./boundary/safe-data.ts";
-import { isRecord } from "./utils.ts";
 export { isRecord } from "./utils.ts";
 
 export const ADVISOR_CONFIG_BASENAME = "pi-advisor.json";
@@ -126,6 +130,8 @@ const AdvisorRawFieldSchemas = {
   timeoutMs: Schema.Number,
   maxContextChars: Schema.Number,
 } as const;
+const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
+const isJsonObject = (value: unknown): value is JsonObject => Schema.is(JsonObjectSchema)(value);
 
 const normalizeAdvisorConfigData = (raw: unknown, configPath: string): ResolvedAdvisorConfig => {
   const record = migrateLegacyReviewPolicy(safeDataRecord(raw));
@@ -198,7 +204,7 @@ export function readRawAdvisorConfig(path = getAdvisorConfigPath()): JsonObject 
   if (source === undefined) return {};
   try {
     const decoded = parseJson(source);
-    if (isRecord(decoded)) return decoded;
+    if (isJsonObject(decoded)) return decoded;
   } catch {
     // Report malformed existing files while keeping reads fail-open.
   }
@@ -281,14 +287,40 @@ export function writeRawAdvisorConfigAsync(
 ): Promise<void> {
   return standaloneAdvisorExecutor.run(writeRawAdvisorConfigEffect(raw, path));
 }
-export const writeAdvisorConfigPatchEffect = Effect.fn("AdvisorConfig.patch")(function* (
+export const writeAdvisorConfigPatchEffect = Effect.fn("AdvisorConfig.patch")(function* <
+  AfterCommitR = never,
+>(
   patch: AdvisorConfigPatch,
   path = getAdvisorConfigPath(),
+  afterCommit?: (next: ResolvedAdvisorConfig) => Effect.Effect<void, never, AfterCommitR>,
 ) {
   const documents = yield* JsonDocumentStore;
   yield* protectAdvisorConfigDirectoryEffect(path).pipe(
     Effect.mapError(mapError("protect directory", path)),
   );
+  const modifyObject = documents.modifyObject;
+  if (modifyObject) {
+    return yield* modifyObject(path, (raw) =>
+      Effect.try({
+        try: () => {
+          const document = patchAdvisorConfig(migrateLegacyReviewPolicy(raw), patch);
+          const next = normalizeAdvisorConfig(document, path);
+          return {
+            value: next,
+            document,
+            ...(afterCommit ? { afterCommit: afterCommit(next) } : {}),
+          } satisfies JsonDocumentModification<ResolvedAdvisorConfig, AfterCommitR>;
+        },
+        catch: mapError("update", path),
+      }),
+    ).pipe(Effect.mapError(mapError("update", path)));
+  }
+  if (afterCommit)
+    return yield* new AdvisorConfigError({
+      operation: "update",
+      path,
+      message: "Unable to commit Advisor configuration state atomically.",
+    });
   let next: JsonObject | undefined;
   yield* documents
     .updateObject(path, (raw) => {
@@ -306,7 +338,7 @@ export function writeAdvisorConfigPatch(
   let raw: JsonObject = {};
   if (source !== undefined) {
     const decoded = parseJson(source);
-    if (!isRecord(decoded))
+    if (!isJsonObject(decoded))
       throw new AdvisorConfigError({
         operation: "update",
         path,
@@ -326,7 +358,10 @@ export function writeAdvisorConfigPatchAsync(
 }
 
 function safeDataRecord(value: unknown): JsonObject {
-  return snapshotDataRecord(value) ?? {};
+  const snapshot = snapshotDataRecord(value);
+  if (snapshot === undefined) return {};
+  const decoded = Schema.decodeUnknownOption(JsonObjectSchema)(snapshot);
+  return decoded._tag === "Some" ? decoded.value : {};
 }
 function setOptionalBoolean(target: JsonObject, key: string, value: boolean | undefined) {
   if (typeof value === "boolean") target[key] = value;

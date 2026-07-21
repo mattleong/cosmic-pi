@@ -23,6 +23,7 @@ export interface ConfigRepositoryShape {
   readonly patch: (
     patch: AdvisorConfigPatch,
     path?: string,
+    afterCommit?: (next: ResolvedAdvisorConfig) => Effect.Effect<void>,
   ) => Effect.Effect<ResolvedAdvisorConfig, AdvisorConfigRepositoryError>;
 }
 
@@ -46,8 +47,8 @@ export const configRepositoryLayer = Layer.effect(
           Effect.mapError(repositoryError("load")),
           Effect.provide(platform),
         ),
-      patch: (patch, path = getAdvisorConfigPath()) =>
-        writeAdvisorConfigPatchEffect(patch, path).pipe(
+      patch: (patch, path = getAdvisorConfigPath(), afterCommit) =>
+        writeAdvisorConfigPatchEffect(patch, path, afterCommit).pipe(
           Effect.mapError(repositoryError("update")),
           Effect.provide(platform),
         ),
@@ -69,8 +70,8 @@ export const configRepositoryTestLayer = (
             try: () => Promise.resolve(load(path)),
             catch: repositoryError("load"),
           }),
-        patch: (patch, path = getAdvisorConfigPath()) =>
-          writeAdvisorConfigPatchEffect(patch, path).pipe(
+        patch: (patch, path = getAdvisorConfigPath(), afterCommit) =>
+          writeAdvisorConfigPatchEffect(patch, path, afterCommit).pipe(
             Effect.mapError(repositoryError("update")),
             Effect.provide(platform),
           ),

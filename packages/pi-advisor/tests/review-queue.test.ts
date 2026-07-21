@@ -5,6 +5,7 @@
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
@@ -56,8 +57,14 @@ async function makeQueue(
     steer: (value) => Effect.tryPromise({ try: () => driver.steer(value), catch: modelError }),
     reprime: (seed, state) =>
       Effect.tryPromise({ try: () => driver.reprime(seed, state), catch: modelError }),
-    abort: () => Effect.promise(() => driver.abort()),
-    dispose: () => Effect.promise(() => driver.dispose()),
+    abort: () =>
+      Effect.tryPromise({ try: () => driver.abort(), catch: modelError }).pipe(
+        Effect.catch(() => Effect.void),
+      ),
+    dispose: () =>
+      Effect.tryPromise({ try: () => driver.dispose(), catch: modelError }).pipe(
+        Effect.catch(() => Effect.void),
+      ),
   };
   const queue = new AdvisorReviewQueue(
     runtime,
@@ -153,6 +160,34 @@ describe("AdvisorReviewQueue", () => {
     expect(disposals).toBe(1);
   });
 
+  test("explicit disposal closes the queue child scope before the layer scope", async () => {
+    let disposals = 0;
+    const runtime: AdvisorRuntimeServiceShape = {
+      activeToolNames: () => [],
+      start: () => Effect.void,
+      checkpoint: () => Effect.never,
+      steer: () => Effect.succeed(false),
+      reprime: () => Effect.void,
+      abort: () => Effect.void,
+      dispose: () =>
+        Effect.sync(() => {
+          disposals += 1;
+        }),
+    };
+    const managed = ManagedRuntime.make(advisorReviewQueueServiceLayer);
+    const service = await managed.runPromise(AdvisorReviewQueueService);
+    const queue = await managed.runPromise(service.make(runtime));
+    const queueScope = (queue as unknown as { resourceScope: Scope.Closeable }).resourceScope;
+
+    expect(queueScope.state._tag).not.toBe("Closed");
+    await managed.runPromise(queue.disposeEffect());
+    expect(queueScope.state._tag).toBe("Closed");
+    expect(disposals).toBe(1);
+
+    await managed.dispose();
+    expect(disposals).toBe(1);
+  });
+
   test("serializes two checkpoints and does not ordinarily abort the first", async () => {
     const harness = runtimeHarness();
     const queue = await makeQueue(harness.runtime);
@@ -176,6 +211,128 @@ describe("AdvisorReviewQueue", () => {
     harness.pending[1]?.resolve(result(secondRequest));
     await expect(second).resolves.toMatchObject({ checkpointId: "two" });
     expect(queue.pendingCheckpoints).toBe(0);
+  });
+
+  test("interrupting an active checkpoint caller aborts owned work and leaves the queue reusable", async () => {
+    const harness = runtimeHarness();
+    const settled = vi.fn();
+    const queue = await makeQueue(harness.runtime, { onCheckpointSettled: settled });
+    queue.ingest(1, { type: "user", text: "interrupted" });
+    const caller = Effect.runFork(
+      queue.checkpointEffect({
+        checkpointId: "interrupted",
+        focus: "standard",
+        parentTurnId: 1,
+      }),
+    );
+    await tick();
+
+    expect(queue.pendingCheckpoints).toBe(1);
+    await Effect.runPromise(Fiber.interrupt(caller));
+    expect(harness.runtime.abort).toHaveBeenCalledOnce();
+    expect(queue.pendingCheckpoints).toBe(0);
+    expect(queue.hasActiveCheckpoint).toBe(false);
+    expect(settled).toHaveBeenCalledOnce();
+
+    queue.ingest(2, { type: "user", text: "later" });
+    const later = queue.checkpoint({
+      checkpointId: "later",
+      focus: "standard",
+      parentTurnId: 2,
+    });
+    await tick();
+    expect(harness.requests.map((request) => request.checkpointId)).toEqual([
+      "interrupted",
+      "later",
+    ]);
+    harness.pending[1]?.resolve(result(harness.requests[1]!));
+    await expect(later).resolves.toMatchObject({ checkpointId: "later" });
+    expect(queue.pendingCheckpoints).toBe(0);
+    await queue.dispose();
+  });
+
+  test("interrupting a queued checkpoint caller removes only its admitted waiter", async () => {
+    const harness = runtimeHarness();
+    const queue = await makeQueue(harness.runtime);
+    queue.ingest(1, { type: "user", text: "active" });
+    const active = queue.checkpoint({
+      checkpointId: "active",
+      focus: "standard",
+      parentTurnId: 1,
+    });
+    await tick();
+    const queuedCaller = Effect.runFork(
+      queue.checkpointEffect({
+        checkpointId: "queued",
+        focus: "standard",
+        parentTurnId: 1,
+      }),
+    );
+    await tick();
+
+    expect(queue.pendingCheckpoints).toBe(2);
+    await Effect.runPromise(Fiber.interrupt(queuedCaller));
+    expect(queue.pendingCheckpoints).toBe(1);
+    expect(harness.runtime.abort).not.toHaveBeenCalled();
+
+    harness.pending[0]?.resolve(result(harness.requests[0]!));
+    await active;
+    expect(queue.pendingCheckpoints).toBe(0);
+    await queue.dispose();
+  });
+
+  test("interrupting after atomic settlement does not decrement the next queued waiter", async () => {
+    const harness = runtimeHarness();
+    const queue = await makeQueue(harness.runtime);
+    const settlementReached = deferred<void>();
+    const releaseCompletion = deferred<void>();
+    const internals = queue as unknown as {
+      settleClaimedWaiterEffect: (
+        waiter: QueuedCheckpoint,
+        processedThrough?: number,
+      ) => Effect.Effect<boolean>;
+    };
+    const settleClaimedWaiterEffect = internals.settleClaimedWaiterEffect.bind(queue);
+    internals.settleClaimedWaiterEffect = (waiter, processedThrough) =>
+      settleClaimedWaiterEffect(waiter, processedThrough).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            settlementReached.resolve();
+          }),
+        ),
+        Effect.flatMap((settled) =>
+          Effect.promise(() => releaseCompletion.promise).pipe(Effect.as(settled)),
+        ),
+      );
+
+    queue.ingest(1, { type: "user", text: "first" });
+    const firstCaller = Effect.runFork(
+      queue.checkpointEffect({ checkpointId: "first", focus: "standard", parentTurnId: 1 }),
+    );
+    await tick();
+    const second = queue.checkpoint({
+      checkpointId: "second",
+      focus: "standard",
+      parentTurnId: 1,
+    });
+    await tick();
+    expect(queue.pendingCheckpoints).toBe(2);
+
+    harness.pending[0]?.resolve(result(harness.requests[0]!));
+    await settlementReached.promise;
+    expect(queue.hasActiveCheckpoint).toBe(false);
+    expect(queue.pendingCheckpoints).toBe(1);
+    await Effect.runPromise(Fiber.interrupt(firstCaller));
+    expect(queue.pendingCheckpoints).toBe(1);
+    expect(harness.runtime.abort).not.toHaveBeenCalled();
+
+    releaseCompletion.resolve();
+    await tick();
+    expect(harness.requests[1]?.checkpointId).toBe("second");
+    harness.pending[1]?.resolve(result(harness.requests[1]!));
+    await second;
+    expect(queue.pendingCheckpoints).toBe(0);
+    await queue.dispose();
   });
 
   test("coalesces and live-steers bounded deltas without committing them", async () => {
@@ -667,6 +824,45 @@ describe("AdvisorReviewQueue", () => {
     expect(harness.requests.map((request) => request.checkpointId)).toEqual(["first", "second"]);
     harness.pending[1]?.resolve(result(harness.requests[1]!));
     await second;
+    await queue.dispose();
+  });
+
+  test("interrupting active cancellation during abort still restores a reusable queue", async () => {
+    const harness = runtimeHarness();
+    const abortRelease = deferred<void>();
+    (harness.runtime.abort as ReturnType<typeof vi.fn>).mockImplementation(
+      () => abortRelease.promise,
+    );
+    const queue = await makeQueue(harness.runtime);
+    queue.ingest(1, { type: "user", text: "first" });
+    const first = queue
+      .checkpoint({ checkpointId: "first", focus: "standard", parentTurnId: 1 })
+      .catch((error: unknown) => error);
+    await tick();
+    const second = queue.checkpoint({
+      checkpointId: "second",
+      focus: "standard",
+      parentTurnId: 1,
+    });
+    await tick();
+
+    const cancellation = Effect.runFork(queue.cancelCheckpointEffect("first"));
+    await tick();
+    expect(harness.runtime.abort).toHaveBeenCalledOnce();
+    const interrupting = Effect.runFork(Fiber.interrupt(cancellation));
+    await tick();
+    expect(harness.requests.map((request) => request.checkpointId)).toEqual(["first"]);
+
+    abortRelease.resolve();
+    await Effect.runPromise(Fiber.join(interrupting));
+    expect(await first).toBeInstanceOf(AdvisorQueueCancelledError);
+    expect(queue.pendingCheckpoints).toBe(1);
+    await tick();
+    expect(harness.requests.map((request) => request.checkpointId)).toEqual(["first", "second"]);
+    expect(queue.hasActiveCheckpoint).toBe(true);
+    harness.pending[1]?.resolve(result(harness.requests[1]!));
+    await second;
+    expect(queue.pendingCheckpoints).toBe(0);
     await queue.dispose();
   });
 

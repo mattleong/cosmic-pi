@@ -12,14 +12,17 @@ import {
   previewScheduleEffect,
   scheduleCodePreview,
 } from "../session-capability";
+import { scheduleProjectedCodePreview } from "../session-projection";
 
 test("no background work starts before acquisition or after shutdown", () => {
   clearCodePreviewSessionCapability();
   let calls = 0;
   const cancelDeferred = deferCodePreview(() => calls++);
   const cancelSchedule = scheduleCodePreview(1, () => calls++);
+  const cancelProjectedSchedule = scheduleProjectedCodePreview(1, () => calls++);
   cancelDeferred();
   cancelSchedule();
+  cancelProjectedSchedule();
   assert.equal(calls, 0);
 });
 
@@ -33,6 +36,20 @@ describe("preview runtime clock", () => {
       yield* Fiber.interrupt(fiber);
       yield* TestClock.adjust("1 second");
       assert.equal(ticks, 5);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a throwing host callback cannot terminate the repeating timing fiber", () =>
+    Effect.gen(function* () {
+      let ticks = 0;
+      const fiber = yield* previewScheduleEffect(100, () => {
+        ticks++;
+        if (ticks === 1) throw new Error("host invalidation failed");
+      }).pipe(Effect.forkScoped);
+      yield* TestClock.adjust("500 millis");
+      assert.equal(ticks, 5);
+      assert.equal(fiber.pollUnsafe(), undefined);
+      yield* Fiber.interrupt(fiber);
     }).pipe(Effect.scoped),
   );
 });

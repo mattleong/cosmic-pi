@@ -38,9 +38,11 @@ export const makeSynchronousIngress = <A, E, R, FailureR = never>(
   options: SynchronousIngressOptions<A, E, R, FailureR>,
 ): Effect.Effect<SynchronousIngress<A>, SynchronousIngressError, Scope.Scope | R | FailureR> =>
   Effect.gen(function* () {
-    const capacity = Math.floor(options.capacity);
-    if (!(capacity > 0)) {
-      return yield* new SynchronousIngressError({ message: "Ingress capacity must be positive." });
+    const capacity = options.capacity;
+    if (!(Number.isSafeInteger(capacity) && capacity > 0)) {
+      return yield* new SynchronousIngressError({
+        message: "Ingress capacity must be a positive safe integer.",
+      });
     }
 
     const queue = yield* Queue.dropping<A>(capacity);
@@ -49,7 +51,7 @@ export const makeSynchronousIngress = <A, E, R, FailureR = never>(
     let coalesced: { readonly value: A } | undefined;
 
     const handle = (value: A) =>
-      options.handle(value).pipe(
+      Effect.suspend(() => options.handle(value)).pipe(
         Effect.catch((error) => options.onFailure?.(error) ?? Effect.void),
         Effect.catchCause(() => Effect.void),
       );
@@ -81,6 +83,10 @@ export const makeSynchronousIngress = <A, E, R, FailureR = never>(
 
     const offer = (value: A): SynchronousIngressOfferResult => {
       if (closed) return "closed";
+      if (options.overflow === "coalesce-latest" && coalesced !== undefined) {
+        coalesced = { value };
+        return "coalesced";
+      }
       if (offerQueue(value)) return "accepted";
       if (options.overflow === "drop") return "dropped";
       coalesced = { value };

@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Tracer from "effect/Tracer";
 import {
   AgentDirectory,
@@ -17,14 +18,15 @@ import {
   makeSubscriptionRefresh,
   type RefreshRequest,
 } from "pi-cosmic-core";
-import { ModelRegistryAuth } from "./boundary/model-registry-auth.ts";
+import { ModelRegistryAuth, isUsingOAuthAtHostBoundary } from "./boundary/model-registry-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import { readXaiAuth } from "./auth.ts";
 import {
-  applySettingToRawConfig,
+  decodeSettingUpdate,
   readRawConfig,
+  resolveCommittedConfig,
   resolveConfig,
-  writeConfig,
+  updateConfig,
   type InvalidSettingError,
   type ResolvedConfig,
   type XaiConfigError,
@@ -76,14 +78,11 @@ export function resetProjection(projection: MutableRef.MutableRef<XaiProjection>
 export function isXaiSubscriptionModel(
   ctx: ExtensionContext,
   cfg: ResolvedConfig,
-  isUsingOAuth?: boolean,
+  isUsingOAuth = false,
 ): boolean {
   const model = ctx.model;
   if (!model || model.provider !== "xai") return false;
-  return (
-    !cfg.usage.showOnlyOnSubscriptionModels ||
-    (isUsingOAuth ?? ctx.modelRegistry.isUsingOAuth(model))
-  );
+  return !cfg.usage.showOnlyOnSubscriptionModels || isUsingOAuth;
 }
 
 export function synchronizeProjectionContext(
@@ -92,7 +91,12 @@ export function synchronizeProjectionContext(
   options: { readonly clearUsage?: boolean } = {},
 ): void {
   const state = MutableRef.get(projection);
-  const eligible = state.config ? isXaiSubscriptionModel(ctx, state.config) : false;
+  const model = ctx.model;
+  const isUsingOAuth =
+    model?.provider === "xai" && state.config?.usage.showOnlyOnSubscriptionModels
+      ? isUsingOAuthAtHostBoundary(ctx.modelRegistry, model)
+      : false;
+  const eligible = state.config ? isXaiSubscriptionModel(ctx, state.config, isUsingOAuth) : false;
   const statusText = eligible
     ? "Usage unavailable."
     : "Usage hidden: current model is not an xAI subscription model.";
@@ -117,12 +121,11 @@ export function synchronizeProjectionContext(
 }
 
 export function visibleStatusLine(
-  ctx: ExtensionContext,
-  cfg: ResolvedConfig,
   projection: MutableRef.MutableRef<XaiProjection>,
 ): string | undefined {
-  if (!cfg.usage.enabled || !isXaiSubscriptionModel(ctx, cfg)) return undefined;
-  return MutableRef.get(projection).statusLine;
+  const state = MutableRef.get(projection);
+  if (!state.config?.usage.enabled || !state.eligible) return undefined;
+  return state.statusLine;
 }
 
 export class XaiBoundaryError extends Schema.TaggedErrorClass<XaiBoundaryError>()(
@@ -199,6 +202,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
           (current) => current,
           (published) => MutableRef.set(projection, published),
         );
+        const settingUpdates = yield* Semaphore.make(1);
         const updateState = (f: (current: XaiProjection) => XaiProjection) =>
           state
             .transition((current) => {
@@ -223,29 +227,52 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                 message: "Unable to notify Better xAI status.",
               }),
           }).pipe(Effect.catch(() => Effect.void));
+        const subscriptionEligibility = (ctx: ExtensionContext, cfg: ResolvedConfig) => {
+          const model = ctx.model;
+          if (!model || model.provider !== "xai") return Effect.succeed(false);
+          if (!cfg.usage.showOnlyOnSubscriptionModels) return Effect.succeed(true);
+          return registryAuth
+            .isUsingOAuth(model)
+            .pipe(
+              Effect.catch(() =>
+                Effect.logWarning(
+                  "Better xAI authentication recovery: oauth_status_unavailable.",
+                ).pipe(Effect.as(false)),
+              ),
+            );
+        };
         const synchronize = (clearUsage = false) =>
-          updateState((current) => {
-            const ctx = MutableRef.get(context);
-            const eligible = current.config ? isXaiSubscriptionModel(ctx, current.config) : false;
-            const statusText = eligible
-              ? "Usage unavailable."
-              : "Usage hidden: current model is not an xAI subscription model.";
-            return {
-              ...current,
-              eligible,
-              ...(clearUsage
-                ? {
-                    snapshot: undefined,
-                    statusLine: undefined,
-                    error: undefined,
-                    updatedAt: undefined,
-                    statusText,
-                  }
-                : !eligible
-                  ? { statusLine: undefined, error: undefined, statusText }
-                  : {}),
-            };
-          }).pipe(Effect.asVoid);
+          state
+            .transition((current) => {
+              const ctx = MutableRef.get(context);
+              const eligible = current.config
+                ? subscriptionEligibility(ctx, current.config)
+                : Effect.succeed(false);
+              return eligible.pipe(
+                Effect.map((isEligible) => {
+                  const statusText = isEligible
+                    ? "Usage unavailable."
+                    : "Usage hidden: current model is not an xAI subscription model.";
+                  const next = {
+                    ...current,
+                    eligible: isEligible,
+                    ...(clearUsage
+                      ? {
+                          snapshot: undefined,
+                          statusLine: undefined,
+                          error: undefined,
+                          updatedAt: undefined,
+                          statusText,
+                        }
+                      : !isEligible
+                        ? { statusLine: undefined, error: undefined, statusText }
+                        : {}),
+                  };
+                  return [undefined, next] as const;
+                }),
+              );
+            })
+            .pipe(Effect.orDie, Effect.asVoid);
         yield* synchronize(true);
 
         const key = Effect.gen(function* () {
@@ -277,7 +304,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
               const now = yield* Clock.currentTimeMillis;
               if (!cfg.usage.enabled)
                 return { _tag: "Disabled", notify: request.notify === true } as const;
-              if (!isXaiSubscriptionModel(ctx, cfg))
+              if (!(yield* subscriptionEligibility(ctx, cfg)))
                 return { _tag: "Hidden", notify: request.notify === true } as const;
               if (
                 !request.force &&
@@ -286,12 +313,6 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                 now - current.lastFetchAt < cfg.usage.refreshIntervalMs
               )
                 return { _tag: "Skipped" } as const;
-              yield* updateState((latest) => ({
-                ...latest,
-                eligible: true,
-                error: undefined,
-                lastFetchAt: now,
-              }));
               const result = yield* requestXaiUsage(authPath).pipe(
                 Effect.timeout("10 seconds"),
                 Effect.result,
@@ -357,19 +378,23 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                 if (value._tag === "Failure")
                   return {
                     ...current,
+                    eligible: true,
                     snapshot: undefined,
                     statusLine: undefined,
                     error: value.message,
                     statusText: `Usage unavailable: ${value.message}`,
+                    lastFetchAt: value.fetchedAt,
                   };
                 if (value._tag === "Missing") {
                   const message = `Missing xAI OAuth credentials in ${authPath}. Run /login xai.`;
                   return {
                     ...current,
+                    eligible: true,
                     snapshot: undefined,
                     statusLine: undefined,
                     error: message,
                     statusText: `Usage unavailable: ${message}`,
+                    lastFetchAt: value.fetchedAt,
                     authFound: false,
                     teamId: undefined,
                   };
@@ -382,6 +407,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                   statusText: formatUsageDetails(value.snapshot, value.fetchedAt),
                   error: undefined,
                   updatedAt: value.fetchedAt,
+                  lastFetchAt: value.fetchedAt,
                   authFound: value.authFound,
                   teamId: value.teamId,
                 };
@@ -396,18 +422,35 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
           provideDependencies(refreshEngine.request(request));
         const contextChanged = (clearUsage = false) =>
           synchronize(clearUsage).pipe(Effect.andThen(refreshEngine.invalidate), Effect.asVoid);
+        const resolveSettingTarget = Effect.fn("XaiUsageService.resolveSettingTarget")(
+          function* () {
+            const current = yield* resolveConfig(cwd, agentDir, projectTrusted);
+            const globalFallback =
+              current.configPath === current.projectConfigPath && current.globalConfigExists
+                ? yield* readRawConfig(current.globalConfigPath).pipe(
+                    Effect.provideService(JsonDocumentStore, documents),
+                  )
+                : undefined;
+            return { current, globalFallback } as const;
+          },
+        );
         const updateSettingWithRequirements = Effect.fn("XaiUsageService.updateSetting")(function* (
           id: string,
           value: string,
         ) {
-          const current = yield* state.getState;
-          if (!current.config) return;
-          const raw = yield* readRawConfig(current.config.configPath);
-          const nextRaw = yield* applySettingToRawConfig(raw, id, value);
-          yield* writeConfig(current.config.configPath, nextRaw);
-          const nextConfig = yield* resolveConfig(cwd, agentDir, projectTrusted);
-          yield* updateState((latest) => ({ ...latest, config: nextConfig }));
-          yield* synchronize(true);
+          const update = yield* decodeSettingUpdate(id, value);
+          yield* settingUpdates.withPermit(
+            Effect.gen(function* () {
+              if (!(yield* state.getState).config) return;
+              const { current: currentConfig, globalFallback } = yield* resolveSettingTarget();
+              yield* updateConfig(currentConfig.configPath, update, (committed) => {
+                const nextConfig = resolveCommittedConfig(currentConfig, committed, globalFallback);
+                return updateState((latest) => ({ ...latest, config: nextConfig })).pipe(
+                  Effect.andThen(synchronize(true)),
+                );
+              }).pipe(Effect.provideService(JsonDocumentStore, documents));
+            }),
+          );
           yield* refreshEngine.invalidate;
           yield* refresh({ force: true });
         });
@@ -455,7 +498,7 @@ export function formatDebug(
   return [
     `Usage enabled: ${cfg?.usage.enabled ?? false}`,
     `Current model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none"}`,
-    `Current model eligible: ${cfg ? isXaiSubscriptionModel(ctx, cfg) : false}`,
+    `Current model eligible: ${state.eligible}`,
     `Requires subscription model: ${cfg?.usage.showOnlyOnSubscriptionModels ?? true}`,
     `Auth: ${state.authFound ? "found" : "missing"}`,
     `Team ID: ${maskIdentifier(state.teamId) ?? "none"}`,

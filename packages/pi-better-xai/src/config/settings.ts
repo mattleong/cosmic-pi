@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { isRecord } from "../utils.ts";
+import type { JsonObject } from "pi-cosmic-core";
 import type { ResolvedConfig } from "./schema.ts";
 import { FOOTER_MODES, FooterModeSchema } from "./schema.ts";
 
@@ -96,19 +96,33 @@ export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = 
 const SETTINGS_OPTION_BY_ID = new Map(
   SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
 );
+const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
+const isJsonObject = (value: unknown): value is JsonObject => Schema.is(JsonObjectSchema)(value);
 
-export const applySettingToRawConfig = Effect.fn("XaiConfig.applySetting")(function* (
-  current: Record<string, unknown>,
+export type RawConfigUpdate = (current: JsonObject) => JsonObject;
+
+export const decodeSettingUpdate = Effect.fn("XaiConfig.decodeSettingUpdate")(function* (
   id: string,
   rawValue: string,
 ) {
-  const next: Record<string, unknown> = { ...current };
   const descriptor = SETTINGS_OPTION_BY_ID.get(id);
-  if (!descriptor) return next;
+  if (!descriptor) return (current: JsonObject) => ({ ...current });
   const parsedValue = yield* descriptor.decode(rawValue);
-  const currentSection = next[descriptor.section];
-  const section = isRecord(currentSection) ? { ...currentSection } : {};
-  section[descriptor.key] = parsedValue;
-  next[descriptor.section] = section;
-  return next;
+  return ((current: JsonObject) => {
+    const next: JsonObject = { ...current };
+    const currentSection = next[descriptor.section];
+    const section: JsonObject = isJsonObject(currentSection) ? { ...currentSection } : {};
+    section[descriptor.key] = parsedValue;
+    next[descriptor.section] = section;
+    return next;
+  }) satisfies RawConfigUpdate;
+});
+
+export const applySettingToRawConfig = Effect.fn("XaiConfig.applySetting")(function* (
+  current: JsonObject,
+  id: string,
+  rawValue: string,
+) {
+  const update = yield* decodeSettingUpdate(id, rawValue);
+  return update(current);
 });

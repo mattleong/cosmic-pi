@@ -34,7 +34,9 @@ export {
   type DecodedDocument,
 } from "./src/platform/schema-document.ts";
 export {
+  type AtomicJsonDocumentStoreShape,
   JsonDocumentStore,
+  type JsonDocumentModification,
   type JsonDocumentStoreShape,
   type JsonObject,
 } from "./src/platform/json-document.ts";

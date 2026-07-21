@@ -11,7 +11,7 @@ export interface RefreshRequest {
 
 interface State<Request, E> {
   readonly active: Deferred.Deferred<void, E> | undefined;
-  readonly queued: Request | undefined;
+  readonly queued: { readonly value: Request } | undefined;
   readonly acceptingFollowUp: boolean;
 }
 
@@ -45,7 +45,10 @@ export const makeRefreshCoordinatorWith = <Request, E = never>(
             const current = MutableRef.get(state);
             if (current.active) {
               if (current.acceptingFollowUp) {
-                MutableRef.set(state, { ...current, queued: merge(current.queued, request) });
+                MutableRef.set(state, {
+                  ...current,
+                  queued: { value: merge(current.queued?.value, request) },
+                });
               }
               return { owner: false as const, done: current.active };
             }
@@ -69,7 +72,7 @@ export const makeRefreshCoordinatorWith = <Request, E = never>(
               return current.queued;
             }),
           );
-          if (followUp) yield* operation(followUp);
+          if (followUp !== undefined) yield* operation(followUp.value);
         });
         return yield* Effect.uninterruptibleMask((restore) =>
           restore(work).pipe(

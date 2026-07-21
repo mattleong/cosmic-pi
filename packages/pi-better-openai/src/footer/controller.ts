@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedConfig } from "../config.ts";
+import { isModelUsingOAuth } from "../boundary/model-registry.ts";
 import { isFastActive, statusSegment, type FastSnapshot } from "../fast-controller.ts";
 import { abbreviateHomePath } from "../footer-layout.ts";
 import { formatTokens, sanitizeStatusText, truncateToWidth, visibleWidth } from "../format.ts";
@@ -10,6 +11,7 @@ import { visibleStatusLine, type OpenAIProjection } from "../usage-controller.ts
 export interface FooterController {
   readonly installed: boolean;
   update(ctx: ExtensionContext): void;
+  resetTotals(): void;
   refreshTotals(ctx: ExtensionContext): void;
   addAssistantUsage(usage: {
     input: number;
@@ -33,6 +35,13 @@ export function createFooterController(deps: {
   let footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   let footerInstalled = false;
   let requestFooterRender: (() => void) | undefined;
+  type FooterInstallToken = {
+    disposed: boolean;
+    requestRender: (() => void) | undefined;
+    readonly cleanups: Set<() => void>;
+  };
+  let activeFooterToken: FooterInstallToken | undefined;
+  let clearingFooterToken: FooterInstallToken | undefined;
   let statusInstalled = false;
   let contextUsageCached = false;
   let cachedContextUsage: ReturnType<ExtensionContext["getContextUsage"]>;
@@ -43,15 +52,24 @@ export function createFooterController(deps: {
   let cachedSessionName: string | undefined;
   let currentContext: ExtensionContext | undefined;
 
-  function refreshFooterTotals(ctx: ExtensionContext): void {
+  function resetFooterTotals(): void {
     footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-    for (const entry of ctx.sessionManager.getEntries()) {
-      if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-      footerTotals.input += entry.message.usage.input;
-      footerTotals.output += entry.message.usage.output;
-      footerTotals.cacheRead += entry.message.usage.cacheRead;
-      footerTotals.cacheWrite += entry.message.usage.cacheWrite;
-      footerTotals.cost += entry.message.usage.cost.total;
+  }
+
+  function refreshFooterTotals(ctx: ExtensionContext): void {
+    try {
+      const next = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+      for (const entry of ctx.sessionManager.getEntries()) {
+        if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+        next.input += entry.message.usage.input;
+        next.output += entry.message.usage.output;
+        next.cacheRead += entry.message.usage.cacheRead;
+        next.cacheWrite += entry.message.usage.cacheWrite;
+        next.cost += entry.message.usage.cost.total;
+      }
+      footerTotals = next;
+    } catch {
+      // Session data is host-owned. Keep the last complete snapshot when it is unavailable.
     }
   }
 
@@ -66,7 +84,15 @@ export function createFooterController(deps: {
     const leafId = ctx.sessionManager.getLeafId();
     const model = ctx.model;
     if (!contextUsageCached || leafId !== cachedContextLeafId || model !== cachedContextModel) {
-      cachedContextUsage = ctx.getContextUsage();
+      const next = ctx.getContextUsage();
+      const materialized = next
+        ? {
+            ...next,
+            contextWindow: next.contextWindow,
+            percent: next.percent,
+          }
+        : undefined;
+      cachedContextUsage = materialized;
       contextUsageCached = true;
       cachedContextLeafId = leafId;
       cachedContextModel = model;
@@ -77,7 +103,8 @@ export function createFooterController(deps: {
   function sessionName(ctx: ExtensionContext): string | undefined {
     const leafId = ctx.sessionManager.getLeafId();
     if (!sessionNameCached || leafId !== cachedSessionNameLeafId) {
-      cachedSessionName = ctx.sessionManager.getSessionName();
+      const next = ctx.sessionManager.getSessionName();
+      cachedSessionName = next;
       cachedSessionNameLeafId = leafId;
       sessionNameCached = true;
     }
@@ -92,21 +119,68 @@ export function createFooterController(deps: {
 
   function installFooter(ctx: ExtensionContext): void {
     if (footerInstalled) {
-      requestFooterRender?.();
-      return;
+      if (!activeFooterToken?.disposed) {
+        try {
+          requestFooterRender?.();
+        } catch {
+          // Rendering is a host callback; a failed request does not relinquish ownership.
+        }
+        return;
+      }
+      footerInstalled = false;
+      activeFooterToken = undefined;
+      requestFooterRender = undefined;
     }
-    footerInstalled = true;
-    ctx.ui.setFooter((tui, theme, footerData) => {
-      requestFooterRender = () => tui.requestRender();
-      const unsubscribe = footerData.onBranchChange?.(requestFooterRender);
-      return {
-        dispose: () => {
-          unsubscribe?.();
-          footerInstalled = false;
-          requestFooterRender = undefined;
-        },
-        invalidate() {},
-        render(width: number): string[] {
+
+    const token: FooterInstallToken = {
+      disposed: false,
+      requestRender: undefined,
+      cleanups: new Set(),
+    };
+    let accepted = false;
+    const pendingActivations = new Set<() => void>();
+
+    try {
+      ctx.ui.setFooter((tui, theme, footerData) => {
+        let componentDisposed = false;
+        let unsubscribe: (() => void) | undefined;
+        const safeRequestRender = () => {
+          try {
+            tui.requestRender();
+          } catch {
+            // TUI render requests are advisory and must not escape the footer callback.
+          }
+        };
+        const cleanup = () => {
+          const cleanupBranch = unsubscribe;
+          unsubscribe = undefined;
+          token.cleanups.delete(cleanup);
+          if (!cleanupBranch) return;
+          try {
+            cleanupBranch();
+          } catch {
+            // Branch subscriptions are host-owned; disposal remains total.
+          }
+        };
+        token.cleanups.add(cleanup);
+        const activate = () => {
+          pendingActivations.delete(activate);
+          if (componentDisposed || token.disposed || !accepted || activeFooterToken !== token)
+            return;
+          token.requestRender = safeRequestRender;
+          requestFooterRender = safeRequestRender;
+          try {
+            const cleanupBranch = footerData.onBranchChange?.(safeRequestRender);
+            if (typeof cleanupBranch === "function") unsubscribe = cleanupBranch;
+          } catch {
+            // A branch subscription failure does not invalidate an otherwise usable footer.
+          }
+        };
+        if (accepted) activate();
+        else if (!token.disposed) pendingActivations.add(activate);
+
+        const renderDetailed = (width: number): string[] => {
+          if (!Number.isFinite(width) || width <= 0) return [];
           const renderContext = currentContext ?? ctx;
           const parts: string[] = [];
           if (footerTotals.input) parts.push(`↑${formatTokens(footerTotals.input)}`);
@@ -115,7 +189,7 @@ export function createFooterController(deps: {
           if (footerTotals.cacheWrite) parts.push(`W${formatTokens(footerTotals.cacheWrite)}`);
 
           const usingSubscription = renderContext.model
-            ? renderContext.modelRegistry.isUsingOAuth(renderContext.model)
+            ? isModelUsingOAuth(renderContext, renderContext.model)
             : false;
           if (footerTotals.cost || usingSubscription)
             parts.push(`$${footerTotals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
@@ -209,53 +283,113 @@ export function createFooterController(deps: {
             textLines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
           }
           return textLines;
-        },
-      };
-    });
+        };
+
+        return {
+          dispose: () => {
+            if (componentDisposed) return;
+            componentDisposed = true;
+            pendingActivations.delete(activate);
+            cleanup();
+            token.disposed = true;
+            if (activeFooterToken !== token || clearingFooterToken === token) return;
+            activeFooterToken = undefined;
+            footerInstalled = false;
+            requestFooterRender = undefined;
+          },
+          invalidate() {},
+          render(width: number): string[] {
+            if (componentDisposed || token.disposed) return [];
+            try {
+              return renderDetailed(width);
+            } catch {
+              return [];
+            }
+          },
+        };
+      });
+    } catch {
+      token.disposed = true;
+      pendingActivations.clear();
+      for (const cleanup of token.cleanups) cleanup();
+      return;
+    }
+
+    accepted = true;
+    if (token.disposed) return;
+    activeFooterToken = token;
+    footerInstalled = true;
+    for (const activate of pendingActivations) activate();
   }
 
   function clearFooter(ctx: ExtensionContext): void {
     if (!footerInstalled) return;
-    ctx.ui.setFooter(undefined);
-    footerInstalled = false;
-    requestFooterRender = undefined;
+    const token = activeFooterToken;
+    clearingFooterToken = token;
+    try {
+      ctx.ui.setFooter(undefined);
+    } catch {
+      if (token?.disposed && activeFooterToken === token) {
+        activeFooterToken = undefined;
+        footerInstalled = false;
+        requestFooterRender = undefined;
+      }
+      return;
+    } finally {
+      clearingFooterToken = undefined;
+    }
+    if (token && activeFooterToken === token) {
+      token.disposed = true;
+      for (const cleanup of token.cleanups) cleanup();
+      activeFooterToken = undefined;
+      footerInstalled = false;
+      requestFooterRender = undefined;
+    }
   }
 
   function setStatus(ctx: ExtensionContext, text: string | undefined): void {
     if (!text && !statusInstalled) return;
-    ctx.ui.setStatus(STATUS_KEY, text);
-    statusInstalled = text !== undefined;
+    try {
+      ctx.ui.setStatus(STATUS_KEY, text);
+      statusInstalled = text !== undefined;
+    } catch {
+      // Retain the prior ownership state so a later update retries the mutation.
+    }
   }
 
   function updateFooter(ctx: ExtensionContext): void {
     currentContext = ctx;
-    const cfg = config(ctx);
-    if (!hasTerminalUI(ctx)) {
+    try {
+      const cfg = config(ctx);
+      if (!hasTerminalUI(ctx)) {
+        if (cfg.footer.mode === "off") {
+          setStatus(ctx, undefined);
+          return;
+        }
+        const fast = statusSegment(ctx, MutableRef.get(fastProjection));
+        const usage = visibleStatusLine(ctx, cfg, projection);
+        setStatus(ctx, [fast, usage].filter(Boolean).join(" | ") || undefined);
+        return;
+      }
+
+      if (cfg.footer.mode === "replace") {
+        setStatus(ctx, undefined);
+        installFooter(ctx);
+        return;
+      }
+
+      clearFooter(ctx);
       if (cfg.footer.mode === "off") {
         setStatus(ctx, undefined);
         return;
       }
+
       const fast = statusSegment(ctx, MutableRef.get(fastProjection));
       const usage = visibleStatusLine(ctx, cfg, projection);
       setStatus(ctx, [fast, usage].filter(Boolean).join(" | ") || undefined);
-      return;
+    } catch {
+      // Footer/status updates are synchronous host callbacks and must remain total.
     }
-
-    if (cfg.footer.mode === "replace") {
-      setStatus(ctx, undefined);
-      installFooter(ctx);
-      return;
-    }
-
-    clearFooter(ctx);
-    if (cfg.footer.mode === "off") {
-      setStatus(ctx, undefined);
-      return;
-    }
-
-    const fast = statusSegment(ctx, MutableRef.get(fastProjection));
-    const usage = visibleStatusLine(ctx, cfg, projection);
-    setStatus(ctx, [fast, usage].filter(Boolean).join(" | ") || undefined);
   }
 
   function addAssistantUsage(usage: {
@@ -265,11 +399,17 @@ export function createFooterController(deps: {
     cacheWrite: number;
     cost: { total: number };
   }): void {
-    footerTotals.input += usage.input;
-    footerTotals.output += usage.output;
-    footerTotals.cacheRead += usage.cacheRead;
-    footerTotals.cacheWrite += usage.cacheWrite;
-    footerTotals.cost += usage.cost.total;
+    try {
+      footerTotals = {
+        input: footerTotals.input + usage.input,
+        output: footerTotals.output + usage.output,
+        cacheRead: footerTotals.cacheRead + usage.cacheRead,
+        cacheWrite: footerTotals.cacheWrite + usage.cacheWrite,
+        cost: footerTotals.cost + usage.cost.total,
+      };
+    } catch {
+      // Preserve the last complete totals when an event payload is hostile.
+    }
   }
 
   return {
@@ -277,6 +417,7 @@ export function createFooterController(deps: {
       return footerInstalled;
     },
     update: updateFooter,
+    resetTotals: resetFooterTotals,
     refreshTotals: refreshFooterTotals,
     addAssistantUsage,
     invalidateContextUsage,

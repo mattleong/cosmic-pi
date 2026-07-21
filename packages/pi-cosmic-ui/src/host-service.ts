@@ -9,6 +9,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot, makeFrozenProjection, makeSubscriptionRefresh } from "pi-cosmic-core";
+import { HostCallbackBoundary } from "./boundary/host-callback.ts";
 import type { ResolvedCosmicUiConfig } from "./config/schema.ts";
 import { CosmicUiConfigRepository } from "./config/repository.ts";
 import { CosmicUiConfigError } from "./config/store.ts";
@@ -103,6 +104,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
   static layer(options: {
     readonly context: MutableRef.MutableRef<ExtensionContext>;
     readonly cwd: string;
+    readonly initialTotals?: FooterTotals;
     readonly projection: MutableRef.MutableRef<CosmicUiProjection>;
     readonly onChange: () => void;
     readonly startPolling?: boolean;
@@ -113,6 +115,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
       Effect.gen(function* () {
         const repository = yield* CosmicUiConfigRepository;
         const probes = yield* RepositoryProbe;
+        const callbacks = yield* HostCallbackBoundary;
         const settingsLock = yield* Semaphore.make(1);
         const home = yield* Config.option(Config.string("HOME"));
         const projectTrusted = options.projectTrusted ?? true;
@@ -120,7 +123,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
         const state = yield* makeFrozenProjection<CosmicUiProjection, CosmicUiProjection>(
           {
             ...initialProjection(),
-            totals: MutableRef.get(options.projection).totals,
+            totals: options.initialTotals ?? MutableRef.get(options.projection).totals,
             config,
             homeDirectory: Option.getOrUndefined(home),
           },
@@ -139,7 +142,19 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
           catch: () =>
             new CosmicProbeError({ operation: "render", message: "Unable to render Cosmic UI." }),
         }).pipe(Effect.catch(() => Effect.void));
-        const currentCwd = () => MutableRef.get(options.context).sessionManager.getCwd();
+        let lastKnownCwd = options.cwd;
+        const currentCwd = () =>
+          callbacks.invoke(
+            "host-query",
+            () => {
+              const cwd = MutableRef.get(options.context).sessionManager.getCwd();
+              lastKnownCwd = cwd;
+              return cwd;
+            },
+            lastKnownCwd,
+          );
+        const currentMode = (ctx: ExtensionContext) =>
+          callbacks.invoke<ExtensionContext["mode"]>("host-query", () => ctx.mode, "rpc");
         const currentKey = state.getState.pipe(
           Effect.map((current) => `${currentCwd()}\u0000${current.probeRevision}`),
         );
@@ -157,7 +172,8 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
             Effect.gen(function* () {
               const ctx = MutableRef.get(options.context);
               const revision = (yield* state.getState).probeRevision;
-              if (ctx.mode !== "tui") return { cwd: currentCwd(), revision, status: undefined };
+              if (currentMode(ctx) !== "tui")
+                return { cwd: currentCwd(), revision, status: undefined };
               const cwd = currentCwd();
               const result = yield* probes
                 .git(
@@ -188,7 +204,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
           fetch: (request) =>
             Effect.gen(function* () {
               const ctx = MutableRef.get(options.context);
-              if (ctx.mode !== "tui") return undefined;
+              if (currentMode(ctx) !== "tui") return undefined;
               const current = yield* state.getState;
               const now = yield* Clock.currentTimeMillis;
               if (
@@ -260,19 +276,23 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
         const updateFooter = (patch: Partial<ResolvedCosmicUiConfig["footer"]>) =>
           settingsLock.withPermits(1)(
             Effect.gen(function* () {
-              const current = yield* requireConfig;
-              return yield* repository
-                .updateFooter(options.cwd, current, patch, projectTrusted)
-                .pipe(Effect.flatMap(installConfig));
+              yield* requireConfig;
+              return yield* repository.updateFooter(options.cwd, patch, projectTrusted, (next) =>
+                installConfig(next).pipe(Effect.asVoid),
+              );
             }),
           );
         const setVisibility = (id: string, visible: boolean) =>
           settingsLock.withPermits(1)(
             Effect.gen(function* () {
-              const current = yield* requireConfig;
-              return yield* repository
-                .setVisibility(options.cwd, current, id, visible, projectTrusted)
-                .pipe(Effect.flatMap(installConfig));
+              yield* requireConfig;
+              return yield* repository.setVisibility(
+                options.cwd,
+                id,
+                visible,
+                projectTrusted,
+                (next) => installConfig(next).pipe(Effect.asVoid),
+              );
             }),
           );
         if (options.startPolling !== false) {

@@ -43,7 +43,10 @@ export interface FooterRegistryServiceShape {
   readonly upsert: (owner: string, contribution: CosmicFooterContribution) => Effect.Effect<void>;
   readonly remove: (owner: string, id?: string) => Effect.Effect<void>;
   readonly invalidate: (owner?: string, id?: string) => Effect.Effect<void>;
-  readonly setRenderRequest: (requestRender: (() => void) | undefined) => Effect.Effect<void>;
+  readonly setRenderRequest: (
+    requestRender: (() => void) | undefined,
+    expectedCurrent?: () => void,
+  ) => Effect.Effect<void>;
   readonly clear: Effect.Effect<void>;
   readonly snapshot: () => FooterRegistrySnapshot;
   readonly requestRenderNow: () => void;
@@ -67,10 +70,10 @@ export class FooterRegistryService extends Context.Service<
       this,
       Effect.gen(function* () {
         const callbacks = yield* HostCallbackBoundary;
-        const parentScope = yield* Effect.scope;
         const state = yield* SynchronizedRef.make<RegistryState>({ entries: [] });
         const resources = new Map<string, Map<string, SurfaceResource>>();
         let requestRender: (() => void) | undefined;
+        let renderSuppressionDepth = 0;
         let published = emptyFooterRegistrySnapshot();
 
         const publish = (next: RegistryState) => {
@@ -79,7 +82,16 @@ export class FooterRegistryService extends Context.Service<
           options.publish(published);
         };
         const renderNow = () => {
+          if (renderSuppressionDepth > 0) return;
           if (requestRender) callbacks.invoke("request-render", requestRender, undefined);
+        };
+        const withRenderRequestsSuppressed = (action: () => void) => {
+          renderSuppressionDepth++;
+          try {
+            action();
+          } finally {
+            renderSuppressionDepth--;
+          }
         };
         const detach = (resource: SurfaceResource) => {
           if (!resource.attached) return;
@@ -103,10 +115,9 @@ export class FooterRegistryService extends Context.Service<
         };
         const acquire = (contribution: CosmicFooterSurfaceContribution) =>
           Effect.gen(function* () {
-            const scope = yield* Scope.fork(parentScope);
+            const scope = yield* Scope.make();
             const resource: SurfaceResource = { contribution, scope, attached: false };
-            yield* Scope.addFinalizer(
-              scope,
+            return yield* Effect.acquireRelease(Effect.succeed(resource), () =>
               Effect.sync(() => {
                 detach(resource);
                 if (contribution.dispose)
@@ -116,9 +127,7 @@ export class FooterRegistryService extends Context.Service<
                     undefined,
                   );
               }),
-            );
-            attach(resource);
-            return resource;
+            ).pipe(Effect.provideService(Scope.Scope, scope));
           });
         const resourceValues = () => [...resources.values()].flatMap((byId) => [...byId.values()]);
         const setResource = (owner: string, id: string, resource: SurfaceResource) => {
@@ -126,129 +135,187 @@ export class FooterRegistryService extends Context.Service<
           byId.set(id, resource);
           resources.set(owner, byId);
         };
-        const releaseResource = (owner: string, id: string) => {
+        const takeResource = (owner: string, id: string) => {
           const byId = resources.get(owner);
           const resource = byId?.get(id);
-          if (!resource) return Effect.void;
+          if (!resource) return undefined;
           byId?.delete(id);
           if (byId?.size === 0) resources.delete(owner);
-          return Scope.close(resource.scope, Exit.void);
+          return resource;
         };
+        const closeResource = (resource: SurfaceResource | undefined) =>
+          resource ? Scope.close(resource.scope, Exit.void) : Effect.void;
+        const closeResources = (values: readonly SurfaceResource[]) =>
+          Effect.forEach(values, closeResource, { discard: true });
         const serialized = <A>(
           operation: (current: RegistryState) => Effect.Effect<readonly [A, RegistryState]>,
+          lifecycle: {
+            readonly beforePublish?: (result: A, next: RegistryState) => Effect.Effect<void>;
+            readonly afterPublish?: (result: A, next: RegistryState) => Effect.Effect<void>;
+          } = {},
         ) =>
-          SynchronizedRef.modifyEffect(state, (current) =>
-            operation(current).pipe(Effect.tap(([, next]) => Effect.sync(() => publish(next)))),
+          Effect.uninterruptible(
+            SynchronizedRef.modifyEffect(state, (current) =>
+              operation(current).pipe(
+                Effect.flatMap(([result, next]) =>
+                  (lifecycle.beforePublish?.(result, next) ?? Effect.void).pipe(
+                    Effect.andThen(Effect.sync(() => publish(next))),
+                    Effect.andThen(lifecycle.afterPublish?.(result, next) ?? Effect.void),
+                    Effect.as([result, next] as const),
+                  ),
+                ),
+              ),
+            ),
           );
 
         const upsert: FooterRegistryServiceShape["upsert"] = (owner, contribution) =>
-          serialized((current) => {
-            const index = current.entries.findIndex(
-              (entry) => entry.owner === owner && entry.contribution.id === contribution.id,
-            );
-            const previous = index >= 0 ? current.entries[index]?.contribution : undefined;
-            if (previous === contribution) {
-              renderNow();
-              return Effect.succeed([undefined, current] as const);
-            }
-            return Effect.gen(function* () {
-              yield* releaseResource(owner, contribution.id);
-              if (contribution.kind === "surface")
-                setResource(owner, contribution.id, yield* acquire(contribution));
-              const entry = { owner, contribution } as const;
-              const entries = [...current.entries];
-              if (index >= 0) entries[index] = entry;
-              else entries.push(entry);
-              renderNow();
-              return [undefined, { entries }] as const;
-            });
-          });
+          serialized(
+            (current) => {
+              const index = current.entries.findIndex(
+                (entry) => entry.owner === owner && entry.contribution.id === contribution.id,
+              );
+              const previous = index >= 0 ? current.entries[index]?.contribution : undefined;
+              if (previous === contribution) {
+                return Effect.succeed([
+                  { previousResource: undefined, nextResource: undefined },
+                  current,
+                ] as const);
+              }
+              return Effect.gen(function* () {
+                const nextResource =
+                  contribution.kind === "surface" ? yield* acquire(contribution) : undefined;
+                const previousResource = takeResource(owner, contribution.id);
+                if (nextResource) setResource(owner, contribution.id, nextResource);
+                const entry = { owner, contribution } as const;
+                const entries = [...current.entries];
+                if (index >= 0) entries[index] = entry;
+                else entries.push(entry);
+                return [{ previousResource, nextResource }, { entries }] as const;
+              });
+            },
+            {
+              beforePublish: ({ nextResource }) =>
+                nextResource
+                  ? Effect.sync(() => withRenderRequestsSuppressed(() => attach(nextResource)))
+                  : Effect.void,
+              afterPublish: ({ previousResource }) =>
+                closeResource(previousResource).pipe(Effect.andThen(Effect.sync(renderNow))),
+            },
+          ).pipe(Effect.asVoid);
 
         const remove: FooterRegistryServiceShape["remove"] = (owner, id) =>
-          serialized((current) => {
-            const removed = current.entries.filter(
-              (entry) =>
-                entry.owner === owner && (id === undefined || entry.contribution.id === id),
-            );
-            if (removed.length === 0) return Effect.succeed([undefined, current] as const);
-            return Effect.gen(function* () {
-              yield* Effect.forEach(
-                removed,
-                (entry) => releaseResource(entry.owner, entry.contribution.id),
-                { discard: true },
+          serialized<{
+            readonly changed: boolean;
+            readonly resources: readonly SurfaceResource[];
+          }>(
+            (current) => {
+              const removed = current.entries.filter(
+                (entry) =>
+                  entry.owner === owner && (id === undefined || entry.contribution.id === id),
               );
-              renderNow();
-              return [
-                undefined,
+              if (removed.length === 0)
+                return Effect.succeed([{ changed: false, resources: [] }, current] as const);
+              const removedResources = removed.flatMap((entry) => {
+                const resource = takeResource(entry.owner, entry.contribution.id);
+                return resource ? [resource] : [];
+              });
+              return Effect.succeed([
+                { changed: true, resources: removedResources },
                 {
                   entries: current.entries.filter(
                     (entry) =>
                       entry.owner !== owner || (id !== undefined && entry.contribution.id !== id),
                   ),
                 },
-              ] as const;
-            });
-          });
+              ] as const);
+            },
+            {
+              afterPublish: ({ changed, resources: removedResources }) =>
+                closeResources(removedResources).pipe(
+                  Effect.andThen(changed ? Effect.sync(renderNow) : Effect.void),
+                ),
+            },
+          ).pipe(Effect.asVoid);
 
         const invalidate: FooterRegistryServiceShape["invalidate"] = (owner, id) =>
-          serialized((current) =>
-            Effect.sync(() => {
-              for (const entry of current.entries) {
-                if (owner !== undefined && entry.owner !== owner) continue;
-                if (id !== undefined && entry.contribution.id !== id) continue;
-                if (entry.contribution.kind === "surface" && entry.contribution.invalidate)
-                  callbacks.invoke(
-                    "surface-invalidate",
-                    entry.contribution.invalidate.bind(entry.contribution),
-                    undefined,
-                  );
-              }
-              renderNow();
-              return [undefined, current] as const;
-            }),
+          serialized(
+            (current) =>
+              Effect.sync(() => {
+                for (const entry of current.entries) {
+                  if (owner !== undefined && entry.owner !== owner) continue;
+                  if (id !== undefined && entry.contribution.id !== id) continue;
+                  if (entry.contribution.kind === "surface" && entry.contribution.invalidate)
+                    callbacks.invoke(
+                      "surface-invalidate",
+                      entry.contribution.invalidate.bind(entry.contribution),
+                      undefined,
+                    );
+                }
+                return [undefined, current] as const;
+              }),
+            { afterPublish: () => Effect.sync(renderNow) },
           );
 
-        const setRenderRequest: FooterRegistryServiceShape["setRenderRequest"] = (next) =>
-          serialized((current) =>
-            Effect.sync(() => {
-              if (requestRender === next) return [undefined, current] as const;
-              for (const resource of resourceValues()) detach(resource);
-              requestRender = next;
-              for (const resource of resourceValues()) attach(resource);
-              renderNow();
-              return [undefined, current] as const;
-            }),
-          );
+        const setRenderRequest: FooterRegistryServiceShape["setRenderRequest"] = (
+          next,
+          expectedCurrent,
+        ) =>
+          serialized(
+            (current) =>
+              Effect.sync(() => {
+                if (
+                  next === undefined &&
+                  expectedCurrent !== undefined &&
+                  requestRender !== expectedCurrent
+                )
+                  return [false, current] as const;
+                if (requestRender === next) return [false, current] as const;
+                requestRender = undefined;
+                for (const resource of resourceValues()) detach(resource);
+                requestRender = next;
+                return [true, current] as const;
+              }),
+            {
+              afterPublish: (changed) =>
+                changed
+                  ? Effect.sync(() => {
+                      withRenderRequestsSuppressed(() => {
+                        for (const resource of resourceValues()) attach(resource);
+                      });
+                      renderNow();
+                    })
+                  : Effect.void,
+            },
+          ).pipe(Effect.asVoid);
 
-        const clear = serialized(() =>
-          Effect.gen(function* () {
-            yield* Effect.forEach(
-              [...resources].flatMap(([owner, byId]) =>
-                [...byId.keys()].map((id) => [owner, id] as const),
-              ),
-              ([owner, id]) => releaseResource(owner, id),
-              { discard: true },
-            );
-            requestRender = undefined;
-            return [undefined, { entries: [] }] as const;
-          }),
+        const clear = serialized(
+          () =>
+            Effect.sync(() => {
+              const activeResources = resourceValues();
+              resources.clear();
+              requestRender = undefined;
+              return [activeResources, { entries: [] }] as const;
+            }),
+          { afterPublish: (activeResources) => closeResources(activeResources) },
         );
 
-        options.bridge.snapshot = published;
-        options.bridge.requestRenderNow = renderNow;
-        options.publish(published);
-
-        yield* Effect.addFinalizer(() =>
-          clear.pipe(
-            Effect.andThen(
-              Effect.sync(() => {
-                const empty = emptyFooterRegistrySnapshot();
-                options.bridge.snapshot = empty;
-                options.bridge.requestRenderNow = () => undefined;
-                options.publish(empty);
-              }),
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            options.bridge.snapshot = published;
+            options.bridge.requestRenderNow = renderNow;
+            options.publish(published);
+          }),
+          () =>
+            clear.pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  const empty = emptyFooterRegistrySnapshot();
+                  options.bridge.snapshot = empty;
+                  options.bridge.requestRenderNow = () => undefined;
+                  options.publish(empty);
+                }),
+              ),
             ),
-          ),
         );
 
         return FooterRegistryService.of({
@@ -256,7 +323,7 @@ export class FooterRegistryService extends Context.Service<
           remove,
           invalidate,
           setRenderRequest,
-          clear,
+          clear: clear.pipe(Effect.asVoid),
           snapshot: () => published,
           requestRenderNow: renderNow,
         });

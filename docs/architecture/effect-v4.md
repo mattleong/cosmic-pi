@@ -12,14 +12,41 @@ Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, fail
 - Declare services as classes with `Context.Service` and deterministic language-service keys.
 - Give every live implementation an explicit Layer. Compose the dependency graph before providing it.
 - In beta.99, use `Layer.effect` with `Effect.acquireRelease` for layer-owned scoped resources.
+- Use `Effect.sync` only for operations that are total by contract. Wrap hostile or throwing
+  synchronous callbacks with `Effect.try` and a schema-backed boundary error, then recover that
+  typed failure deliberately where the host callback is best effort.
+- Use `Effect.promise` only when rejection is impossible by contract. Ordinary third-party and
+  Node Promises use `Effect.tryPromise`; cleanup failures are mapped to a redacted typed error
+  before they are propagated or deliberately recovered.
+- Register a finalizer only after the acquisition has established ownership. Generated names,
+  candidate paths, and other intentions to acquire are not resources; exclusive file creation,
+  opened handles, subscriptions, and child scopes are.
+- Default host and third-party Promises to interruptible. An ordered finalizer or irreversible
+  commit region may be uninterruptible only when it is narrowly documented, ownership is already
+  established, exact-once state publication is included, and the liveness tradeoff is explicit.
+  When a foreign API cannot be cancelled and ordering does not require waiting for settlement,
+  detach Effect ownership on interruption and arrange safe late cleanup instead of blocking scope
+  closure indefinitely.
 - Keep implementation-only requirements in Layer construction rather than leaking them through service methods.
 - Use `Schema.decodeUnknownEffect` at unknown boundaries. Do not cast decoded JSON. Core JSON HTTP requests require a provider-local response decoder and return an accepted typed body or a rejected status with preserved response text; no public `body: unknown` path exists.
 - Represent expected failures with schema-backed tagged errors. Reserve defects for violated invariants.
 - Use `Clock`, `Duration`, `Random`, `Config`, `Logger`, queues, deferred values, semaphores, refs, schedules, streams, and scopes instead of corresponding unmanaged globals.
 - Create one `ManagedRuntime` from `session_start` at the Pi host boundary. Internal services never call Effect runners.
 - The shared Pi session-runtime slot is the minimal imperative island: it creates, replaces, and disposes the runtime that cannot own its own creation. Everything acquired after runtime construction is scoped inside Effect.
+- Production session-runtime facades carry the exact `Layer.Error` type and never cast a returned
+  Fiber to erase initialization failure. Exported compatibility types may default an omitted
+  error argument to conservative `unknown`, but every workspace call site supplies the exact type;
+  no runtime error may be defaulted or asserted to `never`.
 - Dispose runtimes and close session resources explicitly.
 - Effect services own state transitions in `Ref` or `SynchronizedRef`. When Pi requires synchronous rendering, services atomically publish immutable snapshots to a boundary `MutableRef`; renderers only read those snapshots.
+- Keep stale-result validation and its commit inside the same serialized transition. Likewise,
+  persistence plus authoritative projection publication is one serialized commit whenever
+  concurrent callers could otherwise publish an older read after a newer write.
+- For atomic file replacement, complete creation, writing, validation, and permissions before a
+  narrow uninterruptible rename commit. Nothing fallible follows the rename; owned temporary
+  cleanup is best effort and cannot change the committed result.
+- Prefer explicit one-argument callbacks such as `Effect.map((value) => decode(value))` over tacit
+  higher-order use when a function is overloaded, generic, or accepts optional extra arguments.
 - Add spans around provider requests, refreshes, image streams, advisor checkpoints, and resource initialization without recording secrets.
 
 ## Beta-specific rules

@@ -2,7 +2,7 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/processEnv:off
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -146,6 +146,77 @@ describe("Better OpenAI session boundary", () => {
     await h.emit("session_shutdown");
   });
 
+  test("keeps the replacement context current after deactivating the previous runtime", async () => {
+    const h = harness();
+    const configPath = join(h.ctx.cwd, ".pi", "extensions", "pi-better-openai.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        persistState: false,
+        usage: { enabled: true, showOnlyOnSubscriptionModels: true },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      }),
+    );
+    await h.emit("session_start");
+    const replacement = { ...h.ctx } as ExtensionContext;
+    await h.emit("session_start", {}, replacement);
+    vi.mocked(h.ctx.ui.notify).mockClear();
+
+    const selected = {
+      ...replacement,
+      model: { provider: "anthropic", id: "claude" },
+    } as ExtensionContext;
+    await h.emit("model_select", { model: selected.model }, selected);
+    await Promise.resolve(h.commands.get("openai-usage")?.("", selected));
+
+    expect(h.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Usage hidden: current model is not an OpenAI subscription model.",
+      "warning",
+    );
+    await h.emit("session_shutdown", {}, selected);
+  });
+
+  test("recovers host notification failures after fast and settings state commits", async () => {
+    const h = harness();
+    await h.emit("session_start");
+    vi.mocked(h.ctx.ui.notify).mockImplementation(() => {
+      throw new Error("host notification failed");
+    });
+
+    await expect(Promise.resolve(h.commands.get("fast")?.("", h.ctx))).resolves.toBeUndefined();
+    const results: unknown[] = [];
+    for (const handler of h.handlers.get("before_provider_request") ?? [])
+      results.push(await handler({ payload: { model: "gpt-5.5" } }, h.ctx));
+    expect(results).toContainEqual({ model: "gpt-5.5", service_tier: "priority" });
+
+    await expect(
+      Promise.resolve(h.commands.get("openai-settings")?.("usage.enabled false", h.ctx)),
+    ).resolves.toBeUndefined();
+    const raw = JSON.parse(
+      readFileSync(join(h.ctx.cwd, ".pi", "extensions", "pi-better-openai.json"), "utf8"),
+    );
+    expect(raw.usage.enabled).toBe(false);
+    await h.emit("session_shutdown");
+  });
+
+  test("fails closed when terminal UI capability getters throw during activation", async () => {
+    const h = harness();
+    Object.defineProperty(h.ctx, "mode", {
+      configurable: true,
+      get() {
+        throw new Error("host mode unavailable");
+      },
+    });
+
+    await expect(h.emit("session_start")).resolves.toBeUndefined();
+    expect(h.ctx.ui.setFooter).not.toHaveBeenCalled();
+    await expect(
+      Promise.resolve(h.commands.get("openai-settings")?.("usage.enabled false", h.ctx)),
+    ).resolves.toBeUndefined();
+    await h.emit("session_shutdown");
+  });
+
   test("host abort immediately interrupts a stalled startup and removes its listener", async () => {
     const stalled = stalledStartup();
     const controller = new AbortController();
@@ -192,6 +263,104 @@ describe("Better OpenAI session boundary", () => {
     await expect(
       h.tool.execute("call", { prompt: "x" }, undefined, undefined, h.ctx),
     ).rejects.toThrow("has not started");
+  });
+
+  test("captures changing session cwd and signal getters exactly once", async () => {
+    const h = harness();
+    const controller = new AbortController();
+    let cwdReads = 0;
+    let signalReads = 0;
+    const replacement = { ...h.ctx } as ExtensionContext;
+    Object.defineProperties(replacement, {
+      cwd: {
+        configurable: true,
+        get() {
+          cwdReads++;
+          if (cwdReads > 1) throw new Error("cwd was read again");
+          return h.ctx.cwd;
+        },
+      },
+      signal: {
+        configurable: true,
+        get() {
+          signalReads++;
+          if (signalReads > 1) throw new Error("signal was read again");
+          return controller.signal;
+        },
+      },
+    });
+
+    await expect(h.emit("session_start", {}, replacement)).resolves.toBeUndefined();
+
+    expect(cwdReads).toBe(1);
+    expect(signalReads).toBe(1);
+    await expect(
+      Promise.resolve(h.commands.get("openai-usage")?.("", h.ctx)),
+    ).resolves.toBeUndefined();
+    await h.emit("session_shutdown", {}, h.ctx);
+  });
+
+  test.each(["cwd", "signal"] as const)(
+    "fails closed and deactivates the prior runtime when the session %s getter throws",
+    async (property) => {
+      const h = harness();
+      await h.emit("session_start");
+      vi.mocked(h.ctx.ui.notify).mockClear();
+      const replacement = { ...h.ctx } as ExtensionContext;
+      Object.defineProperty(replacement, property, {
+        configurable: true,
+        get() {
+          throw new Error(`${property} unavailable`);
+        },
+      });
+
+      await expect(h.emit("session_start", {}, replacement)).resolves.toBeUndefined();
+
+      expect(h.ctx.ui.notify).toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
+      await expect(
+        h.tool.execute("call", { prompt: "x" }, undefined, undefined, h.ctx),
+      ).rejects.toThrow("has not started");
+    },
+  );
+
+  test("contains throwing signal getters at command and event boundaries", async () => {
+    const h = harness();
+    await h.emit("session_start");
+    Object.defineProperty(h.ctx, "signal", {
+      configurable: true,
+      get() {
+        throw new Error("signal unavailable");
+      },
+    });
+
+    await expect(
+      Promise.resolve(h.commands.get("openai-usage")?.("", h.ctx)),
+    ).resolves.toBeUndefined();
+    await expect(
+      Promise.resolve(h.commands.get("openai-settings")?.("help", h.ctx)),
+    ).resolves.toBeUndefined();
+    await expect(h.emit("turn_end", { message: { role: "user" } }, h.ctx)).resolves.toBeUndefined();
+    await expect(h.emit("model_select", {}, h.ctx)).resolves.toBeUndefined();
+    await h.emit("session_shutdown", {}, h.ctx);
+  });
+
+  test("materializes one dynamic signal for both model-change forks", async () => {
+    const h = harness();
+    await h.emit("session_start");
+    let reads = 0;
+    Object.defineProperty(h.ctx, "signal", {
+      configurable: true,
+      get() {
+        reads++;
+        if (reads > 1) throw new Error("signal was read again");
+        return undefined;
+      },
+    });
+
+    await h.emit("model_select", {}, h.ctx);
+
+    expect(reads).toBe(1);
+    await h.emit("session_shutdown", {}, h.ctx);
   });
 
   test("recomputes model visibility before asynchronous refresh and rejects disabled image work", async () => {

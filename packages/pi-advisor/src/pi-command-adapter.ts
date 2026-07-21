@@ -40,9 +40,14 @@ export class PiCommandAdapter extends Context.Service<PiCommandAdapter, PiComman
             }),
         }),
       notify: (ctx, message, level) =>
-        Effect.sync(() => {
-          ctx.ui.notify(message, level);
-        }).pipe(Effect.catchDefect(() => Effect.void)),
+        Effect.try({
+          try: () => ctx.ui.notify(message, level),
+          catch: () =>
+            new PiCommandError({
+              operation: "notify",
+              message: "Advisor command notification failed.",
+            }),
+        }).pipe(Effect.catch(() => Effect.void)),
       select: (ctx, title, options) =>
         Effect.tryPromise({
           try: () => ctx.ui.select(title, [...options]),

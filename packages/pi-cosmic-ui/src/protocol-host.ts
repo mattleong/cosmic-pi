@@ -1,5 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import { makeSynchronousIngress, type SynchronousIngressOfferResult } from "pi-cosmic-core";
 import { FooterRegistryService } from "./footer/registry.ts";
@@ -30,7 +31,9 @@ export interface FooterProtocolBuffer {
   readonly activate: (
     consumer: (event: FooterProtocolEvent) => SynchronousIngressOfferResult,
   ) => void;
-  readonly takePending: () => readonly FooterProtocolEvent[];
+  readonly takePending: () => FooterProtocolEvent | undefined;
+  readonly completePending: () => void;
+  readonly restorePending: (event: FooterProtocolEvent) => void;
   readonly deactivate: () => void;
   readonly reset: () => void;
   readonly stats: () => FooterProtocolBufferStats;
@@ -50,6 +53,7 @@ export function makeFooterProtocolBuffer(capacity = 128): FooterProtocolBuffer {
   const pending: FooterProtocolEvent[] = [];
   let consumer: ((event: FooterProtocolEvent) => SynchronousIngressOfferResult) | undefined;
   let dropped = 0;
+  let reserved = 0;
 
   const offer = (raw: FooterProtocolEvent): SynchronousIngressOfferResult => {
     const event = freezeEvent(raw);
@@ -58,12 +62,16 @@ export function makeFooterProtocolBuffer(capacity = 128): FooterProtocolBuffer {
       if (result === "dropped" || result === "closed") dropped++;
       return result;
     }
-    if (pending.length === limit) {
+    if (pending.length + reserved >= limit) {
+      if (pending.length === 0) {
+        dropped++;
+        return "dropped";
+      }
       pending.shift();
       dropped++;
     }
     pending.push(event);
-    return pending.length <= limit ? "accepted" : "dropped";
+    return "accepted";
   };
   const activate = (next: (event: FooterProtocolEvent) => SynchronousIngressOfferResult) => {
     consumer = next;
@@ -75,7 +83,18 @@ export function makeFooterProtocolBuffer(capacity = 128): FooterProtocolBuffer {
   return {
     offer,
     activate,
-    takePending: () => pending.splice(0),
+    takePending: () => {
+      const event = pending.shift();
+      if (event !== undefined) reserved++;
+      return event;
+    },
+    completePending: () => {
+      if (reserved > 0) reserved--;
+    },
+    restorePending: (event) => {
+      if (reserved > 0) reserved--;
+      pending.unshift(freezeEvent(event));
+    },
     deactivate: () => {
       consumer = undefined;
     },
@@ -83,8 +102,10 @@ export function makeFooterProtocolBuffer(capacity = 128): FooterProtocolBuffer {
       consumer = undefined;
       pending.length = 0;
       dropped = 0;
+      reserved = 0;
     },
-    stats: () => Object.freeze({ buffered: pending.length, dropped, active: !!consumer }),
+    stats: () =>
+      Object.freeze({ buffered: pending.length + reserved, dropped, active: !!consumer }),
   };
 }
 
@@ -135,13 +156,21 @@ export class FooterProtocolHost extends Context.Service<
           overflow: "drop",
           handle,
         });
-        let pending = options.buffer.takePending();
-        while (pending.length > 0) {
-          yield* Effect.forEach(pending, handle, { discard: true });
-          pending = options.buffer.takePending();
+        while (true) {
+          const pending = options.buffer.takePending();
+          if (pending === undefined) break;
+          yield* handle(pending).pipe(
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit)
+                ? Effect.sync(() => options.buffer.restorePending(pending))
+                : Effect.sync(() => options.buffer.completePending()),
+            ),
+          );
         }
-        options.buffer.activate(ingress.offer);
-        yield* Effect.addFinalizer(() => Effect.sync(() => options.buffer.deactivate()));
+        yield* Effect.acquireRelease(
+          Effect.sync(() => options.buffer.activate(ingress.offer)),
+          () => Effect.sync(() => options.buffer.deactivate()),
+        );
         return FooterProtocolHost.of({ stats: options.buffer.stats });
       }),
     );

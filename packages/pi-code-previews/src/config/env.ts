@@ -5,10 +5,7 @@ import { environmentValue } from "../boundary/environment";
 
 export function parsePositiveInteger(value: string | undefined): number | undefined {
   const parsed = Number(value);
-  const integer = Math.floor(parsed);
-  return Number.isFinite(parsed) && parsed > 0 && Number.isSafeInteger(integer)
-    ? integer
-    : undefined;
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 export function positiveEnvInteger(name: string, fallback: number): number {

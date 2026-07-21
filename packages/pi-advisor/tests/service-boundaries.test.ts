@@ -9,6 +9,7 @@ import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary
 import { FailureLogger, failureLoggerTestLayer } from "../src/failure-logger.ts";
 import { HostNotifier, hostNotifierTestLayer } from "../src/host-notifier.ts";
 import { normalizeAdvisorConfig } from "../src/config.ts";
+import { PiCommandAdapter } from "../src/pi-command-adapter.ts";
 
 it.effect("converts the Promise config seam into a typed repository test Layer", () => {
   const paths: string[] = [];
@@ -73,3 +74,26 @@ it.effect("isolates hostile host notification callbacks in the service Layer", (
     }),
   );
 });
+
+it.effect("recovers only the typed command-notification boundary failure", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const context = yield* Layer.build(PiCommandAdapter.layer);
+      const adapter = Context.get(context, PiCommandAdapter);
+      let attempts = 0;
+      yield* adapter.notify(
+        {
+          ui: {
+            notify: () => {
+              attempts++;
+              throw new Error("sensitive host failure");
+            },
+          },
+        } as never,
+        "bounded notification",
+        "warning",
+      );
+      expect(attempts).toBe(1);
+    }),
+  ),
+);

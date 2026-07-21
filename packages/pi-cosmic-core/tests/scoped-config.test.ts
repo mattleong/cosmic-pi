@@ -2,7 +2,7 @@ import { expect, it, layer as testLayer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { JsonDocumentStore } from "../src/platform/json-document.ts";
+import { JsonDocumentStore, type JsonObject } from "../src/platform/json-document.ts";
 import { makeInMemoryDocuments } from "../src/testing/layers.ts";
 import { decodeTolerantFields } from "../src/config/tolerant-fields.ts";
 import {
@@ -21,6 +21,38 @@ it("decodes valid siblings, retains unknown keys, and bounds redacted diagnostic
   expect(decoded.raw.future).toEqual({ secret: "retained" });
   expect(decoded.diagnostics).toEqual([{ path: "usage.interval", issue: "invalid" }]);
   expect(JSON.stringify(decoded.diagnostics)).not.toContain("bad");
+});
+
+it("preserves and decodes only own __proto__ fields without prototype mutation", () => {
+  const input: JsonObject = { future: true };
+  Object.defineProperty(input, "__proto__", {
+    value: { enabled: true },
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+  const ProtoFieldSchema = Schema.Struct({ enabled: Schema.Boolean });
+  const fields = Object.create(null) as { readonly __proto__: typeof ProtoFieldSchema };
+  Object.defineProperty(fields, "__proto__", {
+    value: ProtoFieldSchema,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+
+  const decoded = decodeTolerantFields(input, fields);
+  expect(Object.hasOwn(decoded.raw, "__proto__")).toBe(true);
+  expect(Object.getOwnPropertyDescriptor(decoded.raw, "__proto__")?.value).toEqual({
+    enabled: true,
+  });
+  expect(Object.hasOwn(decoded.value, "__proto__")).toBe(true);
+  expect(Object.getOwnPropertyDescriptor(decoded.value, "__proto__")?.value).toEqual({
+    enabled: true,
+  });
+  expect(Object.getPrototypeOf(decoded.value)).toBe(Object.prototype);
+
+  const missing = decodeTolerantFields({}, fields);
+  expect(Object.hasOwn(missing.value, "__proto__")).toBe(false);
 });
 
 testLayer(Path.layer)("scoped document paths", (it) => {

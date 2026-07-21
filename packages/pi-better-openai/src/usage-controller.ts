@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Tracer from "effect/Tracer";
 import {
   AgentDirectory,
@@ -20,13 +21,15 @@ import {
 } from "pi-cosmic-core";
 import type { ResolvedConfig } from "./config.ts";
 import {
-  applySettingToRawConfig,
+  modifyConfig,
+  prepareSettingUpdate,
   readRawConfig,
+  resolveCommittedConfig,
   resolveConfig,
-  updateConfig,
   type InvalidSettingError,
   type OpenAIConfigError,
 } from "./config.ts";
+import { isModelUsingOAuth } from "./boundary/model-registry.ts";
 import { currentModelKey } from "./fast-controller.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import { getCodexCredentialsResult } from "./codex-auth.ts";
@@ -74,6 +77,15 @@ export const resetProjection = (projection: MutableRef.MutableRef<OpenAIProjecti
   MutableRef.set(projection, freezeSnapshot(initial()));
 };
 
+function usageConfigChanged(left: ResolvedConfig, right: ResolvedConfig): boolean {
+  return (
+    left.usage.enabled !== right.usage.enabled ||
+    left.usage.refreshIntervalMs !== right.usage.refreshIntervalMs ||
+    left.usage.showOnlyOnSubscriptionModels !== right.usage.showOnlyOnSubscriptionModels ||
+    left.usage.showResetTimes !== right.usage.showResetTimes
+  );
+}
+
 export function isOpenAISubscriptionModel(
   ctx: ExtensionContext,
   cfg: ResolvedConfig,
@@ -81,28 +93,24 @@ export function isOpenAISubscriptionModel(
 ): boolean {
   const model = ctx.model;
   if (!model || (model.provider !== "openai" && model.provider !== "openai-codex")) return false;
-  return (
-    !cfg.usage.showOnlyOnSubscriptionModels ||
-    (isUsingOAuth ?? ctx.modelRegistry.isUsingOAuth(model))
-  );
+  return !cfg.usage.showOnlyOnSubscriptionModels || (isUsingOAuth ?? isModelUsingOAuth(ctx, model));
 }
-export function synchronizeProjectionContext(
-  projection: MutableRef.MutableRef<OpenAIProjection>,
+
+function synchronizedProjection(
+  state: OpenAIProjection,
   ctx: ExtensionContext,
-  options: { readonly clearUsage?: boolean } = {},
-): void {
-  const state = MutableRef.get(projection);
-  const eligible = state.config ? isOpenAISubscriptionModel(ctx, state.config) : false;
-  const scopeMatches = state.snapshot?.scope === usageScopeForModel(ctx.model?.id);
-  const statusText = eligible
-    ? "Usage unavailable."
-    : "Usage hidden: current model is not an OpenAI subscription model.";
-  MutableRef.set(
-    projection,
-    freezeSnapshot({
+  clearUsage: boolean,
+): OpenAIProjection {
+  try {
+    const eligible = state.config ? isOpenAISubscriptionModel(ctx, state.config) : false;
+    const scopeMatches = state.snapshot?.scope === usageScopeForModel(ctx.model?.id);
+    const statusText = eligible
+      ? "Usage unavailable."
+      : "Usage hidden: current model is not an OpenAI subscription model.";
+    return {
       ...state,
       eligible,
-      ...(options.clearUsage || !scopeMatches
+      ...(clearUsage || !scopeMatches
         ? {
             snapshot: undefined,
             statusLine: undefined,
@@ -113,7 +121,30 @@ export function synchronizeProjectionContext(
         : !eligible
           ? { statusLine: undefined, error: undefined, statusText }
           : {}),
-    }),
+    };
+  } catch {
+    return {
+      ...state,
+      eligible: false,
+      snapshot: undefined,
+      statusLine: undefined,
+      error: undefined,
+      updatedAt: undefined,
+      statusText: "Usage unavailable.",
+    };
+  }
+}
+
+export function synchronizeProjectionContext(
+  projection: MutableRef.MutableRef<OpenAIProjection>,
+  ctx: ExtensionContext,
+  options: { readonly clearUsage?: boolean } = {},
+): void {
+  MutableRef.set(
+    projection,
+    freezeSnapshot(
+      synchronizedProjection(MutableRef.get(projection), ctx, options.clearUsage === true),
+    ),
   );
 }
 export function visibleStatusLine(
@@ -142,6 +173,7 @@ export interface OpenAIUsageServiceShape {
   readonly persistFast: (
     active: boolean,
     desiredActive: boolean,
+    afterCommit?: Effect.Effect<void>,
   ) => Effect.Effect<void, OpenAIConfigError>;
   readonly reloadConfig: () => Effect.Effect<ResolvedConfig, OpenAIConfigError>;
   readonly readConfigDocument: () => Effect.Effect<JsonObject, OpenAIConfigError>;
@@ -201,6 +233,7 @@ export class OpenAIUsageService extends Context.Service<
           (current) => current,
           (published) => MutableRef.set(projection, published),
         );
+        const configMutation = yield* Semaphore.make(1);
         const updateState = (f: (current: OpenAIProjection) => OpenAIProjection) =>
           state
             .transition((current) => {
@@ -226,31 +259,9 @@ export class OpenAIUsageService extends Context.Service<
               }),
           }).pipe(Effect.catch(() => Effect.void));
         const synchronize = (clearUsage = false) =>
-          updateState((current) => {
-            const ctx = MutableRef.get(context);
-            const eligible = current.config
-              ? isOpenAISubscriptionModel(ctx, current.config)
-              : false;
-            const scopeMatches = current.snapshot?.scope === usageScopeForModel(ctx.model?.id);
-            const statusText = eligible
-              ? "Usage unavailable."
-              : "Usage hidden: current model is not an OpenAI subscription model.";
-            return {
-              ...current,
-              eligible,
-              ...(clearUsage || !scopeMatches
-                ? {
-                    snapshot: undefined,
-                    statusLine: undefined,
-                    error: undefined,
-                    updatedAt: undefined,
-                    statusText,
-                  }
-                : !eligible
-                  ? { statusLine: undefined, error: undefined, statusText }
-                  : {}),
-            };
-          }).pipe(Effect.asVoid);
+          updateState((current) =>
+            synchronizedProjection(current, MutableRef.get(context), clearUsage),
+          ).pipe(Effect.asVoid);
         yield* synchronize(true);
         const key = Effect.gen(function* () {
           const ctx = MutableRef.get(context);
@@ -290,12 +301,6 @@ export class OpenAIUsageService extends Context.Service<
                 now - current.lastFetchAt < cfg.usage.refreshIntervalMs
               )
                 return { _tag: "Skipped" } as const;
-              yield* updateState((latest) => ({
-                ...latest,
-                eligible: true,
-                error: undefined,
-                lastFetchAt: now,
-              }));
               const authOutcome = yield* getCodexCredentialsResult(authPath, ctx).pipe(
                 Effect.timeout("10 seconds"),
                 Effect.result,
@@ -356,9 +361,18 @@ export class OpenAIUsageService extends Context.Service<
                 yield* Effect.logWarning("Better OpenAI usage recovery: credentials_missing.");
               const latest = yield* updateState((current) => {
                 const cfg = current.config!;
+                const attempted =
+                  "fetchedAt" in value
+                    ? {
+                        ...current,
+                        eligible: true,
+                        error: undefined,
+                        lastFetchAt: value.fetchedAt,
+                      }
+                    : current;
                 if (value._tag === "Disabled")
                   return {
-                    ...current,
+                    ...attempted,
                     eligible: false,
                     snapshot: undefined,
                     statusLine: undefined,
@@ -367,7 +381,7 @@ export class OpenAIUsageService extends Context.Service<
                   };
                 if (value._tag === "Hidden")
                   return {
-                    ...current,
+                    ...attempted,
                     eligible: false,
                     snapshot: undefined,
                     statusLine: undefined,
@@ -376,7 +390,7 @@ export class OpenAIUsageService extends Context.Service<
                   };
                 if (value._tag === "Failure")
                   return {
-                    ...current,
+                    ...attempted,
                     snapshot: undefined,
                     statusLine: undefined,
                     error: value.message,
@@ -392,7 +406,7 @@ export class OpenAIUsageService extends Context.Service<
                 if (value._tag === "Missing") {
                   const message = `Missing openai-codex OAuth credentials in ${authPath}. Run /login openai-codex.`;
                   return {
-                    ...current,
+                    ...attempted,
                     snapshot: undefined,
                     statusLine: undefined,
                     error: message,
@@ -404,7 +418,7 @@ export class OpenAIUsageService extends Context.Service<
                 }
                 const { snapshot, credential } = value.result;
                 return {
-                  ...current,
+                  ...attempted,
                   eligible: true,
                   snapshot,
                   statusLine: formatUsageSnapshot(snapshot, cfg.usage, value.fetchedAt),
@@ -427,26 +441,46 @@ export class OpenAIUsageService extends Context.Service<
         const contextChanged = (clearUsage = false) =>
           synchronize(clearUsage).pipe(Effect.andThen(refreshEngine.invalidate), Effect.asVoid);
         const reloadConfigWithRequirements = Effect.fn("OpenAIUsage.reloadConfig")(function* () {
+          const current = yield* state.getState;
           const next = yield* resolveConfig(cwd, agentDir, projectTrusted);
+          const clearUsage = current.config ? usageConfigChanged(current.config, next) : true;
           yield* updateState((current) => ({ ...current, config: next }));
+          yield* synchronize(clearUsage);
           return next;
         });
-        const reloadConfig = () => provideDependencies(reloadConfigWithRequirements());
+        const reloadConfig = () =>
+          provideDependencies(configMutation.withPermit(reloadConfigWithRequirements()));
+        const readGlobalFallback = Effect.fn("OpenAIUsage.readGlobalFallback")(function* (
+          current: ResolvedConfig,
+        ) {
+          if (current.configPath !== current.projectConfigPath || !current.globalConfigExists)
+            return undefined;
+          return yield* readRawConfig(current.globalConfigPath).pipe(
+            Effect.provideService(JsonDocumentStore, documents),
+          );
+        });
         const updateSettingWithRequirements = Effect.fn("OpenAIUsage.updateSetting")(function* (
           id: string,
           value: string,
         ) {
-          const current = yield* state.getState;
-          if (!current.config) return;
-          const raw = yield* readRawConfig(current.config.configPath).pipe(
-            Effect.provideService(JsonDocumentStore, documents),
+          const update = yield* prepareSettingUpdate(id, value);
+          yield* configMutation.withPermit(
+            Effect.gen(function* () {
+              const freshConfig = yield* resolveConfig(cwd, agentDir, projectTrusted);
+              const globalFallback = yield* readGlobalFallback(freshConfig);
+              yield* modifyConfig(freshConfig.configPath, (raw) => {
+                const committed = update(raw);
+                const nextConfig = resolveCommittedConfig(freshConfig, committed, globalFallback);
+                return {
+                  value: nextConfig,
+                  document: committed,
+                  afterCommit: updateState((latest) => ({ ...latest, config: nextConfig })).pipe(
+                    Effect.andThen(synchronize(true)),
+                  ),
+                };
+              }).pipe(Effect.provideService(JsonDocumentStore, documents));
+            }),
           );
-          const nextRaw = yield* applySettingToRawConfig(raw, id, value);
-          yield* updateConfig(current.config.configPath, () => nextRaw).pipe(
-            Effect.provideService(JsonDocumentStore, documents),
-          );
-          yield* reloadConfig();
-          yield* synchronize(true);
           yield* refreshEngine.invalidate;
           yield* refresh({ force: true });
         });
@@ -455,18 +489,40 @@ export class OpenAIUsageService extends Context.Service<
         const persistFastWithRequirements = Effect.fn("OpenAIUsage.persistFast")(function* (
           active: boolean,
           desiredActive: boolean,
+          afterCommit: Effect.Effect<void> = Effect.void,
         ) {
-          const current = yield* state.getState;
-          if (!current.config?.persistState) return;
-          yield* updateConfig(current.config.configPath, (raw) => ({
-            ...raw,
-            active,
-            desiredActive,
-          })).pipe(Effect.provideService(JsonDocumentStore, documents));
-          yield* reloadConfig();
+          yield* configMutation.withPermit(
+            Effect.gen(function* () {
+              const freshConfig = yield* resolveConfig(cwd, agentDir, projectTrusted);
+              if (!freshConfig.persistState) {
+                yield* Effect.uninterruptible(afterCommit);
+                return;
+              }
+              const globalFallback = yield* readGlobalFallback(freshConfig);
+              yield* modifyConfig(freshConfig.configPath, (raw) => {
+                const committed = { ...raw, active, desiredActive };
+                const nextConfig = resolveCommittedConfig(freshConfig, committed, globalFallback);
+                const clearUsage = usageConfigChanged(freshConfig, nextConfig);
+                return {
+                  value: nextConfig,
+                  document: committed,
+                  afterCommit: updateState((latest) => ({ ...latest, config: nextConfig })).pipe(
+                    Effect.andThen(synchronize(clearUsage)),
+                    Effect.andThen(afterCommit),
+                  ),
+                };
+              }).pipe(Effect.provideService(JsonDocumentStore, documents));
+            }),
+          );
         });
-        const persistFast = (active: boolean, desiredActive: boolean) =>
-          provideDependencies(persistFastWithRequirements(active, desiredActive));
+        const persistFast = (
+          active: boolean,
+          desiredActive: boolean,
+          afterCommit?: Effect.Effect<void>,
+        ) =>
+          provideDependencies(
+            persistFastWithRequirements(active, desiredActive, afterCommit ?? Effect.void),
+          );
         const readConfigDocument = () =>
           state.getState.pipe(
             Effect.flatMap((current) =>

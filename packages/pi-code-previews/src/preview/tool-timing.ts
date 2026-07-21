@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { synchronousNow } from "../boundary/clock";
-import { deferCodePreview, scheduleCodePreview } from "../session-capability";
+import { deferProjectedCodePreview, scheduleProjectedCodePreview } from "../session-projection";
 import { codePreviewSettings } from "../settings/index";
 
 type ToolTimingUpdateContext = {
@@ -107,7 +107,7 @@ function withLastComponent<TContext extends ToolTimingRenderContext>(
 }
 
 function ensureToolCallTimingInterval(state: TimingState, invalidate: () => void): void {
-  state.codePreviewTimingCancel ??= scheduleCodePreview(100, () =>
+  state.codePreviewTimingCancel ??= scheduleProjectedCodePreview(100, () =>
     invalidateForToolCallTiming(state, invalidate),
   );
 }
@@ -118,7 +118,7 @@ function invalidateForToolCallTiming(state: TimingState, invalidate: () => void)
   try {
     invalidate();
   } finally {
-    deferCodePreview(() => {
+    deferProjectedCodePreview(() => {
       if (state.codePreviewTimingOnlyRenderToken === token)
         state.codePreviewTimingOnlyRenderToken = undefined;
     });

@@ -15,6 +15,7 @@ import {
   booleanEnv,
   loadCodePreviewEnvironment,
   parseBoolean,
+  parsePositiveInteger,
   performanceConfigFromEnvironment,
 } from "./env";
 
@@ -53,4 +54,12 @@ test("invalid boolean environment values preserve the configured fallback", () =
   process.env.CODE_PREVIEW_TEST_BOOLEAN = "invalid";
   assert.equal(booleanEnv("CODE_PREVIEW_TEST_BOOLEAN", true), true);
   assert.equal(booleanEnv("CODE_PREVIEW_TEST_BOOLEAN", false), false);
+});
+
+test("positive integer environment values reject fractions and unsafe integers", () => {
+  assert.equal(parsePositiveInteger("2"), 2);
+  assert.equal(parsePositiveInteger("0.5"), undefined);
+  assert.equal(parsePositiveInteger("1.5"), undefined);
+  assert.equal(parsePositiveInteger("0"), undefined);
+  assert.equal(parsePositiveInteger(String(Number.MAX_SAFE_INTEGER + 1)), undefined);
 });

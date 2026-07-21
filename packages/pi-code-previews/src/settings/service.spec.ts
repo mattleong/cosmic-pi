@@ -9,11 +9,28 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import { AgentDirectory, JsonDocumentError, JsonDocumentStore } from "pi-cosmic-core";
+import {
+  AgentDirectory,
+  JsonDocumentError,
+  JsonDocumentStore,
+  type JsonDocumentModification,
+  type JsonObject,
+} from "pi-cosmic-core";
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
 import { CodePreviewEnvironmentService } from "./environment-service";
 import { codePreviewSettings } from "./state";
 import { CodePreviewSettingsService, settingsSaveContextProjection } from "./service";
+
+function commitModification<A, E, R, AfterCommitR>(
+  modify: (document: JsonObject) => Effect.Effect<JsonDocumentModification<A, AfterCommitR>, E, R>,
+  document: JsonObject = {},
+): Effect.Effect<A, E, R | AfterCommitR> {
+  return modify(document).pipe(
+    Effect.flatMap(({ value, afterCommit }) =>
+      (afterCommit ?? Effect.void).pipe(Effect.as(value), Effect.uninterruptible),
+    ),
+  );
+}
 
 it.effect("logs a sanitized warning and continues after a malformed settings document", () => {
   const captured = makeCapturedLogger();
@@ -33,6 +50,7 @@ it.effect("logs a sanitized warning and continues after a malformed settings doc
         : Effect.sync(() => undefined);
     },
     writeObject: () => Effect.void,
+    modifyObject: (_path, modify) => commitModification(modify),
     updateObject: (_path, update) => Effect.sync(() => update({})),
   });
   const dependencies = Layer.mergeAll(
@@ -65,6 +83,7 @@ it.effect("starts each session from its own environment defaults", () =>
       exists: () => Effect.succeed(false),
       readObject: () => Effect.sync(() => undefined),
       writeObject: () => Effect.void,
+      modifyObject: (_path, modify) => commitModification(modify),
       updateObject: (_path, update) => Effect.sync(() => update({})),
     });
     const makeLayer = (readLines: string) => {
@@ -97,6 +116,18 @@ it.effect("failed persistence leaves authoritative state and renderer projection
       exists: () => Effect.succeed(false),
       readObject: () => Effect.sync(() => undefined),
       writeObject: () => Effect.void,
+      modifyObject: (_path, modify) =>
+        modify({}).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new JsonDocumentError({
+                operation: "write",
+                path: "/secret/settings.json",
+                message: "expected failure",
+              }),
+            ),
+          ),
+        ),
       updateObject: () =>
         Effect.fail(
           new JsonDocumentError({
@@ -117,6 +148,7 @@ it.effect("failed persistence leaves authoritative state and renderer projection
       Effect.gen(function* () {
         const before = yield* service.snapshot;
         const publishedBefore = codePreviewSettings;
+        const saveContextBefore = settingsSaveContextProjection();
         const failed = yield* service.save({ ...before.settings, readCollapsedLines: 42 }).pipe(
           Effect.as(false),
           Effect.catch(() => Effect.succeed(true)),
@@ -124,6 +156,81 @@ it.effect("failed persistence leaves authoritative state and renderer projection
         assert.equal(failed, true);
         assert.equal((yield* service.snapshot).settings.readCollapsedLines, 17);
         assert.equal(codePreviewSettings, publishedBefore);
+        assert.equal(codePreviewSettings.readCollapsedLines, 17);
+        assert.equal(settingsSaveContextProjection(), saveContextBefore);
+      }),
+    ).pipe(Effect.provide(layer));
+  }),
+);
+
+it.effect("runtime-invalid settings fail before document commit or projection publication", () =>
+  Effect.gen(function* () {
+    let modifications = 0;
+    const documents = JsonDocumentStore.of({
+      exists: () => Effect.succeed(false),
+      readObject: () => Effect.sync((): JsonObject | undefined => undefined),
+      writeObject: () => Effect.void,
+      modifyObject: (_path, modify) => {
+        modifications++;
+        return commitModification(modify);
+      },
+      updateObject: () => Effect.die("legacy updateObject must not be used"),
+    });
+    const dependencies = Layer.mergeAll(
+      CodePreviewEnvironmentService.layerFrom({ CODE_PREVIEW_READ_LINES: "17" }),
+      AgentDirectory.layer("/agent"),
+      NodePath.layer,
+      Layer.succeed(JsonDocumentStore, documents),
+    );
+    const layer = CodePreviewSettingsService.layer.pipe(Layer.provide(dependencies));
+    yield* CodePreviewSettingsService.use((service) =>
+      Effect.gen(function* () {
+        const before = yield* service.snapshot;
+        const publishedBefore = codePreviewSettings;
+        const saveContextBefore = settingsSaveContextProjection();
+        const invalid = { ...before.settings, tools: null } as unknown as typeof before.settings;
+        const failure = yield* service.save(invalid).pipe(Effect.flip);
+        assert.ok(failure instanceof JsonDocumentError);
+        assert.equal(failure.operation, "validate");
+        assert.equal(modifications, 0);
+        assert.equal(yield* service.snapshot, before);
+        assert.equal(codePreviewSettings, publishedBefore);
+        assert.equal(settingsSaveContextProjection(), saveContextBefore);
+      }),
+    ).pipe(Effect.provide(layer));
+  }),
+);
+
+it.effect("save fails typed without atomic document modification capability", () =>
+  Effect.gen(function* () {
+    let legacyUpdates = 0;
+    const documents = JsonDocumentStore.of({
+      exists: () => Effect.succeed(false),
+      readObject: () => Effect.sync((): JsonObject | undefined => undefined),
+      writeObject: () => Effect.void,
+      updateObject: (_path, update) =>
+        Effect.sync(() => {
+          legacyUpdates++;
+          return update({});
+        }),
+    });
+    const dependencies = Layer.mergeAll(
+      CodePreviewEnvironmentService.layerFrom({ CODE_PREVIEW_READ_LINES: "17" }),
+      AgentDirectory.layer("/agent"),
+      NodePath.layer,
+      Layer.succeed(JsonDocumentStore, documents),
+    );
+    const layer = CodePreviewSettingsService.layer.pipe(Layer.provide(dependencies));
+    yield* CodePreviewSettingsService.use((service) =>
+      Effect.gen(function* () {
+        const before = yield* service.snapshot;
+        const failure = yield* service
+          .save({ ...before.settings, readCollapsedLines: 42 })
+          .pipe(Effect.flip);
+        assert.ok(failure instanceof JsonDocumentError);
+        assert.equal(failure.operation, "write");
+        assert.equal(legacyUpdates, 0);
+        assert.equal((yield* service.snapshot).settings.readCollapsedLines, 17);
         assert.equal(codePreviewSettings.readCollapsedLines, 17);
       }),
     ).pipe(Effect.provide(layer));
@@ -139,6 +246,20 @@ it.effect("flush waits for prior saves and its interruption cannot lose the save
       exists: () => Effect.succeed(false),
       readObject: () => Effect.sync(() => undefined),
       writeObject: () => Effect.void,
+      modifyObject: (_path, modify) =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(modify({})),
+          Effect.flatMap(({ value, document, afterCommit }) =>
+            Effect.sync(() => {
+              persistedLines = document.readCollapsedLines;
+            }).pipe(
+              Effect.andThen(afterCommit ?? Effect.void),
+              Effect.as(value),
+              Effect.uninterruptible,
+            ),
+          ),
+        ),
       updateObject: (_path, update) =>
         Deferred.succeed(started, undefined).pipe(
           Effect.andThen(Deferred.await(release)),
@@ -181,6 +302,77 @@ it.effect("flush waits for prior saves and its interruption cannot lose the save
   }).pipe(Effect.scoped),
 );
 
+it.effect("interruption after JSON commit cannot leave authoritative settings stale", () =>
+  Effect.gen(function* () {
+    const committed = yield* Deferred.make<void>();
+    const releaseAfterCommit = yield* Deferred.make<void>();
+    let persistedDocument: JsonObject = {
+      owner: "keep",
+      codePreview: { futureSetting: { enabled: true }, readCollapsedLines: 17 },
+    };
+    const documents = JsonDocumentStore.of({
+      exists: () => Effect.succeed(false),
+      readObject: () => Effect.sync((): JsonObject | undefined => undefined),
+      writeObject: () => Effect.void,
+      modifyObject: (_path, modify) =>
+        modify(persistedDocument).pipe(
+          Effect.flatMap(({ value, document, afterCommit }) =>
+            Effect.sync(() => {
+              persistedDocument = document;
+            }).pipe(
+              Effect.andThen(Deferred.succeed(committed, undefined)),
+              Effect.andThen(Deferred.await(releaseAfterCommit)),
+              Effect.andThen(afterCommit ?? Effect.void),
+              Effect.as(value),
+              Effect.uninterruptible,
+            ),
+          ),
+        ),
+      updateObject: () => Effect.die("legacy updateObject must not be used"),
+    });
+    const dependencies = Layer.mergeAll(
+      CodePreviewEnvironmentService.layerFrom({ CODE_PREVIEW_READ_LINES: "17" }),
+      AgentDirectory.layer("/agent"),
+      NodePath.layer,
+      Layer.succeed(JsonDocumentStore, documents),
+    );
+    const layer = CodePreviewSettingsService.layer.pipe(Layer.provide(dependencies));
+    yield* CodePreviewSettingsService.use((service) =>
+      Effect.gen(function* () {
+        const current = yield* service.snapshot;
+        const saveFiber = yield* service
+          .save({ ...current.settings, readCollapsedLines: 42 })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(committed);
+        assert.deepEqual(persistedDocument, {
+          owner: "keep",
+          codePreview: { futureSetting: { enabled: true }, readCollapsedLines: 42 },
+        });
+        assert.equal((yield* service.snapshot).settings.readCollapsedLines, 17);
+        assert.equal(codePreviewSettings.readCollapsedLines, 17);
+
+        const interruptFiber = yield* Fiber.interrupt(saveFiber).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(releaseAfterCommit, undefined);
+        yield* Fiber.join(interruptFiber);
+
+        const committedState = yield* service.snapshot;
+        assert.deepEqual(committedState.saveContext.globalDocument, persistedDocument);
+        assert.deepEqual(committedState.saveContext.globalOverrides, {
+          futureSetting: { enabled: true },
+          readCollapsedLines: 42,
+        });
+        assert.equal(committedState.saveContext.nested, true);
+        assert.equal(committedState.saveContext.baseline.readCollapsedLines, 17);
+        assert.equal(committedState.saveContext.loaded.readCollapsedLines, 42);
+        assert.equal(committedState.settings.readCollapsedLines, 42);
+        assert.equal(codePreviewSettings.readCollapsedLines, 42);
+        assert.deepEqual(settingsSaveContextProjection(), committedState.saveContext);
+      }),
+    ).pipe(Effect.provide(layer));
+  }).pipe(Effect.scoped),
+);
+
 it.effect("interrupted settings loads finalize without publishing a partial snapshot", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
@@ -193,6 +385,7 @@ it.effect("interrupted settings loads finalize without publishing a partial snap
           Effect.ensuring(Effect.sync(() => interrupted++)),
         ),
       writeObject: () => Effect.void,
+      modifyObject: (_path, modify) => commitModification(modify),
       updateObject: (_path, update) => Effect.sync(() => update({})),
     });
     const dependencies = Layer.mergeAll(

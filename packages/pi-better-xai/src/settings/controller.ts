@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { SETTINGS_OPTION_DESCRIPTORS, type ResolvedConfig } from "../config.ts";
-import { XaiUsageService } from "../usage-controller.ts";
+import { XaiBoundaryError, XaiUsageService } from "../usage-controller.ts";
 
 export function registerSettingsController(
   pi: ExtensionAPI,
@@ -9,24 +9,56 @@ export function registerSettingsController(
     config(ctx: ExtensionContext): ResolvedConfig;
     updateFooter(ctx: ExtensionContext): void;
     formatDebugStatus(ctx: ExtensionContext): string;
+    notifyAtHostBoundary(
+      ctx: ExtensionContext,
+      message: string,
+      level: "info" | "warning" | "error",
+    ): void;
+    captureSignal(
+      ctx: ExtensionContext,
+    ):
+      | { readonly _tag: "Captured"; readonly signal: AbortSignal | undefined }
+      | { readonly _tag: "Unavailable" };
     run<A, E>(effect: Effect.Effect<A, E, XaiUsageService>, signal?: AbortSignal): Promise<A>;
   },
 ): void {
-  const { config, updateFooter, formatDebugStatus, run } = options;
-  const done = (signal?: AbortSignal) => run(Effect.void, signal);
+  const { config, updateFooter, formatDebugStatus, notifyAtHostBoundary, captureSignal, run } =
+    options;
+  const completeHostFeedback = (
+    ctx: ExtensionContext,
+    message: string,
+    level: "info" | "warning" | "error",
+  ) => {
+    notifyAtHostBoundary(ctx, message, level);
+    return Promise.resolve();
+  };
+  const recoverUi = (operation: string, action: () => void) =>
+    Effect.try({
+      try: action,
+      catch: () =>
+        new XaiBoundaryError({
+          operation,
+          message: "Unable to update Better xAI settings UI.",
+        }),
+    }).pipe(Effect.catch(() => Effect.logWarning(`Better xAI UI recovery: ${operation}_failed.`)));
 
   pi.registerCommand("xai-settings", {
     description: "Configure Better xAI usage display",
     handler: (args, ctx) => {
       const trimmed = args.trim();
       if (!trimmed || trimmed === "help") {
-        const cfg = config(ctx);
+        let cfg: ResolvedConfig | undefined;
+        try {
+          cfg = config(ctx);
+        } catch {
+          // Help remains useful before the session runtime has published its config.
+        }
         const lines = [
           "Better xAI settings",
-          ...SETTINGS_OPTION_DESCRIPTORS.map(
-            (descriptor) =>
-              `  ${descriptor.id}=${descriptor.currentValue(cfg)}  — ${descriptor.description}`,
-          ),
+          ...SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => {
+            const current = cfg ? `=${descriptor.currentValue(cfg)}` : "";
+            return `  ${descriptor.id}${current}  — ${descriptor.description}`;
+          }),
           "",
           "Usage:",
           "  /xai-settings",
@@ -37,46 +69,56 @@ export function registerSettingsController(
           "  /xai-settings usage.enabled false",
           "  /xai-settings usage.showResetTimes true",
         ];
-        ctx.ui.notify(lines.join("\n"), "info");
-        return done(ctx.signal);
+        return completeHostFeedback(ctx, lines.join("\n"), "info");
       }
 
       if (trimmed === "diagnostics" || trimmed === "debug") {
-        ctx.ui.notify(formatDebugStatus(ctx), "info");
-        return done(ctx.signal);
+        try {
+          return completeHostFeedback(ctx, formatDebugStatus(ctx), "info");
+        } catch {
+          return completeHostFeedback(ctx, "Better xAI diagnostics are unavailable.", "warning");
+        }
       }
 
       const [id, ...valueParts] = trimmed.split(/\s+/);
       const value = valueParts.join(" ").trim();
       if (!id || !value) {
-        ctx.ui.notify("Usage: /xai-settings <id> <value>", "error");
-        return done(ctx.signal);
+        return completeHostFeedback(ctx, "Usage: /xai-settings <id> <value>", "error");
       }
       const descriptor = SETTINGS_OPTION_DESCRIPTORS.find((entry) => entry.id === id);
       if (!descriptor) {
-        ctx.ui.notify(`Unknown setting: ${id}`, "error");
-        return done(ctx.signal);
+        return completeHostFeedback(ctx, `Unknown setting: ${id}`, "error");
       }
-      if (descriptor.values && !(descriptor.values as readonly string[]).includes(value)) {
-        ctx.ui.notify(
-          `Invalid value for ${id}. Expected one of: ${descriptor.values.join(", ")}`,
+      const allowedValues = descriptor.values;
+      if (allowedValues && !(allowedValues as readonly string[]).includes(value)) {
+        return completeHostFeedback(
+          ctx,
+          `Invalid value for ${id}. Expected one of: ${allowedValues.join(", ")}`,
           "error",
         );
-        return done(ctx.signal);
       }
+
+      const capturedSignal = captureSignal(ctx);
+      if (capturedSignal._tag === "Unavailable")
+        return completeHostFeedback(ctx, "Better xAI settings are unavailable.", "warning");
 
       return run(
         XaiUsageService.use((service) => service.updateSetting(id, value)).pipe(
           Effect.tap(() =>
-            Effect.sync(() => {
-              updateFooter(ctx);
-              ctx.ui.notify(`${id} = ${descriptor.currentValue(config(ctx))}`, "info");
-            }),
+            recoverUi("settings_render", () => updateFooter(ctx)).pipe(
+              Effect.andThen(
+                recoverUi("settings_success", () =>
+                  ctx.ui.notify(`${id} = ${descriptor.currentValue(config(ctx))}`, "info"),
+                ),
+              ),
+            ),
           ),
-          Effect.catch((error) => Effect.sync(() => ctx.ui.notify(error.message, "error"))),
+          Effect.catch((error) =>
+            recoverUi("settings_error", () => ctx.ui.notify(error.message, "error")),
+          ),
         ),
-        ctx.signal,
-      );
+        capturedSignal.signal,
+      ).catch(() => notifyAtHostBoundary(ctx, "Better xAI settings are unavailable.", "warning"));
     },
   });
 }

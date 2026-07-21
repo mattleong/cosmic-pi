@@ -46,7 +46,7 @@ export const encodeStreamingJsonBody = <A, E, R>(
   body: A,
 ): Effect.Effect<Schema.Json, StreamingHttpError, R> =>
   Schema.encodeEffect(bodySchema)(body).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(Schema.Json)),
+    Effect.flatMap((encodedBody) => Schema.decodeUnknownEffect(Schema.Json)(encodedBody)),
     Effect.mapError(
       () =>
         new StreamingHttpError({

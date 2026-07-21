@@ -3,7 +3,7 @@ import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/p
 import { codePreviewSettings } from "../settings/index";
 import { formatOnOff } from "../settings/on-off";
 import { getSettingsPath } from "../settings/store";
-import { getShikiStatus } from "../syntax/shiki";
+import { getShikiStatus } from "../syntax/render";
 import { formatEnabledCodePreviewTools } from "../tools/selection";
 import {
   formatActiveCodePreviewTools,

@@ -15,6 +15,7 @@ import {
   nodePlatformLayer,
 } from "pi-cosmic-core";
 import { SharpAdapter } from "./boundary/sharp.ts";
+import { safeHostSignal, safeHostUi, tryHostUi } from "./boundary/host-ui.ts";
 import {
   DEFAULT_CONFIG,
   DEFAULT_IMAGE_CONFIG,
@@ -64,13 +65,46 @@ const defaultDependencies: BetterOpenAIExtensionDependencies = {
   startupEffect: () => OpenAIUsageService.use(() => Effect.void),
 };
 
-const hasTerminalUI = (ctx: ExtensionContext) =>
-  ctx.mode === "tui" || (ctx.mode === undefined && ctx.hasUI);
+const hasTerminalUI = (ctx: ExtensionContext): boolean => {
+  try {
+    const mode = ctx.mode;
+    const hasUI = ctx.hasUI;
+    return mode === "tui" || (mode === undefined && hasUI);
+  } catch {
+    return false;
+  }
+};
 const isProjectTrusted = (ctx: ExtensionContext): boolean => {
   try {
     return typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
   } catch {
     return false;
+  }
+};
+type SessionHostContext = {
+  readonly cwd: string;
+  readonly signal: AbortSignal | undefined;
+  readonly aborted: boolean;
+};
+type SessionHostCapture =
+  | { readonly _tag: "Success"; readonly value: SessionHostContext }
+  | { readonly _tag: "Failure"; readonly error: OpenAIBoundaryError };
+const captureSessionHostContext = (ctx: ExtensionContext): SessionHostCapture => {
+  try {
+    const cwd = ctx.cwd;
+    const signal = ctx.signal;
+    const aborted = signal?.aborted === true;
+    if (typeof cwd !== "string" || cwd.length === 0)
+      throw new Error("The host returned an invalid working directory.");
+    return { _tag: "Success", value: { cwd, signal, aborted } };
+  } catch {
+    return {
+      _tag: "Failure",
+      error: new OpenAIBoundaryError({
+        operation: "session-context",
+        message: "Unable to capture the Pi session context.",
+      }),
+    };
   }
 };
 const requiredConfig = (projection: MutableRef.MutableRef<OpenAIProjection>): ResolvedConfig => {
@@ -125,43 +159,48 @@ export function betterOpenAIWithDependencies(
   type SessionInput = {
     readonly ctx: ExtensionContext;
     readonly context: MutableRef.MutableRef<ExtensionContext>;
+    readonly cwd: string;
+    readonly signal: AbortSignal | undefined;
+    readonly aborted: boolean;
     readonly generation: number;
     readonly projectTrusted: boolean;
   };
+  const makeApplicationLayer = ({ context, cwd, projectTrusted }: SessionInput) => {
+    const usage = OpenAIUsageService.layer({
+      context,
+      cwd,
+      projection,
+      projectTrusted,
+      onChange: () => {
+        if (sessionActive) updateFooter(MutableRef.get(context));
+      },
+    });
+    const fast = FastModeService.layer({
+      serviceTier: SERVICE_TIER,
+      projection: fastProjection,
+      registerInjectionIngress: (offer) => {
+        recordFastInjection = offer;
+      },
+    }).pipe(Layer.provide(usage));
+    const image = OpenAIImageService.layer({ context, projection }).pipe(
+      Layer.provide(Layer.merge(SharpAdapter.layer, SafeFile.layer)),
+    );
+    const platform = Layer.merge(
+      nodePlatformLayer,
+      AgentDirectory.layerFromHost(() => getAgentDir()),
+    );
+    return Layer.mergeAll(usage, fast, image).pipe(Layer.provide(platform));
+  };
+  type OpenAIApplicationLayer = ReturnType<typeof makeApplicationLayer>;
+  type OpenAIApplication = Layer.Success<OpenAIApplicationLayer>;
+  type OpenAIRuntimeError = Layer.Error<OpenAIApplicationLayer>;
   const slot = makePiSessionRuntimeSlot<
     SessionInput,
-    OpenAIUsageService | OpenAIImageService | FastModeService,
-    OpenAIConfigError
+    OpenAIApplication,
+    OpenAIConfigError,
+    OpenAIRuntimeError
   >({
-    makeRuntime: ({ ctx, context, projectTrusted }) => {
-      const usage = OpenAIUsageService.layer({
-        context,
-        cwd: ctx.cwd,
-        projection,
-        projectTrusted,
-        onChange: () => {
-          if (sessionActive) updateFooter(MutableRef.get(context));
-        },
-      });
-      const fast = FastModeService.layer({
-        serviceTier: SERVICE_TIER,
-        projection: fastProjection,
-        registerInjectionIngress: (offer) => {
-          recordFastInjection = offer;
-        },
-      }).pipe(Layer.provide(usage));
-      const image = OpenAIImageService.layer({ context, projection }).pipe(
-        Layer.provide(Layer.merge(SharpAdapter.layer, SafeFile.layer)),
-      );
-      const platform = Layer.merge(
-        nodePlatformLayer,
-        AgentDirectory.layerFromHost(() => getAgentDir()),
-      );
-      return makePiManagedRuntime(
-        pi,
-        Layer.mergeAll(usage, fast, image).pipe(Layer.provide(platform)),
-      );
-    },
+    makeRuntime: (input) => makePiManagedRuntime(pi, makeApplicationLayer(input)),
     startup: ({ ctx, generation }) =>
       dependencies
         .startupEffect(generation)
@@ -180,28 +219,22 @@ export function betterOpenAIWithDependencies(
       updateFooter(ctx);
       const fast = MutableRef.get(fastProjection);
       if (fast.desiredActive && !isFastActive(ctx, fast))
-        ctx.ui.notify(unsupportedRequestMessage(ctx), "warning");
-      if (isFastActive(ctx, fast)) ctx.ui.notify(fastStateText(ctx, fast), "info");
+        safeHostUi(() => ctx.ui.notify(unsupportedRequestMessage(ctx), "warning"));
+      if (isFastActive(ctx, fast))
+        safeHostUi(() => ctx.ui.notify(fastStateText(ctx, fast), "info"));
     },
-    onDeactivated: () => {
+    onDeactivated: ({ context }) => {
       sessionActive = false;
-      currentContext = undefined;
+      if (currentContext === context) currentContext = undefined;
       cosmicUiAdapter.shutdown();
       resetProjection(projection);
       MutableRef.set(fastProjection, initialFastSnapshot());
     },
     onStartFailure: ({ ctx }) => {
-      try {
-        ctx.ui.notify("Better OpenAI failed to start.", "warning");
-      } catch {
-        // Host notification failures do not prevent runtime cleanup.
-      }
+      safeHostUi(() => ctx.ui.notify("Better OpenAI failed to start.", "warning"));
     },
   });
-  const run = <A, E>(
-    effect: Effect.Effect<A, E, OpenAIUsageService | OpenAIImageService | FastModeService>,
-    signal?: AbortSignal,
-  ) =>
+  const run = <A, E>(effect: Effect.Effect<A, E, OpenAIApplication>, signal?: AbortSignal) =>
     sessionActive
       ? slot.run(effect, signal)
       : Promise.reject(
@@ -221,27 +254,31 @@ export function betterOpenAIWithDependencies(
     handler: (args, ctx) => {
       updateContext(ctx);
       if (args.trim()) {
-        ctx.ui.notify("Usage: /fast", "error");
+        safeHostUi(() => ctx.ui.notify("Usage: /fast", "error"));
         return Promise.resolve();
       }
       const desired = !MutableRef.get(fastProjection).desiredActive;
       return run(
         FastModeService.use((service) => service.setDesired(ctx, desired)).pipe(
           Effect.tap(() =>
-            Effect.sync(() => {
-              updateFooter(ctx);
+            Effect.gen(function* () {
+              yield* tryHostUi("fast.render", () => updateFooter(ctx)).pipe(
+                Effect.catchTag("OpenAIHostUiError", () => Effect.void),
+              );
               const fast = MutableRef.get(fastProjection);
               const active = isFastActive(ctx, fast);
-              ctx.ui.notify(
-                fast.desiredActive && !active
-                  ? unsupportedRequestMessage(ctx)
-                  : fastStateText(ctx, fast),
-                fast.desiredActive && !active ? "warning" : "info",
-              );
+              yield* tryHostUi("fast.notify", () =>
+                ctx.ui.notify(
+                  fast.desiredActive && !active
+                    ? unsupportedRequestMessage(ctx)
+                    : fastStateText(ctx, fast),
+                  fast.desiredActive && !active ? "warning" : "info",
+                ),
+              ).pipe(Effect.catchTag("OpenAIHostUiError", () => Effect.void));
             }),
           ),
         ),
-        ctx.signal,
+        safeHostSignal(ctx),
       );
     },
   });
@@ -251,8 +288,10 @@ export function betterOpenAIWithDependencies(
       updateContext(ctx);
       return run(
         OpenAIUsageService.use((service) => service.refresh({ notify: true, force: true })),
-        ctx.signal,
-      ).catch(() => ctx.ui.notify("OpenAI usage is unavailable.", "warning"));
+        safeHostSignal(ctx),
+      ).catch(() => {
+        safeHostUi(() => ctx.ui.notify("OpenAI usage is unavailable.", "warning"));
+      });
     },
   });
   const formatDebugStatus = (ctx: ExtensionContext) => {
@@ -280,24 +319,37 @@ export function betterOpenAIWithDependencies(
   registerOpenAIImage(pi, run, updateContext);
 
   pi.on("session_start", (_event, ctx) => {
+    const captured = captureSessionHostContext(ctx);
+    if (captured._tag === "Failure") {
+      safeHostUi(() => ctx.ui.notify("Better OpenAI failed to start.", "warning"));
+      return slot.shutdown();
+    }
+    const { cwd, signal, aborted } = captured.value;
+    if (aborted) {
+      safeHostUi(() => ctx.ui.notify("Better OpenAI failed to start.", "warning"));
+      return slot.shutdown();
+    }
+    const projectTrusted = isProjectTrusted(ctx);
     cosmicUiAdapter.shutdown();
     resetProjection(projection);
     MutableRef.set(fastProjection, initialFastSnapshot());
+    footerController.resetTotals();
     footerController.invalidateContextUsage();
     footerController.invalidateSessionName();
     const context = MutableRef.make(ctx);
     currentContext = context;
-    if (ctx.signal?.aborted) {
-      try {
-        ctx.ui.notify("Better OpenAI failed to start.", "warning");
-      } catch {
-        // Host notification failures do not prevent runtime cleanup.
-      }
-    }
     return slot
       .start(
-        { ctx, context, generation: ++startGeneration, projectTrusted: isProjectTrusted(ctx) },
-        ctx.signal,
+        {
+          ctx,
+          context,
+          cwd,
+          signal,
+          aborted,
+          generation: ++startGeneration,
+          projectTrusted,
+        },
+        signal,
       )
       .then(() => undefined);
   });
@@ -315,7 +367,7 @@ export function betterOpenAIWithDependencies(
     updateFooter(ctx);
     slot.fork(
       OpenAIUsageService.use((service) => service.refresh()),
-      ctx.signal,
+      safeHostSignal(ctx),
     );
   });
   const refreshFooter = (ctx: ExtensionContext) => {
@@ -327,6 +379,7 @@ export function betterOpenAIWithDependencies(
   pi.on("session_compact", (_event, ctx) => refreshFooter(ctx));
   pi.on("session_tree", (_event, ctx) => refreshFooter(ctx));
   pi.on("model_select", (_event, ctx) => {
+    const signal = safeHostSignal(ctx);
     const before = MutableRef.get(fastProjection).active;
     updateContext(ctx);
     footerController.invalidateContextUsage();
@@ -335,19 +388,21 @@ export function betterOpenAIWithDependencies(
     const fast = MutableRef.get(fastProjection);
     const active = isFastActive(ctx, fast);
     if (active !== before)
-      ctx.ui.notify(
-        active ? fastStateText(ctx, fast) : inactiveForModelMessage(ctx),
-        active ? "info" : "warning",
+      safeHostUi(() =>
+        ctx.ui.notify(
+          active ? fastStateText(ctx, fast) : inactiveForModelMessage(ctx),
+          active ? "info" : "warning",
+        ),
       );
     slot.fork(
       FastModeService.use((service) => service.modelChanged(ctx)),
-      ctx.signal,
+      signal,
     );
     slot.fork(
       OpenAIUsageService.use((service) =>
         service.contextChanged(true).pipe(Effect.andThen(service.refresh({ force: true }))),
       ),
-      ctx.signal,
+      signal,
     );
   });
   pi.on("session_shutdown", () => {

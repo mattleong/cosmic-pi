@@ -2,9 +2,10 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { makeSynchronousIngress, type SynchronousIngress } from "pi-cosmic-core";
-import { ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
+import { disposeShikiHighlighter, ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
 import { codePreviewPerformanceConfig } from "../config/env";
 import { codePreviewSettings } from "../settings";
 import {
@@ -129,6 +130,7 @@ export class CodePreviewSyntaxService extends Context.Service<
         statusVersion: 0,
       };
       const state = yield* SynchronizedRef.make(initial);
+      const highlighterLifecycle = yield* Semaphore.make(1);
 
       const publish = (current: SyntaxState) =>
         publishSyntaxProjection(owner, syntaxSnapshot(current));
@@ -141,19 +143,20 @@ export class CodePreviewSyntaxService extends Context.Service<
           transition(current).pipe(Effect.tap(([, next]) => Effect.sync(() => publish(next)))),
         );
 
-      const dispose = modify((current) =>
-        Effect.sync(() => {
-          current.highlighter?.dispose();
-          return [
-            undefined,
-            {
-              ...initial,
-              generation: current.generation + 1,
-              initVersion: current.initVersion + 1,
-              statusVersion: current.statusVersion + 1,
-            },
-          ] as const;
-        }),
+      const dispose = highlighterLifecycle.withPermits(1)(
+        modify((current) =>
+          disposeShikiHighlighter(current.highlighter).pipe(
+            Effect.as([
+              undefined,
+              {
+                ...initial,
+                generation: current.generation + 1,
+                initVersion: current.initVersion + 1,
+                statusVersion: current.statusVersion + 1,
+              },
+            ] as const),
+          ),
+        ),
       );
 
       const initialize: (theme: string) => Effect.Effect<void> = Effect.fn(
@@ -198,52 +201,58 @@ export class CodePreviewSyntaxService extends Context.Service<
               : current,
           ] as const),
         ).pipe(Effect.andThen(Deferred.succeed(flight.done, "Interrupted")), Effect.asVoid);
-        return yield* adapter.create(theme, PRELOADED_SHIKI_LANGUAGES).pipe(
-          Effect.matchEffect({
-            onFailure: () =>
-              modify((current) => {
-                if (current.initVersion !== flight.version)
-                  return Effect.succeed([undefined, current] as const);
-                // Replacement is transactional: a failed candidate only clears its flight.
-                // The working highlighter and renderer projection remain installed.
-                return Effect.succeed([
-                  undefined,
-                  {
-                    ...current,
-                    initialization: undefined,
-                    statusVersion: current.statusVersion + 1,
-                  },
-                ] as const);
-              }).pipe(
-                Effect.andThen(
-                  Effect.logWarning(
-                    "Shiki failed to initialize; code previews will use plain text.",
+        return yield* Effect.uninterruptibleMask((restore) =>
+          restore(adapter.create(theme, PRELOADED_SHIKI_LANGUAGES)).pipe(
+            Effect.matchEffect({
+              onFailure: () =>
+                modify((current) => {
+                  if (current.initVersion !== flight.version)
+                    return Effect.succeed([undefined, current] as const);
+                  // Replacement is transactional: a failed candidate only clears its flight.
+                  // The working highlighter and renderer projection remain installed.
+                  return Effect.succeed([
+                    undefined,
+                    {
+                      ...current,
+                      initialization: undefined,
+                      statusVersion: current.statusVersion + 1,
+                    },
+                  ] as const);
+                }).pipe(
+                  Effect.andThen(
+                    Effect.logWarning(
+                      "Shiki failed to initialize; code previews will use plain text.",
+                    ),
                   ),
                 ),
-              ),
-            onSuccess: (next) =>
-              modify((current) => {
-                if (current.initVersion !== flight.version) {
-                  next.dispose();
-                  return Effect.succeed([[] as readonly (() => void)[], current] as const);
-                }
-                current.highlighter?.dispose();
-                return Effect.succeed([
-                  undefined,
-                  {
-                    ...current,
-                    highlighter: next,
-                    theme,
-                    generation: current.generation + 1,
-                    initialization: undefined,
-                    loadedLanguages: new Set(PRELOADED_SHIKI_LANGUAGES),
-                    pendingLanguages: new Set(),
-                    languageCallbacks: new Map(),
-                    statusVersion: current.statusVersion + 1,
-                  },
-                ] as const);
-              }),
-          }),
+              onSuccess: (next) =>
+                highlighterLifecycle.withPermits(1)(
+                  modify((current) => {
+                    if (current.initVersion !== flight.version)
+                      return disposeShikiHighlighter(next).pipe(
+                        Effect.as([[] as readonly (() => void)[], current] as const),
+                      );
+                    return disposeShikiHighlighter(current.highlighter).pipe(
+                      Effect.as([
+                        undefined,
+                        {
+                          ...current,
+                          highlighter: next,
+                          theme,
+                          generation: current.generation + 1,
+                          initialization: undefined,
+                          loadedLanguages: new Set(PRELOADED_SHIKI_LANGUAGES),
+                          pendingLanguages: new Set(),
+                          languageCallbacks: new Map(),
+                          statusVersion: current.statusVersion + 1,
+                        },
+                      ] as const),
+                    );
+                  }),
+                ),
+            }),
+          ),
+        ).pipe(
           Effect.onInterrupt(() => clearInterruptedFlight),
           Effect.ensuring(Deferred.succeed(flight.done, "Completed").pipe(Effect.asVoid)),
           Effect.withSpan("pi-code-previews.shiki.initialize", {
@@ -286,7 +295,17 @@ export class CodePreviewSyntaxService extends Context.Service<
         });
         if (!decision) return;
         if (decision.kind === "Notify") return yield* invokeCallbacks(decision.callbacks);
-        return yield* adapter.loadLanguage(decision.highlighter, language).pipe(
+        const loadCurrentGeneration = highlighterLifecycle.withPermits(1)(
+          SynchronizedRef.get(state).pipe(
+            Effect.flatMap((current) =>
+              current.generation === decision.generation &&
+              current.highlighter === decision.highlighter
+                ? adapter.loadLanguage(decision.highlighter, language)
+                : Effect.void,
+            ),
+          ),
+        );
+        return yield* loadCurrentGeneration.pipe(
           Effect.matchEffect({
             onFailure: () =>
               modify((current) => {
@@ -429,6 +448,7 @@ export class CodePreviewSyntaxService extends Context.Service<
         Effect.sync(() => {
           acceptingRequests = false;
         }).pipe(
+          Effect.andThen(ingress.shutdown),
           Effect.andThen(flushPendingCallbacks),
           Effect.andThen(dispose),
           Effect.ensuring(Effect.sync(() => clearSyntaxProjection(owner))),

@@ -2,8 +2,10 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
+import * as Semaphore from "effect/Semaphore";
 import {
   AgentDirectory,
+  freezeSnapshot,
   JsonDocumentStore,
   makeFrozenProjection,
   type JsonDocumentError,
@@ -47,8 +49,8 @@ export interface CodePreviewSettingsServiceShape {
 let saveContextProjection: SettingsSaveContext | undefined;
 
 function publishState(state: CodePreviewSettingsState): void {
-  saveContextProjection = state.saveContext;
   setCodePreviewSettings(state.settings);
+  saveContextProjection = state.saveContext;
 }
 
 export function settingsSaveContextProjection(): SettingsSaveContext | undefined {
@@ -78,15 +80,18 @@ export class CodePreviewSettingsService extends Context.Service<
         saveContext: defaultSettingsSaveContext(environment.defaults),
       };
       const state = yield* makeFrozenProjection(initial, (current) => current, publishState);
+      const operations = yield* Semaphore.make(1);
 
       const loadFromDisk = (options: LoadSettingsOptions = {}) =>
-        state.transition(() =>
-          loadSettingsStateEffect(options).pipe(
-            Effect.provide(dependencies),
-            Effect.map((loaded) => {
-              const settings = cloneCodePreviewSettings(loaded.settings ?? environment.defaults);
-              return [loaded.settings, { settings, saveContext: loaded.saveContext }] as const;
-            }),
+        operations.withPermits(1)(
+          state.transition(() =>
+            loadSettingsStateEffect(options).pipe(
+              Effect.provide(dependencies),
+              Effect.map((loaded) => {
+                const settings = cloneCodePreviewSettings(loaded.settings ?? environment.defaults);
+                return [loaded.settings, { settings, saveContext: loaded.saveContext }] as const;
+              }),
+            ),
           ),
         );
 
@@ -96,23 +101,34 @@ export class CodePreviewSettingsService extends Context.Service<
         );
 
       const save = (settings: CodePreviewSettings, context?: SettingsSaveContext) =>
-        state.transition((current) =>
-          saveSettingsStateEffect(settings, context ?? current.saveContext).pipe(
-            Effect.provide(dependencies),
-            Effect.map(
-              (saveContext) =>
-                [undefined, { settings: cloneCodePreviewSettings(settings), saveContext }] as const,
-            ),
-          ),
+        operations.withPermits(1)(
+          Effect.gen(function* () {
+            const current = yield* state.getState;
+            yield* saveSettingsStateEffect(
+              settings,
+              context ?? current.saveContext,
+              (saveContext) => {
+                // This callback is evaluated before the document write. Preflight the exact plain
+                // projection now so the post-rename hook performs only an invariant-safe swap.
+                const committedState = freezeSnapshot<CodePreviewSettingsState>({
+                  settings: cloneCodePreviewSettings(saveContext.loaded),
+                  saveContext,
+                });
+                return state
+                  .transition(() => Effect.succeed([undefined, committedState] as const))
+                  .pipe(Effect.orDie);
+              },
+            ).pipe(Effect.provide(dependencies));
+          }),
         );
 
       return CodePreviewSettingsService.of({
         load,
         loadFromDisk,
         save,
-        // A no-op transition is a FIFO barrier behind every save that has already entered the
-        // synchronized state. The Promise-shaped Pi close edge awaits this before disposal.
-        flush: state.transition((current) => Effect.succeed([undefined, current] as const)),
+        // The operation semaphore is a FIFO barrier behind every save/load that has entered the
+        // service. The Promise-shaped Pi close edge awaits this before disposal.
+        flush: operations.withPermits(1)(Effect.void),
         snapshot: state.getState,
       });
     }),

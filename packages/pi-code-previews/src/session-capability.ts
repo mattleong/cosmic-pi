@@ -4,6 +4,7 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import type * as Layer from "effect/Layer";
 import { nodeFilePlatformLayer, type PiSessionRuntimeSlot } from "pi-cosmic-core";
+import type { CodePreviewRuntimeError } from "./application-layer";
 import type { CodePreviewSession } from "./session-service";
 import type { CodePreviewSettingsService } from "./settings/service";
 import type { CodePreviewSyntaxService } from "./syntax/service";
@@ -11,6 +12,7 @@ import type { CodePreviewWriteService } from "./write/service";
 import {
   deferProjectedCodePreview,
   publishCodePreviewDefer,
+  publishCodePreviewSchedule,
   publishCodePreviewSessionActive,
 } from "./session-projection";
 
@@ -20,6 +22,8 @@ type SessionRequirements =
   | CodePreviewSyntaxService
   | CodePreviewWriteService
   | Layer.Success<typeof nodeFilePlatformLayer>;
+
+export type CodePreviewSessionFiber<A, E> = Fiber.Fiber<A, E | CodePreviewRuntimeError>;
 
 export class CodePreviewSessionUnavailable extends Schema.TaggedErrorClass<CodePreviewSessionUnavailable>()(
   "CodePreviewSessionUnavailable",
@@ -35,10 +39,41 @@ export interface CodePreviewSessionCapability {
   readonly fork: <A, E>(
     effect: Effect.Effect<A, E, SessionRequirements>,
     signal?: AbortSignal,
-  ) => Fiber.Fiber<A, unknown> | undefined;
+  ) => CodePreviewSessionFiber<A, E> | undefined;
 }
 
 let activeCapability: CodePreviewSessionCapability | undefined;
+
+const invokeCodePreviewCallback = (task: () => void): Effect.Effect<void> =>
+  Effect.try({ try: task, catch: () => undefined }).pipe(Effect.ignore);
+
+function forkSessionEffect<A, E>(
+  capability: CodePreviewSessionCapability,
+  effect: Effect.Effect<A, E, SessionRequirements>,
+): CodePreviewSessionFiber<A, E> | undefined {
+  try {
+    return capability.fork(effect);
+  } catch {
+    return undefined;
+  }
+}
+
+function interruptSessionFiber<A, E>(
+  capability: CodePreviewSessionCapability,
+  fiber: Fiber.Fiber<A, E> | undefined,
+): void {
+  if (!fiber) return;
+  forkSessionEffect(capability, Fiber.interrupt(fiber));
+}
+
+function scheduleWithCapability(
+  capability: CodePreviewSessionCapability,
+  interval: number,
+  task: () => void,
+): () => void {
+  const fiber = forkSessionEffect(capability, previewScheduleEffect(interval, task));
+  return () => interruptSessionFiber(capability, fiber);
+}
 
 export function installCodePreviewSessionCapability(
   capability: CodePreviewSessionCapability | undefined,
@@ -48,19 +83,26 @@ export function installCodePreviewSessionCapability(
   publishCodePreviewDefer(
     capability
       ? (task) => {
-          const fiber = capability.fork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
+          const fiber = forkSessionEffect(
+            capability,
+            Effect.yieldNow.pipe(Effect.andThen(invokeCodePreviewCallback(task))),
+          );
           return () => {
-            if (fiber) capability.fork(Fiber.interrupt(fiber));
+            interruptSessionFiber(capability, fiber);
           };
         }
       : undefined,
   );
+  publishCodePreviewSchedule(
+    capability ? (interval, task) => scheduleWithCapability(capability, interval, task) : undefined,
+  );
 }
 
-export function installCodePreviewSessionSlot<R, E>(
-  slot: PiSessionRuntimeSlot<unknown, SessionRequirements | R, E>,
-  token: number,
-): void {
+export function installCodePreviewSessionSlot<
+  Input,
+  R,
+  RuntimeError extends CodePreviewRuntimeError,
+>(slot: PiSessionRuntimeSlot<Input, SessionRequirements | R, RuntimeError>, token: number): void {
   installCodePreviewSessionCapability({
     token,
     run: (effect, signal) => slot.run(effect, signal),
@@ -73,6 +115,7 @@ export function clearCodePreviewSessionCapability(token?: number): void {
     activeCapability = undefined;
     publishCodePreviewSessionActive(false);
     publishCodePreviewDefer(undefined);
+    publishCodePreviewSchedule(undefined);
   }
 }
 
@@ -97,7 +140,7 @@ export function runCodePreviewSessionEffect<A, E>(
 export function forkCodePreviewSessionEffect<A, E>(
   effect: Effect.Effect<A, E, SessionRequirements>,
   signal?: AbortSignal,
-): Fiber.Fiber<A, unknown> | undefined {
+): CodePreviewSessionFiber<A, E> | undefined {
   return activeCapability?.fork(effect, signal);
 }
 
@@ -109,15 +152,12 @@ export function deferCodePreview(task: () => void): () => void {
 /** Fixed cadence avoids recursive-sleep drift while remaining TestClock driven. */
 export const previewScheduleEffect = (interval: number, task: () => void) =>
   Effect.sleep(interval).pipe(
-    Effect.andThen(Effect.repeat(Effect.sync(task), Schedule.fixed(interval))),
+    Effect.andThen(Effect.repeat(invokeCodePreviewCallback(task), Schedule.fixed(interval))),
     Effect.asVoid,
   );
 
 export function scheduleCodePreview(interval: number, task: () => void): () => void {
   const active = activeCapability;
   if (!active) return () => undefined;
-  const fiber = active.fork(previewScheduleEffect(interval, task));
-  return () => {
-    if (fiber) active.fork(Fiber.interrupt(fiber));
-  };
+  return scheduleWithCapability(active, interval, task);
 }

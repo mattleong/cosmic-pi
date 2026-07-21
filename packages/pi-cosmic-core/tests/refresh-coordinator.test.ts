@@ -3,7 +3,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import { makeRefreshCoordinator, type RefreshRequest } from "../index.ts";
+import {
+  makeRefreshCoordinator,
+  makeRefreshCoordinatorWith,
+  type RefreshRequest,
+} from "../index.ts";
 
 describe("RefreshCoordinator", () => {
   it.effect("coalesces force and notify into one follow-up", () =>
@@ -30,6 +34,58 @@ describe("RefreshCoordinator", () => {
       yield* Fiber.join(forced);
       yield* Fiber.join(notified);
       expect(requests).toEqual([{}, { force: true, notify: true }]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("runs a falsy queued follow-up request", () =>
+    Effect.gen(function* () {
+      const coordinator = yield* makeRefreshCoordinatorWith<number>((_current, next) => next);
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const requests: number[] = [];
+      const operation = (request: number) =>
+        Effect.gen(function* () {
+          requests.push(request);
+          if (requests.length === 1) {
+            yield* Deferred.succeed(started, undefined);
+            yield* Deferred.await(release);
+          }
+        });
+
+      const owner = yield* coordinator.run(1, operation).pipe(Effect.forkScoped);
+      yield* Deferred.await(started);
+      const waiter = yield* coordinator.run(0, operation).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(owner);
+      yield* Fiber.join(waiter);
+      expect(requests).toEqual([1, 0]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("distinguishes an undefined request from no queued follow-up", () =>
+    Effect.gen(function* () {
+      const coordinator = yield* makeRefreshCoordinatorWith<undefined>((_current, next) => next);
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let calls = 0;
+      const operation = () =>
+        Effect.gen(function* () {
+          calls++;
+          if (calls === 1) {
+            yield* Deferred.succeed(started, undefined);
+            yield* Deferred.await(release);
+          }
+        });
+
+      const owner = yield* coordinator.run(undefined, operation).pipe(Effect.forkScoped);
+      yield* Deferred.await(started);
+      const waiter = yield* coordinator.run(undefined, operation).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(owner);
+      yield* Fiber.join(waiter);
+      expect(calls).toBe(2);
     }).pipe(Effect.scoped),
   );
 

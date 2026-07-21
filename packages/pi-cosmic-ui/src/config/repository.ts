@@ -8,6 +8,7 @@ import {
   resolveConfig,
   setFooterVisibility,
   updateFooterConfig,
+  type CosmicUiConfigAfterCommit,
   type CosmicUiConfigError,
 } from "./store.ts";
 
@@ -18,16 +19,16 @@ export interface CosmicUiConfigRepositoryShape {
   ) => Effect.Effect<ResolvedCosmicUiConfig, CosmicUiConfigError>;
   readonly updateFooter: (
     cwd: string,
-    config: ResolvedCosmicUiConfig,
     patch: Partial<ResolvedCosmicUiConfig["footer"]>,
     projectTrusted?: boolean,
+    afterCommit?: CosmicUiConfigAfterCommit,
   ) => Effect.Effect<ResolvedCosmicUiConfig, CosmicUiConfigError>;
   readonly setVisibility: (
     cwd: string,
-    config: ResolvedCosmicUiConfig,
     id: string,
     visible: boolean,
     projectTrusted?: boolean,
+    afterCommit?: CosmicUiConfigAfterCommit,
   ) => Effect.Effect<ResolvedCosmicUiConfig, CosmicUiConfigError>;
 }
 
@@ -44,10 +45,10 @@ export class CosmicUiConfigRepository extends Context.Service<
         effect.pipe(Effect.provideContext(dependencies));
       return CosmicUiConfigRepository.of({
         resolve: (cwd, projectTrusted) => provide(resolveConfig(cwd, agentDir, projectTrusted)),
-        updateFooter: (cwd, config, patch, projectTrusted) =>
-          provide(updateFooterConfig(cwd, agentDir, config, patch, projectTrusted)),
-        setVisibility: (cwd, config, id, visible, projectTrusted) =>
-          provide(setFooterVisibility(cwd, agentDir, config, id, visible, projectTrusted)),
+        updateFooter: (cwd, patch, projectTrusted, afterCommit) =>
+          provide(updateFooterConfig(cwd, agentDir, patch, projectTrusted, afterCommit)),
+        setVisibility: (cwd, id, visible, projectTrusted, afterCommit) =>
+          provide(setFooterVisibility(cwd, agentDir, id, visible, projectTrusted, afterCommit)),
       });
     }),
   );

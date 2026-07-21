@@ -23,7 +23,13 @@ export function createCosmicFooterClient(
   owner: string,
 ): CosmicFooterClient {
   let active = false;
-  const emit = (name: string, value: unknown) => events?.emit(name, value);
+  const emit = (name: string, value: unknown) => {
+    try {
+      events?.emit(name, value);
+    } catch {
+      return;
+    }
+  };
   return {
     get active() {
       return active;
@@ -50,8 +56,10 @@ export function createCosmicFooterClient(
         emit(COSMIC_UI_FOOTER_INVALIDATE, { version: COSMIC_UI_PROTOCOL_VERSION, owner, id });
     },
     shutdown() {
-      if (active) emit(COSMIC_UI_FOOTER_REMOVE, { version: COSMIC_UI_PROTOCOL_VERSION, owner });
+      const removeOwner = active;
       active = false;
+      if (removeOwner)
+        emit(COSMIC_UI_FOOTER_REMOVE, { version: COSMIC_UI_PROTOCOL_VERSION, owner });
     },
   };
 }

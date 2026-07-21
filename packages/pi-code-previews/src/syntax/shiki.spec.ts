@@ -360,6 +360,82 @@ describe("session syntax service", () => {
     );
   });
 
+  it.effect("isolates throwing disposers while transferring replacement ownership", () => {
+    setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
+    const captured = makeCapturedLogger();
+    let oldDisposeAttempts = 0;
+    let nextDisposeAttempts = 0;
+    const old = highlighter(() => {
+      oldDisposeAttempts++;
+      throw new Error("third-party disposal failed");
+    });
+    const next = highlighter(() => nextDisposeAttempts++);
+    const adapter = ShikiAdapter.of({
+      create: (theme) => Effect.succeed(theme === "old" ? old : next),
+      loadLanguage: () => Effect.void,
+    });
+    const layer = Layer.merge(
+      CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+      captured.layer,
+    );
+    return Effect.gen(function* () {
+      yield* CodePreviewSyntaxService.use((service) =>
+        Effect.gen(function* () {
+          yield* service.initialize("old");
+          yield* service.initialize("next");
+          assert.equal(syntaxProjection()?.highlighter, next);
+          assert.equal(syntaxProjection()?.theme, "next");
+        }),
+      ).pipe(Effect.provide(layer));
+      assert.equal(oldDisposeAttempts, 1);
+      assert.equal(nextDisposeAttempts, 1);
+      assert.match(capturedTelemetrySnapshot(captured), /failed to dispose cleanly/);
+    });
+  });
+
+  it.effect(
+    "interrupts a non-settling language load before disposing and completing shutdown",
+    () =>
+      Effect.gen(function* () {
+        setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
+        const started = yield* Deferred.make<void>();
+        const events: string[] = [];
+        let disposeAttempts = 0;
+        const adapter = ShikiAdapter.of({
+          create: () =>
+            Effect.succeed(
+              highlighter(() => {
+                disposeAttempts++;
+                events.push("dispose");
+              }),
+            ),
+          loadLanguage: () =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.ensuring(Effect.sync(() => events.push("language-stopped"))),
+            ),
+        });
+        const session = yield* CodePreviewSyntaxService.use((service) =>
+          Effect.gen(function* () {
+            yield* service.initialize("dark-plus");
+            requestSyntaxLanguage("rust");
+            yield* Deferred.await(started);
+          }),
+        ).pipe(
+          Effect.provide(
+            CodePreviewSyntaxService.layer.pipe(
+              Layer.provide(Layer.succeed(ShikiAdapter, adapter)),
+            ),
+          ),
+          Effect.forkScoped,
+        );
+        yield* Deferred.await(started);
+        yield* Fiber.join(session);
+        assert.deepEqual(events, ["language-stopped", "dispose"]);
+        assert.equal(disposeAttempts, 1);
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("interrupts in-flight initialization", () => {
     let interrupted = 0;
     return Effect.gen(function* () {

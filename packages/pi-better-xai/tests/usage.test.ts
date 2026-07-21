@@ -16,6 +16,7 @@ import {
   JsonDocumentStore,
   JsonHttpClient,
   JsonHttpError,
+  type JsonDocumentModification,
   makePiRuntime,
   type JsonDocumentStoreShape,
   type JsonObject,
@@ -35,6 +36,7 @@ import {
 } from "../src/config.ts";
 import {
   XaiUsageService,
+  formatDebug,
   isXaiSubscriptionModel,
   makeProjection,
   synchronizeProjectionContext,
@@ -70,18 +72,75 @@ const weeklyFixture = {
 
 function documentHarness(initial: Readonly<Record<string, JsonObject>> = {}) {
   const documents = new Map(Object.entries(initial));
+  let beforeNextUpdate: ((current: JsonObject) => JsonObject) | undefined;
+  let nextUpdateGate:
+    | {
+        readonly _tag: "BeforeCommit" | "Committed";
+        readonly started: Deferred.Deferred<void>;
+        readonly release: Deferred.Deferred<void>;
+      }
+    | undefined;
+  let updateCount = 0;
+  const modifyObject: NonNullable<JsonDocumentStoreShape["modifyObject"]> = (path, modify) =>
+    Effect.gen(function* () {
+      updateCount++;
+      const current = documents.get(path) ?? {};
+      const atomicCurrent = beforeNextUpdate ? beforeNextUpdate(current) : current;
+      beforeNextUpdate = undefined;
+      const { value, document, afterCommit } = yield* modify(atomicCurrent);
+      const gate = nextUpdateGate;
+      nextUpdateGate = undefined;
+      if (gate?._tag === "BeforeCommit") {
+        yield* Deferred.succeed(gate.started, undefined);
+        yield* Deferred.await(gate.release);
+      }
+      const commit = Effect.sync(() => void documents.set(path, document)).pipe(
+        Effect.andThen(afterCommit ?? Effect.void),
+      );
+      if (gate?._tag === "Committed") {
+        return yield* Effect.gen(function* () {
+          yield* Effect.sync(() => void documents.set(path, document));
+          yield* Deferred.succeed(gate.started, undefined);
+          yield* Deferred.await(gate.release);
+          yield* afterCommit ?? Effect.void;
+          return value;
+        }).pipe(Effect.uninterruptible);
+      }
+      yield* commit.pipe(Effect.uninterruptible);
+      return value;
+    });
   const service: JsonDocumentStoreShape = {
     exists: (path) => Effect.succeed(documents.has(path)),
     readObject: (path) => Effect.succeed(documents.get(path)),
     writeObject: (path, document) => Effect.sync(() => void documents.set(path, document)),
+    modifyObject,
     updateObject: (path, update) =>
-      Effect.sync(() => {
-        const next = update(documents.get(path) ?? {});
-        documents.set(path, next);
-        return next;
-      }),
+      modifyObject(path, (current) =>
+        Effect.sync(() => {
+          const next = update(current);
+          return { value: next, document: next } satisfies JsonDocumentModification<JsonObject>;
+        }),
+      ),
   };
-  return { documents, layer: Layer.succeed(JsonDocumentStore, service) };
+  return {
+    documents,
+    layer: Layer.succeed(JsonDocumentStore, service),
+    injectBeforeNextUpdate(update: (current: JsonObject) => JsonObject) {
+      beforeNextUpdate = update;
+    },
+    blockNextUpdateBeforeCommit(
+      started: Deferred.Deferred<void>,
+      release: Deferred.Deferred<void>,
+    ) {
+      nextUpdateGate = { _tag: "BeforeCommit", started, release };
+    },
+    blockNextUpdateAtCommit(started: Deferred.Deferred<void>, release: Deferred.Deferred<void>) {
+      nextUpdateGate = { _tag: "Committed", started, release };
+    },
+    get updateCount() {
+      return updateCount;
+    },
+  };
 }
 
 function httpLayer(request: Parameters<typeof jsonHttpTestLayer>[0]) {
@@ -289,6 +348,7 @@ describe("xAI credentials", () => {
         exists: () => Effect.fail(failure),
         readObject: () => Effect.fail(failure),
         writeObject: () => Effect.fail(failure),
+        modifyObject: () => Effect.fail(failure),
         updateObject: () => Effect.fail(failure),
       }),
     );
@@ -388,6 +448,14 @@ describe("xAI credentials", () => {
       exists: () => Effect.succeed(true),
       readObject: () => Effect.succeed(original),
       writeObject: () => Effect.die("unexpected direct write"),
+      modifyObject: () =>
+        Effect.fail(
+          new JsonDocumentError({
+            operation: "read",
+            path: "/agent/auth.json",
+            message: "failed reread",
+          }),
+        ),
       updateObject: () =>
         Effect.fail(
           new JsonDocumentError({
@@ -583,7 +651,7 @@ describe("xAI visibility", () => {
     });
 
     expect(isXaiSubscriptionModel(apiKeyContext, config)).toBe(true);
-    expect(visibleStatusLine(apiKeyContext, config, projection)).toBe("Usage: 7d: 82%");
+    expect(visibleStatusLine(projection)).toBe("Usage: 7d: 82%");
     expect(xaiUsageUiState(apiKeyContext, config, projection).visible).toBe(true);
 
     const otherModel = {
@@ -591,12 +659,78 @@ describe("xAI visibility", () => {
       model: { provider: "openai", id: "gpt" },
     } as ExtensionContext;
     synchronizeProjectionContext(projection, otherModel, { clearUsage: true });
-    expect(visibleStatusLine(otherModel, config, projection)).toBeUndefined();
+    expect(visibleStatusLine(projection)).toBeUndefined();
     expect(MutableRef.get(projection).snapshot).toBeUndefined();
     expect(MutableRef.get(projection).error).toBeUndefined();
     expect(Object.isFrozen(MutableRef.get(projection))).toBe(true);
     expect(Object.isFrozen(MutableRef.get(projection).config?.usage)).toBe(true);
     expect(MutableRef.get(projection).config).not.toBe(config);
+  });
+
+  it("honors public context and config visibility guards independently of projection", () => {
+    const projection = makeProjection();
+    const subscriptionContext = registryContext();
+    const subscriptionConfig = resolvedConfig(true);
+    MutableRef.set(projection, {
+      ...MutableRef.get(projection),
+      config: subscriptionConfig,
+      eligible: true,
+      statusLine: "Usage: 7d: 82%",
+    });
+
+    expect(xaiUsageUiState(subscriptionContext, subscriptionConfig, projection).visible).toBe(true);
+    expect(
+      xaiUsageUiState(
+        subscriptionContext,
+        {
+          ...subscriptionConfig,
+          usage: { ...subscriptionConfig.usage, enabled: false },
+        },
+        projection,
+      ).visible,
+    ).toBe(false);
+    expect(
+      xaiUsageUiState(
+        {
+          ...subscriptionContext,
+          model: { provider: "openai", id: "gpt" },
+        } as ExtensionContext,
+        subscriptionConfig,
+        projection,
+      ).visible,
+    ).toBe(false);
+
+    const apiKeyContext = registryContext();
+    apiKeyContext.modelRegistry.isUsingOAuth = () => false;
+    expect(xaiUsageUiState(apiKeyContext, subscriptionConfig, projection).visible).toBe(false);
+    expect(xaiUsageUiState(apiKeyContext, resolvedConfig(false), projection).visible).toBe(true);
+
+    const throwingContext = registryContext();
+    throwingContext.modelRegistry.isUsingOAuth = () => {
+      throw new Error("oauth-host-secret");
+    };
+    expect(xaiUsageUiState(throwingContext, subscriptionConfig, projection).visible).toBe(false);
+  });
+
+  it("fails closed when OAuth detection throws and renderers use only the projection", () => {
+    const projection = makeProjection();
+    const ctx = registryContext();
+    const config = resolvedConfig(true);
+    ctx.modelRegistry.isUsingOAuth = () => {
+      throw new Error("oauth-host-secret");
+    };
+    MutableRef.set(projection, {
+      ...MutableRef.get(projection),
+      config,
+      eligible: true,
+      statusLine: "Usage: 7d: 82%",
+    });
+
+    expect(() => synchronizeProjectionContext(projection, ctx, { clearUsage: true })).not.toThrow();
+    expect(MutableRef.get(projection).eligible).toBe(false);
+    expect(visibleStatusLine(projection)).toBeUndefined();
+    expect(xaiUsageUiState(ctx, config, projection).visible).toBe(false);
+    expect(() => formatDebug(projection, ctx)).not.toThrow();
   });
 });
 
@@ -626,6 +760,419 @@ describe("xAI refresh lifecycle", () => {
       expect(MutableRef.get(projection).statusText).toBe("Usage display is disabled.");
       expect(MutableRef.get(projection).error).toBeUndefined();
     }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("publishes global fallback when an atomic project update removes an override", () => {
+    const projectPath = "/project/.pi/extensions/pi-better-xai.json";
+    const harness = documentHarness({
+      "/agent/extensions/pi-better-xai.json": {
+        usage: { enabled: false, showOnlyOnSubscriptionModels: true },
+        footer: { mode: "status" },
+      },
+      [projectPath]: {
+        usage: { showOnlyOnSubscriptionModels: false, showResetTimes: true },
+      },
+    });
+    const projection = makeProjection();
+    const serviceLayer = XaiUsageService.layer({
+      context: MutableRef.make(registryContext()),
+      cwd: "/project",
+      projection,
+      onChange() {},
+      startPolling: false,
+      agentDir: "/agent",
+    }).pipe(
+      Layer.provide(
+        providers(
+          harness.layer,
+          httpLayer(() => Effect.die("unexpected HTTP")),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* XaiUsageService;
+      harness.injectBeforeNextUpdate((current) => ({
+        ...current,
+        usage: { showResetTimes: true },
+      }));
+
+      yield* service.updateSetting("usage.showResetTimes", "false");
+
+      expect(harness.documents.get(projectPath)).toMatchObject({
+        usage: { showResetTimes: false },
+      });
+      expect(harness.documents.get(projectPath)?.usage).not.toHaveProperty(
+        "showOnlyOnSubscriptionModels",
+      );
+      expect(MutableRef.get(projection).config?.usage).toMatchObject({
+        enabled: false,
+        showOnlyOnSubscriptionModels: true,
+        showResetTimes: false,
+      });
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("refreshes scope when a project config appears after startup", () => {
+    const globalPath = "/agent/extensions/pi-better-xai.json";
+    const projectPath = "/project/.pi/extensions/pi-better-xai.json";
+    const harness = documentHarness({
+      [globalPath]: {
+        usage: { enabled: false, showOnlyOnSubscriptionModels: true },
+        footer: { mode: "replace" },
+      },
+    });
+    const projection = makeProjection();
+    const serviceLayer = XaiUsageService.layer({
+      context: MutableRef.make(registryContext()),
+      cwd: "/project",
+      projection,
+      onChange() {},
+      startPolling: false,
+      agentDir: "/agent",
+    }).pipe(
+      Layer.provide(
+        providers(
+          harness.layer,
+          httpLayer(() => Effect.die("unexpected HTTP")),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* XaiUsageService;
+      harness.documents.set(projectPath, {
+        usage: { showOnlyOnSubscriptionModels: false },
+      });
+
+      yield* service.updateSetting("usage.showResetTimes", "false");
+
+      expect(harness.documents.get(projectPath)).toMatchObject({
+        usage: { showOnlyOnSubscriptionModels: false, showResetTimes: false },
+      });
+      expect(harness.documents.get(globalPath)?.usage).not.toHaveProperty("showResetTimes");
+      expect(MutableRef.get(projection).config).toMatchObject({
+        configPath: projectPath,
+        projectConfigExists: true,
+        globalConfigExists: true,
+        usage: {
+          enabled: false,
+          showOnlyOnSubscriptionModels: false,
+          showResetTimes: false,
+        },
+      });
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("refreshes scope when a project config disappears after startup", () => {
+    const globalPath = "/agent/extensions/pi-better-xai.json";
+    const projectPath = "/project/.pi/extensions/pi-better-xai.json";
+    const harness = documentHarness({
+      [globalPath]: {
+        usage: { enabled: false, showOnlyOnSubscriptionModels: true },
+        footer: { mode: "replace" },
+      },
+      [projectPath]: {
+        usage: { showOnlyOnSubscriptionModels: false },
+      },
+    });
+    const projection = makeProjection();
+    const serviceLayer = XaiUsageService.layer({
+      context: MutableRef.make(registryContext()),
+      cwd: "/project",
+      projection,
+      onChange() {},
+      startPolling: false,
+      agentDir: "/agent",
+    }).pipe(
+      Layer.provide(
+        providers(
+          harness.layer,
+          httpLayer(() => Effect.die("unexpected HTTP")),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* XaiUsageService;
+      harness.documents.delete(projectPath);
+
+      yield* service.updateSetting("usage.showResetTimes", "false");
+
+      expect(harness.documents.has(projectPath)).toBe(false);
+      expect(harness.documents.get(globalPath)).toMatchObject({
+        usage: {
+          enabled: false,
+          showOnlyOnSubscriptionModels: true,
+          showResetTimes: false,
+        },
+      });
+      expect(MutableRef.get(projection).config).toMatchObject({
+        configPath: globalPath,
+        projectConfigExists: false,
+        globalConfigExists: true,
+        usage: { showOnlyOnSubscriptionModels: true, showResetTimes: false },
+      });
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("refreshes fallback when a global config appears after startup", () => {
+    const globalPath = "/agent/extensions/pi-better-xai.json";
+    const projectPath = "/project/.pi/extensions/pi-better-xai.json";
+    const harness = documentHarness({
+      [projectPath]: {
+        usage: { showOnlyOnSubscriptionModels: false },
+        footer: { mode: "replace" },
+      },
+    });
+    const projection = makeProjection();
+    const serviceLayer = XaiUsageService.layer({
+      context: MutableRef.make(registryContext()),
+      cwd: "/project",
+      projection,
+      onChange() {},
+      startPolling: false,
+      agentDir: "/agent",
+    }).pipe(
+      Layer.provide(
+        providers(
+          harness.layer,
+          httpLayer(({ url }) =>
+            Effect.succeed({
+              status: 200,
+              body: url.includes("format=credits") ? weeklyFixture : monthlyFixture,
+            }),
+          ),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* XaiUsageService;
+      harness.documents.set(globalPath, {
+        usage: { enabled: false, showOnlyOnSubscriptionModels: true },
+        footer: { mode: "status" },
+      });
+
+      yield* service.updateSetting("usage.showResetTimes", "false");
+
+      expect(harness.documents.get(projectPath)).toMatchObject({
+        usage: { showOnlyOnSubscriptionModels: false, showResetTimes: false },
+      });
+      expect(MutableRef.get(projection).config).toMatchObject({
+        configPath: projectPath,
+        projectConfigExists: true,
+        globalConfigExists: true,
+        usage: {
+          enabled: false,
+          showOnlyOnSubscriptionModels: false,
+          showResetTimes: false,
+        },
+      });
+    }).pipe(Effect.provide(serviceLayer));
+  });
+
+  it.effect("serializes concurrent setting changes through projection publication", () => {
+    const configPath = "/agent/extensions/pi-better-xai.json";
+    const harness = documentHarness({
+      [configPath]: {
+        usage: { enabled: false, showResetTimes: true },
+        footer: { mode: "replace" },
+        unknown: "keep",
+      },
+    });
+    const projection = makeProjection();
+    const serviceLayer = XaiUsageService.layer({
+      context: MutableRef.make(registryContext()),
+      cwd: "/project",
+      projection,
+      onChange() {},
+      startPolling: false,
+      agentDir: "/agent",
+    }).pipe(
+      Layer.provide(
+        providers(
+          harness.layer,
+          httpLayer(() => Effect.die("unexpected HTTP")),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* XaiUsageService;
+      const mutationStarted = yield* Deferred.make<void>();
+      const releaseMutation = yield* Deferred.make<void>();
+      harness.injectBeforeNextUpdate((current) => ({
+        ...current,
+        usage: { enabled: false, showResetTimes: true, refreshIntervalMs: 120_000 },
+      }));
+      harness.blockNextUpdateBeforeCommit(mutationStarted, releaseMutation);
+
+      const usage = yield* service
+        .updateSetting("usage.showResetTimes", "false")
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(mutationStarted);
+      const footer = yield* service.updateSetting("footer.mode", "status").pipe(Effect.forkScoped);
+      for (let index = 0; index < 100 && harness.updateCount < 2; index++) yield* Effect.yieldNow;
+      const writesBeforeRelease = harness.updateCount;
+
+      yield* Deferred.succeed(releaseMutation, undefined);
+      yield* Fiber.join(usage);
+      yield* Fiber.join(footer);
+
+      expect(writesBeforeRelease).toBe(1);
+      const persisted = harness.documents.get(configPath);
+      expect(persisted?.usage).toEqual(
+        expect.objectContaining({
+          enabled: false,
+          refreshIntervalMs: 120_000,
+          showResetTimes: false,
+        }),
+      );
+      expect(persisted?.footer).toEqual(expect.objectContaining({ mode: "status" }));
+      expect(persisted?.unknown).toBe("keep");
+      const published = MutableRef.get(projection).config;
+      expect(published?.usage.refreshIntervalMs).toBe(120_000);
+      expect(published?.usage.showResetTimes).toBe(false);
+      expect(published?.footer.mode).toBe("status");
+    }).pipe(Effect.scoped, Effect.provide(serviceLayer));
+  });
+
+  it.effect("publishes committed config before interruption is observable", () => {
+    const configPath = "/agent/extensions/pi-better-xai.json";
+    const harness = documentHarness({
+      [configPath]: {
+        usage: { enabled: false, showResetTimes: true },
+        footer: { mode: "replace" },
+      },
+    });
+    const projection = makeProjection();
+    const serviceLayer = XaiUsageService.layer({
+      context: MutableRef.make(registryContext()),
+      cwd: "/project",
+      projection,
+      onChange() {},
+      startPolling: false,
+      agentDir: "/agent",
+    }).pipe(
+      Layer.provide(
+        providers(
+          harness.layer,
+          httpLayer(() => Effect.die("unexpected HTTP")),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* XaiUsageService;
+      const commitStarted = yield* Deferred.make<void>();
+      const releaseCommit = yield* Deferred.make<void>();
+      harness.blockNextUpdateAtCommit(commitStarted, releaseCommit);
+
+      const setting = yield* service
+        .updateSetting("usage.showResetTimes", "false")
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(commitStarted);
+      const interruption = yield* Fiber.interrupt(setting).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(releaseCommit, undefined);
+      yield* Fiber.join(interruption);
+
+      expect(harness.documents.get(configPath)).toMatchObject({
+        usage: { enabled: false, showResetTimes: false },
+        footer: { mode: "replace" },
+      });
+      expect(MutableRef.get(projection).config).toMatchObject({
+        usage: { enabled: false, showResetTimes: false },
+        footer: { mode: "replace" },
+      });
+    }).pipe(Effect.scoped, Effect.provide(serviceLayer));
+  });
+
+  it.effect("does not hold setting serialization while a forced refresh is gated", () => {
+    const configPath = "/agent/extensions/pi-better-xai.json";
+    const harness = documentHarness({
+      [configPath]: {
+        usage: { enabled: false },
+        footer: { mode: "replace" },
+      },
+    });
+    const refreshStarted = Deferred.makeUnsafe<void>();
+    const releaseRefresh = Deferred.makeUnsafe<void>();
+    let gateNextRequest = true;
+    const http = httpLayer(({ url }) => {
+      const response = {
+        status: 200,
+        body: url.includes("format=credits") ? weeklyFixture : monthlyFixture,
+      };
+      if (!gateNextRequest) return Effect.succeed(response);
+      gateNextRequest = false;
+      return Deferred.succeed(refreshStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseRefresh)),
+        Effect.as(response),
+      );
+    });
+    const projection = makeProjection();
+    const serviceLayer = XaiUsageService.layer({
+      context: MutableRef.make(registryContext()),
+      cwd: "/project",
+      projection,
+      onChange() {},
+      startPolling: false,
+      agentDir: "/agent",
+    }).pipe(Layer.provide(providers(harness.layer, http)));
+
+    return Effect.gen(function* () {
+      const service = yield* XaiUsageService;
+      const enabling = yield* service
+        .updateSetting("usage.enabled", "true")
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(refreshStarted);
+
+      const footer = yield* service.updateSetting("footer.mode", "status").pipe(Effect.forkScoped);
+      for (let index = 0; index < 100 && harness.updateCount < 2; index++) yield* Effect.yieldNow;
+
+      expect(harness.updateCount).toBe(2);
+      expect(harness.documents.get(configPath)).toMatchObject({
+        usage: { enabled: true },
+        footer: { mode: "status" },
+      });
+      expect(MutableRef.get(projection).config).toMatchObject({
+        usage: { enabled: true },
+        footer: { mode: "status" },
+      });
+
+      yield* Deferred.succeed(releaseRefresh, undefined);
+      yield* Fiber.join(enabling);
+      yield* Fiber.join(footer);
+    }).pipe(Effect.scoped, Effect.provide(serviceLayer));
+  });
+
+  it.effect("fails closed when Effect-owned OAuth detection throws", () => {
+    const captured = makeCapturedLogger();
+    const harness = documentHarness();
+    const ctx = registryContext();
+    ctx.modelRegistry.isUsingOAuth = () => {
+      throw new Error("oauth-host-secret");
+    };
+    const projection = makeProjection();
+    const serviceLayer = XaiUsageService.layer({
+      context: MutableRef.make(ctx),
+      cwd: "/project",
+      projection,
+      onChange() {},
+      startPolling: false,
+      agentDir: "/agent",
+    }).pipe(
+      Layer.provide(
+        providers(
+          harness.layer,
+          httpLayer(() => Effect.die("unexpected HTTP")),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      yield* XaiUsageService.use((service) => service.refresh({ force: true }));
+      expect(MutableRef.get(projection).eligible).toBe(false);
+      expect(MutableRef.get(projection).statusText).toContain("Usage hidden");
+      const telemetry = capturedTelemetrySnapshot(captured);
+      expect(telemetry).toContain("oauth_status_unavailable");
+      expect(telemetry).not.toContain("oauth-host-secret");
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, captured.layer)));
   });
 
   it.effect("moves to an error status after a failed billing request", () => {
@@ -765,6 +1312,8 @@ describe("xAI refresh lifecycle", () => {
       yield* Fiber.join(old);
       expect(MutableRef.get(projection).snapshot).toBeUndefined();
       expect(MutableRef.get(projection).authFound).toBe(false);
+      expect(MutableRef.get(projection).eligible).toBe(false);
+      expect(MutableRef.get(projection).lastFetchAt).toBeUndefined();
       expect(notifications).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(serviceLayer));
   });

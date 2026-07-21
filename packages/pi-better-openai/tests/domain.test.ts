@@ -38,7 +38,12 @@ import {
   readConfig,
   resolveConfig,
 } from "../src/config.ts";
-import { injectProviderPayload, type FastSnapshot } from "../src/fast-controller.ts";
+import {
+  initialFastSnapshot,
+  injectProviderPayload,
+  type FastSnapshot,
+} from "../src/fast-controller.ts";
+import { FastModeService } from "../src/fast-service.ts";
 import { openAIUsageUiState } from "../src/ui/primitives.ts";
 import {
   OpenAIUsageService,
@@ -56,18 +61,68 @@ import {
 const NOW = 1_752_883_200_000;
 function documents(initial: Readonly<Record<string, JsonObject>> = {}) {
   const values = new Map(Object.entries(initial));
+  let beforeNextUpdate: ((current: JsonObject) => JsonObject) | undefined;
+  let nextUpdateGate:
+    | {
+        readonly _tag: "BeforeCommit" | "Committed";
+        readonly started: Deferred.Deferred<void>;
+        readonly release: Deferred.Deferred<void>;
+      }
+    | undefined;
+  let updateCount = 0;
+  const modifyObject: NonNullable<JsonDocumentStoreShape["modifyObject"]> = (path, modify) =>
+    Effect.gen(function* () {
+      updateCount++;
+      const current = values.get(path) ?? {};
+      const lockedCurrent = beforeNextUpdate ? beforeNextUpdate(current) : current;
+      beforeNextUpdate = undefined;
+      const modification = yield* modify(lockedCurrent);
+      const gate = nextUpdateGate;
+      nextUpdateGate = undefined;
+      if (gate?._tag === "BeforeCommit") {
+        yield* Deferred.succeed(gate.started, undefined);
+        yield* Deferred.await(gate.release);
+      }
+      return yield* Effect.gen(function* () {
+        values.set(path, modification.document);
+        if (gate?._tag === "Committed") {
+          yield* Deferred.succeed(gate.started, undefined);
+          yield* Deferred.await(gate.release);
+        }
+        yield* modification.afterCommit ?? Effect.void;
+        return modification.value;
+      }).pipe(Effect.uninterruptible);
+    });
   const service: JsonDocumentStoreShape = {
     exists: (path) => Effect.succeed(values.has(path)),
     readObject: (path) => Effect.succeed(values.get(path)),
     writeObject: (path, value) => Effect.sync(() => void values.set(path, value)),
+    modifyObject,
     updateObject: (path, update) =>
-      Effect.sync(() => {
-        const next = update(values.get(path) ?? {});
-        values.set(path, next);
-        return next;
+      modifyObject(path, (current) => {
+        const next = update(current);
+        return Effect.succeed({ value: next, document: next });
       }),
   };
-  return { values, layer: Layer.succeed(JsonDocumentStore, service) };
+  return {
+    values,
+    layer: Layer.succeed(JsonDocumentStore, service),
+    beforeNextUpdate(update: (current: JsonObject) => JsonObject) {
+      beforeNextUpdate = update;
+    },
+    blockNextUpdateBeforeCommit(
+      started: Deferred.Deferred<void>,
+      release: Deferred.Deferred<void>,
+    ) {
+      nextUpdateGate = { _tag: "BeforeCommit", started, release };
+    },
+    blockNextUpdateAtCommit(started: Deferred.Deferred<void>, release: Deferred.Deferred<void>) {
+      nextUpdateGate = { _tag: "Committed", started, release };
+    },
+    get updateCount() {
+      return updateCount;
+    },
+  };
 }
 const context = (token?: string, oauth = true) =>
   ({
@@ -144,6 +199,7 @@ describe("OpenAI configuration and credentials", () => {
         exists: () => Effect.fail(failure),
         readObject: () => Effect.fail(failure),
         writeObject: () => Effect.fail(failure),
+        modifyObject: () => Effect.fail(failure),
         updateObject: () => Effect.fail(failure),
       }),
     );
@@ -412,6 +468,507 @@ describe("usage payloads, visibility, and fast mode", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("applies setting patches to the document snapshot held by the update lock", () => {
+    const configPath = "/project/.pi/extensions/pi-better-openai.json";
+    const globalConfigPath = "/agent/extensions/pi-better-openai.json";
+    const store = documents({
+      [configPath]: {
+        unknown: { preserved: true },
+        active: false,
+        desiredActive: false,
+        usage: { enabled: false, sibling: "preserved" },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      },
+      [globalConfigPath]: {
+        footer: { mode: "status" },
+      },
+    });
+    const projection = makeProjection();
+    const layer = OpenAIUsageService.layer({
+      context: MutableRef.make(context()),
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+      startPolling: false,
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          store.layer,
+          jsonHttpTestLayer(() => Effect.die("usage request was not expected")),
+          Path.layer,
+          AgentDirectory.layer("/agent"),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* OpenAIUsageService;
+      store.beforeNextUpdate((current) => {
+        const withoutFooterOverride = { ...current };
+        delete withoutFooterOverride.footer;
+        return {
+          ...withoutFooterOverride,
+          active: true,
+          desiredActive: true,
+          concurrentField: "preserved",
+        };
+      });
+
+      yield* service.updateSetting("usage.showResetTimes", "true");
+
+      expect(store.values.get(configPath)).toEqual({
+        unknown: { preserved: true },
+        active: true,
+        desiredActive: true,
+        concurrentField: "preserved",
+        usage: { enabled: false, sibling: "preserved", showResetTimes: true },
+        image: { enabled: false },
+      });
+      expect(MutableRef.get(projection).config).toMatchObject({
+        active: true,
+        desiredActive: true,
+        usage: { enabled: false, showResetTimes: true },
+        footer: { mode: "status" },
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refreshes global fallback appearance and removal before project commits", () => {
+    const configPath = "/project/.pi/extensions/pi-better-openai.json";
+    const globalConfigPath = "/agent/extensions/pi-better-openai.json";
+    const store = documents({
+      [configPath]: {
+        usage: { enabled: false },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      },
+    });
+    const projection = makeProjection();
+    const layer = OpenAIUsageService.layer({
+      context: MutableRef.make(context()),
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+      startPolling: false,
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          store.layer,
+          jsonHttpTestLayer(() => Effect.die("usage request was not expected")),
+          Path.layer,
+          AgentDirectory.layer("/agent"),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const service = yield* OpenAIUsageService;
+      store.values.set(globalConfigPath, { footer: { mode: "status" } });
+      store.beforeNextUpdate((current) => {
+        const next = { ...current };
+        delete next.footer;
+        return next;
+      });
+
+      yield* service.updateSetting("usage.showResetTimes", "false");
+
+      expect(store.values.get(configPath)).not.toHaveProperty("footer");
+      expect(MutableRef.get(projection).config).toMatchObject({
+        configPath,
+        globalConfigExists: true,
+        footer: { mode: "status" },
+        usage: { enabled: false, showResetTimes: false },
+      });
+
+      store.values.delete(globalConfigPath);
+      yield* service.updateSetting("usage.showOnlyOnSubscriptionModels", "false");
+
+      expect(MutableRef.get(projection).config).toMatchObject({
+        configPath,
+        globalConfigExists: false,
+        footer: { mode: "replace" },
+        usage: {
+          enabled: false,
+          showOnlyOnSubscriptionModels: false,
+          showResetTimes: false,
+        },
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("switches to a newly appeared project scope before committing", () => {
+    const configPath = "/project/.pi/extensions/pi-better-openai.json";
+    const globalConfigPath = "/agent/extensions/pi-better-openai.json";
+    const store = documents({
+      [globalConfigPath]: {
+        persistState: true,
+        usage: { enabled: true, showResetTimes: true },
+        footer: { mode: "status" },
+        image: { enabled: false },
+      },
+    });
+    const projection = makeProjection();
+    const layer = OpenAIUsageService.layer({
+      context: MutableRef.make(context()),
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+      startPolling: false,
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          store.layer,
+          jsonHttpTestLayer(() => Effect.die("usage request was not expected")),
+          Path.layer,
+          AgentDirectory.layer("/agent"),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const service = yield* OpenAIUsageService;
+      store.values.set(configPath, {
+        usage: { enabled: false },
+        footer: { mode: "off" },
+      });
+
+      yield* service.updateSetting("usage.showResetTimes", "false");
+
+      expect(store.values.get(globalConfigPath)).toMatchObject({
+        usage: { enabled: true, showResetTimes: true },
+      });
+      expect(store.values.get(configPath)).toMatchObject({
+        usage: { enabled: false, showResetTimes: false },
+        footer: { mode: "off" },
+      });
+      expect(MutableRef.get(projection).config).toMatchObject({
+        configPath,
+        projectConfigExists: true,
+        footer: { mode: "off" },
+        usage: { enabled: false, showResetTimes: false },
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("publishes concurrent known-field edits from a persisted fast-mode commit", () => {
+    const configPath = "/project/.pi/extensions/pi-better-openai.json";
+    const store = documents({
+      [configPath]: {
+        persistState: true,
+        active: false,
+        desiredActive: false,
+        usage: { enabled: true, showResetTimes: true },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      },
+    });
+    const projection = makeProjection();
+    const layer = OpenAIUsageService.layer({
+      context: MutableRef.make(context(JSON.stringify({ access: "token", accountId: "acct" }))),
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+      startPolling: false,
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          store.layer,
+          jsonHttpTestLayer(() => Effect.succeed({ status: 200, body: payload })),
+          Path.layer,
+          AgentDirectory.layer("/agent"),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* OpenAIUsageService;
+      yield* service.refresh({ force: true });
+      expect(MutableRef.get(projection).snapshot).toBeDefined();
+      store.beforeNextUpdate((current) => ({
+        ...current,
+        usage: { enabled: true, showResetTimes: false },
+        footer: { mode: "status" },
+      }));
+
+      yield* service.persistFast(true, true);
+
+      expect(store.values.get(configPath)).toMatchObject({
+        active: true,
+        desiredActive: true,
+        usage: { enabled: true, showResetTimes: false },
+        footer: { mode: "status" },
+      });
+      expect(MutableRef.get(projection).config).toMatchObject({
+        active: true,
+        desiredActive: true,
+        usage: { enabled: true, showResetTimes: false },
+        footer: { mode: "status" },
+      });
+      expect(MutableRef.get(projection).snapshot).toBeUndefined();
+      expect(MutableRef.get(projection).statusLine).toBeUndefined();
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("serializes config mutation through resolved-config publication", () => {
+    const configPath = "/project/.pi/extensions/pi-better-openai.json";
+    const store = documents({
+      [configPath]: {
+        unknown: { preserved: true },
+        persistState: true,
+        active: false,
+        desiredActive: false,
+        usage: { enabled: false, sibling: "preserved" },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      },
+    });
+    const projection = makeProjection();
+    const layer = OpenAIUsageService.layer({
+      context: MutableRef.make(context()),
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+      startPolling: false,
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          store.layer,
+          jsonHttpTestLayer(() => Effect.die("usage request was not expected")),
+          Path.layer,
+          AgentDirectory.layer("/agent"),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* OpenAIUsageService;
+      const commitStarted = yield* Deferred.make<void>();
+      const releaseCommit = yield* Deferred.make<void>();
+      store.blockNextUpdateAtCommit(commitStarted, releaseCommit);
+
+      const setting = yield* service
+        .updateSetting("usage.showResetTimes", "true")
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(commitStarted);
+      const fast = yield* service.persistFast(true, true).pipe(Effect.forkScoped);
+      for (let index = 0; index < 100 && store.updateCount < 2; index++) yield* Effect.yieldNow;
+      const writesBeforeRelease = store.updateCount;
+
+      yield* Deferred.succeed(releaseCommit, undefined);
+      yield* Fiber.join(setting);
+      yield* Fiber.join(fast);
+
+      expect(writesBeforeRelease).toBe(1);
+      expect(store.values.get(configPath)).toEqual({
+        unknown: { preserved: true },
+        persistState: true,
+        active: true,
+        desiredActive: true,
+        usage: { enabled: false, sibling: "preserved", showResetTimes: true },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      });
+      expect(MutableRef.get(projection).config).toMatchObject({
+        persistState: true,
+        active: true,
+        desiredActive: true,
+        usage: { enabled: false, showResetTimes: true },
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("publishes committed config before interruption is observable", () => {
+    const configPath = "/project/.pi/extensions/pi-better-openai.json";
+    const store = documents({
+      [configPath]: {
+        persistState: true,
+        active: false,
+        desiredActive: false,
+        usage: { enabled: false, sibling: "preserved" },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      },
+    });
+    const projection = makeProjection();
+    const layer = OpenAIUsageService.layer({
+      context: MutableRef.make(context()),
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+      startPolling: false,
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          store.layer,
+          jsonHttpTestLayer(() => Effect.die("usage request was not expected")),
+          Path.layer,
+          AgentDirectory.layer("/agent"),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* OpenAIUsageService;
+      const commitStarted = yield* Deferred.make<void>();
+      const releaseCommit = yield* Deferred.make<void>();
+      store.blockNextUpdateAtCommit(commitStarted, releaseCommit);
+      expect(MutableRef.get(projection).config?.usage.showResetTimes).toBe(true);
+
+      const setting = yield* service
+        .updateSetting("usage.showResetTimes", "false")
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(commitStarted);
+      const interruption = yield* Fiber.interrupt(setting).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(releaseCommit, undefined);
+      yield* Fiber.join(interruption);
+
+      expect(store.values.get(configPath)).toMatchObject({
+        usage: { enabled: false, sibling: "preserved", showResetTimes: false },
+      });
+      expect(MutableRef.get(projection).config).toMatchObject({
+        usage: { enabled: false, showResetTimes: false },
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("commits persisted and in-memory fast state before interruption is observable", () => {
+    const configPath = "/project/.pi/extensions/pi-better-openai.json";
+    const store = documents({
+      [configPath]: {
+        persistState: true,
+        active: false,
+        desiredActive: false,
+        usage: { enabled: false },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      },
+    });
+    const projection = makeProjection();
+    const fastProjection = MutableRef.make(initialFastSnapshot());
+    const usageLayer = OpenAIUsageService.layer({
+      context: MutableRef.make(context()),
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+      startPolling: false,
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          store.layer,
+          jsonHttpTestLayer(() => Effect.die("usage request was not expected")),
+          Path.layer,
+          AgentDirectory.layer("/agent"),
+        ),
+      ),
+    );
+    const layer = FastModeService.layer({
+      serviceTier: "priority",
+      projection: fastProjection,
+      registerInjectionIngress() {},
+    }).pipe(Layer.provide(usageLayer));
+
+    return Effect.gen(function* () {
+      const service = yield* FastModeService;
+      const commitStarted = yield* Deferred.make<void>();
+      const releaseCommit = yield* Deferred.make<void>();
+      store.blockNextUpdateAtCommit(commitStarted, releaseCommit);
+
+      const transition = yield* service.setDesired(context(), true).pipe(Effect.forkScoped);
+      yield* Deferred.await(commitStarted);
+      expect(MutableRef.get(fastProjection)).toMatchObject({
+        active: false,
+        desiredActive: false,
+      });
+      expect(MutableRef.get(projection).config).toMatchObject({
+        active: false,
+        desiredActive: false,
+      });
+
+      const interruption = yield* Fiber.interrupt(transition).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      expect(interruption.pollUnsafe()).toBeUndefined();
+      yield* Deferred.succeed(releaseCommit, undefined);
+      yield* Fiber.join(interruption);
+      expect((yield* Fiber.await(transition))._tag).toBe("Failure");
+
+      expect(store.values.get(configPath)).toMatchObject({
+        active: true,
+        desiredActive: true,
+      });
+      expect(MutableRef.get(projection).config).toMatchObject({
+        active: true,
+        desiredActive: true,
+      });
+      expect(MutableRef.get(fastProjection)).toMatchObject({
+        active: true,
+        desiredActive: true,
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("interrupts pre-commit config I/O and releases serialization", () => {
+    const configPath = "/project/.pi/extensions/pi-better-openai.json";
+    const store = documents({
+      [configPath]: {
+        persistState: true,
+        active: false,
+        desiredActive: false,
+        usage: { enabled: false, sibling: "preserved" },
+        footer: { mode: "off" },
+        image: { enabled: false },
+      },
+    });
+    const projection = makeProjection();
+    const layer = OpenAIUsageService.layer({
+      context: MutableRef.make(context()),
+      cwd: "/project",
+      agentDir: "/agent",
+      projection,
+      onChange() {},
+      startPolling: false,
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          store.layer,
+          jsonHttpTestLayer(() => Effect.die("usage request was not expected")),
+          Path.layer,
+          AgentDirectory.layer("/agent"),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* OpenAIUsageService;
+      const writeStarted = yield* Deferred.make<void>();
+      const abandonedWrite = yield* Deferred.make<void>();
+      store.blockNextUpdateBeforeCommit(writeStarted, abandonedWrite);
+
+      const setting = yield* service.updateSetting("usage.enabled", "true").pipe(Effect.forkScoped);
+      yield* Deferred.await(writeStarted);
+      yield* Fiber.interrupt(setting);
+
+      expect(store.values.get(configPath)).toMatchObject({ usage: { enabled: false } });
+      expect(MutableRef.get(projection).config?.usage.enabled).toBe(false);
+
+      yield* service.persistFast(true, true);
+      expect(store.updateCount).toBe(2);
+      expect(store.values.get(configPath)).toMatchObject({
+        active: true,
+        desiredActive: true,
+        usage: { enabled: false, sibling: "preserved" },
+      });
+      expect(MutableRef.get(projection).config).toMatchObject({
+        active: true,
+        desiredActive: true,
+        usage: { enabled: false },
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect(
     "records registry auth before a failed usage request and interrupts polling on release",
     () => {
@@ -545,13 +1102,17 @@ describe("usage payloads, visibility, and fast mode", () => {
       while (!started) yield* Effect.yieldNow;
       MutableRef.set(contextRef, {
         ...MutableRef.get(contextRef),
-        model: { provider: "openai", id: "o3" },
+        model: { provider: "anthropic", id: "claude" },
       } as ExtensionContext);
       yield* service.contextChanged(true);
       yield* Deferred.succeed(response, { status: 200, body: payload });
       yield* Fiber.join(old);
-      expect(MutableRef.get(projection).snapshot).toBeUndefined();
-      expect(MutableRef.get(projection).authFound).toBe(false);
+      const state = MutableRef.get(projection);
+      expect(state.snapshot).toBeUndefined();
+      expect(state.authFound).toBe(false);
+      expect(state.eligible).toBe(false);
+      expect(state.error).toBeUndefined();
+      expect(state.lastFetchAt).toBeUndefined();
       expect(notifications).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
@@ -578,9 +1139,15 @@ describe("usage payloads, visibility, and fast mode", () => {
         image: DEFAULT_IMAGE_CONFIG,
       };
       expect(isOpenAISubscriptionModel(ctx, cfg)).toBe(false);
+      ctx.modelRegistry.isUsingOAuth = () => {
+        throw new Error("host registry failed");
+      };
+      expect(isOpenAISubscriptionModel(ctx, cfg)).toBe(false);
       const projection = makeProjection();
       MutableRef.set(projection, { ...MutableRef.get(projection), config: cfg });
-      synchronizeProjectionContext(projection, ctx, { clearUsage: true });
+      expect(() =>
+        synchronizeProjectionContext(projection, ctx, { clearUsage: true }),
+      ).not.toThrow();
       expect(openAIUsageUiState(ctx, cfg, projection).visible).toBe(false);
       expect(Object.isFrozen(MutableRef.get(projection))).toBe(true);
       expect(Object.isFrozen(MutableRef.get(projection).config?.usage)).toBe(true);

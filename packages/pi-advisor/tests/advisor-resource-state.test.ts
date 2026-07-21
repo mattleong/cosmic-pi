@@ -61,3 +61,62 @@ it.effect("serializes replacement and releases each installed child exactly once
     expect(released).toEqual(["first", "second"]);
   }),
 );
+
+it.effect(
+  "does not release the previous child again after replacement acquisition is interrupted",
+  () =>
+    Effect.gen(function* () {
+      const resources = yield* makeAdvisorResourceState();
+      const acquireStarted = yield* Deferred.make<void>();
+      let releaseAttempts = 0;
+
+      yield* resources.replaceChild(Effect.succeed("first"), () =>
+        Effect.sync(() => {
+          releaseAttempts += 1;
+        }),
+      );
+      const replacement = yield* resources
+        .replaceChild(
+          Deferred.succeed(acquireStarted, undefined).pipe(Effect.andThen(Effect.never)),
+          () => Effect.void,
+        )
+        .pipe(Effect.forkChild({ startImmediately: true }));
+
+      yield* Deferred.await(acquireStarted);
+      expect(releaseAttempts).toBe(1);
+      yield* Fiber.interrupt(replacement);
+      yield* resources.stopChild;
+      expect(releaseAttempts).toBe(1);
+    }),
+);
+
+it.effect("finishes an interrupted stop and does not release the child again", () =>
+  Effect.gen(function* () {
+    const resources = yield* makeAdvisorResourceState();
+    const releaseStarted = yield* Deferred.make<void>();
+    const allowRelease = yield* Deferred.make<void>();
+    let releaseAttempts = 0;
+    let releaseCompletions = 0;
+
+    yield* resources.replaceChild(Effect.succeed("first"), () =>
+      Effect.gen(function* () {
+        releaseAttempts += 1;
+        yield* Deferred.succeed(releaseStarted, undefined);
+        yield* Deferred.await(allowRelease);
+        releaseCompletions += 1;
+      }),
+    );
+    const stopping = yield* resources.stopChild.pipe(Effect.forkChild({ startImmediately: true }));
+
+    yield* Deferred.await(releaseStarted);
+    const interrupting = yield* Fiber.interrupt(stopping).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* Deferred.succeed(allowRelease, undefined);
+    yield* Fiber.join(interrupting);
+    yield* resources.stopChild;
+
+    expect(releaseAttempts).toBe(1);
+    expect(releaseCompletions).toBe(1);
+  }),
+);

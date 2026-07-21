@@ -1,10 +1,17 @@
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { AgentDirectory, JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
+import {
+  AgentDirectory,
+  JsonDocumentError,
+  JsonDocumentStore,
+  type JsonDocumentModification,
+  type JsonObject,
+} from "pi-cosmic-core";
 import { currentWorkingDirectory } from "../boundary/environment";
 import { CODE_PREVIEW_SETTING_KEYS } from "./definitions";
 import { CodePreviewEnvironmentService } from "./environment-service";
+import { CodePreviewSettingsSchema } from "./schema";
 import { cloneCodePreviewSettings } from "./state";
 import type { CodePreviewSettings } from "./types";
 import { normalizeSettings } from "./values";
@@ -12,7 +19,7 @@ import { normalizeSettings } from "./values";
 export type SettingsSaveContext = {
   readonly baseline: CodePreviewSettings;
   readonly loaded: CodePreviewSettings;
-  readonly globalOverrides: Readonly<Record<string, unknown>>;
+  readonly globalOverrides: Readonly<JsonObject>;
   readonly globalDocument: JsonObject;
   readonly nested: boolean;
 };
@@ -112,25 +119,66 @@ export const loadSettingsStateEffect = Effect.fn("CodePreviewSettings.loadState"
 export const saveSettingsStateEffect = Effect.fn("CodePreviewSettings.saveState")(function* (
   settings: CodePreviewSettings,
   context: SettingsSaveContext,
+  afterCommit: (context: SettingsSaveContext) => Effect.Effect<void>,
 ) {
   const path = yield* Path.Path;
   const agentDir = yield* AgentDirectory;
   const documents = yield* JsonDocumentStore;
   const settingsPath = path.join(agentDir, "code-previews.json");
-  const globalDocument = yield* documents.updateObject(settingsPath, (latest) =>
-    settingsDocument(settings, {
-      ...context,
-      globalDocument: latest,
-      nested: isRecord(latest.codePreview),
+  const committedSettings = yield* Schema.decodeUnknownEffect(CodePreviewSettingsSchema)(
+    settings,
+  ).pipe(
+    Effect.map(
+      (decoded): CodePreviewSettings => ({
+        ...decoded,
+        tools: [...decoded.tools],
+      }),
+    ),
+    Effect.mapError(
+      () =>
+        new JsonDocumentError({
+          operation: "validate",
+          path: settingsPath,
+          message: "Code preview settings are invalid.",
+        }),
+    ),
+  );
+  const modifyObject = documents.modifyObject;
+  if (!modifyObject)
+    return yield* new JsonDocumentError({
+      operation: "write",
+      path: settingsPath,
+      message: "Atomic JSON document modification is unavailable.",
+    });
+  return yield* modifyObject(settingsPath, (latest) =>
+    Effect.try({
+      try: () => {
+        const globalDocument = settingsDocument(committedSettings, {
+          ...context,
+          globalDocument: latest,
+          nested: isRecord(latest.codePreview),
+        });
+        const nextContext = {
+          baseline: cloneCodePreviewSettings(context.baseline),
+          loaded: cloneCodePreviewSettings(committedSettings),
+          globalOverrides: extractCodePreviewSettings(globalDocument),
+          globalDocument,
+          nested: isRecord(globalDocument.codePreview),
+        } satisfies SettingsSaveContext;
+        return {
+          value: nextContext,
+          document: globalDocument,
+          afterCommit: afterCommit(nextContext),
+        } satisfies JsonDocumentModification<SettingsSaveContext>;
+      },
+      catch: () =>
+        new JsonDocumentError({
+          operation: "write",
+          path: settingsPath,
+          message: "Unable to update code preview settings.",
+        }),
     }),
   );
-  return {
-    baseline: cloneCodePreviewSettings(context.baseline),
-    loaded: cloneCodePreviewSettings(settings),
-    globalOverrides: extractCodePreviewSettings(globalDocument),
-    globalDocument,
-    nested: isRecord(globalDocument.codePreview),
-  } satisfies SettingsSaveContext;
 });
 
 export function getSettingsPathFrom(directory: string): string {
@@ -183,16 +231,15 @@ export function defaultSettingsSaveContext(defaults: CodePreviewSettings): Setti
   };
 }
 
-const RecordSchema = Schema.Record(Schema.String, Schema.Unknown);
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Schema.is(RecordSchema)(value);
+const RecordSchema = Schema.Record(Schema.String, Schema.Json);
+const isRecord = (value: unknown): value is JsonObject => Schema.is(RecordSchema)(value);
 
-export function extractCodePreviewSettings(data: unknown): Record<string, unknown> {
+export function extractCodePreviewSettings(data: unknown): JsonObject {
   if (!isRecord(data)) return {};
   const nested = data.codePreview;
   if (isRecord(nested)) return nested;
   if (hasDirectCodePreviewSettings(data)) return data;
-  const extracted: Record<string, unknown> = {};
+  const extracted: JsonObject = {};
   for (const [key, value] of Object.entries(data)) {
     if (!key.startsWith("codePreview")) continue;
     const normalized = key.slice("codePreview".length);
@@ -204,6 +251,6 @@ export function extractCodePreviewSettings(data: unknown): Record<string, unknow
   return extracted;
 }
 
-function hasDirectCodePreviewSettings(object: Record<string, unknown>): boolean {
+function hasDirectCodePreviewSettings(object: JsonObject): boolean {
   return CODE_PREVIEW_SETTING_KEYS.some((key) => key in object);
 }

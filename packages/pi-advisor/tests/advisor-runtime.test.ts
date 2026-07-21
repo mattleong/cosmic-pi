@@ -32,7 +32,7 @@ import {
 } from "../src/advisor-runtime.ts";
 import { ADVISOR_TOOL_NAMES, createAdvisorTools } from "../src/advisor-tools.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
-import type { AdvisorUsageTelemetry } from "../src/client.ts";
+import { AdvisorModelError, type AdvisorUsageTelemetry } from "../src/client.ts";
 import { makeCapturedTracer } from "pi-cosmic-core/testing";
 import type { ResolvedAdvisorConfig } from "../src/config.ts";
 
@@ -499,16 +499,45 @@ describe("AdvisorRuntime", () => {
     expect(runtime.childSession).toBeUndefined();
   });
 
-  test("finalizes a child when event subscription acquisition throws", async () => {
+  test.each(["getActiveToolNames", "getToolDefinition"] as const)(
+    "maps a throwing AgentSession %s safety callback to AdvisorModelError",
+    async (method) => {
+      const { runtime, session } = harness();
+      session[method].mockImplementation(() => {
+        throw new Error("sensitive hostile session callback");
+      });
+
+      const failure = start(runtime).catch((error: unknown) => error);
+      await expect(failure).resolves.toBeInstanceOf(AdvisorModelError);
+      await expect(failure).resolves.not.toMatchObject({
+        message: expect.stringContaining("sensitive hostile session callback"),
+      });
+      expect(runtime.childSession).toBeUndefined();
+    },
+  );
+
+  test("falls back safely when the synchronous active-tool projection throws", async () => {
+    const { runtime, session } = harness();
+    await start(runtime);
+    session.getActiveToolNames.mockImplementation(() => {
+      throw new Error("sensitive diagnostic projection failure");
+    });
+
+    expect(() => runtime.activeToolNames).not.toThrow();
+    expect(runtime.activeToolNames).toEqual([]);
+  });
+
+  test("owns the child before fallible event subscription acquisition", async () => {
     const { runtime, session } = harness();
     (session.subscribe as ReturnType<typeof vi.fn>).mockImplementation(() => {
       throw new Error("subscribe failed");
     });
     await expect(start(runtime)).rejects.toThrow(/subscription/i);
-    await runtime.dispose();
     expect(session.abort).toHaveBeenCalledTimes(1);
     expect(session.dispose).toHaveBeenCalledTimes(1);
     expect(runtime.childSession).toBeUndefined();
+    await runtime.dispose();
+    expect(session.dispose).toHaveBeenCalledTimes(1);
   });
 
   test("persistent child rejection and abort failure still dispose exactly once", async () => {
@@ -697,6 +726,58 @@ describe("AdvisorRuntime", () => {
     expect(instance.session.dispose).toHaveBeenCalledTimes(2);
   });
 
+  test("keeps a successfully aborted child reusable for a successor checkpoint", async () => {
+    const instance = harness();
+    await start(instance.runtime);
+
+    await instance.runtime.abort();
+    expect(instance.runtime.childSession).toBe(instance.session);
+    expect(instance.session.abort).toHaveBeenCalledOnce();
+    expect(instance.session.dispose).not.toHaveBeenCalled();
+
+    await expect(
+      instance.runtime.checkpoint({
+        checkpointId: "after-abort",
+        processedThrough: 1,
+        observations: "successor",
+        focus: "standard",
+      }),
+    ).resolves.toMatchObject({ checkpointId: "after-abort" });
+    await instance.runtime.dispose();
+    expect(instance.session.abort).toHaveBeenCalledTimes(2);
+    expect(instance.session.dispose).toHaveBeenCalledOnce();
+  });
+
+  test("force-detaches a child after abort rejection until a clean re-prime", async () => {
+    const instance = harness();
+    await start(instance.runtime);
+    instance.session.abort.mockRejectedValueOnce(new Error("sensitive abort failure"));
+
+    await instance.runtime.abort();
+    expect(instance.runtime.childSession).toBeUndefined();
+    expect(instance.session.dispose).toHaveBeenCalledOnce();
+    await expect(
+      instance.runtime.checkpoint({
+        checkpointId: "must-reprime",
+        processedThrough: 1,
+        observations: "batch",
+        focus: "standard",
+      }),
+    ).rejects.toThrow(/abort failed.*fresh context/i);
+
+    await start(instance.runtime, {}, { seed: "fresh" });
+    await expect(
+      instance.runtime.checkpoint({
+        checkpointId: "fresh",
+        processedThrough: 2,
+        observations: "fresh batch",
+        focus: "standard",
+      }),
+    ).resolves.toMatchObject({ checkpointId: "fresh" });
+    await instance.runtime.dispose();
+    expect(instance.session.dispose).toHaveBeenCalledTimes(2);
+  });
+
   test("replacement and repeated disposal release each child exactly once", async () => {
     const first = harness();
     await start(first.runtime);
@@ -765,13 +846,9 @@ describe("AdvisorRuntime", () => {
     }
   });
 
-  test("blocks replacement until a timed-out late child finishes abort and disposal", async () => {
+  test("replaces a timed-out create without waiting and disposes its late child once", async () => {
     vi.useFakeTimers();
-    let releaseAbort!: () => void;
     let resolveLate!: (value: { session: AgentSession; extensionsResult: never }) => void;
-    const abortGate = new Promise<undefined>((resolve) => {
-      releaseAbort = () => resolve(undefined);
-    });
     try {
       const late = new Promise<{ session: AgentSession; extensionsResult: never }>((resolve) => {
         resolveLate = resolve;
@@ -779,7 +856,6 @@ describe("AdvisorRuntime", () => {
       const first = harness();
       const replacement = harness();
       replacement.session.getActiveToolNames.mockReturnValue([]);
-      first.session.abort.mockImplementationOnce(() => abortGate);
       const sessions = [
         late,
         Promise.resolve({
@@ -805,54 +881,37 @@ describe("AdvisorRuntime", () => {
       await vi.advanceTimersByTimeAsync(25);
       await firstRejection;
 
-      let replacementSettled = false;
-      const secondStart = start(runtime, { timeoutMs: 1_000 }).finally(() => {
-        replacementSettled = true;
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(createSession).toHaveBeenCalledTimes(1);
-      expect(replacementSettled).toBe(false);
+      await start(runtime, { timeoutMs: 1_000 });
+      expect(createSession).toHaveBeenCalledTimes(2);
+      expect(runtime.childSession).toBe(replacement.session);
+      expect(first.session.abort).not.toHaveBeenCalled();
+      expect(first.session.dispose).not.toHaveBeenCalled();
 
       resolveLate({
         session: first.session as unknown as AgentSession,
         extensionsResult: {} as never,
       });
-      await vi.runAllTimersAsync();
-      await Promise.resolve();
-      expect(first.session.abort).toHaveBeenCalledOnce();
-      expect(first.session.dispose).not.toHaveBeenCalled();
-      expect(createSession).toHaveBeenCalledTimes(1);
-      expect(replacementSettled).toBe(false);
-
-      releaseAbort();
       await vi.advanceTimersByTimeAsync(0);
-      await secondStart;
+      await Promise.resolve();
       expect(first.session.dispose).toHaveBeenCalledOnce();
-      expect(createSession).toHaveBeenCalledTimes(2);
+      expect(first.session.abort).not.toHaveBeenCalled();
       expect(runtime.childSession).toBe(replacement.session);
       await runtime.dispose();
       expect(replacement.session.abort).toHaveBeenCalledOnce();
       expect(replacement.session.dispose).toHaveBeenCalledOnce();
     } finally {
-      releaseAbort();
       vi.useRealTimers();
     }
   });
 
-  test("blocks shutdown behind timed-out late-child cleanup", async () => {
+  test("shuts down after timed-out create and still disposes a late child once", async () => {
     vi.useFakeTimers();
     let resolveLate!: (value: { session: AgentSession; extensionsResult: never }) => void;
-    let releaseAbort!: () => void;
     const late = new Promise<{ session: AgentSession; extensionsResult: never }>((resolve) => {
       resolveLate = resolve;
     });
-    const abortGate = new Promise<undefined>((resolve) => {
-      releaseAbort = () => resolve(undefined);
-    });
     try {
       const value = harness();
-      value.session.abort.mockImplementationOnce(() => abortGate);
       const runtime = makeTestRuntime({
         createChildModel: vi.fn(async () => ({
           modelRuntime: {} as never,
@@ -869,74 +928,64 @@ describe("AdvisorRuntime", () => {
       await vi.advanceTimersByTimeAsync(25);
       await firstRejection;
 
-      let shutdownSettled = false;
-      const shutdown = runtime.dispose().finally(() => {
-        shutdownSettled = true;
-      });
-      await Promise.resolve();
-      expect(shutdownSettled).toBe(false);
+      await runtime.dispose();
+      expect(value.session.abort).not.toHaveBeenCalled();
+      expect(value.session.dispose).not.toHaveBeenCalled();
 
       resolveLate({
         session: value.session as unknown as AgentSession,
         extensionsResult: {} as never,
       });
-      await vi.runAllTimersAsync();
-      expect(value.session.abort).toHaveBeenCalledOnce();
-      expect(value.session.dispose).not.toHaveBeenCalled();
-      expect(shutdownSettled).toBe(false);
-
-      releaseAbort();
       await vi.advanceTimersByTimeAsync(0);
-      await shutdown;
+      await Promise.resolve();
+      expect(value.session.abort).not.toHaveBeenCalled();
+      expect(value.session.dispose).toHaveBeenCalledOnce();
+      await runtime.dispose();
       expect(value.session.dispose).toHaveBeenCalledOnce();
     } finally {
-      releaseAbort();
       vi.useRealTimers();
     }
   });
 
-  test.each(["throws", "rejects"] as const)(
-    "disposes a late child even when its abort %s",
-    async (failure) => {
-      vi.useFakeTimers();
-      try {
-        let resolveSession!: (value: { session: AgentSession; extensionsResult: never }) => void;
-        const late = new Promise<{ session: AgentSession; extensionsResult: never }>((resolve) => {
-          resolveSession = resolve;
-        });
-        const base = harness();
-        base.session.abort.mockImplementationOnce(() => {
-          if (failure === "throws") throw new Error("synchronous abort defect");
-          return Promise.reject(new Error("asynchronous abort defect"));
-        });
-        const runtime = makeTestRuntime({
-          createChildModel: vi.fn(async () => ({
-            modelRuntime: {} as never,
-            model: { provider: "p", id: "m" } as never,
-            thinkingLevel: "medium" as const,
-          })),
-          createTools: vi.fn(async () => []),
-          createSession: vi.fn(() => late),
-        });
-        const pending = start(runtime, { timeoutMs: 25 });
-        const rejection = expect(pending).rejects.toThrow("startup timed out");
-        await Promise.resolve();
-        await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(25);
-        await rejection;
-        resolveSession({
-          session: base.session as unknown as AgentSession,
-          extensionsResult: {} as never,
-        });
-        await vi.runAllTimersAsync();
-        await Promise.resolve();
-        expect(base.session.abort).toHaveBeenCalled();
-        expect(base.session.dispose).toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
+  test("isolates a throwing late-child disposal callback", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveSession!: (value: { session: AgentSession; extensionsResult: never }) => void;
+      const late = new Promise<{ session: AgentSession; extensionsResult: never }>((resolve) => {
+        resolveSession = resolve;
+      });
+      const base = harness();
+      base.session.dispose.mockImplementationOnce(() => {
+        throw new Error("sensitive disposal defect");
+      });
+      const runtime = makeTestRuntime({
+        createChildModel: vi.fn(async () => ({
+          modelRuntime: {} as never,
+          model: { provider: "p", id: "m" } as never,
+          thinkingLevel: "medium" as const,
+        })),
+        createTools: vi.fn(async () => []),
+        createSession: vi.fn(() => late),
+      });
+      const pending = start(runtime, { timeoutMs: 25 });
+      const rejection = expect(pending).rejects.toThrow("startup timed out");
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(25);
+      await rejection;
+      await runtime.dispose();
+      resolveSession({
+        session: base.session as unknown as AgentSession,
+        extensionsResult: {} as never,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      expect(base.session.abort).not.toHaveBeenCalled();
+      expect(base.session.dispose).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   test("event ingress overflow requests a reset and releases its child without leaks", async () => {
     const value = harness("stop", true);

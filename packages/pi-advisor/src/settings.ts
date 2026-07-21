@@ -46,7 +46,7 @@ export interface AdvisorConfigState {
   get(): ResolvedAdvisorConfig;
   getMetrics(): Readonly<AdvisorSessionMetrics>;
   update(config: ResolvedAdvisorConfig): void | Promise<void>;
-  /** Session-owned persistence adapter; omitted only by standalone compatibility tests. */
+  /** Session-owned adapter commits persistence and authoritative state together. */
   persist?(patch: AdvisorConfigPatch, path: string): Promise<ResolvedAdvisorConfig>;
 }
 
@@ -517,15 +517,17 @@ function updateConfig(
   patch: AdvisorConfigPatch,
 ): Promise<boolean> {
   const path = state.get().configPath;
-  return (state.persist ? state.persist(patch, path) : writeAdvisorConfigPatchAsync(patch, path))
-    .then((next) => {
-      return Promise.resolve(state.update(next)).then(() => true);
-    })
-    .catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(`Could not save advisor settings: ${message}`, "error");
-      return false;
-    });
+  return (
+    state.persist
+      ? state.persist(patch, path).then(() => true)
+      : writeAdvisorConfigPatchAsync(patch, path).then((next) =>
+          Promise.resolve(state.update(next)).then(() => true),
+        )
+  ).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    ctx.ui.notify(`Could not save advisor settings: ${message}`, "error");
+    return false;
+  });
 }
 
 function showAdvisorUsage(

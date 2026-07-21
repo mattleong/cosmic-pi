@@ -15,6 +15,23 @@ Do not use stale examples containing `it.scoped` or `it.scopedLive`; those helpe
 
 Resource-owning services test acquisition and release counts on success, failure, replacement, interruption, and repeated shutdown. Time-dependent behavior uses `TestClock`; sleeping work is forked before the clock is advanced. Tests cover interruption during auth lookup, HTTP requests, streams, configuration writes, image writes, Shiki initialization, advisor checkpoints, session replacement, and shutdown. Shared deterministic platform fakes and acquisition probes live under the published `pi-cosmic-core/testing` test-kit subpath.
 
+Advisor lifecycle tests use `TestClock` to prove that a never-settling child abort reaches forced
+disposal at the configured operation deadline and remains reset-required until a clean re-prime.
+Promise-boundary tests also prove that timed-out child creation cannot delay replacement or
+shutdown, and that a never-installed late session is synchronously disposed exactly once.
+Advisor host-boundary tests inject throwing getters, session methods, abort signals, tool metadata,
+status renderers, and timer callbacks; replacement tests prove exact listener release. Configuration
+tests interrupt inside `afterCommit` and require the renamed document and authoritative publication
+to remain aligned. Checkpoint finalizer tests deactivate the outer executor before scope closure and
+still require inline cancellation, fiber interruption, and exact-once bookkeeping.
+
+Concurrency tests pause at the exact ownership or publication boundary with `Deferred`, then
+force the competing operation through that window. A test named atomic, serialized, stale-safe,
+or interruption-safe must fail if the lock, revision check, or finalizer ordering is removed.
+Wall-clock timeouts under `it.effect` are not promptness proofs because the test clock advances
+only when the test advances it; use completion probes and retain Vitest's timeout only as an outer
+hang guard.
+
 Each migrated package must prove:
 
 - no fibers survive shutdown,
@@ -22,6 +39,12 @@ Each migrated package must prove:
 - service requirements are fully supplied,
 - external data is schema-decoded,
 - secrets do not appear in errors, logs, spans, or snapshots.
+- cleanup Promises that reject become typed failures rather than defects,
+- failed acquisition never releases or deletes a resource owned by another operation,
+- atomic file writers never remove an unacquired collision and perform no fallible work after the
+  rename commit,
+- persistence fakes clone JSON ingress and egress, reject non-JSON values, and do not commit a
+  failed effectful mutation.
 
 ## Shared test Layers and telemetry capture
 

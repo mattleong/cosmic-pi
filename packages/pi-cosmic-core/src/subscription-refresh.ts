@@ -1,5 +1,8 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as MutableRef from "effect/MutableRef";
+import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { makeRefreshCoordinatorWith } from "./refresh-coordinator.ts";
 
@@ -30,11 +33,32 @@ export const makeSubscriptionRefresh = <Request, Key, Value, E, R>(
 ): Effect.Effect<SubscriptionRefresh<Request, E, R>> =>
   Effect.gen(function* () {
     const coordinator = yield* makeRefreshCoordinatorWith<Request, E>(options.mergeRequest);
-    const revisionRef = yield* SynchronizedRef.make(0);
+    const revisionRef = yield* Ref.make(0);
+    const commitGate = yield* Semaphore.make(1);
+    const commitOwner = MutableRef.make<number | undefined>(undefined);
     const initialWake = yield* Deferred.make<void>();
     const wakeRef = yield* SynchronizedRef.make(initialWake);
     const equals = options.equals ?? Object.is;
     const spanName = options.spanName ?? "pi-cosmic-core.subscription.refresh";
+
+    // Validation and commit share one gate with external invalidation. A commit may deliberately
+    // invalidate its own result, so same-fiber re-entry bypasses the semaphore instead of waiting
+    // on itself; invalidation from every other fiber remains serialized after the commit.
+    const withCommitPermit = <A, E2, R2>(effect: Effect.Effect<A, E2, R2>) =>
+      Effect.gen(function* () {
+        const fiberId = yield* Effect.fiberId;
+        if (MutableRef.get(commitOwner) === fiberId) return yield* effect;
+        return yield* commitGate.withPermits(1)(
+          Effect.acquireUseRelease(
+            Effect.sync(() => MutableRef.set(commitOwner, fiberId)),
+            () => effect,
+            () =>
+              Effect.sync(() => {
+                if (MutableRef.get(commitOwner) === fiberId) MutableRef.set(commitOwner, undefined);
+              }),
+          ),
+        );
+      });
 
     const wake = Effect.gen(function* () {
       const previous = yield* SynchronizedRef.modifyEffect(wakeRef, (current) =>
@@ -43,19 +67,22 @@ export const makeSubscriptionRefresh = <Request, Key, Value, E, R>(
       yield* Deferred.succeed(previous, undefined);
     });
 
-    const invalidate = SynchronizedRef.update(revisionRef, (revision) => revision + 1).pipe(
+    const invalidate = withCommitPermit(Ref.update(revisionRef, (revision) => revision + 1)).pipe(
       Effect.andThen(wake),
       Effect.asVoid,
     );
 
     const perform = Effect.fn(spanName)(function* (request: Request) {
-      const capturedRevision = yield* SynchronizedRef.get(revisionRef);
+      const capturedRevision = yield* Ref.get(revisionRef);
       const capturedKey = yield* options.currentKey;
       const value = yield* options.fetch(request);
-      const currentRevision = yield* SynchronizedRef.get(revisionRef);
-      const currentKey = yield* options.currentKey;
-      if (capturedRevision !== currentRevision || !equals(capturedKey, currentKey)) return;
-      yield* options.commit(value, request);
+      yield* withCommitPermit(
+        Effect.gen(function* () {
+          if (capturedRevision !== (yield* Ref.get(revisionRef))) return;
+          const currentKey = yield* options.currentKey;
+          if (equals(capturedKey, currentKey)) yield* options.commit(value, request);
+        }),
+      );
     });
 
     const request = (next: Request) => coordinator.run(next, perform);
@@ -75,6 +102,6 @@ export const makeSubscriptionRefresh = <Request, Key, Value, E, R>(
       invalidate,
       wake,
       startPolling,
-      revision: SynchronizedRef.get(revisionRef),
+      revision: Ref.get(revisionRef),
     };
   });

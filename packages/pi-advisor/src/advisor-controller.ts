@@ -3,7 +3,6 @@ import { snapshotData } from "./boundary/safe-data.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { makeAdvisorProjection, type AdvisorControllerSnapshot } from "./advisor-projection.ts";
@@ -119,6 +118,26 @@ import {
 } from "./routing.ts";
 import { PiCommandAdapter } from "./pi-command-adapter.ts";
 import {
+  abortAdvisorParentAtHostBoundary,
+  captureAdvisorAbortInputAtHostBoundary,
+  captureAdvisorSessionInputAtHostBoundary,
+  captureAdvisorSessionInputEffect,
+  readAdvisorContextEntriesAtHostBoundary,
+  readAdvisorContextEntriesEffect,
+  readAdvisorParentIdleAtHostBoundary,
+  readAdvisorPendingMessagesAtHostBoundary,
+  readAdvisorSessionBranchAtHostBoundary,
+  readAdvisorSessionBranchEffect,
+  readAdvisorSessionIdAtHostBoundary,
+  readAdvisorSessionLeafIdAtHostBoundary,
+  readAdvisorSignalAbortedAtHostBoundary,
+  registerAdvisorAbortListenerAtHostBoundary,
+  registerAdvisorAbortListenerEffect,
+  type AdvisorAbortInput,
+  type AdvisorHostContextError,
+  type AdvisorSessionInput,
+} from "./boundary/host-context.ts";
+import {
   emptyAdvisorOutcomes,
   type AdvisorCommandActions,
   type AdvisorSessionMetrics,
@@ -157,6 +176,8 @@ const STATUS_KEY = "pi-advisor";
 const STATUS_SPINNER_DELAY_MS = 200;
 const STATUS_SPINNER_INTERVAL_MS = 120;
 const STATUS_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+const UNREADABLE_PARENT_ANCHOR = Symbol("pi-advisor/unreadable-parent-anchor");
+type ParentAnchor = string | null | typeof UNREADABLE_PARENT_ANCHOR;
 export const ADVISOR_CATCH_UP_TIMEOUT_MS = 30_000;
 type ReviewPhase = "final" | "progress";
 type CheckpointSettlement = "completed" | "discarded" | "failed";
@@ -177,6 +198,7 @@ export const awaitAdvisorCatchUpEffect = (
   );
 
 interface AdvisorCheckpointHandle {
+  readonly abortInput: AdvisorAbortInput;
   invalidate(): void;
   cancel(): void;
   cancelEffect: Effect.Effect<void>;
@@ -225,7 +247,7 @@ export interface AdvisorControllerShape {
   readonly stopChild: () => Effect.Effect<void>;
   readonly sessionInitialize: (
     event: never,
-    ctx: ExtensionContext,
+    input: AdvisorSessionInput,
   ) => Effect.Effect<unknown, AdvisorExtensionError>;
   readonly sessionShutdown: (
     event: never,
@@ -370,8 +392,9 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       let checkpointId = 0;
       let queue: AdvisorReviewQueue | undefined;
       let runtime: AdvisorRuntimeServiceShape | undefined;
-      let runtimeCursor: { anchor: string | null; fingerprint: string } | undefined;
+      let runtimeCursor: { anchor: ParentAnchor; fingerprint: string } | undefined;
       let activeContext: ExtensionContext | undefined;
+      let activeSessionInput: AdvisorSessionInput | undefined;
       const applicationStateStore = makeAdvisorApplicationStateStore(
         initialAdvisorApplicationState(normalizeAdvisorConfig({}, "")),
       );
@@ -549,18 +572,18 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       };
 
       const renderReviewStatus = (ctx: ExtensionContext, frameIndex: number): void => {
-        const renderConfig = currentConfig();
-        const frame =
-          STATUS_SPINNER_FRAMES[frameIndex % STATUS_SPINNER_FRAMES.length] ??
-          STATUS_SPINNER_FRAMES[0];
-        const model =
-          renderConfig.provider && renderConfig.model
-            ? ctx.modelRegistry.find(renderConfig.provider, renderConfig.model)
-            : undefined;
-        const effort = model
-          ? clampThinkingLevel(model, renderConfig.thinkingLevel)
-          : renderConfig.thinkingLevel;
         try {
+          const renderConfig = currentConfig();
+          const frame =
+            STATUS_SPINNER_FRAMES[frameIndex % STATUS_SPINNER_FRAMES.length] ??
+            STATUS_SPINNER_FRAMES[0];
+          const model =
+            renderConfig.provider && renderConfig.model
+              ? ctx.modelRegistry.find(renderConfig.provider, renderConfig.model)
+              : undefined;
+          const effort = model
+            ? clampThinkingLevel(model, renderConfig.thinkingLevel)
+            : renderConfig.thinkingLevel;
           ctx.ui.setStatus(
             STATUS_KEY,
             `${frame} ${redactSensitiveText(renderConfig.model ?? "advisor").slice(0, 256)}:${effort} advising…`,
@@ -655,28 +678,32 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         return next;
       };
 
-      const activeSeed = (ctx: ExtensionContext): string =>
+      const seedFromMessages = (messages: readonly unknown[]): string =>
         buildAdvisorContext({
-          messages: activeContextMessages(ctx),
+          messages,
           candidate: lastCandidate?.candidate ?? "[No completed candidate at this cursor.]",
           maxChars: currentConfig().maxContextChars,
         }).transcript;
+      const activeSeed = (ctx: ExtensionContext): string =>
+        seedFromMessages(activeContextMessages(ctx));
 
-      const fingerprint = (ctx: ExtensionContext): string =>
+      const fingerprint = (): string =>
         createLedgerFingerprint({
           provider: currentConfig().provider ?? "",
           model: currentConfig().model ?? "",
-          cwd: ctx.cwd,
+          cwd: activeSessionInput?.cwd ?? "",
           guidance: instructions.content ?? "",
           fastMode: currentConfig().fastMode,
           thinkingLevel: currentConfig().thinkingLevel,
         });
 
-      const parentAnchor = (ctx: ExtensionContext): string | null => {
-        if (typeof ctx.sessionManager.getBranch !== "function") {
-          return ctx.sessionManager.getLeafId?.() ?? null;
+      const parentAnchor = (ctx: ExtensionContext): ParentAnchor => {
+        const branchResult = readAdvisorSessionBranchAtHostBoundary(ctx);
+        if (!branchResult.ok) {
+          const leafResult = readAdvisorSessionLeafIdAtHostBoundary(ctx);
+          return leafResult.ok ? leafResult.value : UNREADABLE_PARENT_ANCHOR;
         }
-        const branch = ctx.sessionManager.getBranch();
+        const branch = branchResult.value;
         for (let index = branch.length - 1; index >= 0; index -= 1) {
           const entry = branch[index];
           if (
@@ -689,19 +716,39 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       };
 
       const lifecycleScope = (ctx: ExtensionContext): string => {
-        const sessionId = ctx.sessionManager.getSessionId?.();
+        const sessionIdResult = readAdvisorSessionIdAtHostBoundary(ctx);
+        const sessionId = sessionIdResult.ok ? sessionIdResult.value : undefined;
         if (sessionId) return `session:${sessionId}`;
-        const branch = ctx.sessionManager.getBranch?.() ?? [];
+        const branchResult = readAdvisorSessionBranchAtHostBoundary(ctx);
+        const branch = branchResult.ok ? branchResult.value : [];
         const root = branch.find(
           (entry) =>
             !(entry.type === "custom" && entry.customType === ADVISOR_CHECKPOINT_ENTRY_TYPE),
         );
-        return `branch:${root?.id ?? parentAnchor(ctx) ?? "root"}`;
+        const fallback = parentAnchor(ctx);
+        return `branch:${root?.id ?? (typeof fallback === "string" ? fallback : "root")}`;
       };
 
-      const branchContains = (ctx: ExtensionContext, anchor: string | null): boolean => {
-        if (!anchor || typeof ctx.sessionManager.getBranch !== "function") return true;
-        return ctx.sessionManager.getBranch().some((entry) => entry.id === anchor);
+      const branchContains = (ctx: ExtensionContext, anchor: ParentAnchor): boolean => {
+        if (anchor === UNREADABLE_PARENT_ANCHOR) return false;
+        if (!anchor) return true;
+        const branchResult = readAdvisorSessionBranchAtHostBoundary(ctx);
+        return branchResult.ok && branchResult.value.some((entry) => entry.id === anchor);
+      };
+
+      const parentIsIdle = (ctx: ExtensionContext): boolean => {
+        const result = readAdvisorParentIdleAtHostBoundary(ctx);
+        return result.ok && result.value;
+      };
+
+      const parentHasPendingMessages = (ctx: ExtensionContext): boolean => {
+        const result = readAdvisorPendingMessagesAtHostBoundary(ctx);
+        return !result.ok || result.value;
+      };
+
+      const parentSignalAborted = (input: AdvisorAbortInput): boolean => {
+        const result = readAdvisorSignalAbortedAtHostBoundary(input);
+        return !result.ok || result.value;
       };
 
       const clearPersistentTrajectory = (): void => {
@@ -801,18 +848,27 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             )
               return undefined;
             const executor = executorForSession();
-            if (!executor) return undefined;
+            const sessionInput = activeSessionInput;
+            if (!executor || !sessionInput) return undefined;
             nextRuntime = createRuntime
               ? advisorRuntimeEffectsFromDriver(createRuntime(executor))
               : productionRuntimeService;
             runtime = nextRuntime;
             const branch =
-              typeof ctx.sessionManager.getBranch === "function"
-                ? ctx.sessionManager.getBranch()
+              restoration === "restore-branch"
+                ? yield* readAdvisorSessionBranchEffect(ctx).pipe(
+                    Effect.mapError(extensionError("session branch read")),
+                  )
                 : [];
+            const contextEntries = yield* readAdvisorContextEntriesEffect(ctx).pipe(
+              Effect.mapError(extensionError("session context read")),
+            );
+            const startSeed = seedFromMessages(
+              contextEntries.flatMap(sessionEntryToContextMessages),
+            );
             const ledger =
               restoration === "restore-branch"
-                ? restoreCheckpointLedger(branch, fingerprint(ctx))
+                ? restoreCheckpointLedger(branch, fingerprint())
                 : undefined;
             if (restoration === "restore-branch") {
               updateApplicationState((state) => ({
@@ -843,9 +899,12 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             const startCancellation = makeCancellationLatch();
             activeChildStart = startCancellation;
             const startOptions = {
-              ctx,
+              ctx: {
+                cwd: sessionInput.cwd,
+                modelRegistry: sessionInput.modelRegistry,
+              },
               config: runtimeConfig,
-              seed: activeSeed(ctx),
+              seed: startSeed,
               stateSummary:
                 restoration === "restore-branch" && ledger
                   ? renderDurableReviewSummary(ledger.reviewSummary)
@@ -916,7 +975,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                 next.childResets = incrementBounded(next.childResets);
               });
             childStartedOnce = true;
-            runtimeCursor = { anchor: parentAnchor(ctx), fingerprint: fingerprint(ctx) };
+            runtimeCursor = { anchor: parentAnchor(ctx), fingerprint: fingerprint() };
             queue = nextQueue;
             updateApplicationState((state) => ({ ...state, started: true }));
             yield* publishControllerSnapshot();
@@ -1007,14 +1066,15 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             }),
           );
         });
-      const persistLedger = (anchor: string | null, ctx: ExtensionContext): void => {
-        if (!anchor || typeof pi.appendEntry !== "function") return;
+      const persistLedger = (anchor: ParentAnchor): void => {
+        if (!anchor || anchor === UNREADABLE_PARENT_ANCHOR || typeof pi.appendEntry !== "function")
+          return;
         const route = applicationStateStore.get().routing;
         try {
           pi.appendEntry(
             ADVISOR_CHECKPOINT_ENTRY_TYPE,
             createCheckpointLedger({
-              fingerprint: fingerprint(ctx),
+              fingerprint: fingerprint(),
               anchorId: anchor,
               reviewSummary: latestDurableSummary,
               cancellationLatched: route.cancellationLatched,
@@ -1044,7 +1104,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       };
 
       const persistCurrentLedger = (ctx: ExtensionContext): void => {
-        persistLedger(parentAnchor(ctx), ctx);
+        persistLedger(parentAnchor(ctx));
       };
 
       const deliver = (
@@ -1052,6 +1112,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         phase: ReviewPhase,
         source: ReviewSource,
         ctx: ExtensionContext,
+        abortInput: AdvisorAbortInput,
         scope: string,
         expectedCancellationEpoch: number,
         trajectoryId?: number,
@@ -1065,7 +1126,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           return "silent";
         };
         if (
-          ctx.signal?.aborted ||
+          parentSignalAborted(abortInput) ||
           expectedCancellationEpoch !== applicationStateStore.get().cancellationEpoch
         ) {
           return discardAtDeliveryBoundary();
@@ -1101,7 +1162,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           );
           if (!suggestion) return suppress();
           if (
-            ctx.signal?.aborted ||
+            parentSignalAborted(abortInput) ||
             expectedCancellationEpoch !== applicationStateStore.get().cancellationEpoch
           ) {
             return discardAtDeliveryBoundary();
@@ -1252,7 +1313,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
               policy: currentConfig().reviewPolicy,
               parentState: aborting
                 ? "aborting"
-                : ctx.isIdle()
+                : parentIsIdle(ctx)
                   ? phase === "final"
                     ? "final"
                     : "idle"
@@ -1277,12 +1338,12 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           !canCorrectAdvisorIntervention(applicationStateStore.get().interventionBudget)
         )
           route = "push-direct";
-        if (budgeted && route === "push-direct" && ctx.isIdle()) route = "silent";
+        if (budgeted && route === "push-direct" && parentIsIdle(ctx)) route = "silent";
 
         // Cancellation is synchronous and wins over a provider completion queued in
         // the same tick. Recheck at the exact delivery boundary before every send path.
         if (
-          ctx.signal?.aborted ||
+          parentSignalAborted(abortInput) ||
           expectedCancellationEpoch !== applicationStateStore.get().cancellationEpoch
         ) {
           rollbackUndelivered(emission);
@@ -1294,11 +1355,12 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         const recordDelivery = (
           correction: boolean,
           outcome: "advice" | "guidance" | "revision",
+          commitBudget = budgeted,
         ): AdvisorReview => {
           updateApplicationState((state) => ({
             ...state,
             findingLifecycle: acknowledgeAdvisorFindings(state.findingLifecycle, findingIds),
-            interventionBudget: budgeted
+            interventionBudget: commitBudget
               ? commitAdvisorIntervention(state.interventionBudget, severity, correction)
               : state.interventionBudget,
           }));
@@ -1315,8 +1377,8 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           });
           return reviewWithAcknowledgedFindings(filteredReview, findingIds);
         };
-        const pushAdvice = (): void => {
-          sendAdvisorAdvice(pi, currentConfig(), recordDelivery(false, "advice"));
+        const pushAdvice = (commitBudget = budgeted): void => {
+          sendAdvisorAdvice(pi, currentConfig(), recordDelivery(false, "advice", commitBudget));
         };
         if (route === "silent") {
           rollbackUndelivered(emission);
@@ -1392,7 +1454,20 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           mutateMetrics((next) => {
             next.lastAction = "recovery";
           });
-          ctx.abort();
+          const abortResult = abortAdvisorParentAtHostBoundary(ctx);
+          if (!abortResult.ok) {
+            updateApplicationState((state) => ({
+              ...state,
+              pendingPersistentRecovery: undefined,
+              abortInProgress: undefined,
+            }));
+            pushAdvice(false);
+            mutateMetrics((next) => {
+              next.lastAction = "advice";
+            });
+            notifyBestEffort(ctx, abortResult.error.message, "warning");
+            return "push-direct";
+          }
         }
         return route;
       };
@@ -1406,6 +1481,9 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         trajectoryId?: number;
         abortOnBlocker?: boolean;
       }): AdvisorCheckpointHandle | undefined => {
+        const abortCapture = captureAdvisorAbortInputAtHostBoundary(options.ctx);
+        if (!abortCapture.ok) return undefined;
+        const requestAbortInput = abortCapture.input;
         if (
           (!queue || !isStarted()) &&
           (!currentConfig().enabled || !currentConfig().configured || isPaused())
@@ -1442,7 +1520,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         const checkpointSettlement = Effect.gen(function* () {
           const cursorMismatch =
             !runtimeCursor ||
-            runtimeCursor.fingerprint !== fingerprint(options.ctx) ||
+            runtimeCursor.fingerprint !== fingerprint() ||
             !branchContains(options.ctx, runtimeCursor.anchor);
           if (cursorMismatch) {
             // One bounded restart remains part of this same checkpoint settlement,
@@ -1486,10 +1564,10 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             requestCancellationEpoch === applicationStateStore.get().cancellationEpoch &&
             requestParentTurnId === applicationStateStore.get().parentTurnId &&
             requestConfigRevision === configRevision &&
-            !options.ctx.signal?.aborted &&
+            !parentSignalAborted(requestAbortInput) &&
             (!options.requiresEnabled ||
               (currentConfig().enabled && !isPaused() && currentConfig().configured)) &&
-            !options.ctx.hasPendingMessages() &&
+            !parentHasPendingMessages(options.ctx) &&
             branchContains(options.ctx, anchor) &&
             (options.trajectoryId === undefined ||
               applicationStateStore.get().activeTrajectory?.id === options.trajectoryId);
@@ -1532,10 +1610,10 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             requestCancellationEpoch !== applicationStateStore.get().cancellationEpoch ||
             requestParentTurnId !== applicationStateStore.get().parentTurnId ||
             requestConfigRevision !== configRevision ||
-            options.ctx.signal?.aborted ||
+            parentSignalAborted(requestAbortInput) ||
             (options.requiresEnabled &&
               (!currentConfig().enabled || isPaused() || !currentConfig().configured)) ||
-            options.ctx.hasPendingMessages() ||
+            parentHasPendingMessages(options.ctx) ||
             !branchContains(options.ctx, anchor)
           ) {
             mutateMetrics((next) => {
@@ -1562,12 +1640,13 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             options.phase,
             options.source,
             options.ctx,
+            requestAbortInput,
             ledgerScope,
             requestCancellationEpoch,
             options.abortOnBlocker ? options.trajectoryId : undefined,
           );
-          runtimeCursor = { anchor, fingerprint: fingerprint(options.ctx) };
-          persistLedger(anchor, options.ctx);
+          runtimeCursor = { anchor, fingerprint: fingerprint() };
+          persistLedger(anchor);
           outcomeRecorded = true;
           return "completed" as const;
         }).pipe(
@@ -1633,6 +1712,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           cancelActive: cancel,
         });
         return {
+          abortInput: requestAbortInput,
           invalidate: orchestrated.invalidate,
           cancel: orchestrated.cancel,
           cancelEffect: orchestrated.cancelEffect,
@@ -1656,7 +1736,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             next.catchUpWaits = incrementBounded(next.catchUpWaits);
             next.activeCatchUpWaits = incrementBounded(next.activeCatchUpWaits);
           });
-          const signal = ctx.signal;
           let timeoutRecorded = false;
           const recordTimeout = () => {
             if (timeoutRecorded) return;
@@ -1665,28 +1744,45 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
               next.catchUpTimeouts = incrementBounded(next.catchUpTimeouts);
             });
           };
-          const cancellation = signal
-            ? Effect.callback<"cancelled">((resume) => {
-                let recorded = false;
-                const onAbort = () => {
-                  if (recorded) return;
-                  recorded = true;
-                  handle.invalidate();
-                  advanceDomainCounter("cancellationEpoch");
-                  latchCancellation();
-                  clearPendingRecovery();
-                  clearPendingReceipt();
-                  persistCurrentLedger(ctx);
-                  mutateMetrics((next) => {
-                    next.catchUpCancellations = incrementBounded(next.catchUpCancellations);
-                  });
+          let cancellationRecorded = false;
+          const recordCancellation = () => {
+            if (cancellationRecorded) return;
+            cancellationRecorded = true;
+            handle.invalidate();
+            advanceDomainCounter("cancellationEpoch");
+            latchCancellation();
+            clearPendingRecovery();
+            clearPendingReceipt();
+            persistCurrentLedger(ctx);
+            mutateMetrics((next) => {
+              next.catchUpCancellations = incrementBounded(next.catchUpCancellations);
+            });
+          };
+          const cancellation = Effect.callback<"cancelled", AdvisorHostContextError>((resume) => {
+            const registered = registerAdvisorAbortListenerAtHostBoundary(handle.abortInput, () => {
+              try {
+                recordCancellation();
+              } finally {
+                try {
                   resume(handle.cancelEffect.pipe(Effect.as("cancelled" as const)));
-                };
-                if (signal.aborted) onAbort();
-                else signal.addEventListener("abort", onAbort, { once: true });
-                return Effect.sync(() => signal.removeEventListener("abort", onAbort));
-              })
-            : Effect.never;
+                } catch {
+                  /* Effect callback resumption cannot escape the native abort listener */
+                }
+              }
+            });
+            if (!registered.ok) {
+              resume(Effect.fail(registered.error));
+              return;
+            }
+            return Effect.sync(registered.registration.remove);
+          }).pipe(
+            Effect.catch(() =>
+              Effect.sync(recordCancellation).pipe(
+                Effect.andThen(handle.cancelEffect),
+                Effect.as("cancelled" as const),
+              ),
+            ),
+          );
           return awaitAdvisorCatchUpEffect(
             handle.settlement,
             catchUpTimeoutMs,
@@ -1801,6 +1897,35 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         },
       };
 
+      const applyCommittedConfigEffect = (next: ResolvedAdvisorConfig): Effect.Effect<void> =>
+        Effect.sync(() => {
+          const enabledChanged = currentConfig().enabled !== next.enabled;
+          const disabling = currentConfig().enabled && !next.enabled;
+          updateApplicationState((state) => ({
+            ...state,
+            config: next,
+            paused: enabledChanged ? false : state.paused,
+          }));
+          configRevision += 1;
+          clearPendingRecovery();
+          resetRequestDomain(true);
+          latestStateSummary = "";
+          latestDurableSummary = summarizeAdvisorReview();
+          pendingExplicitStart = undefined;
+          if (disabling) latchCancellation();
+          advanceDomainCounter("cancellationEpoch");
+          const ctx = activeContext;
+          if (!ctx) return;
+          persistCurrentLedger(ctx);
+          const executor = executorForSession();
+          if (!executor) return;
+          try {
+            executor.fork(startRuntimeEffect(ctx));
+          } catch {
+            // Slot deactivation already owns runtime cleanup; the next session reloads disk state.
+          }
+        });
+
       registerAdvisorCommands(
         capturingPi,
         {
@@ -1809,7 +1934,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           persist: (patch, path) => {
             const executor = executorForSession();
             return executor
-              ? executor.run(configRepository.patch(patch, path))
+              ? executor.run(configRepository.patch(patch, path, applyCommittedConfigEffect))
               : Promise.reject(
                   new AdvisorExtensionError({
                     operation: "config persistence",
@@ -1817,36 +1942,15 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                   }),
                 );
           },
-          update: (next) =>
-            runSessionEffect(
-              Effect.gen(function* () {
-                const enabledChanged = currentConfig().enabled !== next.enabled;
-                const disabling = currentConfig().enabled && !next.enabled;
-                updateApplicationState((state) => ({
-                  ...state,
-                  config: next,
-                  paused: enabledChanged ? false : state.paused,
-                }));
-                configRevision += 1;
-                clearPendingRecovery();
-                resetRequestDomain(true);
-                latestStateSummary = "";
-                latestDurableSummary = summarizeAdvisorReview();
-                pendingExplicitStart = undefined;
-                if (disabling) latchCancellation();
-                advanceDomainCounter("cancellationEpoch");
-                if (activeContext) persistCurrentLedger(activeContext);
-                yield* publishControllerSnapshot();
-                if (activeContext) void startRuntime(activeContext);
-              }),
-            ),
+          update: (next) => runSessionEffect(applyCommittedConfigEffect(next)),
         },
         commandActions,
         (effect) => runSessionEffect(effect),
       );
 
-      const sessionInitializeEffect = (ctx: ExtensionContext) =>
+      const sessionInitializeEffect = (input: AdvisorSessionInput) =>
         Effect.gen(function* () {
+          const ctx = input.ctx;
           ++parentGeneration;
           advanceDomainCounter("epoch");
           advanceDomainCounter("cancellationEpoch");
@@ -1854,61 +1958,92 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           yield* checkpointOrchestrator.cancelAll();
           removeHostCancellation?.();
           removeHostCancellation = undefined;
-          const latchHostCancellation = () => {
+          activeContext = undefined;
+          activeSessionInput = undefined;
+          yield* stopRuntimeUnlockedEffect();
+          let hostCancellationPending = false;
+          let hostCancellationActive = false;
+          const applyHostCancellation = () => {
             latchCancellation();
             clearPendingRecovery();
             clearPendingReceipt();
             advanceDomainCounter("cancellationEpoch");
             persistCurrentLedger(ctx);
           };
-          ctx.signal?.addEventListener("abort", latchHostCancellation, { once: true });
-          removeHostCancellation = () =>
-            ctx.signal?.removeEventListener("abort", latchHostCancellation);
-          if (ctx.signal?.aborted) latchHostCancellation();
-          activeContext = ctx;
-          const configPath = currentConfig().configPath || getAdvisorConfigPath();
-          const configEffect = configRepository
-            .load(configPath)
-            .pipe(Effect.mapError(extensionError("config load")));
-          yield* stopRuntimeUnlockedEffect();
-          const loadedConfig = yield* configEffect;
-          configRevision += 1;
-          updateApplicationState(() => initialAdvisorApplicationState(loadedConfig));
-          childStartedOnce = false;
-          instructions = yield* loadAdvisorInstructionsEffect(
-            currentConfig().configPath,
-            ctx.cwd,
-            ctx.isProjectTrusted(),
-          ).pipe(Effect.mapError(extensionError("instruction load")));
-          updateApplicationState((state) => ({
-            ...state,
-            paused: false,
-            reviewNext: false,
-            guidancePaths: [...instructions.paths],
-            hasLastCandidate: false,
-          }));
-          pendingExplicitStart = undefined;
-          lastCandidate = undefined;
-          setDomainCounter("parentTurnId", 0);
-          checkpointId = 0;
-          advanceDomainCounter("cancellationEpoch");
-          resetRequestDomain(true);
-          setDomainCounter("requestSequence", 0);
-          updateApplicationState((state) => ({
-            ...state,
-            routing: emptyAdvisorRoutingState(),
-          }));
-          latestStateSummary = "";
-          latestDurableSummary = summarizeAdvisorReview();
-          updateApplicationState((state) => ({
-            ...state,
-            reportedFailures: [],
-            reportedDiagnostics: [],
-          }));
-          yield* publishControllerSnapshot();
-          if (!currentConfig().configured)
-            warnIfSetupRequired(ctx, currentConfig(), () => undefined, notifyBestEffort);
-          yield* startRuntimeEffect(ctx, "restore-branch");
+          const latchHostCancellation = () => {
+            hostCancellationPending = true;
+            if (hostCancellationActive) applyHostCancellation();
+          };
+          const registration = yield* registerAdvisorAbortListenerEffect(
+            input,
+            latchHostCancellation,
+          ).pipe(Effect.mapError(extensionError("host cancellation registration")));
+          let registrationCommitted = false;
+          const initialize = Effect.gen(function* () {
+            activeContext = ctx;
+            activeSessionInput = input;
+            const configPath = currentConfig().configPath || getAdvisorConfigPath();
+            const configEffect = configRepository
+              .load(configPath)
+              .pipe(Effect.mapError(extensionError("config load")));
+            const loadedConfig = yield* configEffect;
+            configRevision += 1;
+            updateApplicationState(() => initialAdvisorApplicationState(loadedConfig));
+            childStartedOnce = false;
+            instructions = yield* loadAdvisorInstructionsEffect(
+              currentConfig().configPath,
+              input.cwd,
+              input.projectTrusted,
+            ).pipe(Effect.mapError(extensionError("instruction load")));
+            updateApplicationState((state) => ({
+              ...state,
+              paused: false,
+              reviewNext: false,
+              guidancePaths: [...instructions.paths],
+              hasLastCandidate: false,
+            }));
+            pendingExplicitStart = undefined;
+            lastCandidate = undefined;
+            setDomainCounter("parentTurnId", 0);
+            checkpointId = 0;
+            advanceDomainCounter("cancellationEpoch");
+            resetRequestDomain(true);
+            setDomainCounter("requestSequence", 0);
+            updateApplicationState((state) => ({
+              ...state,
+              routing: emptyAdvisorRoutingState(),
+            }));
+            latestStateSummary = "";
+            latestDurableSummary = summarizeAdvisorReview();
+            updateApplicationState((state) => ({
+              ...state,
+              reportedFailures: [],
+              reportedDiagnostics: [],
+            }));
+            yield* publishControllerSnapshot();
+            if (!currentConfig().configured)
+              warnIfSetupRequired(ctx, currentConfig(), () => undefined, notifyBestEffort);
+            if (hostCancellationPending)
+              return yield* new AdvisorExtensionError({
+                operation: "session initialization",
+                message: "Advisor session initialization was cancelled.",
+              });
+            hostCancellationActive = true;
+            yield* startRuntimeEffect(ctx, "restore-branch");
+            removeHostCancellation = registration.remove;
+            registrationCommitted = true;
+          });
+          yield* initialize.pipe(
+            Effect.onExit(() =>
+              registrationCommitted
+                ? Effect.void
+                : Effect.sync(() => {
+                    registration.remove();
+                    if (activeContext === ctx) activeContext = undefined;
+                    if (activeSessionInput === input) activeSessionInput = undefined;
+                  }),
+            ),
+          );
         });
       const sessionShutdownEffect = () =>
         Effect.sync(() => {
@@ -1916,6 +2051,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           advanceDomainCounter("epoch");
           pendingExplicitStart = undefined;
           activeContext = undefined;
+          activeSessionInput = undefined;
           removeHostCancellation?.();
           removeHostCancellation = undefined;
         }).pipe(
@@ -1937,7 +2073,12 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         }).pipe(Effect.andThen(startRuntimeEffect(ctx, "restore-branch")), Effect.asVoid);
 
       capturingPi.on("session_start", (_event, ctx) =>
-        runSessionEffect(sessionInitializeEffect(ctx)),
+        runSessionEffect(
+          captureAdvisorSessionInputEffect(ctx).pipe(
+            Effect.mapError(extensionError("session input capture")),
+            Effect.flatMap(sessionInitializeEffect),
+          ),
+        ),
       );
       capturingPi.on("session_shutdown", () => runSessionEffect(sessionShutdownEffect()));
       capturingPi.on("session_compact", (_event, ctx) => runSessionEffect(compactEffect(ctx)));
@@ -2166,6 +2307,8 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
 
       capturingPi.on("agent_settled", (_event, ctx) => {
         const recovery = applicationStateStore.get().pendingPersistentRecovery;
+        const abortCapture = captureAdvisorAbortInputAtHostBoundary(ctx);
+        const signalAborted = !abortCapture.ok || parentSignalAborted(abortCapture.input);
         if (
           !recovery ||
           recovery.epoch !== applicationStateStore.get().epoch ||
@@ -2175,9 +2318,9 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           !currentConfig().enabled ||
           isPaused() ||
           !currentConfig().configured ||
-          ctx.signal?.aborted ||
-          !ctx.isIdle() ||
-          ctx.hasPendingMessages()
+          signalAborted ||
+          !parentIsIdle(ctx) ||
+          parentHasPendingMessages(ctx)
         ) {
           clearPendingRecovery();
           return;
@@ -2210,7 +2353,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           ...state,
           routing: armAdvisorInterruption(state.routing),
         }));
-        persistLedger(parentAnchor(ctx), ctx);
+        persistLedger(parentAnchor(ctx));
       });
 
       capturingPi.on("turn_end", (event, ctx) => {
@@ -2354,8 +2497,8 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         refreshProjection: Effect.suspend(publishControllerSnapshot),
         replaceChild: productionController.replaceChild,
         stopChild: productionController.stopChild,
-        sessionInitialize: (_event, ctx) =>
-          sessionInitializeEffect(ctx).pipe(Effect.provide(platformContext)),
+        sessionInitialize: (_event, input) =>
+          sessionInitializeEffect(input).pipe(Effect.provide(platformContext)),
         sessionShutdown: () => sessionShutdownEffect(),
         event: invokeEvent,
         compact: (_event, ctx) => compactEffect(ctx),
@@ -2364,7 +2507,13 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         command: invokeCommand,
       });
       yield* Effect.addFinalizer(() =>
-        stopRuntimeUnlockedEffect().pipe(Effect.andThen(resources.stopChild)),
+        Effect.sync(() => {
+          ++parentGeneration;
+          removeHostCancellation?.();
+          removeHostCancellation = undefined;
+          activeContext = undefined;
+          activeSessionInput = undefined;
+        }).pipe(Effect.andThen(stopRuntimeUnlockedEffect()), Effect.andThen(resources.stopChild)),
       );
       return service;
     }),
@@ -2377,7 +2526,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     const commandHandlers = new Map<string, AdvisorHostCommandHandler>();
     const commandDefinitions = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
     let parentSlot!: PiSessionRuntimeSlot<
-      ExtensionContext,
+      AdvisorSessionInput,
       | AdvisorPlatform
       | AdvisorRuntimeService
       | AdvisorReviewQueueService
@@ -2385,7 +2534,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       | ConfigRepository
       | FailureLogger
       | HostNotifier
-      | PiCommandAdapter
+      | PiCommandAdapter,
+      never
     >;
     const sessionExecutor: AdvisorEffectExecutor = {
       run: (effect, signal) => parentSlot.run(effect, signal),
@@ -2396,7 +2546,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
             operation: "session fork",
             message: "Advisor session runtime is not active.",
           });
-        return fiber as Fiber.Fiber<never, never>;
+        return fiber;
       },
       now: () => performance.now(),
     };
@@ -2423,15 +2573,16 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       commandDefinitions,
     }).pipe(Layer.provideMerge(dependenciesLayer));
     parentSlot = makePiSessionRuntimeSlot<
-      ExtensionContext,
+      AdvisorSessionInput,
       Layer.Success<typeof applicationLayer>,
-      AdvisorExtensionError
+      AdvisorExtensionError,
+      Layer.Error<typeof applicationLayer>
     >({
       makeRuntime: () => makePiManagedRuntime(pi, applicationLayer),
-      startup: (ctx) =>
+      startup: (input) =>
         Effect.gen(function* () {
           const controller = yield* AdvisorController;
-          yield* controller.sessionInitialize(undefined as never, ctx);
+          yield* controller.sessionInitialize(undefined as never, input);
         }),
     });
 
@@ -2463,9 +2614,12 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       });
     }
 
-    pi.on("session_start", (_event, ctx) =>
-      parentSlot.start(ctx, ctx.signal).then(() => undefined),
-    );
+    pi.on("session_start", (_event, ctx) => {
+      const captured = captureAdvisorSessionInputAtHostBoundary(ctx);
+      return captured.ok
+        ? parentSlot.start(captured.input, captured.input.signal).then(() => undefined)
+        : parentSlot.shutdown().then(() => undefined);
+    });
     pi.on("session_shutdown", (event, ctx) =>
       runController((controller) => controller.sessionShutdown(event as never, ctx))
         .catch(() => undefined)
@@ -2549,6 +2703,10 @@ const advisorRuntimeEffectsFromDriver = (
       : new AdvisorModelError({
           message: error instanceof Error ? error.message : `Advisor ${operation} failed.`,
         });
+  const bestEffortCleanup = (operation: string, cleanup: () => Promise<void>) =>
+    Effect.tryPromise({ try: () => cleanup(), catch: modelError(operation) }).pipe(
+      Effect.catch(() => Effect.void),
+    );
   return {
     activeToolNames: () => driver.activeToolNames,
     start: (options) =>
@@ -2562,8 +2720,8 @@ const advisorRuntimeEffectsFromDriver = (
         try: () => driver.reprime(seed, stateSummary),
         catch: modelError("re-prime"),
       }),
-    abort: () => Effect.promise(() => driver.abort()),
-    dispose: () => Effect.promise(() => driver.dispose()),
+    abort: () => bestEffortCleanup("abort", () => driver.abort()),
+    dispose: () => bestEffortCleanup("dispose", () => driver.dispose()),
   };
 };
 
@@ -2708,7 +2866,8 @@ function emptySessionMetrics(): AdvisorSessionMetrics {
 }
 
 function activeContextMessages(ctx: ExtensionContext): unknown[] {
-  return ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages);
+  const result = readAdvisorContextEntriesAtHostBoundary(ctx);
+  return result.ok ? result.value.flatMap(sessionEntryToContextMessages) : [];
 }
 
 function classifyFailure(error: unknown): string {
@@ -2909,4 +3068,8 @@ export const _extensionTest = {
   classifyReviewCheckpoint,
   isGenuineUserMessage,
   isReviewCandidate,
+};
+
+export const _advisorControllerTest = {
+  runtimeEffectsFromDriver: advisorRuntimeEffectsFromDriver,
 };

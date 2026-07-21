@@ -334,6 +334,22 @@ describe("Cosmic UI extension", () => {
     expect(rendered[0]).toBe("Model   second-model • high");
     expect(rendered[1]).toContain("Repo    /tmp/second-project");
     expect(rendered.join("\n")).toContain("second-session");
+
+    const laterContext = {
+      ...secondContext,
+      model: { ...secondContext.model!, id: "later-model" },
+      sessionManager: {
+        ...secondContext.sessionManager,
+        getCwd: vi.fn(() => "/tmp/later-project"),
+        getSessionName: vi.fn(() => "later-session"),
+        getLeafId: vi.fn(() => "later-leaf"),
+      },
+    } as ExtensionContext;
+    for (const handler of h.handlers.get("model_select") ?? []) await handler({}, laterContext);
+    const laterRendered = footer.render(100);
+    expect(laterRendered[0]).toBe("Model   later-model • high");
+    expect(laterRendered[1]).toContain("Repo    /tmp/later-project");
+    expect(laterRendered.join("\n")).toContain("later-session");
   });
 
   test("immediately disposes in-flight startup probes on overlapping session replacement", async () => {
@@ -423,14 +439,469 @@ describe("Cosmic UI extension", () => {
 
   test("reports startup I/O failure and permits a clean subsequent session", async () => {
     const h = harness();
+    const source = new AbortController().signal;
+    const addEventListener = vi.fn(source.addEventListener.bind(source));
+    const removeEventListener = vi.fn(source.removeEventListener.bind(source));
+    h.ctx.signal = new Proxy(source, {
+      get(target, property) {
+        if (property === "addEventListener") return addEventListener;
+        if (property === "removeEventListener") return removeEventListener;
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
     h.ctx.cwd = "\0invalid";
     await emit(h, "session_start");
     expect(h.ctx.ui.notify).toHaveBeenCalledWith("Cosmic UI failed to start.", "warning");
     expect(h.setFooter).not.toHaveBeenCalled();
+    expect(removeEventListener).toHaveBeenCalledOnce();
 
     h.ctx.cwd = process.cwd();
     await emit(h, "session_start");
     expect(h.setFooter).toHaveBeenCalledOnce();
+    expect(addEventListener).toHaveBeenCalledTimes(2);
+    await emit(h, "session_shutdown");
+    expect(removeEventListener).toHaveBeenCalledTimes(2);
+  });
+
+  test("retries footer installation after the host rejects the first setFooter call", async () => {
+    const h = harness();
+    h.setFooter.mockImplementationOnce(() => {
+      throw new Error("host rejected footer");
+    });
+
+    await emit(h, "session_start");
+    expect(h.setFooter).toHaveBeenCalledOnce();
+
+    await emit(h, "session_start");
+    expect(h.setFooter).toHaveBeenCalledTimes(2);
+    expect(h.setFooter.mock.calls[1]?.[0]).toEqual(expect.any(Function));
+
+    await emit(h, "session_shutdown");
+  });
+
+  test("retains complete same-session totals but resets them before a failing new session", async () => {
+    const h = harness();
+    let reads = 0;
+    h.ctx.sessionManager.getEntries = vi.fn(() => {
+      reads++;
+      if (reads > 1) throw new Error("one-shot entries");
+      return [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            usage: {
+              input: 100,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              cost: { total: 0 },
+            },
+          },
+        },
+      ] as never;
+    });
+    await emit(h, "session_start");
+    const firstFactory = h.setFooter.mock.calls[0]?.[0];
+    const firstFooter = firstFactory(
+      { requestRender: vi.fn() },
+      { fg: (_color: string, text: string) => text },
+      {
+        getGitBranch: () => null,
+        getExtensionStatuses: () => new Map(),
+        getAvailableProviderCount: () => 1,
+        onBranchChange: () => vi.fn(),
+      },
+    );
+    expect(firstFooter.render(100).join("\n")).toContain("↑100");
+
+    await emit(h, "session_compact");
+    expect(reads).toBe(2);
+    expect(firstFooter.render(100).join("\n")).toContain("↑100");
+
+    const secondContext = {
+      ...h.ctx,
+      sessionManager: {
+        ...h.ctx.sessionManager,
+        getEntries: vi.fn(() => {
+          throw new Error("new session entries unavailable");
+        }),
+      },
+    } as ExtensionContext;
+    for (const handler of h.handlers.get("session_start") ?? []) await handler({}, secondContext);
+    const secondFactory = h.setFooter.mock.calls.at(-1)?.[0];
+    const secondFooter = secondFactory(
+      { requestRender: vi.fn() },
+      { fg: (_color: string, text: string) => text },
+      {
+        getGitBranch: () => null,
+        getExtensionStatuses: () => new Map(),
+        getAvailableProviderCount: () => 1,
+        onBranchChange: () => vi.fn(),
+      },
+    );
+    expect(secondFooter.render(100).join("\n")).not.toContain("↑100");
+    await emit(h, "session_shutdown");
+  });
+
+  test("retains complete totals when a turn usage getter throws", async () => {
+    const h = harness();
+    h.ctx.sessionManager.getEntries = vi.fn(
+      () =>
+        [
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              usage: {
+                input: 50,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                cost: { total: 0 },
+              },
+            },
+          },
+        ] as never,
+    );
+    await emit(h, "session_start");
+    const factory = h.setFooter.mock.calls[0]?.[0];
+    const footer = factory(
+      { requestRender: vi.fn() },
+      { fg: (_color: string, text: string) => text },
+      {
+        getGitBranch: () => null,
+        getExtensionStatuses: () => new Map(),
+        getAvailableProviderCount: () => 1,
+        onBranchChange: () => vi.fn(),
+      },
+    );
+    const input = vi.fn(() => {
+      throw new Error("nested usage failure");
+    });
+    const usage = Object.defineProperty(
+      { output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
+      "input",
+      { get: input },
+    );
+
+    await emit(h, "turn_end", { message: { role: "assistant", usage } });
+    expect(input).toHaveBeenCalledOnce();
+    expect(footer.render(100).join("\n")).toContain("↑50");
+    await emit(h, "session_shutdown");
+  });
+
+  test("fails closed when the live context mode getter throws", async () => {
+    const h = harness();
+    Object.defineProperty(h.ctx, "mode", {
+      get() {
+        throw new Error("mode host failure");
+      },
+    });
+    await emit(h, "session_start");
+    expect(h.setFooter).not.toHaveBeenCalled();
+    await emit(h, "session_shutdown");
+  });
+
+  test("materializes session cwd, signal, and initial abort state exactly once", async () => {
+    const h = harness();
+    const source = new AbortController().signal;
+    let cwdReads = 0;
+    let signalReads = 0;
+    let abortedReads = 0;
+    const addEventListener = vi.fn(source.addEventListener.bind(source));
+    const removeEventListener = vi.fn(source.removeEventListener.bind(source));
+    const signal = new Proxy(source, {
+      get(target, property) {
+        if (property === "aborted") abortedReads++;
+        if (property === "addEventListener") return addEventListener;
+        if (property === "removeEventListener") return removeEventListener;
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    Object.defineProperties(h.ctx, {
+      cwd: {
+        get() {
+          cwdReads++;
+          if (cwdReads > 1) throw new Error("cwd reread");
+          return process.cwd();
+        },
+      },
+      signal: {
+        get() {
+          signalReads++;
+          if (signalReads > 1) throw new Error("signal reread");
+          return signal;
+        },
+      },
+    });
+
+    await emit(h, "session_start");
+    expect(cwdReads).toBe(1);
+    expect(signalReads).toBe(1);
+    expect(abortedReads).toBe(1);
+    expect(addEventListener).toHaveBeenCalledOnce();
+    expect(h.setFooter).toHaveBeenCalledOnce();
+    await emit(h, "session_shutdown");
+    expect(removeEventListener).toHaveBeenCalledOnce();
+  });
+
+  test("observes an abort between session capture and runtime listener registration", async () => {
+    const h = harness();
+    const controller = new AbortController();
+    const addEventListener = vi.fn(controller.signal.addEventListener.bind(controller.signal));
+    const removeEventListener = vi.fn(
+      controller.signal.removeEventListener.bind(controller.signal),
+    );
+    const signal = new Proxy(controller.signal, {
+      get(target, property) {
+        if (property === "addEventListener") return addEventListener;
+        if (property === "removeEventListener") return removeEventListener;
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    h.ctx.signal = signal;
+    h.ctx.isProjectTrusted = vi.fn(() => {
+      controller.abort();
+      return true;
+    });
+
+    await emit(h, "session_start");
+
+    expect(addEventListener).toHaveBeenCalledOnce();
+    expect(removeEventListener).toHaveBeenCalledOnce();
+    expect(h.setFooter).not.toHaveBeenCalled();
+    expect(h.exec).not.toHaveBeenCalled();
+  });
+
+  test("releases short-lived event abort forwarders when runtime work settles", async () => {
+    const h = harness();
+    const source = new AbortController().signal;
+    const addEventListener = vi.fn(source.addEventListener.bind(source));
+    const removeEventListener = vi.fn(source.removeEventListener.bind(source));
+    h.ctx.signal = new Proxy(source, {
+      get(target, property) {
+        if (property === "addEventListener") return addEventListener;
+        if (property === "removeEventListener") return removeEventListener;
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    await emit(h, "session_start");
+    expect(addEventListener).toHaveBeenCalledTimes(1);
+    expect(removeEventListener).not.toHaveBeenCalled();
+
+    await emit(h, "turn_end");
+    expect(addEventListener).toHaveBeenCalledTimes(2);
+    expect(removeEventListener).toHaveBeenCalledOnce();
+
+    await emit(h, "session_shutdown");
+    expect(removeEventListener).toHaveBeenCalledTimes(2);
+  });
+
+  test("shuts down the prior session before a hostile session signal can mutate state", async () => {
+    const h = harness();
+    await emit(h, "session_start");
+    const hostile = { ...h.ctx } as ExtensionContext;
+    Object.defineProperty(hostile, "signal", {
+      get() {
+        throw new Error("signal host failure");
+      },
+    });
+
+    for (const handler of h.handlers.get("session_start") ?? []) await handler({}, hostile);
+    expect(h.setFooter).toHaveBeenCalledTimes(2);
+    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+    await emit(h, "session_shutdown");
+  });
+
+  test("shuts down the prior session when the next session cwd cannot be captured", async () => {
+    const h = harness();
+    await emit(h, "session_start");
+    const hostile = { ...h.ctx } as ExtensionContext;
+    Object.defineProperty(hostile, "cwd", {
+      get() {
+        throw new Error("cwd host failure");
+      },
+    });
+
+    for (const handler of h.handlers.get("session_start") ?? []) await handler({}, hostile);
+    expect(h.setFooter).toHaveBeenCalledTimes(2);
+    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+    await emit(h, "session_shutdown");
+  });
+
+  test("contains delayed branch subscription lifecycle callbacks", async () => {
+    const h = harness();
+    await emit(h, "session_start");
+    const factory = h.setFooter.mock.calls[0]?.[0];
+    let branchChanged: (() => void) | undefined;
+    const unsubscribe = vi.fn(() => {
+      throw new Error("unsubscribe host failure");
+    });
+    const footer = factory(
+      {
+        requestRender() {
+          throw new Error("render host failure");
+        },
+      },
+      { fg: (_color: string, text: string) => text },
+      {
+        getGitBranch: () => null,
+        getExtensionStatuses: () => new Map(),
+        getAvailableProviderCount: () => 1,
+        onBranchChange(callback: () => void) {
+          branchChanged = callback;
+          return unsubscribe;
+        },
+      },
+    );
+
+    expect(() => branchChanged?.()).not.toThrow();
+    expect(() => footer.dispose()).not.toThrow();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    await emit(h, "session_shutdown");
+  });
+
+  test("contains delayed branch subscription creation failures", async () => {
+    const h = harness();
+    await emit(h, "session_start");
+    const factory = h.setFooter.mock.calls[0]?.[0];
+    expect(() =>
+      factory(
+        { requestRender: vi.fn() },
+        { fg: (_color: string, text: string) => text },
+        {
+          getGitBranch: () => null,
+          getExtensionStatuses: () => new Map(),
+          getAvailableProviderCount: () => 1,
+          onBranchChange() {
+            throw new Error("subscription host failure");
+          },
+        },
+      ),
+    ).not.toThrow();
+    await emit(h, "session_shutdown");
+  });
+
+  test("stale failed-factory disposal cannot clear a successful retry", async () => {
+    const h = harness();
+    let staleFooter: { dispose(): void } | undefined;
+    let activeFooter: { dispose(): void } | undefined;
+    const staleUnsubscribe = vi.fn();
+    const footerData = (unsubscribe: () => void) => ({
+      getGitBranch: () => null,
+      getExtensionStatuses: () => new Map(),
+      getAvailableProviderCount: () => 1,
+      onBranchChange: () => unsubscribe,
+    });
+    h.setFooter
+      .mockImplementationOnce((factory) => {
+        staleFooter = factory(
+          { requestRender: vi.fn() },
+          { fg: (_color: string, text: string) => text },
+          footerData(staleUnsubscribe),
+        );
+        throw new Error("setFooter failed after factory creation");
+      })
+      .mockImplementationOnce((factory) => {
+        activeFooter = factory(
+          { requestRender: vi.fn() },
+          { fg: (_color: string, text: string) => text },
+          footerData(vi.fn()),
+        );
+      });
+
+    await emit(h, "session_start");
+    expect(staleUnsubscribe).toHaveBeenCalledOnce();
+    await emit(h, "session_start");
+    expect(activeFooter).toBeDefined();
+
+    staleFooter?.dispose();
+    expect(staleUnsubscribe).toHaveBeenCalledOnce();
+    await emit(h, "session_shutdown");
+    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+  });
+
+  test("an older instance cannot dispose a newer footer from the same factory", async () => {
+    const h = harness();
+    const firstUnsubscribe = vi.fn();
+    const secondUnsubscribe = vi.fn();
+    await emit(h, "session_start");
+    const factory = h.setFooter.mock.calls[0]?.[0];
+    const makeFooter = (unsubscribe: () => void) =>
+      factory(
+        { requestRender: vi.fn() },
+        { fg: (_color: string, text: string) => text },
+        {
+          getGitBranch: () => null,
+          getExtensionStatuses: () => new Map(),
+          getAvailableProviderCount: () => 1,
+          onBranchChange: () => unsubscribe,
+        },
+      );
+    const first = makeFooter(firstUnsubscribe);
+    makeFooter(secondUnsubscribe);
+
+    first.dispose();
+    expect(firstUnsubscribe).toHaveBeenCalledOnce();
+    expect(secondUnsubscribe).not.toHaveBeenCalled();
+    await emit(h, "session_shutdown");
+    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+    expect(secondUnsubscribe).toHaveBeenCalledOnce();
+  });
+
+  test("retries footer removal after the host rejects a pre-disposal clear", async () => {
+    const h = harness();
+    let removalAttempts = 0;
+    h.setFooter.mockImplementation((factory) => {
+      if (factory !== undefined) return;
+      removalAttempts++;
+      if (removalAttempts === 1) throw new Error("footer still installed");
+    });
+
+    await emit(h, "session_start");
+    await emit(h, "session_shutdown");
+
+    expect(removalAttempts).toBe(2);
+    expect(h.setFooter).toHaveBeenLastCalledWith(undefined);
+  });
+
+  test("relinquishes footer ownership when the host disposes before rejecting removal", async () => {
+    const h = harness();
+    const unsubscribe = vi.fn();
+    let installedFooter: { dispose(): void } | undefined;
+    let removalAttempts = 0;
+    h.setFooter.mockImplementation((factory) => {
+      if (factory !== undefined) {
+        installedFooter = factory(
+          { requestRender: vi.fn() },
+          { fg: (_color: string, text: string) => text },
+          {
+            getGitBranch: () => null,
+            getExtensionStatuses: () => new Map(),
+            getAvailableProviderCount: () => 1,
+            onBranchChange: () => unsubscribe,
+          },
+        );
+        return;
+      }
+      removalAttempts++;
+      installedFooter?.dispose();
+      throw new Error("host rejected removal after disposal");
+    });
+
+    await emit(h, "session_start");
+    await emit(h, "session_shutdown");
+    expect(removalAttempts).toBe(1);
+    expect(unsubscribe).toHaveBeenCalledOnce();
+
+    await emit(h, "session_start");
+    expect(h.setFooter).toHaveBeenLastCalledWith(expect.any(Function));
     await emit(h, "session_shutdown");
   });
 

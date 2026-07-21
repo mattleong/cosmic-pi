@@ -11,20 +11,145 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { expectTypeOf } from "vitest";
 import {
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,
   type PiManagedRuntime,
+  type PiSessionRuntimeSlot,
 } from "../index.ts";
 import { makeCapturedTracer } from "../testing.ts";
+
+type RuntimeFailure = { readonly _tag: "RuntimeFailure" };
+
+it("preserves runtime construction errors covariantly", () => {
+  expectTypeOf<PiManagedRuntime<never, RuntimeFailure>>().not.toExtend<
+    PiManagedRuntime<never, never>
+  >();
+  expectTypeOf<PiManagedRuntime<never, never>>().toExtend<
+    PiManagedRuntime<never, RuntimeFailure>
+  >();
+  expectTypeOf<PiSessionRuntimeSlot<void, never, RuntimeFailure>>().not.toExtend<
+    PiSessionRuntimeSlot<void, never, never>
+  >();
+  expectTypeOf<PiSessionRuntimeSlot<void, never, never>>().toExtend<
+    PiSessionRuntimeSlot<void, never, RuntimeFailure>
+  >();
+  expectTypeOf<PiManagedRuntime<never>>().not.toExtend<PiManagedRuntime<never, never>>();
+  expectTypeOf<PiSessionRuntimeSlot<void, never>>().not.toExtend<
+    PiSessionRuntimeSlot<void, never, never>
+  >();
+});
+
+it("keeps historical partial generic arities source-compatible", () => {
+  const legacyRuntime: PiManagedRuntime<never> = {
+    run: () => {
+      throw new Error("compile-only runtime");
+    },
+    fork: () => {
+      throw new Error("compile-only runtime");
+    },
+    runSync: () => {
+      throw new Error("compile-only runtime");
+    },
+    dispose: () => Promise.resolve(),
+  };
+  const legacySlot = makePiSessionRuntimeSlot<void, never>({
+    makeRuntime: () => legacyRuntime,
+  });
+  const legacyStartupSlot = makePiSessionRuntimeSlot<void, never, "startup">({
+    makeRuntime: () => legacyRuntime,
+    startup: () => Effect.fail("startup" as const),
+  });
+
+  expectTypeOf(legacyRuntime).toEqualTypeOf<PiManagedRuntime<never, unknown>>();
+  expectTypeOf(legacySlot).toEqualTypeOf<PiSessionRuntimeSlot<void, never, unknown>>();
+  expectTypeOf(legacyStartupSlot).toEqualTypeOf<PiSessionRuntimeSlot<void, never, unknown>>();
+});
+
+function makeAbortDisposalHarness() {
+  const events: string[] = [];
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  let releaseDisposal!: () => void;
+  const disposal = new Promise<void>((resolve) => {
+    releaseDisposal = resolve;
+  });
+  const slot = makePiSessionRuntimeSlot<number, never, never, never>({
+    makeRuntime: (input): PiManagedRuntime<never, never> => ({
+      run: (_effect, signal) => {
+        events.push(`run:${input}`);
+        if (input !== 1) return Promise.resolve(undefined as never);
+        markStarted();
+        return new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      },
+      fork: () => {
+        throw new Error("unused");
+      },
+      runSync: () => {
+        throw new Error("unused");
+      },
+      dispose: () => {
+        events.push(`dispose:${input}`);
+        return input === 1 ? disposal : Promise.resolve();
+      },
+    }),
+    startup: () => Effect.void,
+  });
+  return { disposal, events, releaseDisposal, slot, started };
+}
+
+function makeHostileSignal(operation: "addEventListener" | "aborted"): AbortSignal {
+  const target = new AbortController().signal;
+  return new Proxy(target, {
+    get(signal, property) {
+      if (property === operation) throw new Error(`hostile ${operation}`);
+      const value = Reflect.get(signal, property, signal);
+      return typeof value === "function" ? value.bind(signal) : value;
+    },
+  });
+}
+
+function makeSignalSetupHarness(signal: AbortSignal) {
+  let disposals = 0;
+  let failures = 0;
+  let runs = 0;
+  const slot = makePiSessionRuntimeSlot<void, never, never, never>({
+    makeRuntime: (): PiManagedRuntime<never, never> => ({
+      run: () => {
+        runs++;
+        return Promise.resolve(undefined as never);
+      },
+      fork: () => {
+        throw new Error("unused");
+      },
+      runSync: () => {
+        throw new Error("unused");
+      },
+      dispose: () => {
+        disposals++;
+        return Promise.resolve();
+      },
+    }),
+    startup: () => Effect.void,
+    onStartFailure: () => {
+      failures++;
+    },
+  });
+  return { counts: () => ({ disposals, failures, runs }), signal, slot };
+}
 
 it.effect("replaces a stalled runtime and releases every acquired layer exactly once", () =>
   Effect.gen(function* () {
     const events: string[] = [];
     const firstStarted = yield* Deferred.make<void>();
     const pi = {} as ExtensionAPI;
-    const slot = makePiSessionRuntimeSlot<number, never, never>({
+    const slot = makePiSessionRuntimeSlot<number, never, never, never>({
       makeRuntime: (input) =>
         makePiManagedRuntime(
           pi,
@@ -61,7 +186,7 @@ it.effect("replaces a stalled runtime and releases every acquired layer exactly 
 it.effect("captures a stable runtime startup span without session input", () =>
   Effect.gen(function* () {
     const captured = makeCapturedTracer();
-    const runtime: PiManagedRuntime<never> = {
+    const runtime: PiManagedRuntime<never, never> = {
       run: (effect) =>
         Effect.runPromise(
           (effect as Effect.Effect<unknown, unknown>).pipe(Effect.provide(captured.layer)),
@@ -70,7 +195,7 @@ it.effect("captures a stable runtime startup span without session input", () =>
       runSync: (effect) => Effect.runSync(effect as Effect.Effect<never>),
       dispose: () => Promise.resolve(),
     };
-    const slot = makePiSessionRuntimeSlot<string, never>({
+    const slot = makePiSessionRuntimeSlot<string, never, never, never>({
       makeRuntime: () => runtime,
       startup: () => Effect.void,
     });
@@ -85,7 +210,7 @@ it.effect("releases acquired resources after startup failure", () =>
   Effect.gen(function* () {
     const events: string[] = [];
     const failures: number[] = [];
-    const slot = makePiSessionRuntimeSlot<void, never, "startup">({
+    const slot = makePiSessionRuntimeSlot<void, never, "startup", never>({
       makeRuntime: () =>
         makePiManagedRuntime(
           {} as ExtensionAPI,
@@ -105,12 +230,75 @@ it.effect("releases acquired resources after startup failure", () =>
   }),
 );
 
+it.effect("reports a synchronous runtime-construction throw without activating the slot", () =>
+  Effect.gen(function* () {
+    const failures: number[] = [];
+    const slot = makePiSessionRuntimeSlot<void, never, never, never>({
+      makeRuntime: () => {
+        throw new Error("hostile runtime constructor");
+      },
+      onStartFailure: (_input, token) => void failures.push(token),
+    });
+
+    expect(yield* Effect.promise(() => slot.start(undefined))).toBeUndefined();
+    expect(failures).toEqual([1]);
+    expect((yield* Effect.result(Effect.tryPromise(() => slot.run(Effect.void))))._tag).toBe(
+      "Failure",
+    );
+  }),
+);
+
+for (const operation of ["startup", "run"] as const) {
+  it.effect(`disposes the runtime when ${operation} throws synchronously`, () =>
+    Effect.gen(function* () {
+      let disposals = 0;
+      let runs = 0;
+      const failures: number[] = [];
+      const runtime: PiManagedRuntime<never, never> = {
+        run: () => {
+          runs++;
+          if (operation === "run") throw new Error("hostile runtime.run");
+          return Promise.resolve(undefined as never);
+        },
+        fork: () => {
+          throw new Error("unused");
+        },
+        runSync: () => {
+          throw new Error("unused");
+        },
+        dispose: () => {
+          disposals++;
+          return Promise.resolve();
+        },
+      };
+      const slot = makePiSessionRuntimeSlot<void, never, never, never>({
+        makeRuntime: () => runtime,
+        startup: () => {
+          if (operation === "startup") throw new Error("hostile startup constructor");
+          return Effect.void;
+        },
+        onStartFailure: (_input, token) => void failures.push(token),
+      });
+
+      expect(yield* Effect.promise(() => slot.start(undefined))).toBeUndefined();
+      expect({ disposals, failures, runs }).toEqual({
+        disposals: 1,
+        failures: [1],
+        runs: operation === "run" ? 1 : 0,
+      });
+      expect((yield* Effect.result(Effect.tryPromise(() => slot.run(Effect.void))))._tag).toBe(
+        "Failure",
+      );
+    }),
+  );
+}
+
 it.effect("disposes an already-aborted start and leaves the slot unavailable", () =>
   Effect.gen(function* () {
     const events: string[] = [];
     const controller = new AbortController();
     controller.abort();
-    const slot = makePiSessionRuntimeSlot<void, never>({
+    const slot = makePiSessionRuntimeSlot<void, never, never, never>({
       makeRuntime: () =>
         makePiManagedRuntime(
           {} as ExtensionAPI,
@@ -134,5 +322,78 @@ it.effect("disposes an already-aborted start and leaves the slot unavailable", (
     );
     expect(result._tag).toBe("Failure");
     expect(events).toEqual([]);
+  }),
+);
+
+for (const operation of ["addEventListener", "aborted"] as const) {
+  it.effect(`disposes the runtime when AbortSignal.${operation} throws`, () =>
+    Effect.gen(function* () {
+      const harness = makeSignalSetupHarness(makeHostileSignal(operation));
+      expect(
+        yield* Effect.promise(() => harness.slot.start(undefined, harness.signal)),
+      ).toBeUndefined();
+      expect(harness.counts()).toEqual({ disposals: 1, failures: 1, runs: 0 });
+
+      const result = yield* Effect.result(
+        Effect.tryPromise({
+          try: () => harness.slot.run(Effect.void),
+          catch: (error) =>
+            error instanceof PiSessionRuntimeError
+              ? error
+              : new PiSessionRuntimeError({ operation: "test", message: "unexpected" }),
+        }),
+      );
+      expect(result._tag).toBe("Failure");
+      yield* Effect.promise(() => harness.slot.shutdown());
+      expect(harness.counts()).toEqual({ disposals: 1, failures: 1, runs: 0 });
+    }),
+  );
+}
+
+it.effect("waits for aborted runtime disposal before starting a replacement", () =>
+  Effect.gen(function* () {
+    const harness = makeAbortDisposalHarness();
+    const controller = new AbortController();
+    const first = harness.slot.start(1, controller.signal);
+    yield* Effect.promise(() => harness.started);
+    controller.abort();
+    expect(yield* Effect.promise(() => first)).toBeUndefined();
+
+    let replacementSettled = false;
+    const replacement = harness.slot.start(2).then((token) => {
+      replacementSettled = true;
+      return token;
+    });
+    yield* Effect.promise(() => Promise.resolve());
+    expect(replacementSettled).toBe(false);
+    expect(harness.events).not.toContain("run:2");
+
+    harness.releaseDisposal();
+    expect(yield* Effect.promise(() => replacement)).toBe(3);
+    expect(harness.events).toEqual(["run:1", "dispose:1", "run:2"]);
+    yield* Effect.promise(() => harness.slot.shutdown());
+  }),
+);
+
+it.effect("waits for aborted runtime disposal before shutdown resolves", () =>
+  Effect.gen(function* () {
+    const harness = makeAbortDisposalHarness();
+    const controller = new AbortController();
+    const first = harness.slot.start(1, controller.signal);
+    yield* Effect.promise(() => harness.started);
+    controller.abort();
+    expect(yield* Effect.promise(() => first)).toBeUndefined();
+
+    let shutdownSettled = false;
+    const shutdown = harness.slot.shutdown().then(() => {
+      shutdownSettled = true;
+    });
+    yield* Effect.promise(() => Promise.resolve());
+    expect(shutdownSettled).toBe(false);
+
+    harness.releaseDisposal();
+    yield* Effect.promise(() => shutdown);
+    expect(shutdownSettled).toBe(true);
+    expect(harness.events).toEqual(["run:1", "dispose:1"]);
   }),
 );

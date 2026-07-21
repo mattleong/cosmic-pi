@@ -345,6 +345,48 @@ describe("advisor commands", () => {
     expect(JSON.parse(readFileSync(configPath, "utf8"))).toMatchObject({ enabled: false });
   });
 
+  test("session persistence owns the authoritative update without a second commit gap", async () => {
+    const commands = new Map<string, CommandHandler>();
+    let current = configAt(tempConfigPath());
+    const update = vi.fn();
+    const persist = vi.fn(async (patch: { enabled?: boolean }) => {
+      current = { ...current, ...patch };
+      return current;
+    });
+    registerAdvisorCommands(
+      {
+        registerCommand: (name: string, command: { handler: CommandHandler }) => {
+          commands.set(name, command.handler);
+        },
+      } as unknown as ExtensionAPI,
+      {
+        get: () => current,
+        getMetrics: () => ({
+          attempted: 0,
+          pass: 0,
+          revise: 0,
+          failure: 0,
+          discarded: 0,
+          outcomes: emptyAdvisorOutcomes(),
+        }),
+        persist,
+        update,
+      },
+    );
+    const selections = ["Advisor supervision: on", "Done"];
+    const ctx = {
+      hasUI: true,
+      ui: { notify: vi.fn(), select: vi.fn(async () => selections.shift()) },
+      modelRegistry: { getAvailable: () => [] },
+    } as unknown as ExtensionCommandContext;
+
+    await commands.get("advisor-settings")?.("", ctx);
+
+    expect(persist).toHaveBeenCalledOnce();
+    expect(update).not.toHaveBeenCalled();
+    expect(current.enabled).toBe(false);
+  });
+
   test("settings exposes every tuning control in one flat menu and applies immediately", async () => {
     const configPath = tempConfigPath();
     const harness = createCommands(configAt(configPath));

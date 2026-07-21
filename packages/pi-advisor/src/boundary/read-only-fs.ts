@@ -74,6 +74,26 @@ const info = (value: {
 const failure = (operation: string, path: string, message: string) => () =>
   new AdvisorFileError({ operation, path, message });
 
+type CloseOperation = "close-directory" | "close-file";
+
+const closeResource = (operation: CloseOperation, path: string, close: () => Promise<void>) =>
+  Effect.tryPromise({
+    try: () => close(),
+    catch: failure(
+      operation,
+      path,
+      operation === "close-directory"
+        ? "Unable to close project directory."
+        : "Unable to close project file.",
+    ),
+  });
+
+const closeResourceBestEffort = (
+  operation: CloseOperation,
+  path: string,
+  close: () => Promise<void>,
+) => closeResource(operation, path, close).pipe(Effect.ignore);
+
 /** Native-path containment; unlike prefix matching this is correct on Windows and sibling roots. */
 export const isContainedPathWith = (
   path: {
@@ -188,7 +208,8 @@ export class ReadOnlyFileSystem extends Context.Service<
                 },
                 catch: failure("read-directory", path, "Unable to read project directory."),
               }),
-            (directory) => Effect.promise(() => directory.close()).pipe(Effect.ignore),
+            (directory) =>
+              closeResourceBestEffort("close-directory", path, () => directory.close()),
           );
           yield* verifyPinnedRoot(root);
           yield* Effect.tryPromise({
@@ -262,7 +283,7 @@ export class ReadOnlyFileSystem extends Context.Service<
                 }),
               catch: failure("open", path, "Unable to open stable project file."),
             }),
-            ({ handle }) => Effect.promise(() => handle.close()).pipe(Effect.ignore),
+            ({ handle }) => closeResourceBestEffort("close-file", path, () => handle.close()),
           );
           const verifyVisible = Effect.tryPromise({
             try: () =>
@@ -302,6 +323,8 @@ export class ReadOnlyFileSystem extends Context.Service<
 }
 
 export const _readOnlyFileSystemTest = {
+  closeResource,
+  closeResourceBestEffort,
   isContainedPath,
   isContainedPathWith,
   setDirectoryHooks(hooks?: {

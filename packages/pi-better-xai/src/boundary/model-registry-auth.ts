@@ -7,22 +7,33 @@ import * as Schema from "effect/Schema";
 export class ModelRegistryAuthError extends Schema.TaggedErrorClass<ModelRegistryAuthError>()(
   "ModelRegistryAuthError",
   {
-    operation: Schema.Literal("lookup"),
+    operation: Schema.Literals(["lookup", "oauth-status"]),
     message: Schema.String,
   },
 ) {}
 
+type Registry = Pick<ExtensionContext, "modelRegistry">["modelRegistry"];
+type Model = NonNullable<ExtensionContext["model"]>;
+
 export interface ModelRegistryAuthShape {
   readonly getApiKey: Effect.Effect<string | undefined, ModelRegistryAuthError>;
+  readonly isUsingOAuth: (model: Model) => Effect.Effect<boolean, ModelRegistryAuthError>;
+}
+
+/** Synchronous Pi-renderer boundary. Host failures fail closed and never escape rendering. */
+export function isUsingOAuthAtHostBoundary(registry: Registry, model: Model): boolean {
+  try {
+    return registry.isUsingOAuth(model);
+  } catch {
+    return false;
+  }
 }
 
 /** Named Pi boundary for the model registry's Promise-returning credential lookup. */
 export class ModelRegistryAuth extends Context.Service<ModelRegistryAuth, ModelRegistryAuthShape>()(
   "pi-better-xai/boundary/model-registry-auth/ModelRegistryAuth",
 ) {
-  static make(
-    getRegistry: () => Pick<ExtensionContext, "modelRegistry">["modelRegistry"],
-  ): ModelRegistryAuthShape {
+  static make(getRegistry: () => Registry): ModelRegistryAuthShape {
     return this.of({
       getApiKey: Effect.tryPromise({
         try: () => getRegistry().getApiKeyForProvider("xai"),
@@ -32,12 +43,19 @@ export class ModelRegistryAuth extends Context.Service<ModelRegistryAuth, ModelR
             message: "Unable to read xAI credentials.",
           }),
       }),
+      isUsingOAuth: (model) =>
+        Effect.try({
+          try: () => getRegistry().isUsingOAuth(model),
+          catch: () =>
+            new ModelRegistryAuthError({
+              operation: "oauth-status",
+              message: "Unable to inspect xAI authentication status.",
+            }),
+        }),
     });
   }
 
-  static layer(
-    getRegistry: () => Pick<ExtensionContext, "modelRegistry">["modelRegistry"],
-  ): Layer.Layer<ModelRegistryAuth> {
+  static layer(getRegistry: () => Registry): Layer.Layer<ModelRegistryAuth> {
     return Layer.succeed(this, this.make(getRegistry));
   }
 }

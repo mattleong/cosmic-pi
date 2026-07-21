@@ -6,11 +6,18 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import * as Random from "effect/Random";
 import { JsonDocumentError } from "./errors.ts";
 import { ProcessCoordinator } from "./process-coordinator.ts";
 
+/** Historical public input shape; persistence validates every value against `Schema.Json`. */
 export type JsonObject = Record<string, unknown>;
+
+export interface JsonDocumentModification<A, AfterCommitR = never> {
+  readonly value: A;
+  readonly document: JsonObject;
+  /** Runs exactly once after the document rename, inside the same uninterruptible commit region. */
+  readonly afterCommit?: Effect.Effect<void, never, AfterCommitR>;
+}
 
 const UnknownFromPrettyJsonString = Schema.String.pipe(
   Schema.decodeTo(
@@ -21,9 +28,8 @@ const UnknownFromPrettyJsonString = Schema.String.pipe(
     ),
   ),
 );
-const JsonObjectFromString = UnknownFromPrettyJsonString.pipe(
-  Schema.decodeTo(Schema.Record(Schema.String, Schema.Unknown)),
-);
+const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
+const JsonObjectFromString = UnknownFromPrettyJsonString.pipe(Schema.decodeTo(JsonObjectSchema));
 
 export interface JsonDocumentStoreShape {
   readonly exists: (path: string) => Effect.Effect<boolean, JsonDocumentError>;
@@ -32,10 +38,27 @@ export interface JsonDocumentStoreShape {
     path: string,
     document: JsonObject,
   ) => Effect.Effect<void, JsonDocumentError>;
+  /** Optional additive capability for effectful mutation under the process lock. */
+  readonly modifyObject?: <A, E, R, AfterCommitR = never>(
+    path: string,
+    modify: (
+      document: JsonObject,
+    ) => Effect.Effect<JsonDocumentModification<A, AfterCommitR>, E, R>,
+  ) => Effect.Effect<A, JsonDocumentError | E, R | AfterCommitR>;
   readonly updateObject: (
     path: string,
     update: (document: JsonObject) => JsonObject,
   ) => Effect.Effect<JsonObject, JsonDocumentError>;
+}
+
+/** A document store that guarantees effectful read-modify-write transactions. */
+export interface AtomicJsonDocumentStoreShape extends JsonDocumentStoreShape {
+  readonly modifyObject: <A, E, R, AfterCommitR = never>(
+    path: string,
+    modify: (
+      document: JsonObject,
+    ) => Effect.Effect<JsonDocumentModification<A, AfterCommitR>, E, R>,
+  ) => Effect.Effect<A, JsonDocumentError | E, R | AfterCommitR>;
 }
 
 export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDocumentStoreShape>()(
@@ -78,9 +101,12 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
           Effect.mapError(mapError("encode", path, "Unable to encode JSON document.")),
         );
 
-      const writeObjectUnlocked = Effect.fn("JsonDocumentStore.writeObjectUnlocked")(function* (
+      const writeObjectUnlocked = Effect.fn("JsonDocumentStore.writeObjectUnlocked")(function* <
+        AfterCommitR,
+      >(
         path: string,
         document: JsonObject,
+        afterCommit?: Effect.Effect<void, never, AfterCommitR>,
       ) {
         const source = yield* encodeObject(path, document);
         const directory = pathService.dirname(path);
@@ -89,55 +115,49 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
           .pipe(
             Effect.mapError(mapError("mkdir", path, "Unable to create JSON document directory.")),
           );
-        const nonce = [
-          yield* Random.nextIntBetween(0, 0xffff_ffff),
-          yield* Random.nextIntBetween(0, 0xffff_ffff),
-        ]
-          .map((value) => value.toString(16).padStart(8, "0"))
-          .join("");
-        const temporary = pathService.join(
-          directory,
-          `.${pathService.basename(path)}.${nonce}.tmp`,
-        );
-        yield* Effect.acquireUseRelease(
-          Effect.succeed(temporary),
-          (temporaryPath) =>
-            fs
-              .writeFileString(temporaryPath, `${source}\n`, {
-                flag: "wx",
-                mode: 0o600,
-              })
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const temporaryPath = yield* Effect.acquireRelease(
+              fs
+                .makeTempFile({
+                  directory,
+                  prefix: `.${pathService.basename(path)}.`,
+                  suffix: ".tmp",
+                })
+                .pipe(
+                  Effect.mapError(
+                    mapError("write", path, "Unable to create temporary JSON document."),
+                  ),
+                ),
+              (ownedPath) =>
+                fs
+                  .remove(pathService.dirname(ownedPath), { recursive: true })
+                  .pipe(Effect.catchCause(() => Effect.void)),
+            );
+            yield* fs
+              .writeFileString(temporaryPath, `${source}\n`, { mode: 0o600 })
               .pipe(
                 Effect.mapError(
                   mapError("write", path, "Unable to write temporary JSON document."),
                 ),
-                Effect.andThen(
-                  fs
-                    .chmod(temporaryPath, 0o600)
-                    .pipe(
-                      Effect.mapError(
-                        mapError("chmod", path, "Unable to protect temporary JSON document."),
-                      ),
-                    ),
+              );
+            yield* fs
+              .chmod(temporaryPath, 0o600)
+              .pipe(
+                Effect.mapError(
+                  mapError("chmod", path, "Unable to protect temporary JSON document."),
                 ),
-                Effect.andThen(
-                  fs
-                    .rename(temporaryPath, path)
-                    .pipe(
-                      Effect.mapError(
-                        mapError("rename", path, "Unable to replace JSON document atomically."),
-                      ),
-                    ),
+              );
+            yield* fs
+              .rename(temporaryPath, path)
+              .pipe(
+                Effect.andThen(afterCommit ?? Effect.void),
+                Effect.mapError(
+                  mapError("rename", path, "Unable to replace JSON document atomically."),
                 ),
-                Effect.andThen(
-                  fs
-                    .chmod(path, 0o600)
-                    .pipe(
-                      Effect.mapError(mapError("chmod", path, "Unable to protect JSON document.")),
-                    ),
-                ),
-              ),
-          (temporaryPath) => fs.remove(temporaryPath).pipe(Effect.catch(() => Effect.void)),
+                Effect.uninterruptible,
+              );
+          }),
         );
       });
 
@@ -145,28 +165,47 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
         path: string,
         document: JsonObject,
       ) {
-        yield* coordinator.withLock(pathService.resolve(path), writeObjectUnlocked(path, document));
+        yield* coordinator.withLock(
+          pathService.resolve(path),
+          writeObjectUnlocked(path, document, Effect.void),
+        );
+      });
+
+      const modifyObject: AtomicJsonDocumentStoreShape["modifyObject"] = Effect.fn(
+        "JsonDocumentStore.modifyObject",
+      )(function* <A, E, R, AfterCommitR = never>(
+        path: string,
+        modify: (
+          document: JsonObject,
+        ) => Effect.Effect<JsonDocumentModification<A, AfterCommitR>, E, R>,
+      ) {
+        return yield* coordinator.withLock(
+          pathService.resolve(path),
+          Effect.gen(function* () {
+            const current = (yield* readObjectUnlocked(path)) ?? {};
+            const modification = yield* modify(current);
+            yield* writeObjectUnlocked(path, modification.document, modification.afterCommit);
+            return modification.value;
+          }),
+        );
       });
 
       const updateObject = Effect.fn("JsonDocumentStore.updateObject")(function* (
         path: string,
         update: (document: JsonObject) => JsonObject,
       ) {
-        return yield* coordinator.withLock(
-          pathService.resolve(path),
-          Effect.gen(function* () {
-            const current = (yield* readObjectUnlocked(path)) ?? {};
-            const next = yield* Effect.try({
-              try: () => update(current),
-              catch: mapError("update", path, "Unable to update JSON document."),
-            });
-            yield* writeObjectUnlocked(path, next);
-            return next;
+        return yield* modifyObject(path, (current) =>
+          Effect.try({
+            try: () => {
+              const next = update(current);
+              return { value: next, document: next } satisfies JsonDocumentModification<JsonObject>;
+            },
+            catch: mapError("update", path, "Unable to update JSON document."),
           }),
         );
       });
 
-      return JsonDocumentStore.of({ exists, readObject, writeObject, updateObject });
+      return JsonDocumentStore.of({ exists, readObject, writeObject, modifyObject, updateObject });
     }),
   );
 }

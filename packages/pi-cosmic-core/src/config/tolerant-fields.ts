@@ -2,7 +2,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { JsonObject } from "../platform/json-document.ts";
 
-const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
+const JsonRecordSchema = Schema.Record(Schema.String, Schema.Json);
 
 export interface TolerantFieldDiagnostic {
   readonly path: string;
@@ -38,7 +38,7 @@ export const decodeTolerantFields = <const Fields extends TolerantFieldSchemas>(
   fields: Fields,
   options: TolerantFieldOptions = {},
 ): TolerantFieldResult<Fields> => {
-  const root = Schema.decodeUnknownOption(UnknownRecordSchema)(input);
+  const root = Schema.decodeUnknownOption(JsonRecordSchema)(input);
   const raw = Option.isSome(root) ? root.value : {};
   const diagnostics: TolerantFieldDiagnostic[] = [];
   const maxDiagnostics = Math.max(0, Math.floor(options.maxDiagnostics ?? 32));
@@ -50,10 +50,16 @@ export const decodeTolerantFields = <const Fields extends TolerantFieldSchemas>(
   }
 
   for (const [key, schema] of Object.entries(fields)) {
-    if (!(key in raw)) continue;
+    if (!Object.hasOwn(raw, key)) continue;
     const decoded = Schema.decodeUnknownOption(schema)(raw[key]);
-    if (Option.isSome(decoded)) value[key] = decoded.value;
-    else if (diagnostics.length < maxDiagnostics) {
+    if (Option.isSome(decoded)) {
+      Object.defineProperty(value, key, {
+        value: decoded.value,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    } else if (diagnostics.length < maxDiagnostics) {
       diagnostics.push({ path: `${prefix}${key}`, issue: "invalid" });
     }
   }

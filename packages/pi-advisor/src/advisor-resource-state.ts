@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
+import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 export interface AdvisorOwnedResource<A> {
@@ -10,9 +10,6 @@ export interface AdvisorOwnedResource<A> {
 export interface AdvisorResourceState {
   readonly child: AdvisorOwnedResource<unknown> | undefined;
 }
-
-const flattenExit = <A, E>(exit: Exit.Exit<A, E>): Effect.Effect<A, E> =>
-  Exit.isSuccess(exit) ? Effect.succeed(exit.value) : Effect.failCause(exit.cause);
 
 export interface AdvisorResourceStateService {
   readonly replaceChild: <A, E, R>(
@@ -26,25 +23,30 @@ export interface AdvisorResourceStateService {
 export const makeAdvisorResourceState = (): Effect.Effect<AdvisorResourceStateService> =>
   Effect.gen(function* () {
     const state = yield* SynchronizedRef.make<AdvisorResourceState>({ child: undefined });
-    const stopChild = SynchronizedRef.modifyEffect(state, (current) =>
-      current.child
-        ? Effect.exit(current.child.release).pipe(
-            Effect.map((released) => [released, { child: undefined }] as const),
-          )
-        : Effect.succeed([Exit.succeed(undefined), current] as const),
-    ).pipe(Effect.flatMap(flattenExit));
-    const replaceChild: AdvisorResourceStateService["replaceChild"] = (acquire, release) =>
-      SynchronizedRef.modifyEffect(state, (current) =>
+    const lifecycleLock = yield* Semaphore.make(1);
+    const detachChild = SynchronizedRef.getAndSet(state, { child: undefined });
+    const stopChild = lifecycleLock.withPermits(1)(
+      Effect.uninterruptible(
         Effect.gen(function* () {
-          if (current.child) yield* Effect.exit(current.child.release);
-          const acquired = yield* Effect.exit(acquire);
-          return [
-            acquired,
-            Exit.isSuccess(acquired)
-              ? { child: { value: acquired.value, release: release(acquired.value) } }
-              : { child: undefined },
-          ] as const;
+          const current = yield* detachChild;
+          if (current.child) yield* current.child.release;
         }),
-      ).pipe(Effect.flatMap(flattenExit));
+      ),
+    );
+    const replaceChild: AdvisorResourceStateService["replaceChild"] = (acquire, release) =>
+      lifecycleLock.withPermits(1)(
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const current = yield* detachChild;
+            // Replacement stays fail-open if the previous finalizer defects.
+            if (current.child) yield* current.child.release.pipe(Effect.ignoreCause);
+            const value = yield* restore(acquire);
+            yield* SynchronizedRef.set(state, {
+              child: { value, release: Effect.suspend(() => release(value)) },
+            });
+            return value;
+          }),
+        ),
+      );
     return { replaceChild, stopChild };
   });

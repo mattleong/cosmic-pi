@@ -6,6 +6,7 @@ import {
 import { Container, SettingsList } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
+import { safeHostSignal, safeHostUi, tryHostUi } from "../boundary/host-ui.ts";
 import {
   FAST_SETTING_DESCRIPTORS,
   FOOTER_SETTING_DESCRIPTORS,
@@ -98,9 +99,9 @@ export function registerSettingsController(
   const readRedactedConfig = (ctx: ExtensionContext) =>
     run(
       OpenAIUsageService.use((service) => service.readConfigDocument()).pipe(
-        Effect.map(redactDiagnosticValue),
+        Effect.map((value) => redactDiagnosticValue(value)),
       ),
-      ctx.signal,
+      safeHostSignal(ctx),
     );
 
   const applySetting = (ctx: ExtensionContext, id: string, value: string) => {
@@ -112,19 +113,28 @@ export function registerSettingsController(
       }
       yield* OpenAIUsageService.use((service) => service.updateSetting(id, value));
     });
+    const recoverHostUi = (operation: string, callback: () => unknown) =>
+      tryHostUi(operation, callback).pipe(
+        Effect.catchTag("OpenAIHostUiError", () => Effect.void),
+        Effect.asVoid,
+      );
     return run(
       update.pipe(
         Effect.tap(() =>
-          Effect.sync(() => {
-            updateFooter(ctx);
-            const descriptor = descriptors.find((candidate) => candidate.id === id);
-            ctx.ui.notify(`${id} = ${descriptor?.currentValue(config(ctx)) ?? value}`, "info");
+          Effect.gen(function* () {
+            yield* recoverHostUi("settings.render", () => updateFooter(ctx));
+            yield* recoverHostUi("settings.notify", () => {
+              const descriptor = descriptors.find((candidate) => candidate.id === id);
+              ctx.ui.notify(`${id} = ${descriptor?.currentValue(config(ctx)) ?? value}`, "info");
+            });
           }),
         ),
-        Effect.catch((error) => Effect.sync(() => ctx.ui.notify(error.message, "error"))),
+        Effect.catch((error) =>
+          recoverHostUi("settings.notify.error", () => ctx.ui.notify(error.message, "error")),
+        ),
         Effect.asVoid,
       ),
-      ctx.signal,
+      safeHostSignal(ctx),
     );
   };
 
@@ -138,7 +148,9 @@ export function registerSettingsController(
   const showPicker = (ctx: ExtensionContext): Promise<void> => {
     updateContext(ctx);
     if (!hasTerminalUI(ctx)) {
-      ctx.ui.notify("Better OpenAI settings require interactive TUI mode.", "warning");
+      safeHostUi(() =>
+        ctx.ui.notify("Better OpenAI settings require interactive TUI mode.", "warning"),
+      );
       return Promise.resolve();
     }
     return readRedactedConfig(ctx)
@@ -153,7 +165,7 @@ export function registerSettingsController(
                   .catch(() => redactedConfig)
                   .then((nextRedactedConfig) => {
                     redactedConfig = nextRedactedConfig;
-                    tui.requestRender();
+                    safeHostUi(() => tui.requestRender());
                   }),
               );
             };
@@ -291,7 +303,7 @@ export function registerSettingsController(
                   id,
                   sections().find((item) => item.id === id)?.currentValue ?? value,
                 );
-                tui.requestRender();
+                safeHostUi(() => tui.requestRender());
               },
               () => done(undefined),
               { enableSearch: true },
@@ -302,7 +314,7 @@ export function registerSettingsController(
               invalidate: () => container.invalidate(),
               handleInput(data: string) {
                 settings.handleInput(data);
-                tui.requestRender();
+                safeHostUi(() => tui.requestRender());
               },
             };
           })
@@ -318,41 +330,48 @@ export function registerSettingsController(
       if (!trimmed) return showPicker(ctx);
       if (trimmed === "help") {
         const cfg = config(ctx);
-        ctx.ui.notify(
-          [
-            "Better OpenAI settings",
-            ...descriptors.map(
-              (descriptor) =>
-                `  ${descriptor.id}=${descriptor.currentValue(cfg)}  — ${descriptor.description}`,
-            ),
-            "",
-            "Usage: /openai-settings <id> <value>",
-            "       /openai-settings diagnostics",
-          ].join("\n"),
-          "info",
+        safeHostUi(() =>
+          ctx.ui.notify(
+            [
+              "Better OpenAI settings",
+              ...descriptors.map(
+                (descriptor) =>
+                  `  ${descriptor.id}=${descriptor.currentValue(cfg)}  — ${descriptor.description}`,
+              ),
+              "",
+              "Usage: /openai-settings <id> <value>",
+              "       /openai-settings diagnostics",
+            ].join("\n"),
+            "info",
+          ),
         );
-        return run(Effect.void, ctx.signal);
+        return run(Effect.void, safeHostSignal(ctx));
       }
       if (trimmed === "diagnostics" || trimmed === "debug") {
-        ctx.ui.notify(formatDebugStatus(ctx), "info");
-        return run(Effect.void, ctx.signal);
+        safeHostUi(() => ctx.ui.notify(formatDebugStatus(ctx), "info"));
+        return run(Effect.void, safeHostSignal(ctx));
       }
       const [id, ...parts] = trimmed.split(/\s+/);
       const value = parts.join(" ").trim();
       const descriptor = descriptors.find((candidate) => candidate.id === id);
       if (!id || !value || !descriptor) {
-        ctx.ui.notify(
-          id ? `Unknown setting: ${id}` : "Usage: /openai-settings <id> <value>",
-          "error",
+        safeHostUi(() =>
+          ctx.ui.notify(
+            id ? `Unknown setting: ${id}` : "Usage: /openai-settings <id> <value>",
+            "error",
+          ),
         );
-        return run(Effect.void, ctx.signal);
+        return run(Effect.void, safeHostSignal(ctx));
       }
-      if (descriptor.values && !(descriptor.values as readonly string[]).includes(value)) {
-        ctx.ui.notify(
-          `Invalid value for ${id}. Expected one of: ${descriptor.values.join(", ")}`,
-          "error",
+      const allowedValues = descriptor.values;
+      if (allowedValues && !(allowedValues as readonly string[]).includes(value)) {
+        safeHostUi(() =>
+          ctx.ui.notify(
+            `Invalid value for ${id}. Expected one of: ${allowedValues.join(", ")}`,
+            "error",
+          ),
         );
-        return run(Effect.void, ctx.signal);
+        return run(Effect.void, safeHostSignal(ctx));
       }
       return applySetting(ctx, id, value);
     },

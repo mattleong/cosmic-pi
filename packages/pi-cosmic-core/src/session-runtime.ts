@@ -1,8 +1,11 @@
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import type * as Types from "effect/Types";
 import type { PiApi } from "./pi-api.ts";
 import type { PiManagedRuntime } from "./runtime.ts";
+
+declare const PiSessionRuntimeSlotRuntimeError: unique symbol;
 
 export class PiSessionRuntimeError extends Schema.TaggedErrorClass<PiSessionRuntimeError>()(
   "PiSessionRuntimeError",
@@ -17,7 +20,8 @@ export interface PiSessionRuntimeHooks<Input, R, StartupError, RuntimeError> {
   readonly onStartFailure?: (input: Input, token: number) => void;
 }
 
-export interface PiSessionRuntimeSlot<Input, R, RuntimeError = never> {
+export interface PiSessionRuntimeSlot<Input, R, RuntimeError = unknown> {
+  readonly [PiSessionRuntimeSlotRuntimeError]?: Types.Covariant<RuntimeError>;
   readonly start: (input: Input, signal?: AbortSignal) => Promise<number | undefined>;
   readonly run: <A, E>(effect: Effect.Effect<A, E, PiApi | R>, signal?: AbortSignal) => Promise<A>;
   readonly fork: <A, E>(
@@ -39,7 +43,7 @@ type Active<Input, R, RuntimeError> = {
  * The minimal imperative island that owns the runtime which cannot own its own creation.
  * All resources acquired after `start` are scoped by the managed runtime.
  */
-export function makePiSessionRuntimeSlot<Input, R, StartupError = never, RuntimeError = never>(
+export function makePiSessionRuntimeSlot<Input, R, StartupError = unknown, RuntimeError = unknown>(
   hooks: PiSessionRuntimeHooks<Input, R, StartupError, RuntimeError>,
 ): PiSessionRuntimeSlot<Input, R, RuntimeError> {
   let generation = 0;
@@ -51,7 +55,9 @@ export function makePiSessionRuntimeSlot<Input, R, StartupError = never, Runtime
     if (!runtime) return Promise.resolve();
     const existing = disposals.get(runtime);
     if (existing) return existing;
-    const next = runtime.dispose().catch(() => undefined);
+    const next = Promise.resolve()
+      .then(() => runtime.dispose())
+      .catch(() => undefined);
     disposals.set(runtime, next);
     return next;
   };
@@ -82,6 +88,15 @@ export function makePiSessionRuntimeSlot<Input, R, StartupError = never, Runtime
     return result;
   };
 
+  const notifyStartFailure = (input: Input, token: number): void => {
+    if (token !== generation) return;
+    try {
+      hooks.onStartFailure?.(input, token);
+    } catch {
+      // Failure notification is best effort.
+    }
+  };
+
   const start = (input: Input, signal?: AbortSignal): Promise<number | undefined> => {
     const token = ++generation;
     const previous = active;
@@ -89,26 +104,48 @@ export function makePiSessionRuntimeSlot<Input, R, StartupError = never, Runtime
     return serialize(() =>
       previousDisposal.then(() => {
         if (token !== generation) return undefined;
-        const runtime = hooks.makeRuntime(input);
+        let runtime: PiManagedRuntime<R, RuntimeError>;
+        try {
+          runtime = hooks.makeRuntime(input);
+        } catch {
+          notifyStartFailure(input, token);
+          return undefined;
+        }
         let current: Active<Input, R, RuntimeError>;
         const abort = () => {
           if (active !== current || token !== generation) return;
           ++generation;
-          void removeActive(current);
+          const removal = removeActive(current);
+          void serialize(() => removal);
         };
         const removeAbort = () => signal?.removeEventListener("abort", abort);
         current = { input, token, runtime, removeAbort };
         active = current;
-        signal?.addEventListener("abort", abort, { once: true });
-        if (signal?.aborted) {
-          abort();
-          return dispose(runtime).then(() => undefined);
+        try {
+          signal?.addEventListener("abort", abort, { once: true });
+          if (signal?.aborted) {
+            abort();
+            return dispose(runtime).then(() => undefined);
+          }
+        } catch {
+          return removeActive(current).then(() => {
+            notifyStartFailure(input, token);
+            return undefined;
+          });
         }
-        const startup = hooks.startup?.(input);
-        const started = startup
-          ? runtime.run(startup.pipe(Effect.withSpan("pi-cosmic-core.runtime.startup")), signal)
-          : Promise.resolve();
-        return started.then(
+        let started: Promise<unknown>;
+        try {
+          const startup = hooks.startup?.(input);
+          started = startup
+            ? runtime.run(startup.pipe(Effect.withSpan("pi-cosmic-core.runtime.startup")), signal)
+            : Promise.resolve();
+        } catch {
+          return removeActive(current).then(() => {
+            notifyStartFailure(input, token);
+            return undefined;
+          });
+        }
+        return Promise.resolve(started).then(
           () => {
             if (active !== current || token !== generation) return undefined;
             try {
@@ -120,13 +157,7 @@ export function makePiSessionRuntimeSlot<Input, R, StartupError = never, Runtime
           },
           () =>
             removeActive(current).then(() => {
-              if (token === generation) {
-                try {
-                  hooks.onStartFailure?.(input, token);
-                } catch {
-                  // Failure notification is best effort.
-                }
-              }
+              notifyStartFailure(input, token);
               return undefined;
             }),
         );

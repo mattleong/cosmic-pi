@@ -9,14 +9,16 @@ import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import * as Ref from "effect/Ref";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Random from "effect/Random";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import {
   AgentDirectory,
@@ -25,6 +27,7 @@ import {
   StreamingHttpClient,
   type StreamingHttpError,
 } from "pi-cosmic-core";
+import { safeHostSignal, safeHostUi } from "./boundary/host-ui.ts";
 import { SharpAdapter } from "./boundary/sharp.ts";
 import type { ResolvedConfig } from "./config.ts";
 import { extractAccountIdFromJwt, getCodexCredentials } from "./codex-auth.ts";
@@ -603,70 +606,166 @@ export class OpenAIImageService extends Context.Service<
             `openai-image-${stamp}-${safeId}-${nonce}.${extensionForFormat(outputFormat)}`,
           );
           const temporary = `${destination}.${nonce}.tmp`;
-          let cleanupPath = temporary;
-          yield* Effect.acquireUseRelease(
-            Effect.void,
-            () =>
-              Effect.scoped(
-                Effect.gen(function* () {
-                  const file = yield* fs
-                    .open(temporary, { flag: "wx" })
-                    .pipe(
-                      Effect.mapError(imageError("save", "Unable to create image temporary file.")),
-                    );
-                  const opened = yield* file.stat;
-                  const openedInode = Option.getOrUndefined(opened.ino);
-                  if (opened.type !== "File" || openedInode === undefined)
-                    return yield* fail("save", "Unable to verify image temporary file identity.");
-                  const actualTemporary = yield* fs
-                    .realPath(temporary)
-                    .pipe(
-                      Effect.mapError(imageError("save", "Unable to verify image temporary path.")),
-                    );
-                  cleanupPath = actualTemporary;
-                  const visible = yield* fs
-                    .stat(actualTemporary)
-                    .pipe(
-                      Effect.mapError(imageError("save", "Unable to verify image temporary file.")),
-                    );
-                  const visibleInode = Option.getOrUndefined(visible.ino);
-                  if (
-                    visible.type !== "File" ||
-                    visibleInode === undefined ||
-                    visible.dev !== opened.dev ||
-                    visibleInode !== openedInode ||
-                    (canonicalBase && !isInside(path, canonicalBase, actualTemporary))
-                  )
-                    return yield* fail("save", "Image temporary file escaped its protected root.");
-                  yield* file
-                    .writeAll(bytes)
-                    .pipe(Effect.mapError(imageError("save", "Unable to save generated image.")));
-                  yield* file.sync.pipe(
-                    Effect.mapError(imageError("save", "Unable to sync generated image.")),
-                  );
-                }),
-              ).pipe(
-                Effect.andThen(
-                  fs
-                    .link(cleanupPath, destination)
-                    .pipe(
-                      Effect.mapError(
-                        imageError("save", "Unable to publish generated image without clobbering."),
-                      ),
-                    ),
-                ),
-                Effect.andThen(fs.remove(cleanupPath)),
-              ),
-            () => fs.remove(cleanupPath).pipe(Effect.catch(() => Effect.void)),
+          let ownedIdentity: { readonly dev: number; readonly ino: number } | undefined;
+          let publishedIdentity:
+            | { readonly type: string; readonly dev: number; readonly ino: number }
+            | undefined;
+          const removeOwnedTemporary = Effect.gen(function* () {
+            if (!ownedIdentity) return;
+            const visible = yield* fs.stat(temporary);
+            const visibleInode = Option.getOrUndefined(visible.ino);
+            if (
+              visible.type === "File" &&
+              visibleInode === ownedIdentity.ino &&
+              visible.dev === ownedIdentity.dev
+            )
+              yield* fs.remove(temporary);
+          }).pipe(Effect.catchCause(() => Effect.void));
+          const removePublishedDestination = Effect.gen(function* () {
+            if (!publishedIdentity) return;
+            const visible = yield* fs.stat(destination);
+            const visibleInode = Option.getOrUndefined(visible.ino);
+            if (
+              visible.type === publishedIdentity.type &&
+              visibleInode === publishedIdentity.ino &&
+              visible.dev === publishedIdentity.dev
+            )
+              yield* fs.remove(destination);
+          }).pipe(Effect.catchCause(() => Effect.void));
+          const verifyPublicationSource = Effect.fn("OpenAIImage.verifyPublicationSource")(
+            function* () {
+              if (!ownedIdentity)
+                return yield* fail("save", "Unable to verify image temporary file identity.");
+              const actualTemporary = yield* fs
+                .realPath(temporary)
+                .pipe(
+                  Effect.mapError(imageError("save", "Unable to verify image temporary path.")),
+                );
+              const visible = yield* fs
+                .stat(temporary)
+                .pipe(
+                  Effect.mapError(imageError("save", "Unable to verify image temporary file.")),
+                );
+              const visibleInode = Option.getOrUndefined(visible.ino);
+              if (
+                visible.type !== "File" ||
+                visibleInode !== ownedIdentity.ino ||
+                visible.dev !== ownedIdentity.dev ||
+                !isInside(path, canonicalDirectory, actualTemporary) ||
+                (canonicalBase && !isInside(path, canonicalBase, actualTemporary))
+              )
+                return yield* fail("save", "Image temporary file escaped its protected root.");
+            },
           );
-          return destination;
+          const acquireTemporary = Effect.gen(function* () {
+            const fileScope = yield* Scope.make();
+            return yield* Effect.gen(function* () {
+              const file = yield* fs
+                .open(temporary, { flag: "wx" })
+                .pipe(
+                  Effect.mapError(imageError("save", "Unable to create image temporary file.")),
+                  Effect.provideService(Scope.Scope, fileScope),
+                );
+              const opened = yield* file.stat.pipe(
+                Effect.mapError(
+                  imageError("save", "Unable to verify image temporary file identity."),
+                ),
+              );
+              const openedInode = Option.getOrUndefined(opened.ino);
+              if (opened.type !== "File" || openedInode === undefined)
+                return yield* fail("save", "Unable to verify image temporary file identity.");
+              ownedIdentity = { dev: opened.dev, ino: openedInode };
+              return { file, fileScope };
+            }).pipe(
+              Effect.onError((cause) =>
+                Scope.close(fileScope, Exit.failCause(cause)).pipe(
+                  Effect.catchCause(() => Effect.void),
+                  Effect.ensuring(removeOwnedTemporary),
+                ),
+              ),
+            );
+          });
+          return yield* Effect.uninterruptibleMask((restore) =>
+            Effect.acquireUseRelease(
+              acquireTemporary,
+              ({ file, fileScope }) =>
+                restore(
+                  Effect.gen(function* () {
+                    yield* verifyPublicationSource();
+                    yield* file
+                      .writeAll(bytes)
+                      .pipe(Effect.mapError(imageError("save", "Unable to save generated image.")));
+                    yield* file.sync.pipe(
+                      Effect.mapError(imageError("save", "Unable to sync generated image.")),
+                    );
+                    yield* Scope.close(fileScope, Exit.void).pipe(
+                      Effect.catchDefect(() =>
+                        Effect.fail(fail("save", "Unable to close image temporary file.")),
+                      ),
+                    );
+                  }),
+                ).pipe(
+                  Effect.andThen(
+                    Effect.gen(function* () {
+                      yield* verifyPublicationSource();
+                      let linked = false;
+                      yield* Effect.gen(function* () {
+                        yield* fs
+                          .link(temporary, destination)
+                          .pipe(
+                            Effect.mapError(
+                              imageError(
+                                "save",
+                                "Unable to publish generated image without clobbering.",
+                              ),
+                            ),
+                          );
+                        linked = true;
+                        const published = yield* fs
+                          .stat(destination)
+                          .pipe(
+                            Effect.mapError(
+                              imageError("save", "Unable to verify published image identity."),
+                            ),
+                          );
+                        const publishedInode = Option.getOrUndefined(published.ino);
+                        if (publishedInode !== undefined)
+                          publishedIdentity = {
+                            type: published.type,
+                            dev: published.dev,
+                            ino: publishedInode,
+                          };
+                        if (
+                          !ownedIdentity ||
+                          published.type !== "File" ||
+                          publishedInode !== ownedIdentity.ino ||
+                          published.dev !== ownedIdentity.dev
+                        )
+                          return yield* fail(
+                            "save",
+                            "Published image did not match the owned temporary file.",
+                          );
+                      }).pipe(
+                        Effect.onError(() => (linked ? removePublishedDestination : Effect.void)),
+                      );
+                    }).pipe(Effect.uninterruptible),
+                  ),
+                ),
+              ({ fileScope }, exit) =>
+                Scope.close(fileScope, exit).pipe(
+                  Effect.catchCause(() => Effect.void),
+                  Effect.ensuring(removeOwnedTemporary),
+                ),
+            ).pipe(Effect.as(destination)),
+          );
         });
         const generate = Effect.fn("OpenAIImage.generate")(function* (rawParams: unknown) {
           yield* Ref.set(state, { lastStatus: "requesting" });
-          if (
-            !isRecord(rawParams) ||
-            Object.keys(rawParams).some((key) => !TOOL_PARAM_KEYS.has(key))
-          )
+          const parameterKeys = yield* Effect.try({
+            try: () => (isRecord(rawParams) ? Object.keys(rawParams) : undefined),
+            catch: imageError("params", "Invalid OpenAI image parameters."),
+          });
+          if (!parameterKeys || parameterKeys.some((key) => !TOOL_PARAM_KEYS.has(key)))
             return yield* fail("params", "Invalid OpenAI image parameters.");
           const params = yield* Schema.decodeUnknownEffect(ToolParamsSchema)(rawParams).pipe(
             Effect.mapError(imageError("params", "Invalid OpenAI image parameters.")),
@@ -676,8 +775,14 @@ export class OpenAIImageService extends Context.Service<
           if (!cfg) return yield* fail("config", "Better OpenAI session has not started.");
           if (!cfg.image.enabled)
             return yield* fail("config", "OpenAI image generation is disabled in config.");
-          const cwd = ctx.cwd;
-          const model = resolveModel(params, ctx, cfg);
+          const cwd = yield* Effect.try({
+            try: () => ctx.cwd,
+            catch: imageError("context", "Unable to read the Pi working directory."),
+          });
+          const model = yield* Effect.try({
+            try: () => resolveModel(params, ctx, cfg),
+            catch: imageError("context", "Unable to read the Pi model context."),
+          });
           const { action, outputFormat, save } = resolveImageConfig(cfg, params);
           const customDirectory =
             params.saveDir?.trim() || Option.getOrUndefined(customSaveDir)?.trim();
@@ -850,7 +955,7 @@ export function registerOpenAIImage(
     updateContext(ctx);
     return run(
       OpenAIImageService.use((service) => service.debug()),
-      ctx.signal,
+      safeHostSignal(ctx),
     );
   };
   pi.registerMessageRenderer<CodexImageResult>("openai-image", (message, _options, theme) => {
@@ -904,11 +1009,11 @@ export function registerOpenAIImage(
     handler: (args, ctx) => {
       const prompt = args.trim();
       if (!prompt) {
-        ctx.ui.notify("Usage: /openai-image <prompt>", "error");
+        safeHostUi(() => ctx.ui.notify("Usage: /openai-image <prompt>", "error"));
         return Promise.resolve();
       }
-      ctx.ui.notify("Requesting OpenAI image...", "info");
-      return generate({ prompt }, ctx, ctx.signal).then((result) =>
+      safeHostUi(() => ctx.ui.notify("Requesting OpenAI image...", "info"));
+      return generate({ prompt }, ctx, safeHostSignal(ctx)).then((result) =>
         pi.sendMessage({
           customType: "openai-image",
           content: [

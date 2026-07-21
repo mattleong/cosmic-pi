@@ -48,6 +48,53 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
+type TrackedAbortListener = EventListenerOrEventListenerObject;
+
+function trackedAbortSignal() {
+  let aborted = false;
+  const added: TrackedAbortListener[] = [];
+  const removed: TrackedAbortListener[] = [];
+  const live = new Set<TrackedAbortListener>();
+  const addEventListener = vi.fn((_type: string, listener: TrackedAbortListener) => {
+    added.push(listener);
+    live.add(listener);
+  });
+  const removeEventListener = vi.fn((_type: string, listener: TrackedAbortListener) => {
+    removed.push(listener);
+    live.delete(listener);
+  });
+  const signal = {
+    get aborted() {
+      return aborted;
+    },
+    addEventListener,
+    removeEventListener,
+  } as unknown as AbortSignal;
+  return {
+    signal,
+    abort: () => {
+      if (aborted) return;
+      aborted = true;
+      for (const listener of live) {
+        if (typeof listener === "function") listener.call(signal, { type: "abort" } as Event);
+        else listener.handleEvent({ type: "abort" } as Event);
+      }
+    },
+    addedListeners: () => [...added],
+    liveListeners: () => [...live],
+    removalCount: (listener: TrackedAbortListener) =>
+      removed.filter((candidate) => candidate === listener).length,
+  };
+}
+
+function expectAbortListenersReleasedExactlyOnce(tracker: ReturnType<typeof trackedAbortSignal>) {
+  const added = tracker.addedListeners();
+  expect(added.length).toBeGreaterThan(0);
+  expect(new Set(added).size).toBe(added.length);
+  expect(tracker.liveListeners()).toHaveLength(0);
+  for (const listener of added) expect(tracker.removalCount(listener)).toBe(1);
+}
+
 function harness(
   overrides: Partial<ResolvedAdvisorConfig> = {},
   options: {
@@ -148,16 +195,28 @@ function harness(
     logFailure,
     catchUpTimeoutMs: options.catchUpTimeoutMs,
   })(pi);
-  const emitAwait = async (name: string, event: unknown) => {
-    for (const handler of handlers.get(name) ?? []) await handler(event as never, ctx);
+  const emitWithContext = async (name: string, event: unknown, context: ExtensionContext) => {
+    for (const handler of handlers.get(name) ?? []) await handler(event as never, context);
   };
+  const emitAwait = async (name: string, event: unknown) => emitWithContext(name, event, ctx);
   const emit = async (name: string, event: unknown) => {
     if (name !== "turn_end") return emitAwait(name, event);
     for (const handler of handlers.get(name) ?? []) {
       Promise.resolve(handler(event as never, ctx)).catch(() => undefined);
     }
   };
-  return { appended, branch, commands, ctx, emit, emitAwait, logFailure, runtimes, sendMessage };
+  return {
+    appended,
+    branch,
+    commands,
+    ctx,
+    emit,
+    emitAwait,
+    emitWithContext,
+    logFailure,
+    runtimes,
+    sendMessage,
+  };
 }
 
 function finalTurn(text: string) {
@@ -572,6 +631,71 @@ describe("persistent extension cutover", () => {
     expect(current?.driver.start).toHaveBeenCalledOnce();
     await value.emit("session_shutdown", { type: "session_shutdown" });
     expect(current?.driver.dispose).toHaveBeenCalledOnce();
+  });
+
+  test("a failed replacement capture shuts down the prior application exactly once", async () => {
+    const value = harness();
+    const cancellation = trackedAbortSignal();
+    (value.ctx as unknown as { signal: AbortSignal }).signal = cancellation.signal;
+    await value.emit("session_start", { type: "session_start" });
+    const current = value.runtimes[0]!;
+    expect(cancellation.liveListeners()).toHaveLength(2);
+
+    const invalidContext = Object.create(value.ctx) as ExtensionContext;
+    Object.defineProperty(invalidContext, "cwd", {
+      configurable: true,
+      get: () => {
+        throw new Error("guarded cwd unavailable");
+      },
+    });
+    await expect(
+      value.emitWithContext("session_start", { type: "session_start" }, invalidContext),
+    ).resolves.toBeUndefined();
+    await expect(
+      value.emitWithContext("session_start", { type: "session_start" }, invalidContext),
+    ).resolves.toBeUndefined();
+
+    expect(value.runtimes).toHaveLength(1);
+    expect(current.driver.dispose).toHaveBeenCalledOnce();
+    expectAbortListenersReleasedExactlyOnce(cancellation);
+    await value.emit("turn_end", finalTurn("must not reach the disposed application"));
+    await tick();
+    expect(current.requests).toHaveLength(0);
+    cancellation.abort();
+    await tick();
+    expect(current.driver.dispose).toHaveBeenCalledOnce();
+  });
+
+  test("valid replacement disposes the old Layer and its committed abort listener", async () => {
+    const value = harness();
+    const firstCancellation = trackedAbortSignal();
+    const secondCancellation = trackedAbortSignal();
+    (value.ctx as unknown as { signal: AbortSignal }).signal = firstCancellation.signal;
+    await value.emit("session_start", { type: "session_start" });
+    const firstRuntime = value.runtimes[0]!;
+    expect(firstCancellation.liveListeners()).toHaveLength(2);
+
+    const replacementContext = Object.create(value.ctx) as ExtensionContext;
+    Object.defineProperty(replacementContext, "signal", {
+      configurable: true,
+      value: secondCancellation.signal,
+    });
+    await value.emitWithContext("session_start", { type: "session_start" }, replacementContext);
+
+    expect(value.runtimes).toHaveLength(2);
+    expect(firstRuntime.driver.dispose).toHaveBeenCalledOnce();
+    expectAbortListenersReleasedExactlyOnce(firstCancellation);
+    expect(secondCancellation.liveListeners()).toHaveLength(2);
+
+    firstCancellation.abort();
+    await tick();
+    expect(value.runtimes[1]!.driver.dispose).not.toHaveBeenCalled();
+
+    secondCancellation.abort();
+    await tick();
+    await tick();
+    expect(value.runtimes[1]!.driver.dispose).toHaveBeenCalledOnce();
+    expectAbortListenersReleasedExactlyOnce(secondCancellation);
   });
 
   test("throwing status UI cannot skip child shutdown disposal", async () => {
@@ -2049,6 +2173,43 @@ describe("persistent extension cutover", () => {
       current.pending[0]!.resolve(pass(current.requests[0]!));
       await vi.advanceTimersByTimeAsync(0);
       expect(setStatus).toHaveBeenLastCalledWith("pi-advisor", undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("isolates a throwing status model lookup and releases the spinner owner", async () => {
+    vi.useFakeTimers();
+    try {
+      const value = harness();
+      (value.ctx.modelRegistry.find as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+        throw new Error("hostile model registry");
+      });
+      await value.emit("session_start", { type: "session_start" });
+      await value.emit("turn_end", finalTurn("candidate"));
+      await vi.advanceTimersByTimeAsync(200);
+
+      const current = value.runtimes[0]!;
+      const find = value.ctx.modelRegistry.find as ReturnType<typeof vi.fn>;
+      const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
+      expect(find).toHaveBeenCalledOnce();
+      expect(setStatus.mock.calls.some((call) => String(call[1]).includes("advising"))).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(find).toHaveBeenCalledOnce();
+      current.pending[0]!.resolve(pass(current.requests[0]!));
+      await vi.advanceTimersByTimeAsync(0);
+
+      await value.commands.get("advisor")!.handler("review-last", value.ctx as never);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(find).toHaveBeenCalledTimes(2);
+      expect(setStatus).toHaveBeenLastCalledWith(
+        "pi-advisor",
+        expect.stringMatching(/^⠋ m:medium advising…$/),
+      );
+
+      current.pending[1]!.resolve(pass(current.requests[1]!));
+      await vi.advanceTimersByTimeAsync(0);
     } finally {
       vi.useRealTimers();
     }

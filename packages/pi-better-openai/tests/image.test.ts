@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -176,6 +177,35 @@ describe("Effect-native OpenAI image service", () => {
         input?: Array<{ content?: Array<{ image_url?: string }> }>;
       };
       expect(requestBody.input?.[0]?.content?.[1]?.image_url).toMatch(/^data:image\/png;base64,/);
+    }).pipe(h.effect);
+  });
+
+  it.effect("maps hostile parameter reflection to a typed boundary failure", () => {
+    let calls = 0;
+    const h = harness(() => {
+      calls++;
+      return Effect.succeed(httpResponse(200, sse([completed()])));
+    });
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("hostile ownKeys");
+        },
+      },
+    );
+
+    return Effect.gen(function* () {
+      const error = yield* OpenAIImageService.use((service) => service.generate(hostile)).pipe(
+        Effect.flip,
+      );
+
+      expect(error).toMatchObject({
+        _tag: "OpenAIImageError",
+        operation: "params",
+        message: "Invalid OpenAI image parameters.",
+      });
+      expect(calls).toBe(0);
     }).pipe(h.effect);
   });
 
@@ -626,6 +656,242 @@ describe("Effect-native OpenAI image service", () => {
     }).pipe(h.effect);
   });
 
+  it.effect("never removes an outside target when the owned temp path becomes a symlink", () => {
+    const outside = temp();
+    const outsideTarget = join(outside, "outside.png");
+    writeFileSync(outsideTarget, "outside-owned");
+    let swapped = false;
+    const swappingFileSystem = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const built = yield* Layer.build(nodePlatformLayer);
+        const base = Context.get(built, FileSystem.FileSystem);
+        return FileSystem.FileSystem.of({
+          ...base,
+          open: (filePath, options) =>
+            base.open(filePath, options).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  if (swapped || !filePath.endsWith(".tmp")) return;
+                  swapped = true;
+                  rmSync(filePath);
+                  symlinkSync(outsideTarget, filePath);
+                }),
+              ),
+            ),
+        });
+      }),
+    );
+    const h = harness(
+      () => Effect.succeed(httpResponse(200, sse([completed()]))),
+      DEFAULT_IMAGE_CONFIG.timeoutMs,
+      swappingFileSystem,
+    );
+
+    return Effect.gen(function* () {
+      const error = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x", save: "project" }),
+      ).pipe(Effect.flip);
+
+      expect(error.operation).toBe("save");
+      expect(swapped).toBe(true);
+      expect(readFileSync(outsideTarget, "utf8")).toBe("outside-owned");
+    }).pipe(h.effect);
+  });
+
+  it.effect("rejects a source swap during hard-link publication", () => {
+    const outside = temp();
+    const outsideTarget = join(outside, "outside.png");
+    writeFileSync(outsideTarget, "outside-owned");
+    let swapped = false;
+    const swappingFileSystem = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const built = yield* Layer.build(nodePlatformLayer);
+        const base = Context.get(built, FileSystem.FileSystem);
+        return FileSystem.FileSystem.of({
+          ...base,
+          link: (source, destination) =>
+            Effect.sync(() => {
+              if (swapped || !source.endsWith(".tmp")) return;
+              swapped = true;
+              rmSync(source);
+              symlinkSync(outsideTarget, source);
+            }).pipe(Effect.andThen(base.link(source, destination))),
+        });
+      }),
+    );
+    const h = harness(
+      () => Effect.succeed(httpResponse(200, sse([completed()]))),
+      DEFAULT_IMAGE_CONFIG.timeoutMs,
+      swappingFileSystem,
+    );
+
+    return Effect.gen(function* () {
+      const error = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x", save: "project" }),
+      ).pipe(Effect.flip);
+
+      expect(error.message).toContain("owned temporary file");
+      expect(swapped).toBe(true);
+      expect(readFileSync(outsideTarget, "utf8")).toBe("outside-owned");
+      expect(
+        readdirSync(join(h.cwd, ".pi", "generated-images")).filter((name) => name.endsWith(".png")),
+      ).toEqual([]);
+    }).pipe(h.effect);
+  });
+
+  it.effect("never removes a destination replaced after failed publication verification", () => {
+    const outside = temp();
+    const outsideTarget = join(outside, "outside.png");
+    writeFileSync(outsideTarget, "outside-owned");
+    let destinationPath: string | undefined;
+    let replaced = false;
+    const swappingFileSystem = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const built = yield* Layer.build(nodePlatformLayer);
+        const base = Context.get(built, FileSystem.FileSystem);
+        return FileSystem.FileSystem.of({
+          ...base,
+          link: (source, destination) =>
+            Effect.sync(() => {
+              rmSync(source);
+              symlinkSync(outsideTarget, source);
+              destinationPath = destination;
+            }).pipe(Effect.andThen(base.link(source, destination))),
+          stat: (filePath) =>
+            base.stat(filePath).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  if (replaced || filePath !== destinationPath) return;
+                  replaced = true;
+                  rmSync(filePath);
+                  writeFileSync(filePath, "replacement-owned");
+                }),
+              ),
+            ),
+        });
+      }),
+    );
+    const h = harness(
+      () => Effect.succeed(httpResponse(200, sse([completed()]))),
+      DEFAULT_IMAGE_CONFIG.timeoutMs,
+      swappingFileSystem,
+    );
+
+    return Effect.gen(function* () {
+      const error = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x", save: "project" }),
+      ).pipe(Effect.flip);
+
+      expect(error.message).toContain("owned temporary file");
+      expect(replaced).toBe(true);
+      expect(destinationPath).toBeTypeOf("string");
+      expect(readFileSync(destinationPath!, "utf8")).toBe("replacement-owned");
+      expect(readFileSync(outsideTarget, "utf8")).toBe("outside-owned");
+    }).pipe(h.effect);
+  });
+
+  it.effect("finishes a committed hard-link publication before observing interruption", () => {
+    const linked = Deferred.makeUnsafe<void>();
+    const releaseLink = Deferred.makeUnsafe<void>();
+    const gatedFileSystem = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const built = yield* Layer.build(nodePlatformLayer);
+        const base = Context.get(built, FileSystem.FileSystem);
+        return FileSystem.FileSystem.of({
+          ...base,
+          link: (source, destination) =>
+            base.link(source, destination).pipe(
+              Effect.tap(() => Deferred.succeed(linked, undefined)),
+              Effect.andThen(Deferred.await(releaseLink)),
+            ),
+        });
+      }),
+    );
+    const h = harness(
+      () => Effect.succeed(httpResponse(200, sse([completed()]))),
+      DEFAULT_IMAGE_CONFIG.timeoutMs,
+      gatedFileSystem,
+    );
+
+    return Effect.gen(function* () {
+      let publishedPath: string | undefined;
+      const generation = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x", save: "project" }),
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(linked);
+      const imageDirectory = join(h.cwd, ".pi", "generated-images");
+      publishedPath = readdirSync(imageDirectory)
+        .filter((name) => name.endsWith(".png"))
+        .map((name) => join(imageDirectory, name))[0];
+      expect(publishedPath).toBeTypeOf("string");
+      expect(readFileSync(publishedPath!).toString("base64")).toBe(PNG_BASE64);
+
+      const interruption = yield* Fiber.interrupt(generation).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      expect(interruption.pollUnsafe()).toBeUndefined();
+      yield* Deferred.succeed(releaseLink, undefined);
+      yield* Fiber.join(interruption);
+      const targetExit = yield* Fiber.await(generation);
+
+      expect(targetExit._tag).toBe("Failure");
+      expect(readFileSync(publishedPath!).toString("base64")).toBe(PNG_BASE64);
+      expect(readdirSync(imageDirectory).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    }).pipe(Effect.scoped, h.effect);
+  });
+
+  it.effect("registers temporary-file ownership before observing interruption", () => {
+    const statStarted = Deferred.makeUnsafe<void>();
+    const releaseStat = Deferred.makeUnsafe<void>();
+    const gatedFileSystem = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const built = yield* Layer.build(nodePlatformLayer);
+        const base = Context.get(built, FileSystem.FileSystem);
+        return FileSystem.FileSystem.of({
+          ...base,
+          open: (filePath, options) =>
+            base.open(filePath, options).pipe(
+              Effect.map((file) =>
+                filePath.endsWith(".tmp")
+                  ? {
+                      ...file,
+                      stat: Deferred.succeed(statStarted, undefined).pipe(
+                        Effect.andThen(Deferred.await(releaseStat)),
+                        Effect.andThen(file.stat),
+                      ),
+                    }
+                  : file,
+              ),
+            ),
+        });
+      }),
+    );
+    const h = harness(
+      () => Effect.succeed(httpResponse(200, sse([completed()]))),
+      DEFAULT_IMAGE_CONFIG.timeoutMs,
+      gatedFileSystem,
+    );
+
+    return Effect.gen(function* () {
+      const generation = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x", save: "project" }),
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(statStarted);
+      const interruption = yield* Fiber.interrupt(generation).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      expect(interruption.pollUnsafe()).toBeUndefined();
+
+      yield* Deferred.succeed(releaseStat, undefined);
+      yield* Fiber.join(interruption);
+      expect((yield* Fiber.await(generation))._tag).toBe("Failure");
+      expect(readdirSync(join(h.cwd, ".pi", "generated-images"))).toEqual([]);
+    }).pipe(Effect.scoped, h.effect);
+  });
+
   it.effect("fails before HTTP when credentials are missing", () => {
     let calls = 0;
     const h = harness(() => {
@@ -835,6 +1101,144 @@ describe("Effect-native OpenAI image service", () => {
       expect(collision.message).toContain("without clobbering");
       expect(readFileSync(first.savedPath!)).toEqual(before);
       expect(readdirSync(join(h.cwd, ".pi", "generated-images"))).toHaveLength(1);
+    }).pipe(h.effect);
+  });
+
+  it.effect("never removes a pre-existing temporary-file candidate", () => {
+    const h = harness(() => Effect.succeed(httpResponse(200, sse([completed()]))));
+    const fixedRandom = {
+      nextIntUnsafe: () => 0,
+      nextDoubleUnsafe: () => 0,
+    };
+    const generate = OpenAIImageService.use((service) =>
+      service.generate({ prompt: "x", save: "project" }),
+    ).pipe(Effect.provideService(Random.Random, fixedRandom));
+    return Effect.gen(function* () {
+      const first = yield* generate;
+      const temporaryCandidate = `${first.savedPath}.0000000000000000.tmp`;
+      writeFileSync(temporaryCandidate, "owned by another writer");
+
+      const collision = yield* Effect.flip(generate);
+
+      expect(collision.message).toContain("Unable to create image temporary file");
+      expect(readFileSync(temporaryCandidate, "utf8")).toBe("owned by another writer");
+    }).pipe(h.effect);
+  });
+
+  it.effect("reports a successful publication when temporary cleanup defects", () => {
+    const failingCleanupFileSystem = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const built = yield* Layer.build(nodePlatformLayer);
+        const base = Context.get(built, FileSystem.FileSystem);
+        return FileSystem.FileSystem.of({
+          ...base,
+          remove: (filePath, options) =>
+            filePath.endsWith(".tmp")
+              ? Effect.die("injected cleanup failure")
+              : base.remove(filePath, options),
+        });
+      }),
+    );
+    const h = harness(
+      () => Effect.succeed(httpResponse(200, sse([completed()]))),
+      DEFAULT_IMAGE_CONFIG.timeoutMs,
+      failingCleanupFileSystem,
+    );
+
+    return Effect.gen(function* () {
+      const result = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x", save: "project" }),
+      );
+
+      expect(result.savedPath).toBeTypeOf("string");
+      expect(readFileSync(result.savedPath!).toString("base64")).toBe(PNG_BASE64);
+      expect(readdirSync(join(h.cwd, ".pi", "generated-images"))).toHaveLength(2);
+    }).pipe(h.effect);
+  });
+
+  it.effect("maps a temporary-file close defect before publication and cleans up", () => {
+    const failingCloseFileSystem = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const built = yield* Layer.build(nodePlatformLayer);
+        const base = Context.get(built, FileSystem.FileSystem);
+        return FileSystem.FileSystem.of({
+          ...base,
+          open: (filePath, options) =>
+            base
+              .open(filePath, options)
+              .pipe(
+                Effect.tap(() =>
+                  filePath.endsWith(".tmp")
+                    ? Effect.addFinalizer(() => Effect.die("injected close failure"))
+                    : Effect.void,
+                ),
+              ),
+        });
+      }),
+    );
+    const h = harness(
+      () => Effect.succeed(httpResponse(200, sse([completed()]))),
+      DEFAULT_IMAGE_CONFIG.timeoutMs,
+      failingCloseFileSystem,
+    );
+
+    return Effect.gen(function* () {
+      const failure = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x", save: "project" }),
+      ).pipe(Effect.flip);
+
+      expect(failure).toMatchObject({
+        _tag: "OpenAIImageError",
+        operation: "save",
+        message: "Unable to close image temporary file.",
+      });
+      expect(readdirSync(join(h.cwd, ".pi", "generated-images"))).toEqual([]);
+    }).pipe(h.effect);
+  });
+
+  it.effect("attempts temporary-file cleanup when file-scope release defects", () => {
+    let temporaryOpened = false;
+    const failingReleaseFileSystem = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const built = yield* Layer.build(nodePlatformLayer);
+        const base = Context.get(built, FileSystem.FileSystem);
+        return FileSystem.FileSystem.of({
+          ...base,
+          open: (filePath, options) =>
+            base.open(filePath, options).pipe(
+              Effect.tap(() => {
+                if (!filePath.endsWith(".tmp")) return Effect.void;
+                temporaryOpened = true;
+                return Effect.addFinalizer(() => Effect.die("injected close failure"));
+              }),
+            ),
+          realPath: (filePath) =>
+            temporaryOpened && filePath.endsWith(".tmp")
+              ? Effect.die("injected verification failure")
+              : base.realPath(filePath),
+        });
+      }),
+    );
+    const h = harness(
+      () => Effect.succeed(httpResponse(200, sse([completed()]))),
+      DEFAULT_IMAGE_CONFIG.timeoutMs,
+      failingReleaseFileSystem,
+    );
+    const fixedRandom = {
+      nextIntUnsafe: () => 0,
+      nextDoubleUnsafe: () => 0,
+    };
+    return Effect.gen(function* () {
+      const result = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x", save: "project" }),
+      ).pipe(Effect.provideService(Random.Random, fixedRandom), Effect.exit);
+
+      expect(result._tag).toBe("Failure");
+      expect(temporaryOpened).toBe(true);
+      expect(readdirSync(join(h.cwd, ".pi", "generated-images"))).toEqual([]);
     }).pipe(h.effect);
   });
 

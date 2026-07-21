@@ -93,13 +93,21 @@ export function writeTextFileAtomicSync(path: string, text: string): void {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (!existed || basename(directory) === "extensions") chmodSync(directory, 0o700);
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  let ownsTemporary = false;
   try {
     writeFileSync(temporary, text, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    ownsTemporary = true;
     chmodSync(temporary, 0o600);
     renameSync(temporary, path);
-    chmodSync(path, 0o600);
+    ownsTemporary = false;
   } finally {
-    rmSync(temporary, { force: true });
+    if (ownsTemporary) {
+      try {
+        rmSync(temporary, { force: true });
+      } catch {
+        // Preserve the acquisition failure; best-effort cleanup must not replace it.
+      }
+    }
   }
 }
 

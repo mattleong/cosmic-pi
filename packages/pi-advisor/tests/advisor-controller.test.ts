@@ -7,6 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+  _advisorControllerTest,
   AdvisorController,
   advisorControllerApplicationLayer,
   advisorControllerLayer,
@@ -15,6 +16,7 @@ import {
 import { advisorRuntimeServiceLayer, type AdvisorRuntimeDriver } from "../src/advisor-runtime.ts";
 import { advisorReviewQueueServiceLayer } from "../src/review-queue.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
+import { captureAdvisorSessionInputEffect } from "../src/boundary/host-context.ts";
 import { PiCommandAdapter } from "../src/pi-command-adapter.ts";
 import { configRepositoryTestLayer } from "../src/config-repository.ts";
 import { failureLoggerLayer } from "../src/failure-logger.ts";
@@ -108,6 +110,42 @@ describe("AdvisorController", () => {
     ).pipe(Effect.andThen(Effect.sync(() => expect(releases).toBe(1))));
   });
 
+  it.effect("keeps scoped finalization running when dependency driver cleanup rejects", () => {
+    const events: string[] = [];
+    const runtime = _advisorControllerTest.runtimeEffectsFromDriver({
+      activeToolNames: [],
+      start: () => Promise.resolve(),
+      checkpoint: () => Promise.reject(new Error("unused")),
+      steer: () => Promise.resolve(true),
+      reprime: () => Promise.resolve(),
+      abort: () => {
+        events.push("abort");
+        return Promise.reject(new Error("abort rejected"));
+      },
+      dispose: () => {
+        events.push("dispose");
+        return Promise.reject(new Error("dispose rejected"));
+      },
+    });
+
+    return Effect.scoped(
+      Effect.acquireRelease(Effect.void, () =>
+        runtime.abort().pipe(
+          Effect.andThen(runtime.dispose()),
+          Effect.andThen(
+            Effect.sync(() => {
+              events.push("finalizer continued");
+            }),
+          ),
+        ),
+      ),
+    ).pipe(
+      Effect.andThen(
+        Effect.sync(() => expect(events).toEqual(["abort", "dispose", "finalizer continued"])),
+      ),
+    );
+  });
+
   it.effect("owns real session config, child replacement, and shutdown state", () => {
     let starts = 0;
     let disposals = 0;
@@ -189,10 +227,11 @@ describe("AdvisorController", () => {
       Effect.gen(function* () {
         const context = yield* Layer.build(application);
         const controller = Context.get(context, AdvisorController);
-        yield* controller.sessionInitialize(undefined as never, ctx);
+        const input = yield* captureAdvisorSessionInputEffect(ctx);
+        yield* controller.sessionInitialize(undefined as never, input);
         expect(starts).toBe(1);
         expect(controller.getSnapshot().config.model).toBe("model");
-        yield* controller.sessionInitialize(undefined as never, ctx);
+        yield* controller.sessionInitialize(undefined as never, input);
         expect(starts).toBe(2);
         expect(disposals).toBe(1);
         yield* controller.sessionShutdown(undefined as never, ctx);

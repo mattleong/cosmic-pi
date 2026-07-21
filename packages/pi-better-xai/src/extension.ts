@@ -38,13 +38,63 @@ const defaultDependencies: BetterXaiExtensionDependencies = {
 };
 
 function hasTerminalUI(ctx: ExtensionContext): boolean {
-  return ctx.mode === "tui" || (ctx.mode === undefined && ctx.hasUI);
+  try {
+    const mode = ctx.mode;
+    const hasUI = ctx.hasUI;
+    return mode === "tui" || (mode === undefined && hasUI);
+  } catch {
+    return false;
+  }
 }
 function isProjectTrusted(ctx: ExtensionContext): boolean {
   try {
     return typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
   } catch {
     return false;
+  }
+}
+
+type CapturedHostSignal =
+  | { readonly _tag: "Captured"; readonly signal: AbortSignal | undefined }
+  | { readonly _tag: "Unavailable" };
+
+function captureHostSignal(ctx: ExtensionContext): CapturedHostSignal {
+  try {
+    return { _tag: "Captured", signal: ctx.signal };
+  } catch {
+    return { _tag: "Unavailable" };
+  }
+}
+
+type CapturedSessionHost =
+  | {
+      readonly _tag: "Captured";
+      readonly cwd: string;
+      readonly signal: AbortSignal | undefined;
+      readonly aborted: boolean;
+    }
+  | { readonly _tag: "Unavailable" };
+
+function captureSessionHost(ctx: ExtensionContext): CapturedSessionHost {
+  try {
+    const cwd = ctx.cwd;
+    const signal = ctx.signal;
+    if (typeof cwd !== "string" || cwd.length === 0) return { _tag: "Unavailable" };
+    return { _tag: "Captured", cwd, signal, aborted: signal?.aborted === true };
+  } catch {
+    return { _tag: "Unavailable" };
+  }
+}
+
+function notifyAtHostBoundary(
+  ctx: ExtensionContext,
+  message: string,
+  level: "info" | "warning" | "error",
+): void {
+  try {
+    ctx.ui.notify(message, level);
+  } catch {
+    // Promise-level Pi command recovery must never reject because notification failed.
   }
 }
 
@@ -85,80 +135,96 @@ export function betterXaiWithDependencies(
   let startGeneration = 0;
   type SessionInput = {
     readonly ctx: ExtensionContext;
+    readonly cwd: string;
     readonly context: MutableRef.MutableRef<ExtensionContext>;
     readonly generation: number;
     readonly projectTrusted: boolean;
   };
-  const slot = makePiSessionRuntimeSlot<SessionInput, XaiUsageService>({
-    makeRuntime: ({ ctx, context, projectTrusted }) => {
-      const platform = Layer.merge(
-        nodePlatformLayer,
-        AgentDirectory.layerFromHost(() => getAgentDir()),
-      );
-      const applicationLayer = XaiUsageService.layer({
-        context,
-        cwd: ctx.cwd,
-        projection,
-        projectTrusted,
-        onChange: () => updateFooter(MutableRef.get(context)),
-      }).pipe(Layer.provide(platform));
-      return makePiManagedRuntime(pi, applicationLayer);
-    },
+  const makeApplicationLayer = ({ cwd, context, projectTrusted }: SessionInput) => {
+    const platform = Layer.merge(
+      nodePlatformLayer,
+      AgentDirectory.layerFromHost(() => getAgentDir()),
+    );
+    return XaiUsageService.layer({
+      context,
+      cwd,
+      projection,
+      projectTrusted,
+      onChange: () => updateFooter(MutableRef.get(context)),
+    }).pipe(Layer.provide(platform));
+  };
+  type XaiApplicationLayer = ReturnType<typeof makeApplicationLayer>;
+  type XaiApplication = Layer.Success<XaiApplicationLayer>;
+  type XaiRuntimeError = Layer.Error<XaiApplicationLayer>;
+  const slot = makePiSessionRuntimeSlot<SessionInput, XaiApplication, never, XaiRuntimeError>({
+    makeRuntime: (input) => makePiManagedRuntime(pi, makeApplicationLayer(input)),
     startup: ({ generation }) => dependencies.startupEffect(generation),
     onActivated: ({ ctx }) => {
       if (hasTerminalUI(ctx)) cosmicUiAdapter.detectHost();
       else cosmicUiAdapter.shutdown();
       updateFooter(ctx);
     },
-    onDeactivated: () => {
+    onDeactivated: ({ context }) => {
+      if (currentContext !== context) return;
       currentContext = undefined;
       cosmicUiAdapter.shutdown();
       resetProjection(projection);
     },
     onStartFailure: ({ ctx }) => {
-      try {
-        ctx.ui.notify("Better xAI failed to start.", "warning");
-      } catch {
-        // Host notification failures do not prevent runtime cleanup.
-      }
+      notifyAtHostBoundary(ctx, "Better xAI failed to start.", "warning");
     },
   });
 
-  const run = <A, E>(effect: Effect.Effect<A, E, XaiUsageService>, signal?: AbortSignal) =>
+  const run = <A, E>(effect: Effect.Effect<A, E, XaiApplication>, signal?: AbortSignal) =>
     slot.run(effect, signal);
 
   pi.registerCommand(XAI_STATUS_COMMAND, {
     description: "Show xAI subscription usage status",
-    handler: (_args, ctx) =>
-      run(
+    handler: (_args, ctx) => {
+      const capturedSignal = captureHostSignal(ctx);
+      if (capturedSignal._tag === "Unavailable") {
+        notifyAtHostBoundary(ctx, "xAI usage is unavailable.", "warning");
+        return Promise.resolve();
+      }
+      return run(
         XaiUsageService.use((service) => service.refresh({ notify: true, force: true })),
-        ctx.signal,
-      ).catch(() => ctx.ui.notify("xAI usage is unavailable.", "warning")),
+        capturedSignal.signal,
+      ).catch(() => notifyAtHostBoundary(ctx, "xAI usage is unavailable.", "warning"));
+    },
   });
 
   registerSettingsController(pi, {
     config,
     updateFooter,
     formatDebugStatus: (ctx) => formatDebug(projection, ctx),
+    notifyAtHostBoundary,
+    captureSignal: captureHostSignal,
     run,
   });
 
   pi.on("session_start", (_event, ctx) => {
     cosmicUiAdapter.shutdown();
     resetProjection(projection);
+    const capturedHost = captureSessionHost(ctx);
+    if (capturedHost._tag === "Unavailable") {
+      notifyAtHostBoundary(ctx, "Better xAI failed to start.", "warning");
+      return slot.shutdown().then(() => undefined);
+    }
     const context = MutableRef.make(ctx);
     currentContext = context;
-    if (ctx.signal?.aborted) {
-      try {
-        ctx.ui.notify("Better xAI failed to start.", "warning");
-      } catch {
-        // Host notification failures do not prevent runtime cleanup.
-      }
+    if (capturedHost.aborted) {
+      notifyAtHostBoundary(ctx, "Better xAI failed to start.", "warning");
     }
     return slot
       .start(
-        { ctx, context, generation: ++startGeneration, projectTrusted: isProjectTrusted(ctx) },
-        ctx.signal,
+        {
+          ctx,
+          cwd: capturedHost.cwd,
+          context,
+          generation: ++startGeneration,
+          projectTrusted: isProjectTrusted(ctx),
+        },
+        capturedHost.signal,
       )
       .then(() => undefined);
   });
@@ -166,9 +232,11 @@ export function betterXaiWithDependencies(
   pi.on("turn_end", (_event, ctx) => {
     if (currentContext) MutableRef.set(currentContext, ctx);
     updateFooter(ctx);
+    const capturedSignal = captureHostSignal(ctx);
+    if (capturedSignal._tag === "Unavailable") return;
     slot.fork(
       XaiUsageService.use((service) => service.refresh()),
-      ctx.signal,
+      capturedSignal.signal,
     );
   });
 
@@ -176,11 +244,13 @@ export function betterXaiWithDependencies(
     if (currentContext) MutableRef.set(currentContext, ctx);
     synchronizeProjectionContext(projection, ctx, { clearUsage: true });
     updateFooter(ctx);
+    const capturedSignal = captureHostSignal(ctx);
+    if (capturedSignal._tag === "Unavailable") return;
     slot.fork(
       XaiUsageService.use((service) =>
         service.contextChanged(true).pipe(Effect.andThen(service.refresh({ force: true }))),
       ),
-      ctx.signal,
+      capturedSignal.signal,
     );
   });
 

@@ -11,7 +11,12 @@ import {
   nodePlatformLayer,
   type JsonDocumentStoreShape,
 } from "pi-cosmic-core";
-import { configPaths, resolveConfig, updateFooterConfig } from "../src/config/store.ts";
+import {
+  configPaths,
+  resolveConfig,
+  setFooterVisibility,
+  updateFooterConfig,
+} from "../src/config/store.ts";
 
 const withTempConfig = <A, E>(
   run: (values: {
@@ -49,7 +54,7 @@ describe("Cosmic UI config", () => {
           density: "compact",
           hidden: ["metrics"],
         });
-        yield* updateFooterConfig(cwd, agent, config, { enabled: true });
+        yield* updateFooterConfig(cwd, agent, { enabled: true });
         expect(yield* documents.readObject(paths.project)).toEqual({
           custom: 42,
           footer: { density: "compact", enabled: true, future: true },
@@ -73,10 +78,45 @@ describe("Cosmic UI config", () => {
         const config = yield* resolveConfig(cwd, agent, false);
         expect(config.configPath).toBe(paths.global);
         expect(config.footer).toMatchObject({ enabled: true, density: "comfortable" });
-        const updated = yield* updateFooterConfig(cwd, agent, config, { enabled: false }, false);
+        const updated = yield* updateFooterConfig(cwd, agent, { enabled: false }, false);
         expect(updated.configPath).toBe(paths.global);
         expect(yield* documents.readObject(paths.project)).toEqual({
           footer: { enabled: false, density: "compact" },
+        });
+      }),
+    ),
+  );
+
+  it.effect("reselects scope when external documents appear or disappear", () =>
+    withTempConfig(({ cwd, agent }) =>
+      Effect.gen(function* () {
+        const documents = yield* JsonDocumentStore;
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* configPaths(cwd, agent);
+        yield* documents.writeObject(paths.global, {
+          footer: { density: "comfortable", hidden: ["global-item"] },
+        });
+        const global = yield* resolveConfig(cwd, agent);
+        expect(global.configPath).toBe(paths.global);
+
+        yield* documents.writeObject(paths.project, {
+          footer: { density: "auto", hidden: ["project-item"] },
+        });
+        const project = yield* updateFooterConfig(cwd, agent, { density: "compact" });
+        expect(project.configPath).toBe(paths.project);
+        expect(yield* documents.readObject(paths.project)).toEqual({
+          footer: { density: "compact", hidden: ["project-item"] },
+        });
+        expect(yield* documents.readObject(paths.global)).toEqual({
+          footer: { density: "comfortable", hidden: ["global-item"] },
+        });
+
+        yield* fs.remove(paths.project);
+        const next = yield* setFooterVisibility(cwd, agent, "metrics", false);
+        expect(next.configPath).toBe(paths.global);
+        expect(yield* fs.exists(paths.project)).toBe(false);
+        expect(yield* documents.readObject(paths.global)).toEqual({
+          footer: { density: "comfortable", hidden: ["global-item", "metrics"] },
         });
       }),
     ),
@@ -93,6 +133,7 @@ describe("Cosmic UI config", () => {
       exists: () => Effect.succeed(true),
       readObject: () => Effect.fail(failure),
       writeObject: () => Effect.fail(failure),
+      modifyObject: () => Effect.fail(failure),
       updateObject: () => Effect.fail(failure),
     };
     const logger = Logger.make(({ message }) => {
@@ -121,7 +162,7 @@ describe("Cosmic UI config", () => {
         expect(config.footer.enabled).toBe(true);
         expect(config.configPath).toBe(paths.project);
         expect(
-          yield* Effect.exit(updateFooterConfig(cwd, agent, config, { enabled: false })).pipe(
+          yield* Effect.exit(updateFooterConfig(cwd, agent, { enabled: false })).pipe(
             Effect.map((exit) => exit._tag),
           ),
         ).toBe("Failure");

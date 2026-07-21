@@ -63,6 +63,9 @@ export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute
           // Direct truncation also preserves hard-link aliases, open descriptors, inode
           // identity, modes, and normal umask-derived creation modes.
           yield* fs.writeFileString(absolutePath, content);
+          // Once the mutation commits, publish its correlation before honoring a pending
+          // interruption so renderers can always explain the applied write deterministically.
+          yield* writeService.rememberBeforeWrite(toolCallId, before);
         }).pipe(
           Effect.mapError(
             () =>
@@ -74,7 +77,6 @@ export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute
           ),
         ),
       );
-      yield* writeService.rememberBeforeWrite(toolCallId, before);
       return {
         content: [
           {

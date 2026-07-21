@@ -1,6 +1,10 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { JsonDocumentStore, type JsonObject } from "./json-document.ts";
+import {
+  JsonDocumentStore,
+  type JsonDocumentModification,
+  type JsonObject,
+} from "./json-document.ts";
 
 export class SchemaDocumentError extends Schema.TaggedErrorClass<SchemaDocumentError>()(
   "SchemaDocumentError",
@@ -16,9 +20,32 @@ export interface DecodedDocument<A> {
   readonly raw: JsonObject;
 }
 
-const JsonObjectSchema = Schema.Record(Schema.String, Schema.Unknown);
+const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
 const mapError = (operation: string, path: string, message: string) => () =>
   new SchemaDocumentError({ operation, path, message });
+
+const encodeSchemaObject = <A>(path: string, schema: Schema.Codec<A, unknown>, value: A) =>
+  Schema.encodeUnknownEffect(schema)(value).pipe(
+    Effect.flatMap((encoded) => Schema.decodeUnknownEffect(JsonObjectSchema)(encoded)),
+    Effect.mapError(mapError("encode", path, "Schema document must encode to a JSON object.")),
+  );
+
+const defineOwnJsonProperties = (target: JsonObject, source: JsonObject): void => {
+  for (const key of Object.keys(source)) {
+    Object.defineProperty(target, key, {
+      value: source[key],
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+};
+
+const copyJsonObject = (source: JsonObject): JsonObject => {
+  const target: JsonObject = {};
+  defineOwnJsonProperties(target, source);
+  return target;
+};
 
 /** Decode an owned JSON object while retaining its unknown fields for forward-compatible updates. */
 export const decodeSchemaDocument = <A>(schema: Schema.Decoder<A>, raw: JsonObject) =>
@@ -52,47 +79,39 @@ export const updateSchemaDocument = Effect.fn("SchemaDocument.update")(function*
   update: (document: DecodedDocument<A>) => A,
 ) {
   const documents = yield* JsonDocumentStore;
-  let decodedValue: A | undefined;
-  let schemaFailure: SchemaDocumentError | undefined;
-  yield* documents
-    .updateObject(path, (raw) => {
-      const decoded = Schema.decodeUnknownOption(schema)(raw);
-      if (decoded._tag === "None") {
-        schemaFailure = new SchemaDocumentError({
-          operation: "decode",
-          path,
-          message: "Unable to decode schema document.",
-        });
-        return raw;
-      }
-      const value = update({ value: decoded.value, raw });
-      const encoded = Schema.encodeUnknownOption(schema)(value);
-      if (encoded._tag === "None") {
-        schemaFailure = new SchemaDocumentError({
-          operation: "encode",
-          path,
-          message: "Unable to encode schema document.",
-        });
-        return raw;
-      }
-      const encodedObject = Schema.decodeUnknownOption(JsonObjectSchema)(encoded.value);
-      if (encodedObject._tag === "None") {
-        schemaFailure = new SchemaDocumentError({
-          operation: "encode",
-          path,
-          message: "Schema document must encode to an object.",
-        });
-        return raw;
-      }
-      decodedValue = value;
-      return { ...raw, ...encodedObject.value };
-    })
-    .pipe(Effect.mapError(mapError("update", path, "Unable to update schema document.")));
-  if (schemaFailure) return yield* schemaFailure;
-  if (decodedValue !== undefined) return decodedValue;
-  return yield* new SchemaDocumentError({
-    operation: "update",
-    path,
-    message: "Schema document update produced no value.",
-  });
+  const modifyObject = documents.modifyObject;
+  if (modifyObject === undefined) {
+    return yield* new SchemaDocumentError({
+      operation: "update",
+      path,
+      message: "Atomic JSON document updates are unavailable.",
+    });
+  }
+  return yield* modifyObject(path, (raw) =>
+    Effect.gen(function* () {
+      const current = yield* Schema.decodeUnknownEffect(schema)(raw).pipe(
+        Effect.mapError(mapError("decode", path, "Unable to decode schema document.")),
+      );
+      const currentEncoded = yield* encodeSchemaObject(path, schema, current);
+      const value = yield* Effect.try({
+        try: () => update({ value: current, raw }),
+        catch: mapError("update", path, "Unable to update schema document."),
+      });
+      const encoded = yield* encodeSchemaObject(path, schema, value);
+      const document = copyJsonObject(raw);
+      for (const key of Object.keys(currentEncoded)) delete document[key];
+      defineOwnJsonProperties(document, encoded);
+      return { value, document } satisfies JsonDocumentModification<A>;
+    }),
+  ).pipe(
+    Effect.mapError((error) =>
+      error instanceof SchemaDocumentError
+        ? error
+        : new SchemaDocumentError({
+            operation: "update",
+            path,
+            message: "Unable to update schema document.",
+          }),
+    ),
+  );
 });

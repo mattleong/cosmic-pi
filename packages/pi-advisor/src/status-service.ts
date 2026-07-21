@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import { interruptFiber } from "./boundary/clock.ts";
 import type { AdvisorEffectExecutor } from "./boundary/executor.ts";
@@ -16,18 +17,30 @@ export interface AdvisorStatusStartOptions {
   readonly render: (frame: number) => void;
 }
 
+export class AdvisorStatusRenderError extends Schema.TaggedErrorClass<AdvisorStatusRenderError>()(
+  "AdvisorStatusRenderError",
+  { message: Schema.String },
+) {}
+
 export const advisorStatusFramesEffect = (
   options: Pick<AdvisorStatusStartOptions, "delayMs" | "intervalMs" | "animated" | "frameCount">,
   render: (frame: number) => void,
 ): Effect.Effect<void> =>
   Effect.suspend(() => {
     let frame = 1;
-    const animation = Effect.sync(() => {
-      render(frame % Math.max(1, options.frameCount));
+    const renderFrame = (nextFrame: number): Effect.Effect<void> =>
+      Effect.try({
+        try: () => render(nextFrame),
+        catch: () =>
+          new AdvisorStatusRenderError({ message: "Advisor status rendering failed safely." }),
+      }).pipe(Effect.catch(() => Effect.void));
+    const animation = Effect.suspend(() => {
+      const nextFrame = frame % Math.max(1, options.frameCount);
       frame += 1;
+      return renderFrame(nextFrame);
     }).pipe(Effect.repeat(Schedule.fixed(options.intervalMs)), Effect.asVoid);
     return Effect.sleep(options.delayMs).pipe(
-      Effect.andThen(Effect.sync(() => render(0))),
+      Effect.andThen(renderFrame(0)),
       Effect.andThen(
         options.animated
           ? Effect.sleep(options.intervalMs).pipe(Effect.andThen(animation))

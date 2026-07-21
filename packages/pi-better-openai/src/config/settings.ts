@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import type { JsonObject } from "pi-cosmic-core";
 import { isRecord } from "../utils.ts";
 import type { ResolvedConfig } from "./schema.ts";
 import {
@@ -180,30 +181,45 @@ export type SettingPatchContext = {
   desiredActive?: boolean;
 };
 
-export const applySettingToRawConfig = Effect.fn("OpenAIConfig.applySetting")(function* (
-  current: Record<string, unknown>,
+export const prepareSettingUpdate = Effect.fn("OpenAIConfig.prepareSettingUpdate")(function* (
   id: string,
   rawValue: string,
   context: SettingPatchContext = {},
 ) {
-  const next: Record<string, unknown> = { ...current };
   if (id === "fast.enabled") {
     const enabled = yield* boolean(id)(rawValue);
-    if (context.persistState) {
-      next.active = context.active ?? enabled;
-      next.desiredActive = context.desiredActive ?? enabled;
-    }
-    return next;
+    return (current: JsonObject): JsonObject => ({
+      ...current,
+      ...(context.persistState
+        ? {
+            active: context.active ?? enabled,
+            desiredActive: context.desiredActive ?? enabled,
+          }
+        : {}),
+    });
   }
   const descriptor = SETTINGS_OPTION_BY_ID.get(id);
-  if (!descriptor) return next;
+  if (!descriptor) return (current: JsonObject): JsonObject => ({ ...current });
   const parsedValue = yield* descriptor.decode(rawValue);
-  if (descriptor.section === "root") next[descriptor.key] = parsedValue;
-  else {
-    const currentSection = next[descriptor.section];
-    const section = isRecord(currentSection) ? { ...currentSection } : {};
-    section[descriptor.key] = parsedValue;
-    next[descriptor.section] = section;
-  }
-  return next;
+  return (current: JsonObject): JsonObject => {
+    const next: JsonObject = { ...current };
+    if (descriptor.section === "root") next[descriptor.key] = parsedValue;
+    else {
+      const currentSection = next[descriptor.section];
+      const section = isRecord(currentSection) ? { ...currentSection } : {};
+      section[descriptor.key] = parsedValue;
+      next[descriptor.section] = section;
+    }
+    return next;
+  };
+});
+
+export const applySettingToRawConfig = Effect.fn("OpenAIConfig.applySetting")(function* (
+  current: JsonObject,
+  id: string,
+  rawValue: string,
+  context: SettingPatchContext = {},
+) {
+  const update = yield* prepareSettingUpdate(id, rawValue, context);
+  return update(current);
 });

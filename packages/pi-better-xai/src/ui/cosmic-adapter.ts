@@ -3,7 +3,7 @@ import { createCosmicFooterClient } from "pi-cosmic-ui/client";
 import type { ResolvedConfig } from "../config.ts";
 import type * as MutableRef from "effect/MutableRef";
 import type { XaiProjection } from "../usage-controller.ts";
-import { xaiUsageFooterPrimitive, xaiUsageUiState } from "./primitives.ts";
+import { xaiUsageFooterPrimitive, xaiUsageUiStateFromProjection } from "./primitives.ts";
 
 export interface CosmicUiAdapter {
   readonly active: boolean;
@@ -21,9 +21,9 @@ export function createCosmicUiAdapter(options: {
       return client.active;
     },
     detectHost: client.query,
-    update(ctx, cfg) {
+    update(_ctx, _cfg) {
       if (!client.active) return;
-      const usage = xaiUsageFooterPrimitive(xaiUsageUiState(ctx, cfg, options.projection));
+      const usage = xaiUsageFooterPrimitive(xaiUsageUiStateFromProjection(options.projection));
       if (usage) client.upsert(usage);
       else client.remove("xai.usage");
     },

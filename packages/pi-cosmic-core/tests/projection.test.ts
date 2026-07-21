@@ -24,6 +24,20 @@ it.effect("publishes cloned deeply frozen plain snapshots", () =>
   }),
 );
 
+it("preserves an own __proto__ property without changing the clone prototype", () => {
+  const source = Object.defineProperty({ ok: true }, "__proto__", {
+    value: { polluted: true },
+    enumerable: true,
+  });
+  const snapshot = freezeSnapshot(source);
+
+  expect(Object.hasOwn(snapshot, "__proto__")).toBe(true);
+  expect(Object.getOwnPropertyDescriptor(snapshot, "__proto__")?.value).toEqual({ polluted: true });
+  expect(Object.getPrototypeOf(snapshot)).toBe(Object.prototype);
+  expect("polluted" in snapshot).toBe(false);
+  expect(Object.isFrozen(Object.getOwnPropertyDescriptor(snapshot, "__proto__")?.value)).toBe(true);
+});
+
 it.effect("does not publish or commit a failed transition", () =>
   Effect.gen(function* () {
     const projection = yield* makeFrozenProjection({ count: 1 }, (state) => ({
