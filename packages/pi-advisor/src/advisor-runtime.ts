@@ -133,16 +133,11 @@ interface ActiveCheckpointFinalization {
   finalizationQueued: boolean;
 }
 
-interface AdvisorChildReleaseState {
-  aborted: boolean;
-}
-
 interface AdvisorChildEvent {
   readonly epoch: number;
   readonly type: "stream" | "tool-round" | "message-end";
   readonly streamKind?: "thinking" | "text" | "tool";
   readonly text?: string;
-  readonly toolResults?: number;
   readonly stopReason?: string;
   readonly errorMessage?: string;
   readonly usage?: unknown;
@@ -157,7 +152,7 @@ interface ActiveAdvisorChild {
   epoch: number;
   readonly session: AgentSession;
   readonly scope: Scope.Scope;
-  readonly releaseState: AdvisorChildReleaseState;
+  readonly releaseState: { aborted: boolean };
   pendingEvents: number;
   readonly events: SynchronousIngress<AdvisorChildEvent>;
   readonly finalizations: SynchronousIngress<AdvisorFinalizationCompletion>;
@@ -363,7 +358,7 @@ export class AdvisorRuntime {
           ),
         ),
       );
-      const result = yield* promptEffect.pipe(
+      yield* promptEffect.pipe(
         Effect.andThen(self.awaitChildEventsEffect(checkpointEpoch)),
         Effect.andThen(
           Effect.suspend(() =>
@@ -402,7 +397,6 @@ export class AdvisorRuntime {
         ),
         Effect.withSpan("pi-advisor.child.checkpoint"),
       );
-      void result;
       if (self.resetRequiredReason) {
         const reason = self.resetRequiredReason;
         yield* self.abortEffect();
@@ -466,7 +460,7 @@ export class AdvisorRuntime {
     return Effect.uninterruptibleMask(() =>
       Effect.gen(function* () {
         const scope = yield* Scope.fork(self.resourceScope);
-        const releaseState: AdvisorChildReleaseState = { aborted: false };
+        const releaseState = { aborted: false };
         let committed = false;
         const close = Scope.close(scope, Exit.void);
         yield* Scope.addFinalizer(
@@ -736,7 +730,6 @@ export class AdvisorRuntime {
           this.offerChildEvent(child, {
             epoch: child.epoch,
             type: "tool-round",
-            toolResults: event.toolResults.length,
           });
         return;
       }
@@ -824,12 +817,12 @@ export class AdvisorRuntime {
       if (Option.isNone(usage)) return;
       isolateCallback(() =>
         this.options?.onUsage?.({
-          cacheReadTokens: numberValue(usage.value.cacheRead),
-          cacheWriteTokens: numberValue(usage.value.cacheWrite),
-          cost: numberValue(usage.value.cost?.total),
-          inputTokens: numberValue(usage.value.input),
-          outputTokens: numberValue(usage.value.output),
-          totalTokens: numberValue(usage.value.totalTokens),
+          cacheReadTokens: usage.value.cacheRead ?? 0,
+          cacheWriteTokens: usage.value.cacheWrite ?? 0,
+          cost: usage.value.cost?.total ?? 0,
+          inputTokens: usage.value.input ?? 0,
+          outputTokens: usage.value.output ?? 0,
+          totalTokens: usage.value.totalTokens ?? 0,
         }),
       );
     }).pipe(
@@ -1322,9 +1315,6 @@ function isToolCallDelta(value: unknown): value is { delta: string } {
   );
 }
 
-function numberValue(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
 function isolateCallback(action: () => void): void {
   try {
     action();
@@ -1335,7 +1325,4 @@ function isolateCallback(action: () => void): void {
 
 export const _advisorRuntimeTest = {
   buildCheckpointPrompt,
-  buildCheckpointFinalizationPrompt,
-  buildObservationSteer,
-  unsafeToolNames,
 };

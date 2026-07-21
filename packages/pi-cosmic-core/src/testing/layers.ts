@@ -1,3 +1,4 @@
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -32,6 +33,22 @@ export interface InMemoryDocuments {
   readonly documents: Map<string, JsonObject>;
   readonly service: AtomicJsonDocumentStoreShape;
   readonly layer: Layer.Layer<JsonDocumentStore>;
+  readonly injectBeforeNextUpdate: (update: (current: JsonObject) => JsonObject) => void;
+  readonly blockNextUpdateBeforeCommit: (
+    started: Deferred.Deferred<void>,
+    release: Deferred.Deferred<void>,
+  ) => void;
+  readonly blockNextUpdateAtCommit: (
+    started: Deferred.Deferred<void>,
+    release: Deferred.Deferred<void>,
+  ) => void;
+  readonly updateCount: number;
+}
+
+interface JsonDocumentUpdateGate {
+  readonly _tag: "BeforeCommit" | "Committed";
+  readonly started: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
 }
 
 const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
@@ -48,6 +65,12 @@ class JsonDocumentMapView implements Map<string, JsonObject> {
 
   constructor(stored: Map<string, JsonObject>) {
     this.stored = stored;
+  }
+
+  private snapshot(): Map<string, JsonObject> {
+    return new Map(
+      Array.from(this.stored, ([path, document]) => [path, cloneInitialDocument(document)]),
+    );
   }
 
   get size(): number {
@@ -77,12 +100,7 @@ class JsonDocumentMapView implements Map<string, JsonObject> {
   }
 
   entries(): MapIterator<[string, JsonObject]> {
-    return new Map(
-      Array.from(
-        this.stored,
-        ([path, document]) => [path, cloneInitialDocument(document)] as const,
-      ),
-    ).entries();
+    return this.snapshot().entries();
   }
 
   keys(): MapIterator<string> {
@@ -90,12 +108,7 @@ class JsonDocumentMapView implements Map<string, JsonObject> {
   }
 
   values(): MapIterator<JsonObject> {
-    return new Map(
-      Array.from(
-        this.stored,
-        ([path, document]) => [path, cloneInitialDocument(document)] as const,
-      ),
-    ).values();
+    return this.snapshot().values();
   }
 
   forEach(
@@ -131,6 +144,9 @@ export function makeInMemoryDocuments(
   );
   const documents = new JsonDocumentMapView(storedDocuments);
   const pathSemaphores = new Map<string, Semaphore.Semaphore>();
+  let beforeNextUpdate: ((current: JsonObject) => JsonObject) | undefined;
+  let nextUpdateGate: JsonDocumentUpdateGate | undefined;
+  let updateCount = 0;
   const semaphoreFor = (path: string): Semaphore.Semaphore => {
     const existing = pathSemaphores.get(path);
     if (existing !== undefined) return existing;
@@ -141,15 +157,28 @@ export function makeInMemoryDocuments(
   const modifyObject: AtomicJsonDocumentStoreShape["modifyObject"] = (path, modify) =>
     semaphoreFor(path).withPermit(
       Effect.gen(function* () {
+        updateCount++;
         const current = storedDocuments.get(path);
         const isolated =
           current === undefined ? ({} as JsonObject) : yield* cloneDocument("read", path, current);
-        const { value, document, afterCommit } = yield* modify(isolated);
+        const atomicCurrent = beforeNextUpdate ? beforeNextUpdate(isolated) : isolated;
+        beforeNextUpdate = undefined;
+        const { value, document, afterCommit } = yield* modify(atomicCurrent);
         const stored = yield* cloneDocument("update", path, document);
-        yield* Effect.sync(() => void storedDocuments.set(path, stored)).pipe(
-          Effect.andThen(afterCommit ?? Effect.void),
-          Effect.uninterruptible,
-        );
+        const gate = nextUpdateGate;
+        nextUpdateGate = undefined;
+        if (gate?._tag === "BeforeCommit") {
+          yield* Deferred.succeed(gate.started, undefined);
+          yield* Deferred.await(gate.release);
+        }
+        yield* Effect.gen(function* () {
+          yield* Effect.sync(() => void storedDocuments.set(path, stored));
+          if (gate?._tag === "Committed") {
+            yield* Deferred.succeed(gate.started, undefined);
+            yield* Deferred.await(gate.release);
+          }
+          yield* afterCommit ?? Effect.void;
+        }).pipe(Effect.uninterruptible);
         return value;
       }),
     );
@@ -192,6 +221,18 @@ export function makeInMemoryDocuments(
     documents,
     service,
     layer: Layer.succeed(JsonDocumentStore, JsonDocumentStore.of(service)),
+    injectBeforeNextUpdate(update) {
+      beforeNextUpdate = update;
+    },
+    blockNextUpdateBeforeCommit(started, release) {
+      nextUpdateGate = { _tag: "BeforeCommit", started, release };
+    },
+    blockNextUpdateAtCommit(started, release) {
+      nextUpdateGate = { _tag: "Committed", started, release };
+    },
+    get updateCount() {
+      return updateCount;
+    },
   };
 }
 
@@ -214,6 +255,9 @@ export type JsonHttpTestRequest = Omit<
   "responseSchema"
 > & { readonly responseSchema: Schema.Constraint };
 
+const jsonHttpError = (operation: JsonHttpError["operation"], message: string) => () =>
+  new JsonHttpError({ operation, message });
+
 export const jsonHttpTestLayer = (
   handle: (input: JsonHttpTestRequest) => Effect.Effect<JsonHttpTestResponse, JsonHttpError>,
 ): Layer.Layer<JsonHttpClient> => {
@@ -228,13 +272,7 @@ export const jsonHttpTestLayer = (
           "rawBody" in response
             ? response.rawBody
             : yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(response.body).pipe(
-                Effect.mapError(
-                  () =>
-                    new JsonHttpError({
-                      operation: "response",
-                      message: "Unable to read HTTP response.",
-                    }),
-                ),
+                Effect.mapError(jsonHttpError("response", "Unable to read HTTP response.")),
               );
         return {
           _tag: "Rejected",
@@ -247,22 +285,10 @@ export const jsonHttpTestLayer = (
           ? response.body
           : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
               response.rawBody,
-            ).pipe(
-              Effect.mapError(
-                () =>
-                  new JsonHttpError({
-                    operation: "response",
-                    message: "Unable to read HTTP response.",
-                  }),
-              ),
-            );
+            ).pipe(Effect.mapError(jsonHttpError("response", "Unable to read HTTP response.")));
       const body = yield* Schema.decodeUnknownEffect(input.responseSchema)(rawBody).pipe(
         Effect.mapError(
-          () =>
-            new JsonHttpError({
-              operation: "decode",
-              message: "HTTP response did not match the expected schema.",
-            }),
+          jsonHttpError("decode", "HTTP response did not match the expected schema."),
         ),
       );
       return { _tag: "Accepted", status: response.status, body } as const;

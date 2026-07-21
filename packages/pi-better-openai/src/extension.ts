@@ -14,9 +14,11 @@ import {
   makePiSessionRuntimeSlot,
   nodePlatformLayer,
 } from "pi-cosmic-core";
+import { createCosmicFooterClient } from "pi-cosmic-ui/client";
 import { SharpAdapter } from "./boundary/sharp.ts";
-import { safeHostSignal, safeHostUi, tryHostUi } from "./boundary/host-ui.ts";
+import { ignoreHostUi, safeHostSignal, safeHostUi } from "./boundary/host-ui.ts";
 import {
+  CONFIG_BASENAME,
   DEFAULT_CONFIG,
   DEFAULT_IMAGE_CONFIG,
   configPaths,
@@ -35,12 +37,15 @@ import {
 } from "./fast-controller.ts";
 import { FastModeService } from "./fast-service.ts";
 import { FAST_SERVICE_TIER, SUPPORTED_FAST_MODELS } from "./fast-models.ts";
-import { createFooterController, type FooterController } from "./footer/controller.ts";
-import { abbreviateHomePath } from "./footer-layout.ts";
+import { abbreviateHomePath, createFooterController } from "./footer/controller.ts";
 import { registerOpenAIImage, OpenAIImageService, _imageTest } from "./image.ts";
-import { CONFIG_BASENAME } from "./identity.ts";
 import { registerSettingsController } from "./settings/controller.ts";
-import { createCosmicUiAdapter, type CosmicUiAdapter } from "./ui/cosmic-adapter.ts";
+import {
+  fastModeFooterPrimitive,
+  fastModeUiState,
+  openAIUsageFooterPrimitive,
+  openAIUsageUiState,
+} from "./ui/primitives.ts";
 import {
   OpenAIBoundaryError,
   OpenAIUsageService,
@@ -52,18 +57,11 @@ import {
 } from "./usage-controller.ts";
 import { formatPercent, formatUsageSnapshot, parseUsageSnapshot } from "./usage.ts";
 
-const COMMAND = "fast";
-const OPENAI_STATUS_COMMAND = "openai-usage";
-const FLAG = "fast";
-const SERVICE_TIER = FAST_SERVICE_TIER;
+const FAST_ID = "fast";
 
 export interface BetterOpenAIExtensionDependencies {
   readonly startupEffect: (generation: number) => Effect.Effect<void, never, OpenAIUsageService>;
 }
-
-const defaultDependencies: BetterOpenAIExtensionDependencies = {
-  startupEffect: () => OpenAIUsageService.use(() => Effect.void),
-};
 
 const hasTerminalUI = (ctx: ExtensionContext): boolean => {
   try {
@@ -81,22 +79,14 @@ const isProjectTrusted = (ctx: ExtensionContext): boolean => {
     return false;
   }
 };
-type SessionHostContext = {
-  readonly cwd: string;
-  readonly signal: AbortSignal | undefined;
-  readonly aborted: boolean;
-};
-type SessionHostCapture =
-  | { readonly _tag: "Success"; readonly value: SessionHostContext }
-  | { readonly _tag: "Failure"; readonly error: OpenAIBoundaryError };
-const captureSessionHostContext = (ctx: ExtensionContext): SessionHostCapture => {
+const captureSessionHostContext = (ctx: ExtensionContext) => {
   try {
     const cwd = ctx.cwd;
     const signal = ctx.signal;
     const aborted = signal?.aborted === true;
     if (typeof cwd !== "string" || cwd.length === 0)
       throw new Error("The host returned an invalid working directory.");
-    return { _tag: "Success", value: { cwd, signal, aborted } };
+    return { _tag: "Success", value: { cwd, signal, aborted } } as const;
   } catch {
     return {
       _tag: "Failure",
@@ -104,7 +94,7 @@ const captureSessionHostContext = (ctx: ExtensionContext): SessionHostCapture =>
         operation: "session-context",
         message: "Unable to capture the Pi session context.",
       }),
-    };
+    } as const;
   }
 };
 const requiredConfig = (projection: MutableRef.MutableRef<OpenAIProjection>): ResolvedConfig => {
@@ -117,7 +107,9 @@ const requiredConfig = (projection: MutableRef.MutableRef<OpenAIProjection>): Re
 };
 
 export default function betterOpenAI(pi: ExtensionAPI): void {
-  betterOpenAIWithDependencies(pi, defaultDependencies);
+  betterOpenAIWithDependencies(pi, {
+    startupEffect: () => OpenAIUsageService.use(() => Effect.void),
+  });
 }
 
 /** Internal seam for deterministic lifecycle/finalizer tests. */
@@ -135,24 +127,31 @@ export function betterOpenAIWithDependencies(
   const updateContext = (ctx: ExtensionContext) => {
     if (currentContext) MutableRef.set(currentContext, ctx);
   };
-  let footerController: FooterController;
-  let cosmicUiAdapter: CosmicUiAdapter;
+  const cosmicUi = createCosmicFooterClient(pi.events, "pi-better-openai");
   const config = (_ctx: ExtensionContext) => requiredConfig(projection);
+  const updateCosmicUi = (ctx: ExtensionContext, cfg: ResolvedConfig) => {
+    if (!cosmicUi.active) return;
+    const fast = fastModeFooterPrimitive(fastModeUiState(ctx, MutableRef.get(fastProjection)));
+    const usage = openAIUsageFooterPrimitive(openAIUsageUiState(ctx, cfg, projection));
+    if (fast) cosmicUi.upsert(fast);
+    else cosmicUi.remove("openai.fast");
+    if (usage) cosmicUi.upsert(usage);
+    else cosmicUi.remove("openai.usage");
+  };
   const updateFooter = (fallback: ExtensionContext) => {
     const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
     const cfg = MutableRef.get(projection).config;
     if (!cfg) return;
-    if (cosmicUiAdapter.active) cosmicUiAdapter.update(ctx, cfg);
+    if (cosmicUi.active) updateCosmicUi(ctx, cfg);
     else footerController.update(ctx);
   };
-  footerController = createFooterController({
+  const footerController = createFooterController({
     pi,
     config,
     fastProjection,
     projection,
     hasTerminalUI,
   });
-  cosmicUiAdapter = createCosmicUiAdapter({ pi, fastProjection, projection });
 
   let startGeneration = 0;
   let sessionActive = false;
@@ -160,8 +159,6 @@ export function betterOpenAIWithDependencies(
     readonly ctx: ExtensionContext;
     readonly context: MutableRef.MutableRef<ExtensionContext>;
     readonly cwd: string;
-    readonly signal: AbortSignal | undefined;
-    readonly aborted: boolean;
     readonly generation: number;
     readonly projectTrusted: boolean;
   };
@@ -176,7 +173,7 @@ export function betterOpenAIWithDependencies(
       },
     });
     const fast = FastModeService.layer({
-      serviceTier: SERVICE_TIER,
+      serviceTier: FAST_SERVICE_TIER,
       projection: fastProjection,
       registerInjectionIngress: (offer) => {
         recordFastInjection = offer;
@@ -207,14 +204,14 @@ export function betterOpenAIWithDependencies(
         .pipe(
           Effect.andThen(
             FastModeService.use((service) =>
-              service.initialize(ctx, config(ctx), pi.getFlag(FLAG) === true),
+              service.initialize(ctx, config(ctx), pi.getFlag(FAST_ID) === true),
             ),
           ),
         ),
     onActivated: ({ ctx }) => {
       sessionActive = true;
-      if (hasTerminalUI(ctx)) cosmicUiAdapter.detectHost();
-      else cosmicUiAdapter.shutdown();
+      if (hasTerminalUI(ctx)) cosmicUi.query();
+      else cosmicUi.shutdown();
       footerController.refreshTotals(ctx);
       updateFooter(ctx);
       const fast = MutableRef.get(fastProjection);
@@ -226,7 +223,7 @@ export function betterOpenAIWithDependencies(
     onDeactivated: ({ context }) => {
       sessionActive = false;
       if (currentContext === context) currentContext = undefined;
-      cosmicUiAdapter.shutdown();
+      cosmicUi.shutdown();
       resetProjection(projection);
       MutableRef.set(fastProjection, initialFastSnapshot());
     },
@@ -244,12 +241,12 @@ export function betterOpenAIWithDependencies(
           }),
         );
 
-  pi.registerFlag(FLAG, {
+  pi.registerFlag(FAST_ID, {
     description: "Start with OpenAI fast mode enabled (service_tier=priority)",
     type: "boolean",
     default: false,
   });
-  pi.registerCommand(COMMAND, {
+  pi.registerCommand(FAST_ID, {
     description: "Toggle OpenAI fast mode",
     handler: (args, ctx) => {
       updateContext(ctx);
@@ -262,19 +259,17 @@ export function betterOpenAIWithDependencies(
         FastModeService.use((service) => service.setDesired(ctx, desired)).pipe(
           Effect.tap(() =>
             Effect.gen(function* () {
-              yield* tryHostUi("fast.render", () => updateFooter(ctx)).pipe(
-                Effect.catchTag("OpenAIHostUiError", () => Effect.void),
-              );
+              yield* ignoreHostUi("fast.render", () => updateFooter(ctx));
               const fast = MutableRef.get(fastProjection);
               const active = isFastActive(ctx, fast);
-              yield* tryHostUi("fast.notify", () =>
+              yield* ignoreHostUi("fast.notify", () =>
                 ctx.ui.notify(
                   fast.desiredActive && !active
                     ? unsupportedRequestMessage(ctx)
                     : fastStateText(ctx, fast),
                   fast.desiredActive && !active ? "warning" : "info",
                 ),
-              ).pipe(Effect.catchTag("OpenAIHostUiError", () => Effect.void));
+              );
             }),
           ),
         ),
@@ -282,7 +277,7 @@ export function betterOpenAIWithDependencies(
       );
     },
   });
-  pi.registerCommand(OPENAI_STATUS_COMMAND, {
+  pi.registerCommand("openai-usage", {
     description: "Show OpenAI subscription usage status",
     handler: (_args, ctx) => {
       updateContext(ctx);
@@ -297,7 +292,7 @@ export function betterOpenAIWithDependencies(
   const formatDebugStatus = (ctx: ExtensionContext) => {
     const cfg = config(ctx);
     return [
-      ...fastDebugLines(ctx, MutableRef.get(fastProjection), SERVICE_TIER),
+      ...fastDebugLines(ctx, MutableRef.get(fastProjection), FAST_SERVICE_TIER),
       `Footer mode: ${cfg.footer.mode}`,
       "",
       formatDebug(projection, ctx),
@@ -330,7 +325,7 @@ export function betterOpenAIWithDependencies(
       return slot.shutdown();
     }
     const projectTrusted = isProjectTrusted(ctx);
-    cosmicUiAdapter.shutdown();
+    cosmicUi.shutdown();
     resetProjection(projection);
     MutableRef.set(fastProjection, initialFastSnapshot());
     footerController.resetTotals();
@@ -344,8 +339,6 @@ export function betterOpenAIWithDependencies(
           ctx,
           context,
           cwd,
-          signal,
-          aborted,
           generation: ++startGeneration,
           projectTrusted,
         },
@@ -406,7 +399,7 @@ export function betterOpenAIWithDependencies(
     );
   });
   pi.on("session_shutdown", () => {
-    cosmicUiAdapter.shutdown();
+    cosmicUi.shutdown();
     footerController.invalidateContextUsage();
     footerController.invalidateSessionName();
     return slot.shutdown();
@@ -417,22 +410,17 @@ export function betterOpenAIWithDependencies(
       event,
       ctx,
       MutableRef.get(fastProjection),
-      SERVICE_TIER,
+      FAST_SERVICE_TIER,
       recordFastInjection,
     );
   });
-  pi.on("message_start", (_event, ctx) => {
+  const invalidateContextUsage = (_event: unknown, ctx: ExtensionContext) => {
     updateContext(ctx);
     footerController.invalidateContextUsage();
-  });
-  pi.on("message_update", (_event, ctx) => {
-    updateContext(ctx);
-    footerController.invalidateContextUsage();
-  });
-  pi.on("message_end", (_event, ctx) => {
-    updateContext(ctx);
-    footerController.invalidateContextUsage();
-  });
+  };
+  pi.on("message_start", invalidateContextUsage);
+  pi.on("message_update", invalidateContextUsage);
+  pi.on("message_end", invalidateContextUsage);
 }
 
 export const _test = {
@@ -440,7 +428,7 @@ export const _test = {
   SUPPORTED_FAST_MODELS,
   DEFAULT_CONFIG,
   DEFAULT_IMAGE_CONFIG,
-  SERVICE_TIER,
+  SERVICE_TIER: FAST_SERVICE_TIER,
   configPaths,
   abbreviateHomePath,
   supportsFast,

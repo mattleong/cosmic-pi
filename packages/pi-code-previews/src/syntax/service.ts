@@ -13,7 +13,10 @@ import {
   installSyntaxRequests,
   publishSyntaxProjection,
   type CodePreviewSyntaxSnapshot,
+  type ShikiStatus,
 } from "./projection";
+
+export type { ShikiStatus } from "./projection";
 
 const PRELOADED_SHIKI_LANGUAGES = [
   "bash",
@@ -59,16 +62,6 @@ type LanguageDecision =
     }
   | { readonly kind: "Notify"; readonly callbacks: readonly (() => void)[] }
   | undefined;
-
-export type ShikiStatus = {
-  initialized: boolean;
-  cacheSize: number;
-  cacheLimit: number;
-  maxHighlightChars: number;
-  loadedLanguages: number;
-  pendingLanguages: number;
-  statusVersion: number;
-};
 
 export interface CodePreviewSyntaxServiceShape {
   readonly initialize: (theme: string) => Effect.Effect<void>;

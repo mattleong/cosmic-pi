@@ -78,11 +78,8 @@ export function snapshotHostAbortSignal(
         return Object.freeze({ signal: undefined, aborted: false, release: () => undefined });
       const controller = new AbortController();
       const forward = () => controller.abort();
-      let registered = false;
-      let released = false;
+      let registered = true;
       const release = () => {
-        if (released) return;
-        released = true;
         if (!registered) return;
         registered = false;
         callbacks.invoke(
@@ -92,7 +89,6 @@ export function snapshotHostAbortSignal(
         );
       };
       try {
-        registered = true;
         source.addEventListener("abort", forward, { once: true });
         if (source.aborted) controller.abort();
       } catch (error) {

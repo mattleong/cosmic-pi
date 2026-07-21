@@ -129,58 +129,42 @@ export function renderProviderUsageLine(
   return truncateToWidth(pieces.join(""), width, "");
 }
 
-export function renderOpenAIUsageLine(
+export const renderOpenAIUsageLine = (
   text: string,
   width: number,
   theme: CosmicFooterTheme,
   compact: boolean,
-): string {
-  return renderProviderUsageLine("OpenAI", text, width, theme, compact);
-}
+): string => renderProviderUsageLine("OpenAI", text, width, theme, compact);
 
-export function renderXaiUsageLine(
+export const renderXaiUsageLine = (
   text: string,
   width: number,
   theme: CosmicFooterTheme,
   compact: boolean,
-): string {
-  return renderProviderUsageLine("xAI", text, width, theme, compact);
-}
+): string => renderProviderUsageLine("xAI", text, width, theme, compact);
+
+const CONTRIBUTION_COLORS: Readonly<Record<string, string>> = {
+  model: "mdLink",
+  effort: "syntaxOperator",
+  location: "accent",
+  "openai.fast": "syntaxFunction",
+  branch: "syntaxType",
+  pullRequest: "mdLink",
+  git: "syntaxOperator",
+  session: "customMessageLabel",
+  "metrics.input": "syntaxVariable",
+  "metrics.output": "syntaxFunction",
+  "metrics.cacheRead": "syntaxType",
+  "metrics.cacheWrite": "syntaxKeyword",
+  "metrics.cost": "syntaxNumber",
+  extensions: "mdLink",
+};
 
 function contributionColor(contribution: CosmicFooterTextContribution): string {
   if (contribution.tone === "warning" || contribution.tone === "error") return contribution.tone;
-  switch (contribution.id) {
-    case "model":
-      return "mdLink";
-    case "effort":
-      return "syntaxOperator";
-    case "location":
-      return "accent";
-    case "openai.fast":
-      return "syntaxFunction";
-    case "branch":
-      return "syntaxType";
-    case "pullRequest":
-      return "mdLink";
-    case "git":
-      return "syntaxOperator";
-    case "session":
-      return "customMessageLabel";
-    case "metrics.input":
-      return "syntaxVariable";
-    case "metrics.output":
-      return "syntaxFunction";
-    case "metrics.cacheRead":
-      return "syntaxType";
-    case "metrics.cacheWrite":
-      return "syntaxKeyword";
-    case "metrics.cost":
-      return "syntaxNumber";
-    case "extensions":
-      return "mdLink";
-    default:
-      return "accent";
-  }
+  return Object.hasOwn(CONTRIBUTION_COLORS, contribution.id)
+    ? CONTRIBUTION_COLORS[contribution.id]!
+    : "accent";
 }
 
 function tone(
@@ -232,10 +216,7 @@ function fitContributions(
 ): CosmicFooterTextContribution[] {
   const kept = [...entries];
   while (kept.length > 1) {
-    const value = kept
-      .map((entry) => contributionText(entry, compact))
-      .filter(Boolean)
-      .join(" • ");
+    const value = rawContributionLine(kept, compact);
     if (visibleWidth(value) <= available) break;
     let lowest = 0;
     for (let index = 1; index < kept.length; index++) {
@@ -336,8 +317,7 @@ export function isTerminalImageLine(line: string): boolean {
 function surfaceLineCell(line: string, width: number): string {
   if (!line) return spaces(width);
   if (isTerminalImageLine(line)) return `\x1b[0m${line}`;
-  const clipped = truncateToWidth(line, width, "");
-  return clipped + spaces(width - visibleWidth(clipped));
+  return padTextToWidth(truncateToWidth(line, width, ""), width);
 }
 
 function stripLeadingCursorUp(line: string): string {
@@ -396,11 +376,11 @@ export function combineSurface(
     const surfacePart = leftImageLine
       ? spaces(surfaceWidth)
       : surfaceLineCell(surfaceLine, surfaceWidth);
-    if (renderSurfaceOnRight) {
-      lines.push(`${padTextToWidth(textPart, textWidth)}${spaces(gap)}${surfacePart}`);
-    } else {
-      lines.push(`${surfacePart}${spaces(gap)}${textPart}`);
-    }
+    lines.push(
+      renderSurfaceOnRight
+        ? `${padTextToWidth(textPart, textWidth)}${spaces(gap)}${surfacePart}`
+        : `${surfacePart}${spaces(gap)}${textPart}`,
+    );
   }
 
   if (leftImageLine && lines.length > 0) {

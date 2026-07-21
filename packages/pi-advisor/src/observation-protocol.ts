@@ -95,67 +95,11 @@ export class AdvisorObservationError extends Schema.TaggedErrorClass<AdvisorObse
   { message: Schema.String },
 ) {}
 
-interface ObservationBase {
-  epoch: number;
-  sequence: number;
-  parentTurnId: number;
-}
-
-export type AdvisorObservation =
-  | (ObservationBase & { type: "user"; text: string })
-  | (ObservationBase & { type: "assistant_text_delta"; text: string })
-  | (ObservationBase & {
-      type: "assistant_thinking_delta";
-      text: string;
-      opaque?: boolean | undefined;
-    })
-  | (ObservationBase & {
-      type: "assistant_final";
-      text: string;
-      toolCalls: readonly string[];
-    })
-  | (ObservationBase & { type: "tool_start"; toolCallId: string; toolName: string; args: string })
-  | (ObservationBase & {
-      type: "tool_update";
-      toolCallId: string;
-      toolName: string;
-      update: string;
-    })
-  | (ObservationBase & {
-      type: "tool_end";
-      toolCallId: string;
-      toolName: string;
-      result: string;
-      isError: boolean;
-      callMetadataOmitted?: boolean | undefined;
-    })
-  | (ObservationBase & { type: "turn_complete"; status: "stop" | "aborted" | "error" | "length" })
-  | (ObservationBase & { type: "compaction" | "tree"; marker: string })
-  | (ObservationBase & { type: "truncation"; marker: string })
-  | (ObservationBase & {
-      type: "trajectory_signal";
-      kind: string;
-      confidence: "strong";
-      reason: string;
-      evidence: string;
-      abortSafe: boolean;
-    })
-  | (ObservationBase & { type: "manual_checkpoint"; checkpointId: string; focus: string })
-  | (ObservationBase & {
-      type: "advisor_intervention";
-      findingIds: readonly string[];
-      action: "advice" | "guidance" | "perspective" | "revision" | "recovery";
-      requestSequence: number;
-    })
-  | (ObservationBase & {
-      type: "advisor_intervention_receipt";
-      findingIds: readonly string[];
-      requestSequence: number;
-    });
+export type AdvisorObservation = typeof AdvisorObservationWireSchema.Type;
 
 export type AdvisorObservationInput = AdvisorObservation extends infer Record
   ? Record extends AdvisorObservation
-    ? Omit<Record, keyof ObservationBase>
+    ? Omit<Record, keyof typeof ObservationBaseFields>
     : never
   : never;
 
@@ -252,34 +196,12 @@ export class AdvisorObservationBuffer {
 
   /** Snapshot a batch without removing it. Commit only after a coherent checkpoint succeeds. */
   peekThrough(sequence = this.nextSequence): ObservationBatch | undefined {
-    const selected = this.records.filter((record) => record.sequence <= sequence);
-    const omission =
+    return this.createBatch(
+      this.records.filter((record) => record.sequence <= sequence),
       this.omission?.sequence !== undefined && this.omission.sequence <= sequence
         ? this.omission
-        : undefined;
-    if (selected.length === 0 && !omission) return undefined;
-    const observations = [...selected];
-    if (omission) {
-      observations.push({
-        type: "truncation",
-        marker: OBSERVATION_OMISSION_MARKER,
-        epoch: this.epoch,
-        parentTurnId: omission.parentTurnId,
-        sequence: omission.sequence,
-      });
-      observations.sort((left, right) => left.sequence - right.sequence);
-    }
-    const first = observations[0];
-    const last = observations.at(-1);
-    if (!first || !last) return undefined;
-    return {
-      epoch: this.epoch,
-      firstSequence: first.sequence,
-      lastSequence: last.sequence,
-      observations,
-      rendered: renderObservations(observations),
-      truncated: Boolean(omission),
-    };
+        : undefined,
+    );
   }
 
   /** Snapshot only a live range without removing or committing it. */
@@ -296,6 +218,14 @@ export class AdvisorObservationBuffer {
       this.omission.sequence <= throughSequence
         ? this.omission
         : undefined;
+    return this.createBatch(observations, omission);
+  }
+
+  private createBatch(
+    observations: AdvisorObservation[],
+    omission: { sequence: number; parentTurnId: number } | undefined,
+  ): ObservationBatch | undefined {
+    if (observations.length === 0 && !omission) return undefined;
     if (omission) {
       observations.push({
         type: "truncation",
@@ -306,7 +236,6 @@ export class AdvisorObservationBuffer {
       });
       observations.sort((left, right) => left.sequence - right.sequence);
     }
-    if (observations.length === 0) return undefined;
     const first = observations[0];
     const last = observations.at(-1);
     if (!first || !last) return undefined;

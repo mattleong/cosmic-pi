@@ -8,10 +8,6 @@ export function parsePositiveInteger(value: string | undefined): number | undefi
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-export function positiveEnvInteger(name: string, fallback: number): number {
-  return parsePositiveInteger(environmentValue(name)) ?? fallback;
-}
-
 export function parseBoolean(value: string | undefined): boolean | undefined {
   switch (value?.trim().toLowerCase()) {
     case "1":

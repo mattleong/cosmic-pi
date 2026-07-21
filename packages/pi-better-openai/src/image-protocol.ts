@@ -31,15 +31,6 @@ const ProviderErrorEventSchema = Schema.Struct({
   message: Schema.optional(Schema.String),
 });
 const IgnoredEventSchema = Schema.Struct({ type: Schema.String });
-export const ImageStreamEventSchema = Schema.Union([
-  CompletedEventSchema,
-  ItemEventSchema,
-  PartialEventSchema,
-  FailedEventSchema,
-  ProviderErrorEventSchema,
-  IgnoredEventSchema,
-]);
-export type ImageStreamEvent = typeof ImageStreamEventSchema.Type;
 
 const EventDiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.String) });
 export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent")(function* (

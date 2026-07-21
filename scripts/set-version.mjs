@@ -1,6 +1,6 @@
-import { readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFile, writeFile } from "node:fs/promises";
+
+import { workspaceManifestPaths } from "./workspace-manifest-paths.mjs";
 
 const version = process.argv[2];
 const semverPattern =
@@ -10,15 +10,7 @@ if (!version || !semverPattern.test(version)) {
   throw new Error("Usage: pnpm version:set <semver>");
 }
 
-const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const packagesDir = join(rootDir, "packages");
-const packageDirectories = (await readdir(packagesDir, { withFileTypes: true }))
-  .filter((entry) => entry.isDirectory())
-  .map((entry) => join(packagesDir, entry.name))
-  .sort();
-const manifestPaths = [rootDir, ...packageDirectories].map((directory) =>
-  join(directory, "package.json"),
-);
+const manifestPaths = await workspaceManifestPaths();
 
 for (const manifestPath of manifestPaths) {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));

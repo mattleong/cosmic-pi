@@ -7,6 +7,13 @@ export type ShikiProjectionStatus = Readonly<{
   statusVersion: number;
 }>;
 
+export type ShikiStatus = ShikiProjectionStatus &
+  Readonly<{
+    cacheSize: number;
+    cacheLimit: number;
+    maxHighlightChars: number;
+  }>;
+
 /**
  * Immutable renderer metadata plus the one unavoidable synchronous Shiki capability.
  * The highlighter is never frozen or mutated by renderers except through Shiki's synchronous

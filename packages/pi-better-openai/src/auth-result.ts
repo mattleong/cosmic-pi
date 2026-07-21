@@ -1,22 +1,15 @@
-import * as Schema from "effect/Schema";
-
-const CredentialsSchema = Schema.Struct({
-  accessToken: Schema.String,
-  accountId: Schema.String,
-  source: Schema.Literals(["modelRegistry", "authFile"]),
-});
-
-export const CodexAuthResultSchema = Schema.Union([
-  Schema.TaggedStruct("Found", { credentials: CredentialsSchema }),
-  Schema.TaggedStruct("Missing", {}),
-  Schema.TaggedStruct("Unavailable", {
-    operation: Schema.String,
-    message: Schema.String,
-  }),
-  Schema.TaggedStruct("Malformed", {
-    operation: Schema.String,
-    message: Schema.String,
-  }),
-]);
-
-export type CodexAuthResult = typeof CodexAuthResultSchema.Type;
+export type CodexAuthResult =
+  | {
+      readonly _tag: "Found";
+      readonly credentials: {
+        readonly accessToken: string;
+        readonly accountId: string;
+        readonly source: "modelRegistry" | "authFile";
+      };
+    }
+  | { readonly _tag: "Missing" }
+  | {
+      readonly _tag: "Unavailable" | "Malformed";
+      readonly operation: string;
+      readonly message: string;
+    };

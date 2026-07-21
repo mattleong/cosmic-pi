@@ -9,8 +9,8 @@ import {
   type JsonDocumentModification,
   type JsonObject,
 } from "pi-cosmic-core";
-import { CONFIG_BASENAME } from "../identity.ts";
 import {
+  CONFIG_BASENAME,
   DEFAULT_CONFIG,
   DEFAULT_FOOTER_CONFIG,
   DEFAULT_IMAGE_CONFIG,
@@ -56,6 +56,8 @@ export const readRawConfig = Effect.fn("OpenAIConfig.readRawConfig")(function* (
 
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
+const clamp = (value: number, minimum: number, maximum: number) =>
+  Math.max(minimum, Math.min(maximum, value));
 
 /** Tolerant field-level wire decode: one malformed field never discards valid siblings. */
 function decodeConfig(value: unknown): ConfigFile {
@@ -141,14 +143,12 @@ function resolveConfigFiles(
     desiredActive,
     usage: {
       enabled: project?.usage?.enabled ?? global?.usage?.enabled ?? DEFAULT_USAGE_CONFIG.enabled,
-      refreshIntervalMs: Math.max(
+      refreshIntervalMs: clamp(
+        project?.usage?.refreshIntervalMs ??
+          global?.usage?.refreshIntervalMs ??
+          DEFAULT_USAGE_CONFIG.refreshIntervalMs,
         15_000,
-        Math.min(
-          10 * 60_000,
-          project?.usage?.refreshIntervalMs ??
-            global?.usage?.refreshIntervalMs ??
-            DEFAULT_USAGE_CONFIG.refreshIntervalMs,
-        ),
+        10 * 60_000,
       ),
       showOnlyOnSubscriptionModels:
         project?.usage?.showOnlyOnSubscriptionModels ??
@@ -176,12 +176,10 @@ function resolveConfigFiles(
         project?.image?.outputFormat ??
         global?.image?.outputFormat ??
         DEFAULT_IMAGE_CONFIG.outputFormat,
-      timeoutMs: Math.max(
+      timeoutMs: clamp(
+        project?.image?.timeoutMs ?? global?.image?.timeoutMs ?? DEFAULT_IMAGE_CONFIG.timeoutMs,
         30_000,
-        Math.min(
-          5 * 60_000,
-          project?.image?.timeoutMs ?? global?.image?.timeoutMs ?? DEFAULT_IMAGE_CONFIG.timeoutMs,
-        ),
+        5 * 60_000,
       ),
     },
   };
@@ -222,14 +220,6 @@ export const writeConfig = Effect.fn("OpenAIConfig.writeConfig")(function* (
 ) {
   const documents = yield* JsonDocumentStore;
   yield* documents.writeObject(path, config).pipe(Effect.mapError(mapError("write", path)));
-});
-
-export const updateConfig = Effect.fn("OpenAIConfig.updateConfig")(function* (
-  path: string,
-  update: (document: JsonObject) => JsonObject,
-) {
-  const documents = yield* JsonDocumentStore;
-  return yield* documents.updateObject(path, update).pipe(Effect.mapError(mapError("write", path)));
 });
 
 export const modifyConfig = Effect.fn("OpenAIConfig.modifyConfig")(function* <A, AfterCommitR>(

@@ -1,8 +1,16 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { safeAdvisorLabel } from "./advisor-label.ts";
-import { isRecord } from "./utils.ts";
+import { isOneOf, isRecord } from "./utils.ts";
 import {
+  ADVISOR_CONFIDENCES,
+  ADVISOR_EVIDENCE_BASES,
+  ADVISOR_FINDING_CATEGORIES,
+  ADVISOR_FINDING_STATUSES,
+  ADVISOR_SEVERITIES,
+  ADVISOR_SUGGESTION_KINDS,
+  ADVISOR_SUGGESTION_RELEVANCES,
+  ADVISOR_VERDICTS,
   formatAdvisorReview,
   MAX_ADVISOR_EVIDENCE_CHARS,
   MAX_ADVISOR_FINDINGS,
@@ -14,10 +22,8 @@ import {
   MAX_ADVISOR_SUMMARY_CHARS,
   sanitizeAdvisorReview,
   type AdvisorFinding,
-  type AdvisorFindingCategory,
   type AdvisorReview,
   type AdvisorSuggestion,
-  type AdvisorSuggestionKind,
 } from "./review.ts";
 
 export const ADVISOR_REVIEW_MESSAGE_TYPE = "advisor-review";
@@ -90,7 +96,7 @@ export function registerAdvisorReviewRenderer(pi: ExtensionAPI): void {
 function normalizeReviewForDisplay(value: unknown): AdvisorReview | undefined {
   if (
     !isRecord(value) ||
-    (value.verdict !== "pass" && value.verdict !== "suggest" && value.verdict !== "revise") ||
+    !isOneOf(value.verdict, ADVISOR_VERDICTS) ||
     typeof value.summary !== "string" ||
     !value.summary.trim() ||
     !Array.isArray(value.findings)
@@ -104,9 +110,7 @@ function normalizeReviewForDisplay(value: unknown): AdvisorReview | undefined {
   for (const finding of value.findings.slice(0, MAX_ADVISOR_FINDINGS)) {
     if (
       !isRecord(finding) ||
-      (finding.severity !== "nit" &&
-        finding.severity !== "concern" &&
-        finding.severity !== "blocker" &&
+      (!isOneOf(finding.severity, ADVISOR_SEVERITIES) &&
         finding.severity !== "high" &&
         finding.severity !== "medium") ||
       typeof finding.issue !== "string" ||
@@ -117,24 +121,17 @@ function normalizeReviewForDisplay(value: unknown): AdvisorReview | undefined {
       return undefined;
     }
     findings.push({
-      category: normalizeCategory(finding.category),
+      category: isOneOf(finding.category, ADVISOR_FINDING_CATEGORIES)
+        ? finding.category
+        : "correctness",
       ...(typeof finding.id === "string" && /^af_[a-f\d]{32}$/u.test(finding.id)
         ? { id: finding.id }
         : {}),
-      ...(finding.status === "open" ||
-      finding.status === "acknowledged" ||
-      finding.status === "resolved" ||
-      finding.status === "superseded"
-        ? { status: finding.status }
-        : {}),
-      ...(finding.confidence === "low" ||
-      finding.confidence === "medium" ||
-      finding.confidence === "high"
+      ...(isOneOf(finding.status, ADVISOR_FINDING_STATUSES) ? { status: finding.status } : {}),
+      ...(isOneOf(finding.confidence, ADVISOR_CONFIDENCES)
         ? { confidence: finding.confidence }
         : {}),
-      ...(finding.evidenceBasis === "none" ||
-      finding.evidenceBasis === "inferred" ||
-      finding.evidenceBasis === "direct"
+      ...(isOneOf(finding.evidenceBasis, ADVISOR_EVIDENCE_BASES)
         ? { evidenceBasis: finding.evidenceBasis }
         : {}),
       severity:
@@ -167,10 +164,8 @@ function normalizeSuggestions(value: unknown): AdvisorSuggestion[] | undefined {
   for (const suggestion of value.slice(0, MAX_ADVISOR_SUGGESTIONS)) {
     if (
       !isRecord(suggestion) ||
-      !isSuggestionKind(suggestion.kind) ||
-      (suggestion.relevance !== "possible" &&
-        suggestion.relevance !== "likely" &&
-        suggestion.relevance !== "high") ||
+      !isOneOf(suggestion.kind, ADVISOR_SUGGESTION_KINDS) ||
+      !isOneOf(suggestion.relevance, ADVISOR_SUGGESTION_RELEVANCES) ||
       typeof suggestion.suggestion !== "string" ||
       !suggestion.suggestion.trim() ||
       typeof suggestion.rationale !== "string" ||
@@ -192,28 +187,8 @@ function normalizeSuggestions(value: unknown): AdvisorSuggestion[] | undefined {
   return suggestions;
 }
 
-function isSuggestionKind(value: unknown): value is AdvisorSuggestionKind {
-  return (
-    value === "alternative" ||
-    value === "investigation" ||
-    value === "verification" ||
-    value === "simplification" ||
-    value === "tradeoff" ||
-    value === "edge-case"
-  );
-}
-
 function clip(value: string, limit: number): string {
   return value.length <= limit
     ? value
     : `${value.slice(0, Math.max(0, limit - 18))}[... truncated]`;
-}
-
-function normalizeCategory(value: unknown): AdvisorFindingCategory {
-  return value === "intent" ||
-    value === "correctness" ||
-    value === "completeness" ||
-    value === "evidence"
-    ? value
-    : "correctness";
 }

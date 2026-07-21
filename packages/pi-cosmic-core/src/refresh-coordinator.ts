@@ -15,7 +15,7 @@ interface State<Request, E> {
   readonly acceptingFollowUp: boolean;
 }
 
-const mergeRefreshRequest = (
+export const mergeRefreshRequest = (
   current: RefreshRequest | undefined,
   next: RefreshRequest,
 ): RefreshRequest => ({

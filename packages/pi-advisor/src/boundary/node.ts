@@ -3,7 +3,6 @@
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/globalConsole:off
 import {
-  appendFileSync,
   closeSync,
   constants,
   fstatSync,
@@ -17,17 +16,12 @@ import {
   realpathSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep, isAbsolute } from "node:path";
 
 export const nodeDirname = dirname;
 export const nodeJoin = join;
-export const nodeRelative = relative;
-export const nodeResolve = resolve;
-export const nodeSep = sep;
-export const nodeIsAbsolute = isAbsolute;
 
 export function readTextFileOptionalSync(path: string): string | undefined {
   try {
@@ -113,23 +107,4 @@ export function writeTextFileAtomicSync(path: string, text: string): void {
 
 export function warnSyncBoundary(message: string): void {
   console.warn(message);
-}
-
-export function appendRotatingTextSync(path: string, text: string, maximumBytes: number): boolean {
-  try {
-    const directory = dirname(path);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    chmodSync(directory, 0o700);
-    if (existsSync(path) && statSync(path).size >= maximumBytes) {
-      const previous = `${path}.1`;
-      rmSync(previous, { force: true });
-      renameSync(path, previous);
-      chmodSync(previous, 0o600);
-    }
-    appendFileSync(path, text, { encoding: "utf8", mode: 0o600 });
-    chmodSync(path, 0o600);
-    return true;
-  } catch {
-    return false;
-  }
 }

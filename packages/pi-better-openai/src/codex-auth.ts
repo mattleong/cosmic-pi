@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { readSchemaDocument } from "pi-cosmic-core";
+import { decodeJwtPayloadText, readSchemaDocument } from "pi-cosmic-core";
 import type { CodexAuthResult } from "./auth-result.ts";
 
 const CodexAuthDocumentSchema = Schema.Struct({
@@ -46,22 +46,14 @@ const malformed = (operation: string, message: string): CodexAuthResult => ({
   message,
 });
 
-const decodeBase64Url = (value: string) =>
-  Effect.try({
-    try: () => {
-      const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-      const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-      return Buffer.from(padded, "base64").toString("utf8");
-    },
-    catch: () =>
-      new CodexAuthError({ operation: "jwt", message: "Unable to decode Codex token metadata." }),
-  });
 export const extractAccountIdFromJwt = Effect.fn("CodexAuth.extractAccountIdFromJwt")(function* (
   token: string,
 ) {
-  const payload = token.split(".")[1];
-  if (!payload) return undefined;
-  const source = yield* decodeBase64Url(payload).pipe(Effect.catch(() => Effect.succeed("")));
+  const source = yield* Effect.try({
+    try: () => decodeJwtPayloadText(token),
+    catch: () =>
+      new CodexAuthError({ operation: "jwt", message: "Unable to decode Codex token metadata." }),
+  }).pipe(Effect.catch(() => Effect.succeed("")));
   if (!source) return undefined;
   const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(JwtPayloadSchema))(
     source,

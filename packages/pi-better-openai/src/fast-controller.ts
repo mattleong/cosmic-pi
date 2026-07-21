@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Predicate from "effect/Predicate";
 import { freezeSnapshot } from "pi-cosmic-core";
-import { isRecord } from "./config.ts";
 import { fastModelKey, SUPPORTED_FAST_MODELS, supportsFastModel } from "./fast-models.ts";
 
 export { SUPPORTED_FAST_MODELS } from "./fast-models.ts";
@@ -52,7 +52,7 @@ export function injectProviderPayload(
   serviceTier: string,
   recordInjection: (event: { readonly model: string; readonly tier: string }) => void,
 ): unknown {
-  if (!isFastActive(ctx, snapshot) || !isRecord(event.payload)) return undefined;
+  if (!isFastActive(ctx, snapshot) || !Predicate.isObject(event.payload)) return undefined;
   recordInjection({ model: currentModelKey(ctx), tier: serviceTier });
   return { ...event.payload, service_tier: serviceTier };
 }

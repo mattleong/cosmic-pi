@@ -191,47 +191,35 @@ export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWit
         responseSchema: CodexUsageSchema,
       })
       .pipe(
-        Effect.mapError((error) =>
-          error.operation === "decode"
-            ? new CodexUsageError({
-                operation: "decode",
-                message: "Codex usage response was malformed.",
-              })
-            : new CodexUsageError({
-                operation: "request",
-                message: "Codex usage request failed.",
-              }),
-        ),
+        Effect.mapError((error) => {
+          const malformed = error.operation === "decode";
+          return new CodexUsageError({
+            operation: malformed ? "decode" : "request",
+            message: malformed
+              ? "Codex usage response was malformed."
+              : "Codex usage request failed.",
+          });
+        }),
       );
     if (response._tag === "Rejected")
       return yield* new CodexUsageError({
         operation: "request",
         message: `Codex usage request failed (${response.status})`,
       });
-    const decoded = response.body;
     const now = yield* Clock.currentTimeMillis;
     return {
-      snapshot: parseUsageSnapshot(decoded, modelId, now),
+      snapshot: parseUsageSnapshot(response.body, modelId, now),
       credential: { source: credentials.source, accountId: credentials.accountId },
     } satisfies CodexUsageResult;
   },
 );
-
-export const requestCodexUsageResult = Effect.fn("CodexUsage.requestResult")(function* (
-  authPath: string,
-  ctx: Pick<ExtensionContext, "modelRegistry">,
-  modelId?: string,
-) {
-  const credentials = yield* getCodexCredentials(authPath, ctx);
-  if (!credentials) return undefined;
-  return yield* requestCodexUsageWithCredentials(credentials, modelId);
-});
 
 export const requestCodexUsage = Effect.fn("CodexUsage.request")(function* (
   authPath: string,
   ctx: Pick<ExtensionContext, "modelRegistry">,
   modelId?: string,
 ) {
-  const result = yield* requestCodexUsageResult(authPath, ctx, modelId);
-  return result?.snapshot;
+  const credentials = yield* getCodexCredentials(authPath, ctx);
+  if (!credentials) return undefined;
+  return (yield* requestCodexUsageWithCredentials(credentials, modelId)).snapshot;
 });

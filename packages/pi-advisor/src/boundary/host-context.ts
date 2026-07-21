@@ -315,14 +315,3 @@ export const abortAdvisorParentAtHostBoundary = (
   ctx: ExtensionContext,
 ): AdvisorHostReadResult<void> =>
   readHostContext("parent-abort", "Advisor could not abort the parent safely.", () => ctx.abort());
-
-export const readAdvisorProjectTrustEffect = (
-  ctx: Pick<ExtensionContext, "isProjectTrusted">,
-): Effect.Effect<boolean, AdvisorHostContextError> =>
-  Effect.try({
-    try: () => {
-      const isProjectTrusted = ctx.isProjectTrusted;
-      return typeof isProjectTrusted === "function" && isProjectTrusted.call(ctx) === true;
-    },
-    catch: () => hostContextError("project-trust", "Advisor could not read project trust safely."),
-  });

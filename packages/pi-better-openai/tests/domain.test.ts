@@ -15,14 +15,13 @@ import {
   JsonDocumentError,
   JsonDocumentStore,
   JsonHttpError,
-  type JsonDocumentStoreShape,
-  type JsonObject,
 } from "pi-cosmic-core";
 import {
   capturedTelemetrySnapshot,
   jsonHttpTestLayer,
   makeCapturedLogger,
   makeCapturedTracer,
+  makeInMemoryDocuments,
   type JsonHttpTestRequest,
 } from "pi-cosmic-core/testing";
 import {
@@ -59,71 +58,7 @@ import {
 } from "../src/usage.ts";
 
 const NOW = 1_752_883_200_000;
-function documents(initial: Readonly<Record<string, JsonObject>> = {}) {
-  const values = new Map(Object.entries(initial));
-  let beforeNextUpdate: ((current: JsonObject) => JsonObject) | undefined;
-  let nextUpdateGate:
-    | {
-        readonly _tag: "BeforeCommit" | "Committed";
-        readonly started: Deferred.Deferred<void>;
-        readonly release: Deferred.Deferred<void>;
-      }
-    | undefined;
-  let updateCount = 0;
-  const modifyObject: NonNullable<JsonDocumentStoreShape["modifyObject"]> = (path, modify) =>
-    Effect.gen(function* () {
-      updateCount++;
-      const current = values.get(path) ?? {};
-      const lockedCurrent = beforeNextUpdate ? beforeNextUpdate(current) : current;
-      beforeNextUpdate = undefined;
-      const modification = yield* modify(lockedCurrent);
-      const gate = nextUpdateGate;
-      nextUpdateGate = undefined;
-      if (gate?._tag === "BeforeCommit") {
-        yield* Deferred.succeed(gate.started, undefined);
-        yield* Deferred.await(gate.release);
-      }
-      return yield* Effect.gen(function* () {
-        values.set(path, modification.document);
-        if (gate?._tag === "Committed") {
-          yield* Deferred.succeed(gate.started, undefined);
-          yield* Deferred.await(gate.release);
-        }
-        yield* modification.afterCommit ?? Effect.void;
-        return modification.value;
-      }).pipe(Effect.uninterruptible);
-    });
-  const service: JsonDocumentStoreShape = {
-    exists: (path) => Effect.succeed(values.has(path)),
-    readObject: (path) => Effect.succeed(values.get(path)),
-    writeObject: (path, value) => Effect.sync(() => void values.set(path, value)),
-    modifyObject,
-    updateObject: (path, update) =>
-      modifyObject(path, (current) => {
-        const next = update(current);
-        return Effect.succeed({ value: next, document: next });
-      }),
-  };
-  return {
-    values,
-    layer: Layer.succeed(JsonDocumentStore, service),
-    beforeNextUpdate(update: (current: JsonObject) => JsonObject) {
-      beforeNextUpdate = update;
-    },
-    blockNextUpdateBeforeCommit(
-      started: Deferred.Deferred<void>,
-      release: Deferred.Deferred<void>,
-    ) {
-      nextUpdateGate = { _tag: "BeforeCommit", started, release };
-    },
-    blockNextUpdateAtCommit(started: Deferred.Deferred<void>, release: Deferred.Deferred<void>) {
-      nextUpdateGate = { _tag: "Committed", started, release };
-    },
-    get updateCount() {
-      return updateCount;
-    },
-  };
-}
+const documents = makeInMemoryDocuments;
 const context = (token?: string, oauth = true) =>
   ({
     cwd: "/project",
@@ -504,7 +439,7 @@ describe("usage payloads, visibility, and fast mode", () => {
     );
     return Effect.gen(function* () {
       const service = yield* OpenAIUsageService;
-      store.beforeNextUpdate((current) => {
+      store.injectBeforeNextUpdate((current) => {
         const withoutFooterOverride = { ...current };
         delete withoutFooterOverride.footer;
         return {
@@ -517,7 +452,7 @@ describe("usage payloads, visibility, and fast mode", () => {
 
       yield* service.updateSetting("usage.showResetTimes", "true");
 
-      expect(store.values.get(configPath)).toEqual({
+      expect(store.documents.get(configPath)).toEqual({
         unknown: { preserved: true },
         active: true,
         desiredActive: true,
@@ -565,8 +500,8 @@ describe("usage payloads, visibility, and fast mode", () => {
 
     return Effect.gen(function* () {
       const service = yield* OpenAIUsageService;
-      store.values.set(globalConfigPath, { footer: { mode: "status" } });
-      store.beforeNextUpdate((current) => {
+      store.documents.set(globalConfigPath, { footer: { mode: "status" } });
+      store.injectBeforeNextUpdate((current) => {
         const next = { ...current };
         delete next.footer;
         return next;
@@ -574,7 +509,7 @@ describe("usage payloads, visibility, and fast mode", () => {
 
       yield* service.updateSetting("usage.showResetTimes", "false");
 
-      expect(store.values.get(configPath)).not.toHaveProperty("footer");
+      expect(store.documents.get(configPath)).not.toHaveProperty("footer");
       expect(MutableRef.get(projection).config).toMatchObject({
         configPath,
         globalConfigExists: true,
@@ -582,7 +517,7 @@ describe("usage payloads, visibility, and fast mode", () => {
         usage: { enabled: false, showResetTimes: false },
       });
 
-      store.values.delete(globalConfigPath);
+      store.documents.delete(globalConfigPath);
       yield* service.updateSetting("usage.showOnlyOnSubscriptionModels", "false");
 
       expect(MutableRef.get(projection).config).toMatchObject({
@@ -630,17 +565,17 @@ describe("usage payloads, visibility, and fast mode", () => {
 
     return Effect.gen(function* () {
       const service = yield* OpenAIUsageService;
-      store.values.set(configPath, {
+      store.documents.set(configPath, {
         usage: { enabled: false },
         footer: { mode: "off" },
       });
 
       yield* service.updateSetting("usage.showResetTimes", "false");
 
-      expect(store.values.get(globalConfigPath)).toMatchObject({
+      expect(store.documents.get(globalConfigPath)).toMatchObject({
         usage: { enabled: true, showResetTimes: true },
       });
-      expect(store.values.get(configPath)).toMatchObject({
+      expect(store.documents.get(configPath)).toMatchObject({
         usage: { enabled: false, showResetTimes: false },
         footer: { mode: "off" },
       });
@@ -687,7 +622,7 @@ describe("usage payloads, visibility, and fast mode", () => {
       const service = yield* OpenAIUsageService;
       yield* service.refresh({ force: true });
       expect(MutableRef.get(projection).snapshot).toBeDefined();
-      store.beforeNextUpdate((current) => ({
+      store.injectBeforeNextUpdate((current) => ({
         ...current,
         usage: { enabled: true, showResetTimes: false },
         footer: { mode: "status" },
@@ -695,7 +630,7 @@ describe("usage payloads, visibility, and fast mode", () => {
 
       yield* service.persistFast(true, true);
 
-      expect(store.values.get(configPath)).toMatchObject({
+      expect(store.documents.get(configPath)).toMatchObject({
         active: true,
         desiredActive: true,
         usage: { enabled: true, showResetTimes: false },
@@ -762,7 +697,7 @@ describe("usage payloads, visibility, and fast mode", () => {
       yield* Fiber.join(fast);
 
       expect(writesBeforeRelease).toBe(1);
-      expect(store.values.get(configPath)).toEqual({
+      expect(store.documents.get(configPath)).toEqual({
         unknown: { preserved: true },
         persistState: true,
         active: true,
@@ -826,7 +761,7 @@ describe("usage payloads, visibility, and fast mode", () => {
       yield* Deferred.succeed(releaseCommit, undefined);
       yield* Fiber.join(interruption);
 
-      expect(store.values.get(configPath)).toMatchObject({
+      expect(store.documents.get(configPath)).toMatchObject({
         usage: { enabled: false, sibling: "preserved", showResetTimes: false },
       });
       expect(MutableRef.get(projection).config).toMatchObject({
@@ -896,7 +831,7 @@ describe("usage payloads, visibility, and fast mode", () => {
       yield* Fiber.join(interruption);
       expect((yield* Fiber.await(transition))._tag).toBe("Failure");
 
-      expect(store.values.get(configPath)).toMatchObject({
+      expect(store.documents.get(configPath)).toMatchObject({
         active: true,
         desiredActive: true,
       });
@@ -951,12 +886,12 @@ describe("usage payloads, visibility, and fast mode", () => {
       yield* Deferred.await(writeStarted);
       yield* Fiber.interrupt(setting);
 
-      expect(store.values.get(configPath)).toMatchObject({ usage: { enabled: false } });
+      expect(store.documents.get(configPath)).toMatchObject({ usage: { enabled: false } });
       expect(MutableRef.get(projection).config?.usage.enabled).toBe(false);
 
       yield* service.persistFast(true, true);
       expect(store.updateCount).toBe(2);
-      expect(store.values.get(configPath)).toMatchObject({
+      expect(store.documents.get(configPath)).toMatchObject({
         active: true,
         desiredActive: true,
         usage: { enabled: false, sibling: "preserved" },

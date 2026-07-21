@@ -16,16 +16,15 @@ import {
   JsonDocumentStore,
   JsonHttpClient,
   JsonHttpError,
-  type JsonDocumentModification,
   makePiRuntime,
   type JsonDocumentStoreShape,
-  type JsonObject,
 } from "pi-cosmic-core";
 import {
   capturedTelemetrySnapshot,
   jsonHttpTestLayer,
   makeCapturedLogger,
   makeCapturedTracer,
+  makeInMemoryDocuments,
 } from "pi-cosmic-core/testing";
 import { getXaiCredentials, getXaiCredentialsResult } from "../src/auth.ts";
 import {
@@ -70,78 +69,7 @@ const weeklyFixture = {
   },
 };
 
-function documentHarness(initial: Readonly<Record<string, JsonObject>> = {}) {
-  const documents = new Map(Object.entries(initial));
-  let beforeNextUpdate: ((current: JsonObject) => JsonObject) | undefined;
-  let nextUpdateGate:
-    | {
-        readonly _tag: "BeforeCommit" | "Committed";
-        readonly started: Deferred.Deferred<void>;
-        readonly release: Deferred.Deferred<void>;
-      }
-    | undefined;
-  let updateCount = 0;
-  const modifyObject: NonNullable<JsonDocumentStoreShape["modifyObject"]> = (path, modify) =>
-    Effect.gen(function* () {
-      updateCount++;
-      const current = documents.get(path) ?? {};
-      const atomicCurrent = beforeNextUpdate ? beforeNextUpdate(current) : current;
-      beforeNextUpdate = undefined;
-      const { value, document, afterCommit } = yield* modify(atomicCurrent);
-      const gate = nextUpdateGate;
-      nextUpdateGate = undefined;
-      if (gate?._tag === "BeforeCommit") {
-        yield* Deferred.succeed(gate.started, undefined);
-        yield* Deferred.await(gate.release);
-      }
-      const commit = Effect.sync(() => void documents.set(path, document)).pipe(
-        Effect.andThen(afterCommit ?? Effect.void),
-      );
-      if (gate?._tag === "Committed") {
-        return yield* Effect.gen(function* () {
-          yield* Effect.sync(() => void documents.set(path, document));
-          yield* Deferred.succeed(gate.started, undefined);
-          yield* Deferred.await(gate.release);
-          yield* afterCommit ?? Effect.void;
-          return value;
-        }).pipe(Effect.uninterruptible);
-      }
-      yield* commit.pipe(Effect.uninterruptible);
-      return value;
-    });
-  const service: JsonDocumentStoreShape = {
-    exists: (path) => Effect.succeed(documents.has(path)),
-    readObject: (path) => Effect.succeed(documents.get(path)),
-    writeObject: (path, document) => Effect.sync(() => void documents.set(path, document)),
-    modifyObject,
-    updateObject: (path, update) =>
-      modifyObject(path, (current) =>
-        Effect.sync(() => {
-          const next = update(current);
-          return { value: next, document: next } satisfies JsonDocumentModification<JsonObject>;
-        }),
-      ),
-  };
-  return {
-    documents,
-    layer: Layer.succeed(JsonDocumentStore, service),
-    injectBeforeNextUpdate(update: (current: JsonObject) => JsonObject) {
-      beforeNextUpdate = update;
-    },
-    blockNextUpdateBeforeCommit(
-      started: Deferred.Deferred<void>,
-      release: Deferred.Deferred<void>,
-    ) {
-      nextUpdateGate = { _tag: "BeforeCommit", started, release };
-    },
-    blockNextUpdateAtCommit(started: Deferred.Deferred<void>, release: Deferred.Deferred<void>) {
-      nextUpdateGate = { _tag: "Committed", started, release };
-    },
-    get updateCount() {
-      return updateCount;
-    },
-  };
-}
+const documentHarness = makeInMemoryDocuments;
 
 function httpLayer(request: Parameters<typeof jsonHttpTestLayer>[0]) {
   return jsonHttpTestLayer(request);

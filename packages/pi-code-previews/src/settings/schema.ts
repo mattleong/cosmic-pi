@@ -52,40 +52,6 @@ export const CodePreviewSettingsSchema = Schema.Struct({
   tools: CodePreviewToolsSchema,
 });
 
-const PersistedFields = {
-  shikiTheme: Schema.optional(Schema.String),
-  diffIntensity: Schema.optional(DiffBackgroundIntensitySchema),
-  wordEmphasis: Schema.optional(DiffWordEmphasisSchema),
-  toolCallBackground: Schema.optional(Schema.Union([ToolCallBackgroundModeSchema, Schema.Boolean])),
-  toolCallTiming: Schema.optional(Schema.Boolean),
-  readCollapsedLines: Schema.optional(PositiveIntegerSchema),
-  readContentPreview: Schema.optional(Schema.Boolean),
-  writeContentPreview: Schema.optional(Schema.Boolean),
-  writeCollapsedLines: Schema.optional(PositiveIntegerSchema),
-  editDiffPreview: Schema.optional(Schema.Boolean),
-  editCollapsedLines: Schema.optional(EditCollapsedLinesSchema),
-  grepCollapsedLines: Schema.optional(PositiveIntegerSchema),
-  grepResultPreview: Schema.optional(Schema.Boolean),
-  findResultPreview: Schema.optional(Schema.Boolean),
-  lsResultPreview: Schema.optional(Schema.Boolean),
-  pathListCollapsedLines: Schema.optional(PositiveIntegerSchema),
-  readLineNumbers: Schema.optional(Schema.Boolean),
-  bashResultPreview: Schema.optional(Schema.Boolean),
-  bashWarnings: Schema.optional(Schema.Boolean),
-  syntaxHighlighting: Schema.optional(Schema.Boolean),
-  secretWarnings: Schema.optional(Schema.Boolean),
-  pathIcons: Schema.optional(PathIconModeSchema),
-  tools: Schema.optional(Schema.Union([CodePreviewToolsSchema, Schema.String])),
-} as const;
-
-/** Current raw settings object, decoded field-by-field so one invalid sibling cannot erase others. */
-export const PersistedCodePreviewSettingsSchema = Schema.Struct(PersistedFields);
-export const NestedCodePreviewSettingsDocumentSchema = Schema.Struct({
-  codePreview: Schema.optional(PersistedCodePreviewSettingsSchema),
-});
-/** Legacy prefixed documents remain forward compatible; owned fields are extracted before decoding. */
-export const LegacyCodePreviewSettingsDocumentSchema = Schema.Record(Schema.String, Schema.Unknown);
-
 type SchemaSettings = typeof CodePreviewSettingsSchema.Type;
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 export type CodePreviewSettings = Omit<Mutable<SchemaSettings>, "tools"> & {

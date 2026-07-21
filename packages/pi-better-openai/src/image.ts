@@ -15,6 +15,7 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as Random from "effect/Random";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -23,7 +24,9 @@ import * as Stream from "effect/Stream";
 import {
   AgentDirectory,
   JsonDocumentStore,
+  maskIdentifier,
   SafeFile,
+  sanitizeDiagnosticError,
   StreamingHttpClient,
   type StreamingHttpError,
 } from "pi-cosmic-core";
@@ -31,10 +34,8 @@ import { safeHostSignal, safeHostUi } from "./boundary/host-ui.ts";
 import { SharpAdapter } from "./boundary/sharp.ts";
 import type { ResolvedConfig } from "./config.ts";
 import { extractAccountIdFromJwt, getCodexCredentials } from "./codex-auth.ts";
-import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import { decodeImageStreamEvent, ImageRequestSchema, type ImageRequest } from "./image-protocol.ts";
 import type { OpenAIProjection } from "./usage-controller.ts";
-import { isRecord } from "./utils.ts";
 
 const OPENAI_IMAGE_TOOL = "openai_image";
 const OPENAI_IMAGE_COMMAND = "openai-image";
@@ -200,7 +201,7 @@ function asImageResultItem(
 ):
   | { id?: string; status?: string; revised_prompt?: string; result?: string; b64_json?: string }
   | undefined {
-  if (!isRecord(value) || value.type !== "image_generation_call") return undefined;
+  if (!Predicate.isObject(value) || value.type !== "image_generation_call") return undefined;
   return value;
 }
 function extractImageFromEvent(
@@ -208,7 +209,7 @@ function extractImageFromEvent(
   fallbackMimeType: string,
   fallbackId: string,
 ): ExtractedImageResult | undefined {
-  if (!isRecord(event)) return undefined;
+  if (!Predicate.isObject(event)) return undefined;
   const item = asImageResultItem(event.item) ?? asImageResultItem(event);
   if (item) {
     const raw =
@@ -440,9 +441,9 @@ export class OpenAIImageService extends Context.Service<
               completed = image;
               return false;
             }
-            if (isRecord(event) && event.type === "response.failed") {
-              const response = isRecord(event.response) ? event.response : undefined;
-              const error = isRecord(response?.error) ? response.error : undefined;
+            if (Predicate.isObject(event) && event.type === "response.failed") {
+              const response = Predicate.isObject(event.response) ? event.response : undefined;
+              const error = Predicate.isObject(response?.error) ? response.error : undefined;
               providerFailure = fail(
                 "response",
                 sanitizeDiagnosticError(
@@ -453,7 +454,7 @@ export class OpenAIImageService extends Context.Service<
               );
               return false;
             }
-            if (isRecord(event) && event.type === "error") {
+            if (Predicate.isObject(event) && event.type === "error") {
               providerFailure = fail(
                 "response",
                 `Codex image error: ${sanitizeDiagnosticError(typeof event.message === "string" ? event.message : "Codex image request failed.")}`,
@@ -762,7 +763,7 @@ export class OpenAIImageService extends Context.Service<
         const generate = Effect.fn("OpenAIImage.generate")(function* (rawParams: unknown) {
           yield* Ref.set(state, { lastStatus: "requesting" });
           const parameterKeys = yield* Effect.try({
-            try: () => (isRecord(rawParams) ? Object.keys(rawParams) : undefined),
+            try: () => (Predicate.isObject(rawParams) ? Object.keys(rawParams) : undefined),
             catch: imageError("params", "Invalid OpenAI image parameters."),
           });
           if (!parameterKeys || parameterKeys.some((key) => !TOOL_PARAM_KEYS.has(key)))
@@ -934,7 +935,7 @@ function resultText(result: CodexImageResult): string {
 const isImageContent = (
   value: unknown,
 ): value is { type: "image"; data: string; mimeType: string } =>
-  isRecord(value) &&
+  Predicate.isObject(value) &&
   value.type === "image" &&
   typeof value.data === "string" &&
   typeof value.mimeType === "string";
@@ -951,17 +952,10 @@ export function registerOpenAIImage(
       signal,
     );
   };
-  const getDebug = (ctx: ExtensionContext) => {
-    updateContext(ctx);
-    return run(
-      OpenAIImageService.use((service) => service.debug()),
-      safeHostSignal(ctx),
-    );
-  };
   pi.registerMessageRenderer<CodexImageResult>("openai-image", (message, _options, theme) => {
     const result = message.details;
     const text =
-      result && isRecord(result)
+      result && Predicate.isObject(result)
         ? resultText(result as CodexImageResult)
         : typeof message.content === "string"
           ? message.content
@@ -972,7 +966,7 @@ export function registerOpenAIImage(
     let image: { data: string; mimeType: string; savedPath?: string } | undefined;
     if (
       result &&
-      isRecord(result) &&
+      Predicate.isObject(result) &&
       typeof result.data === "string" &&
       typeof result.mimeType === "string"
     )
@@ -1049,7 +1043,6 @@ export function registerOpenAIImage(
       }));
     },
   });
-  return { getDebug };
 }
 
 export const _imageTest = {

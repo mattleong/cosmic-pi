@@ -4,6 +4,12 @@ export type WordEmphasisToken = {
   end: number;
 };
 
+export function tokenAt(tokens: WordEmphasisToken[], index: number): WordEmphasisToken {
+  const token = tokens[index];
+  if (token === undefined) throw new RangeError(`Missing word-emphasis token ${index}`);
+  return token;
+}
+
 const WORD_TOKEN_PATTERN =
   /[$_\p{L}][$_\p{L}\p{N}\p{Mark}]*|\p{N}+(?:\.\p{N}+)?|===|!==|=>|==|!=|<=|>=|&&|\|\||[^\s]/gu;
 const IDENTIFIER_TOKEN_PATTERN = /^[$_\p{L}][$_\p{L}\p{N}\p{Mark}]*$/u;

@@ -10,6 +10,7 @@ import type { DiffWordEmphasis } from "../src/settings/types";
 import { renderSyntaxHighlightedDiff } from "../src/diff/index";
 import { wordEmphasisTelemetry } from "../src/testing/word-emphasis-telemetry";
 import { changedRanges, changedRangesWithConfidence } from "../src/diff/word/emphasis";
+import { profileLine, profilePlacement } from "../src/diff/word/fixtures/profile-lines";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/settings/index";
 import {
   benchTheme,
@@ -295,27 +296,6 @@ function similarBefore(index: number): string {
 
 function similarAfter(index: number): string {
   return `const value${index} = target.newName${index % 5}(safeInput${index}) ?? fallback${index};`;
-}
-
-function profileLine(logicalIndex: number, placement: string, side: "added" | "removed"): string {
-  const code = profileIdentifierCode(logicalIndex);
-  const changedArguments =
-    side === "removed" ? "oldRecord, legacyOptions" : "newAccount, modernSettings, metadata";
-  return `const profile${code} = build${code}Profile(profile${code}Type, slot("${placement}"), rank("${placement}"), ${changedArguments});`;
-}
-
-function profileIdentifierCode(index: number): string {
-  return `${String.fromCharCode(65 + Math.floor(index / 26))}${String.fromCharCode(
-    97 + (index % 26),
-  )}`;
-}
-
-function profilePlacement(position: number, count: number): string {
-  if (position * 2 === count - 1) return "center";
-  const index = position * 2 < count - 1 ? position : count - position - 1;
-  return `${position * 2 < count - 1 ? "cold" : "warm"}${profileIdentifierCode(
-    index,
-  ).toLowerCase()}`;
 }
 
 function repeatedBefore(index: number): string {

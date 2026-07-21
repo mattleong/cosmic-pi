@@ -6,7 +6,9 @@ import {
 import { Container, SettingsList } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
-import { safeHostSignal, safeHostUi, tryHostUi } from "../boundary/host-ui.ts";
+import * as Predicate from "effect/Predicate";
+import { redactDiagnosticValue } from "pi-cosmic-core";
+import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
 import {
   FAST_SETTING_DESCRIPTORS,
   FOOTER_SETTING_DESCRIPTORS,
@@ -17,9 +19,7 @@ import {
 } from "../config.ts";
 import { modelList, settingsSummary, type FastSnapshot } from "../fast-controller.ts";
 import { FastModeService } from "../fast-service.ts";
-import { redactDiagnosticValue } from "../format.ts";
 import { OpenAIUsageService } from "../usage-controller.ts";
-import { isRecord } from "../utils.ts";
 import { settingsItemsFromDescriptors, type SettingsPickerItem } from "./items.ts";
 import { createSettingsSubmenu, textPanel } from "./picker.ts";
 
@@ -44,7 +44,7 @@ function formatDiagnosticValue(value: unknown, depth = 0): string[] {
       `${indent}]`,
     ];
   }
-  if (isRecord(value)) {
+  if (Predicate.isObject(value)) {
     const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
     if (entries.length === 0) return [`${indent}{}`];
     const lines = [`${indent}{`];
@@ -113,24 +113,19 @@ export function registerSettingsController(
       }
       yield* OpenAIUsageService.use((service) => service.updateSetting(id, value));
     });
-    const recoverHostUi = (operation: string, callback: () => unknown) =>
-      tryHostUi(operation, callback).pipe(
-        Effect.catchTag("OpenAIHostUiError", () => Effect.void),
-        Effect.asVoid,
-      );
     return run(
       update.pipe(
         Effect.tap(() =>
           Effect.gen(function* () {
-            yield* recoverHostUi("settings.render", () => updateFooter(ctx));
-            yield* recoverHostUi("settings.notify", () => {
+            yield* ignoreHostUi("settings.render", () => updateFooter(ctx));
+            yield* ignoreHostUi("settings.notify", () => {
               const descriptor = descriptors.find((candidate) => candidate.id === id);
               ctx.ui.notify(`${id} = ${descriptor?.currentValue(config(ctx)) ?? value}`, "info");
             });
           }),
         ),
         Effect.catch((error) =>
-          recoverHostUi("settings.notify.error", () => ctx.ui.notify(error.message, "error")),
+          ignoreHostUi("settings.notify.error", () => ctx.ui.notify(error.message, "error")),
         ),
         Effect.asVoid,
       ),

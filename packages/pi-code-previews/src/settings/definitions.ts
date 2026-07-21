@@ -14,7 +14,6 @@ import {
   type DiffBackgroundIntensity,
   type DiffWordEmphasis,
   type PathIconMode,
-  type ToolCallBackgroundMode,
 } from "./types";
 import {
   CodePreviewToolsSchema,
@@ -25,7 +24,7 @@ import {
   PositiveIntegerSchema,
   ToolCallBackgroundModeSchema,
 } from "./schema";
-import { isToolCallBackgroundMode, parseToolCallBackgroundMode } from "./tool-call-background";
+import { isToolCallBackgroundMode } from "./tool-call-background";
 
 export type CodePreviewSettingDescriptor<K extends keyof CodePreviewSettings> = {
   readonly schema: Schema.Decoder<unknown>;
@@ -52,7 +51,7 @@ function validatedSetting<K extends keyof CodePreviewSettings>(
 ): CodePreviewSettingDescriptor<K> {
   return {
     schema,
-    normalize: (value, fallback) => coerceSetting(value, fallback, isValid),
+    normalize: (value, fallback) => (isValid(value) ? value : fallback),
     update: (next, _current, value) => {
       if (isValid(value)) next[key] = value;
     },
@@ -62,7 +61,7 @@ function validatedSetting<K extends keyof CodePreviewSettings>(
 function booleanSetting<K extends BooleanSettingKey>(key: K): CodePreviewSettingDescriptor<K> {
   return {
     schema: Schema.Boolean as Schema.Decoder<CodePreviewSettings[K]>,
-    normalize: coerceBoolean as CodePreviewSettingDescriptor<K>["normalize"],
+    normalize: (value) => value as CodePreviewSettings[K],
     update: (next, _current, value) => {
       next[key] = (value === "on") as CodePreviewSettings[K];
     },
@@ -74,7 +73,7 @@ function positiveIntegerSetting<K extends NumberSettingKey>(
 ): CodePreviewSettingDescriptor<K> {
   return {
     schema: PositiveIntegerSchema as Schema.Decoder<CodePreviewSettings[K]>,
-    normalize: coerceNumber as CodePreviewSettingDescriptor<K>["normalize"],
+    normalize: (value) => value as CodePreviewSettings[K],
     update: (next, current, value) => {
       next[key] = coerceStringNumber(value, current[key] as number) as CodePreviewSettings[K];
     },
@@ -89,13 +88,11 @@ export const CODE_PREVIEW_SETTING_DEFINITIONS = {
     isDiffBackgroundIntensity,
   ),
   wordEmphasis: validatedSetting("wordEmphasis", DiffWordEmphasisSchema, isDiffWordEmphasis),
-  toolCallBackground: {
-    schema: ToolCallBackgroundModeSchema,
-    normalize: coerceToolCallBackgroundMode,
-    update: (next, _current, value) => {
-      if (isToolCallBackgroundMode(value)) next.toolCallBackground = value;
-    },
-  },
+  toolCallBackground: validatedSetting(
+    "toolCallBackground",
+    ToolCallBackgroundModeSchema,
+    isToolCallBackgroundMode,
+  ),
   toolCallTiming: booleanSetting("toolCallTiming"),
   readCollapsedLines: positiveIntegerSetting("readCollapsedLines"),
   readContentPreview: booleanSetting("readContentPreview"),
@@ -104,7 +101,7 @@ export const CODE_PREVIEW_SETTING_DEFINITIONS = {
   editDiffPreview: booleanSetting("editDiffPreview"),
   editCollapsedLines: {
     schema: EditCollapsedLinesSchema,
-    normalize: coerceEditPreviewLines,
+    normalize: (value) => value as CodePreviewSettings["editCollapsedLines"],
     update: (next, current, value) => {
       next.editCollapsedLines =
         value === "all"
@@ -147,35 +144,8 @@ export function getSettingDefinition(
     : undefined;
 }
 
-function coerceSetting<T>(value: unknown, fallback: T, isValid: (value: unknown) => value is T): T {
-  return isValid(value) ? value : fallback;
-}
-
-function coerceBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function coerceNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : fallback;
-}
-
 function coerceStringNumber(value: string, fallback: number): number {
   return parsePositiveInteger(value) ?? fallback;
-}
-
-function coerceEditPreviewLines(value: unknown, fallback: number | "all"): number | "all" {
-  if (value === "all") return "all";
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.floor(value);
-  return fallback;
-}
-
-function coerceToolCallBackgroundMode(
-  value: unknown,
-  fallback: ToolCallBackgroundMode,
-): ToolCallBackgroundMode {
-  return parseToolCallBackgroundMode(value) ?? fallback;
 }
 
 function coerceTools(value: unknown, fallback: CodePreviewToolName[]): CodePreviewToolName[] {

@@ -9,7 +9,6 @@ import { ReadOnlyFileSystem, type AdvisorProjectRoot } from "./boundary/read-onl
 // Stable file reads use isSymbolicLink checks and O_NOFOLLOW in the capability-narrow adapter.
 
 export const ADVISOR_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
-export type AdvisorToolName = (typeof ADVISOR_TOOL_NAMES)[number];
 export const ADVISOR_TOOL_LIMITS = Object.freeze({
   maxBytesPerFile: 256_000,
   maxDirectoryEntries: 500,

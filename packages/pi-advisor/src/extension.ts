@@ -3,7 +3,6 @@ export {
   ADVISOR_CATCH_UP_TIMEOUT_MS,
   AdvisorController,
   AdvisorExtensionError,
-  _extensionTest,
   advisorControllerApplicationLayer,
   advisorControllerLayer,
   advisorExtension,

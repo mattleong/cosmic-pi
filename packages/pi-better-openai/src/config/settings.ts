@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import type { JsonObject } from "pi-cosmic-core";
-import { isRecord } from "../utils.ts";
 import type { ResolvedConfig } from "./schema.ts";
 import {
   FOOTER_MODES,
@@ -12,15 +12,12 @@ import {
   ImageSaveModeSchema,
 } from "./schema.ts";
 
-export type SettingsOptionSection = "root" | "usage" | "footer" | "image";
 export class InvalidSettingError extends Schema.TaggedErrorClass<InvalidSettingError>()(
   "InvalidSettingError",
   { id: Schema.String, message: Schema.String },
 ) {}
 export type SettingsOptionDescriptor = {
   id: string;
-  section: SettingsOptionSection;
-  key: string;
   label: string;
   description: string;
   values?: readonly string[];
@@ -42,8 +39,6 @@ const number = (id: string) => decodeJson(id, finiteNumber);
 export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   {
     id: "persistState",
-    section: "root",
-    key: "persistState",
     label: "Persist fast state",
     currentValue: (cfg) => String(cfg.persistState),
     values: ["true", "false"],
@@ -54,8 +49,6 @@ export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
 export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   {
     id: "footer.mode",
-    section: "footer",
-    key: "mode",
     label: "Footer mode",
     currentValue: (cfg) => cfg.footer.mode,
     values: FOOTER_MODES,
@@ -67,8 +60,6 @@ export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
 export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   {
     id: "usage.enabled",
-    section: "usage",
-    key: "enabled",
     label: "Usage display",
     currentValue: (cfg) => String(cfg.usage.enabled),
     values: ["true", "false"],
@@ -77,8 +68,6 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   },
   {
     id: "usage.refreshIntervalMs",
-    section: "usage",
-    key: "refreshIntervalMs",
     label: "Usage refresh",
     currentValue: (cfg) => String(cfg.usage.refreshIntervalMs),
     values: ["15000", "30000", "60000", "120000", "300000", "600000"],
@@ -87,8 +76,6 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   },
   {
     id: "usage.showOnlyOnSubscriptionModels",
-    section: "usage",
-    key: "showOnlyOnSubscriptionModels",
     label: "Usage only on OAuth",
     currentValue: (cfg) => String(cfg.usage.showOnlyOnSubscriptionModels),
     values: ["true", "false"],
@@ -97,8 +84,6 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   },
   {
     id: "usage.showResetTimes",
-    section: "usage",
-    key: "showResetTimes",
     label: "Usage reset times",
     currentValue: (cfg) => String(cfg.usage.showResetTimes),
     values: ["true", "false"],
@@ -109,8 +94,6 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
 export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   {
     id: "image.enabled",
-    section: "image",
-    key: "enabled",
     label: "Image tool",
     currentValue: (cfg) => String(cfg.image.enabled),
     values: ["true", "false"],
@@ -119,8 +102,6 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   },
   {
     id: "image.defaultModel",
-    section: "image",
-    key: "defaultModel",
     label: "Image model",
     currentValue: (cfg) => cfg.image.defaultModel,
     values: ["gpt-5.5", "gpt-5.4", "gpt-5.2", "gpt-5"],
@@ -137,8 +118,6 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   },
   {
     id: "image.defaultSave",
-    section: "image",
-    key: "defaultSave",
     label: "Image save",
     currentValue: (cfg) => cfg.image.defaultSave,
     values: IMAGE_SAVE_MODES,
@@ -147,8 +126,6 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   },
   {
     id: "image.outputFormat",
-    section: "image",
-    key: "outputFormat",
     label: "Image format",
     currentValue: (cfg) => cfg.image.outputFormat,
     values: IMAGE_OUTPUT_FORMATS,
@@ -157,8 +134,6 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   },
   {
     id: "image.timeoutMs",
-    section: "image",
-    key: "timeoutMs",
     label: "Image timeout",
     currentValue: (cfg) => String(cfg.image.timeoutMs),
     values: ["30000", "60000", "120000", "180000", "300000"],
@@ -203,12 +178,15 @@ export const prepareSettingUpdate = Effect.fn("OpenAIConfig.prepareSettingUpdate
   const parsedValue = yield* descriptor.decode(rawValue);
   return (current: JsonObject): JsonObject => {
     const next: JsonObject = { ...current };
-    if (descriptor.section === "root") next[descriptor.key] = parsedValue;
+    const separator = descriptor.id.indexOf(".");
+    if (separator < 0) next[descriptor.id] = parsedValue;
     else {
-      const currentSection = next[descriptor.section];
-      const section = isRecord(currentSection) ? { ...currentSection } : {};
-      section[descriptor.key] = parsedValue;
-      next[descriptor.section] = section;
+      const sectionName = descriptor.id.slice(0, separator);
+      const key = descriptor.id.slice(separator + 1);
+      const currentSection = next[sectionName];
+      const section = Predicate.isObject(currentSection) ? { ...currentSection } : {};
+      section[key] = parsedValue;
+      next[sectionName] = section;
     }
     return next;
   };

@@ -22,22 +22,23 @@ export interface DiagnosticSanitizerOptions {
   readonly extraPatterns?: readonly RegExp[];
 }
 
-const replaceControlCharacters = (value: string): string => {
-  let result = "";
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    result += code <= 31 || (code >= 127 && code <= 159) ? " " : char;
-  }
-  return result;
-};
+const replaceControlCharacters = (value: string): string => value.replace(/\p{Cc}/gu, " ");
 
 export const stripAnsi = (value: string): string => value.replace(ANSI_ESCAPE_REGEXP, "");
+
+export function decodeJwtPayloadText(token: string): string | undefined {
+  const payload = token.split(".")[1];
+  if (!payload) return undefined;
+  const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(normalized + "=".repeat((4 - (normalized.length % 4)) % 4), "base64").toString(
+    "utf8",
+  );
+}
 
 export function maskIdentifier(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
-  if (trimmed.length <= 8) return "found";
-  return `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
+  return trimmed.length <= 8 ? "found" : `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
 }
 
 export function sanitizeDiagnosticError(

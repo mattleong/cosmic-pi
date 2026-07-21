@@ -234,33 +234,28 @@ export function normalizeCosmicFooterInvalidateEvent(
   });
 }
 
-export function isCosmicUiHostQuery(value: unknown): value is CosmicUiHostQuery {
+const isNormalized = <A>(
+  normalize: (value: unknown) => A | undefined,
+  value: unknown,
+): value is A => {
   try {
-    return normalizeCosmicUiHostQuery(value) !== undefined;
+    return normalize(value) !== undefined;
   } catch {
     return false;
   }
+};
+
+export function isCosmicUiHostQuery(value: unknown): value is CosmicUiHostQuery {
+  return isNormalized(normalizeCosmicUiHostQuery, value);
 }
 export function isCosmicFooterUpsertEvent(value: unknown): value is CosmicFooterUpsertEvent {
-  try {
-    return normalizeCosmicFooterUpsertEvent(value) !== undefined;
-  } catch {
-    return false;
-  }
+  return isNormalized(normalizeCosmicFooterUpsertEvent, value);
 }
 export function isCosmicFooterRemoveEvent(value: unknown): value is CosmicFooterRemoveEvent {
-  try {
-    return normalizeCosmicFooterRemoveEvent(value) !== undefined;
-  } catch {
-    return false;
-  }
+  return isNormalized(normalizeCosmicFooterRemoveEvent, value);
 }
 export function isCosmicFooterInvalidateEvent(
   value: unknown,
 ): value is CosmicFooterInvalidateEvent {
-  try {
-    return normalizeCosmicFooterInvalidateEvent(value) !== undefined;
-  } catch {
-    return false;
-  }
+  return isNormalized(normalizeCosmicFooterInvalidateEvent, value);
 }

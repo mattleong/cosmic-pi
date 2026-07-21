@@ -11,6 +11,7 @@ import {
 import { CLEAR_MODEL_OPTION, selectAdvisorModel } from "./model-picker.ts";
 import { getAdvisorFailureLogPath } from "./failure-log.ts";
 import {
+  ADVISOR_THINKING_LEVELS,
   type AdvisorConfigPatch,
   type AdvisorReviewPolicy,
   type ResolvedAdvisorConfig,
@@ -18,6 +19,7 @@ import {
 } from "./config.ts";
 import type { AdvisorReviewFocus } from "./review.ts";
 import { PiCommandAdapter, type PiCommandError } from "./pi-command-adapter.ts";
+import { isOneOf } from "./utils.ts";
 
 const SETTINGS_COMMAND = "advisor-settings";
 const STATUS_COMMAND = "advisor-status";
@@ -26,15 +28,7 @@ const ADVISOR_COMMAND = "advisor";
 
 const TIMEOUT_OPTIONS = [10_000, 30_000, 60_000, 90_000, 120_000, 180_000] as const;
 const CONTEXT_OPTIONS = [16_000, 48_000, 120_000, 240_000] as const;
-const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
+const THINKING_LEVELS: readonly ModelThinkingLevel[] = ADVISOR_THINKING_LEVELS;
 
 const POLICY_OPTIONS: Array<{ label: string; value: AdvisorReviewPolicy }> = [
   { label: "Corrective (recommended)", value: "corrective" },
@@ -491,11 +485,7 @@ function chooseThinkingLevel(
   const levels = model ? getSupportedThinkingLevels(model) : THINKING_LEVELS;
   return ctx.ui
     .select("Advisor reasoning level", [...levels])
-    .then((selection) =>
-      selection && THINKING_LEVELS.includes(selection as ModelThinkingLevel)
-        ? (selection as ModelThinkingLevel)
-        : undefined,
-    );
+    .then((selection) => (isOneOf(selection, THINKING_LEVELS) ? selection : undefined));
 }
 
 function chooseNumericSetting(
@@ -640,8 +630,8 @@ function showAdvisorStatus(
       `Sequence: processed ${(metrics.processedSequence ?? 0).toLocaleString()} / ${(metrics.sequence ?? 0).toLocaleString()}`,
       `Catch-up barrier: hard 30,000 ms cap; waits ${metrics.catchUpWaits ?? 0}, active ${metrics.activeCatchUpWaits ?? 0}, timeouts ${metrics.catchUpTimeouts ?? 0}, failures ${metrics.catchUpFailures ?? 0}, cancellations ${metrics.catchUpCancellations ?? 0}`,
       `Child resets/reprimes: ${metrics.childResets ?? 0}`,
-      `Active Advisor tools: ${formatActiveTools(metrics.activeToolNames)}`,
-      `Advisor guidance: ${formatGuidancePaths(metrics.guidancePaths)}`,
+      `Active Advisor tools: ${formatList(metrics.activeToolNames)}`,
+      `Advisor guidance: ${formatList(metrics.guidancePaths)}`,
       `Latest review duration: ${metrics.latestDurationMs === undefined ? "not available" : `${Math.round(metrics.latestDurationMs).toLocaleString()} ms`}`,
       `Advisor tokens: input ${(metrics.inputTokens ?? 0).toLocaleString()}, output ${(metrics.outputTokens ?? 0).toLocaleString()}, cache read ${(metrics.cacheReadTokens ?? 0).toLocaleString()}, cache write ${(metrics.cacheWriteTokens ?? 0).toLocaleString()}, total ${(metrics.totalTokens ?? 0).toLocaleString()}`,
       `Advisor cost: $${(metrics.cost ?? 0).toFixed(6)}`,
@@ -691,12 +681,8 @@ function formatUsageDuration(milliseconds: number): string {
     : `${(milliseconds / 1_000).toFixed(1)}s`;
 }
 
-function formatGuidancePaths(paths: readonly string[] | undefined): string {
-  return paths && paths.length > 0 ? paths.join(", ") : "none";
-}
-
-function formatActiveTools(names: readonly string[] | undefined): string {
-  return names && names.length > 0 ? names.join(", ") : "none";
+function formatList(values: readonly string[] | undefined): string {
+  return values && values.length > 0 ? values.join(", ") : "none";
 }
 
 function formatModel(config: Pick<ResolvedAdvisorConfig, "provider" | "model">): string {
@@ -706,14 +692,7 @@ function formatModel(config: Pick<ResolvedAdvisorConfig, "provider" | "model">):
 }
 
 function formatPolicy(policy: AdvisorReviewPolicy): string {
-  switch (policy) {
-    case "corrective":
-      return "Corrective";
-    case "guardrail":
-      return "Guardrail";
-    case "advisory":
-      return "Advisory";
-  }
+  return policy[0]!.toUpperCase() + policy.slice(1);
 }
 
 function formatFastMode(

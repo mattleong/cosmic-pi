@@ -7,7 +7,7 @@ import * as Layer from "effect/Layer";
 import { ConfigRepository, configRepositoryTestLayer } from "../src/config-repository.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
 import { FailureLogger, failureLoggerTestLayer } from "../src/failure-logger.ts";
-import { HostNotifier, hostNotifierTestLayer } from "../src/host-notifier.ts";
+import { HostNotifier, hostNotifierLayer } from "../src/host-notifier.ts";
 import { normalizeAdvisorConfig } from "../src/config.ts";
 import { PiCommandAdapter } from "../src/pi-command-adapter.ts";
 
@@ -63,37 +63,40 @@ it.effect("awaits the Promise logging seam instead of detaching it", () =>
 );
 
 it.effect("isolates hostile host notification callbacks in the service Layer", () => {
-  const layer = hostNotifierTestLayer(() => {
-    throw new Error("host unavailable");
-  });
   return Effect.scoped(
     Effect.gen(function* () {
-      const context = yield* Layer.build(layer);
+      const context = yield* Layer.build(hostNotifierLayer);
       const notifier = Context.get(context, HostNotifier);
-      expect(() => notifier.notify({} as never, "bounded diagnostic", "warning")).not.toThrow();
+      expect(() =>
+        notifier.notify(
+          {
+            ui: {
+              notify: () => {
+                throw new Error("host unavailable");
+              },
+            },
+          } as never,
+          "bounded diagnostic",
+          "warning",
+        ),
+      ).not.toThrow();
     }),
   );
 });
 
-it.effect("recovers only the typed command-notification boundary failure", () =>
+it.effect("converts rejected command Promises into bounded typed failures", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const context = yield* Layer.build(PiCommandAdapter.layer);
       const adapter = Context.get(context, PiCommandAdapter);
-      let attempts = 0;
-      yield* adapter.notify(
-        {
-          ui: {
-            notify: () => {
-              attempts++;
-              throw new Error("sensitive host failure");
-            },
-          },
-        } as never,
-        "bounded notification",
-        "warning",
-      );
-      expect(attempts).toBe(1);
+      const error = yield* adapter
+        .fromPromise(() => Promise.reject(new Error("sensitive host failure")))
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "PiCommandError",
+        operation: "handler",
+        message: "Advisor command failed.",
+      });
     }),
   ),
 );

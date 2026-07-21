@@ -109,49 +109,27 @@ function settingsGroupDefinition(name: string): SettingsGroupDefinition {
   return definition;
 }
 
-type SettingsGroupItemOptions = {
-  name: string;
-  label: string;
-  description: string;
-  currentValue: string;
-  onSettingChange: SettingChangeHandler;
-  items: () => SettingItem[];
-  summary: () => string;
-};
-
-function createSettingsGroupItem(options: SettingsGroupItemOptions): SettingItem {
-  return {
-    id: groupId(options.name),
-    label: options.label,
-    description: options.description,
-    currentValue: options.currentValue,
-    submenu: (_currentValue, done) =>
-      new SettingsGroupSubmenu({
-        title: options.label,
-        description: options.description,
-        items: options.items,
-        onChange: options.onSettingChange,
-        done,
-        summary: options.summary,
-      }),
-  };
-}
-
 function createSettingsGroupItemFromDefinition(
   definition: SettingsGroupDefinition,
   current: CodePreviewSettings,
   getCurrent: SettingsProvider,
   onSettingChange: SettingChangeHandler,
 ): SettingItem {
-  return createSettingsGroupItem({
-    name: definition.name,
+  return {
+    id: groupId(definition.name),
     label: definition.label,
     description: definition.description,
     currentValue: definition.summarize(current),
-    onSettingChange,
-    items: () => definition.items(getCurrent(), getCurrent, onSettingChange),
-    summary: () => definition.summarize(getCurrent()),
-  });
+    submenu: (_currentValue, done) =>
+      new SettingsGroupSubmenu({
+        title: definition.label,
+        description: definition.description,
+        items: () => definition.items(getCurrent(), getCurrent, onSettingChange),
+        onChange: onSettingChange,
+        done,
+        summary: () => definition.summarize(getCurrent()),
+      }),
+  };
 }
 
 export function isSettingsGroupItemId(id: string): boolean {

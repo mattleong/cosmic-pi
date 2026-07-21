@@ -7,7 +7,12 @@ import {
   similarityTokenWeight,
   tokenSimilarity,
 } from "./line-similarity";
-import type { IndexedChangedLine } from "./changed-line";
+import {
+  changedLineAt,
+  changedLinePositions,
+  type ChangedLinePositions,
+  type IndexedChangedLine,
+} from "./changed-line";
 import {
   competingCandidateValue,
   matchChangedLinesSparse,
@@ -101,21 +106,6 @@ const SPARSE_LINE_MATCHING_POLICY: SparseLineMatchingPolicy = {
   isReciprocalBestChangedLinePair,
   linePairConfidence,
 };
-
-type ChangedLinePositions = {
-  removed: Map<number, number>;
-  added: Map<number, number>;
-};
-
-function changedLinePositions(
-  removed: Array<IndexedChangedLine<RemovedDiffLine>>,
-  added: Array<IndexedChangedLine<AddedDiffLine>>,
-): ChangedLinePositions {
-  return {
-    removed: new Map(removed.map((line, index) => [line.index, index])),
-    added: new Map(added.map((line, index) => [line.index, index])),
-  };
-}
 
 function confidentChangedLinePairs(
   positions: ChangedLinePositions,
@@ -377,13 +367,4 @@ function positionPairs(
     ]);
   }
   return pairs;
-}
-
-function changedLineAt<T extends AddedDiffLine | RemovedDiffLine>(
-  lines: Array<IndexedChangedLine<T>>,
-  index: number,
-): IndexedChangedLine<T> {
-  const line = lines[index];
-  if (line === undefined) throw new RangeError(`Missing changed line ${index}`);
-  return line;
 }

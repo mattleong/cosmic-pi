@@ -15,6 +15,9 @@ export class ModelRegistryAuthError extends Schema.TaggedErrorClass<ModelRegistr
 type Registry = Pick<ExtensionContext, "modelRegistry">["modelRegistry"];
 type Model = NonNullable<ExtensionContext["model"]>;
 
+export type WithoutModelRegistry<T extends Effect.Effect<unknown, unknown, unknown>> =
+  Effect.Effect<Effect.Success<T>, Effect.Error<T>, Exclude<Effect.Services<T>, ModelRegistryAuth>>;
+
 export interface ModelRegistryAuthShape {
   readonly getApiKey: Effect.Effect<string | undefined, ModelRegistryAuthError>;
   readonly isUsingOAuth: (model: Model) => Effect.Effect<boolean, ModelRegistryAuthError>;
@@ -58,4 +61,16 @@ export class ModelRegistryAuth extends Context.Service<ModelRegistryAuth, ModelR
   static layer(getRegistry: () => Registry): Layer.Layer<ModelRegistryAuth> {
     return Layer.succeed(this, this.make(getRegistry));
   }
+}
+
+export function provideModelRegistryAuth<A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  ctx: Pick<ExtensionContext, "modelRegistry">,
+): Effect.Effect<A, E, Exclude<R, ModelRegistryAuth>> {
+  return effect.pipe(
+    Effect.provideService(
+      ModelRegistryAuth,
+      ModelRegistryAuth.make(() => ctx.modelRegistry),
+    ),
+  );
 }

@@ -12,6 +12,11 @@ export type IndexedChangedLine<T extends AddedDiffLine | RemovedDiffLine> = {
   similarityFeatureValues?: string[];
 };
 
+export type ChangedLinePositions = {
+  removed: Map<number, number>;
+  added: Map<number, number>;
+};
+
 export function indexedChangedLine<T extends AddedDiffLine | RemovedDiffLine>(
   index: number,
   line: T,
@@ -31,6 +36,25 @@ export function changedLineTokens(
   line: IndexedChangedLine<AddedDiffLine | RemovedDiffLine>,
 ): WordEmphasisToken[] {
   return (line.tokens ??= wordEmphasisTokens(normalizedChangedContent(line)));
+}
+
+export function changedLinePositions(
+  removed: Array<IndexedChangedLine<RemovedDiffLine>>,
+  added: Array<IndexedChangedLine<AddedDiffLine>>,
+): ChangedLinePositions {
+  return {
+    removed: new Map(removed.map((line, index) => [line.index, index])),
+    added: new Map(added.map((line, index) => [line.index, index])),
+  };
+}
+
+export function changedLineAt<T extends AddedDiffLine | RemovedDiffLine>(
+  lines: Array<IndexedChangedLine<T>>,
+  index: number,
+): IndexedChangedLine<T> {
+  const line = lines[index];
+  if (line === undefined) throw new RangeError(`Missing changed line ${index}`);
+  return line;
 }
 
 function normalizeDiffContent(content: string): string {

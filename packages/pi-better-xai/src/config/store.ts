@@ -11,9 +11,10 @@ import {
 } from "pi-cosmic-core";
 import { CONFIG_BASENAME } from "../identity.ts";
 import {
-  FooterModeSchema,
   DEFAULT_FOOTER_CONFIG,
   DEFAULT_USAGE_CONFIG,
+  FiniteNumberSchema,
+  FooterModeSchema,
   type ResolvedConfig,
 } from "./schema.ts";
 
@@ -51,7 +52,6 @@ export const readRawConfig = Effect.fn("XaiConfig.readRawConfig")(function* (pat
 });
 
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
-const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
 
 function decodeConfig(value: unknown) {
   const root = decodeTolerantFields(
@@ -92,20 +92,13 @@ function overlayConfigValues(
   primary: DecodedConfig | void,
   fallback: ResolvedConfigValues,
 ): ResolvedConfigValues {
+  const usage = { ...fallback.usage, ...primary?.usage };
   return {
     usage: {
-      enabled: primary?.usage?.enabled ?? fallback.usage.enabled,
-      refreshIntervalMs: Math.max(
-        5_000,
-        primary?.usage?.refreshIntervalMs ?? fallback.usage.refreshIntervalMs,
-      ),
-      showOnlyOnSubscriptionModels:
-        primary?.usage?.showOnlyOnSubscriptionModels ?? fallback.usage.showOnlyOnSubscriptionModels,
-      showResetTimes: primary?.usage?.showResetTimes ?? fallback.usage.showResetTimes,
+      ...usage,
+      refreshIntervalMs: Math.max(5_000, usage.refreshIntervalMs),
     },
-    footer: {
-      mode: primary?.footer?.mode ?? fallback.footer.mode,
-    },
+    footer: { ...fallback.footer, ...primary?.footer },
   };
 }
 
@@ -168,10 +161,7 @@ export const updateConfig = Effect.fn("XaiConfig.updateConfig")(function* (
   ).pipe(Effect.mapError(mapDocumentError("write", path)));
 });
 
-const defaultDocument = (): JsonObject => ({
-  usage: { ...DEFAULT_USAGE_CONFIG },
-  footer: { ...DEFAULT_FOOTER_CONFIG },
-});
+const defaultDocument = (): JsonObject => defaultConfigValues();
 
 export const resolveConfig = Effect.fn("XaiConfig.resolveConfig")(function* (
   cwd: string,

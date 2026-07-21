@@ -2,11 +2,24 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { ResolvedConfig } from "../config.ts";
 import { isModelUsingOAuth } from "../boundary/model-registry.ts";
 import { isFastActive, statusSegment, type FastSnapshot } from "../fast-controller.ts";
-import { abbreviateHomePath } from "../footer-layout.ts";
-import { formatTokens, sanitizeStatusText, truncateToWidth, visibleWidth } from "../format.ts";
-import { STATUS_KEY } from "../identity.ts";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import * as MutableRef from "effect/MutableRef";
 import { visibleStatusLine, type OpenAIProjection } from "../usage-controller.ts";
+
+function formatTokens(count: number): string {
+  if (count < 1000) return count.toString();
+  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1000000) return `${Math.round(count / 1000)}k`;
+  if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+  return `${Math.round(count / 1000000)}M`;
+}
+
+const sanitizeStatusText = (text: string) => text.replace(/[ \r\n\t]+/g, " ").trim();
+
+/** Abbreviates conventional Unix home paths without consulting process globals. */
+export function abbreviateHomePath(cwd: string): string {
+  return cwd.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+}
 
 export interface FooterController {
   readonly installed: boolean;
@@ -117,6 +130,12 @@ export function createFooterController(deps: {
     cachedSessionName = undefined;
   }
 
+  function resetFooterOwnership(): void {
+    activeFooterToken = undefined;
+    footerInstalled = false;
+    requestFooterRender = undefined;
+  }
+
   function installFooter(ctx: ExtensionContext): void {
     if (footerInstalled) {
       if (!activeFooterToken?.disposed) {
@@ -127,9 +146,7 @@ export function createFooterController(deps: {
         }
         return;
       }
-      footerInstalled = false;
-      activeFooterToken = undefined;
-      requestFooterRender = undefined;
+      resetFooterOwnership();
     }
 
     const token: FooterInstallToken = {
@@ -293,9 +310,7 @@ export function createFooterController(deps: {
             cleanup();
             token.disposed = true;
             if (activeFooterToken !== token || clearingFooterToken === token) return;
-            activeFooterToken = undefined;
-            footerInstalled = false;
-            requestFooterRender = undefined;
+            resetFooterOwnership();
           },
           invalidate() {},
           render(width: number): string[] {
@@ -329,11 +344,7 @@ export function createFooterController(deps: {
     try {
       ctx.ui.setFooter(undefined);
     } catch {
-      if (token?.disposed && activeFooterToken === token) {
-        activeFooterToken = undefined;
-        footerInstalled = false;
-        requestFooterRender = undefined;
-      }
+      if (token?.disposed && activeFooterToken === token) resetFooterOwnership();
       return;
     } finally {
       clearingFooterToken = undefined;
@@ -341,20 +352,24 @@ export function createFooterController(deps: {
     if (token && activeFooterToken === token) {
       token.disposed = true;
       for (const cleanup of token.cleanups) cleanup();
-      activeFooterToken = undefined;
-      footerInstalled = false;
-      requestFooterRender = undefined;
+      resetFooterOwnership();
     }
   }
 
   function setStatus(ctx: ExtensionContext, text: string | undefined): void {
     if (!text && !statusInstalled) return;
     try {
-      ctx.ui.setStatus(STATUS_KEY, text);
+      ctx.ui.setStatus("better-openai", text);
       statusInstalled = text !== undefined;
     } catch {
       // Retain the prior ownership state so a later update retries the mutation.
     }
+  }
+
+  function statusText(ctx: ExtensionContext, cfg: ResolvedConfig): string | undefined {
+    const fast = statusSegment(ctx, MutableRef.get(fastProjection));
+    const usage = visibleStatusLine(ctx, cfg, projection);
+    return [fast, usage].filter(Boolean).join(" | ") || undefined;
   }
 
   function updateFooter(ctx: ExtensionContext): void {
@@ -366,9 +381,7 @@ export function createFooterController(deps: {
           setStatus(ctx, undefined);
           return;
         }
-        const fast = statusSegment(ctx, MutableRef.get(fastProjection));
-        const usage = visibleStatusLine(ctx, cfg, projection);
-        setStatus(ctx, [fast, usage].filter(Boolean).join(" | ") || undefined);
+        setStatus(ctx, statusText(ctx, cfg));
         return;
       }
 
@@ -384,9 +397,7 @@ export function createFooterController(deps: {
         return;
       }
 
-      const fast = statusSegment(ctx, MutableRef.get(fastProjection));
-      const usage = visibleStatusLine(ctx, cfg, projection);
-      setStatus(ctx, [fast, usage].filter(Boolean).join(" | ") || undefined);
+      setStatus(ctx, statusText(ctx, cfg));
     } catch {
       // Footer/status updates are synchronous host callbacks and must remain total.
     }

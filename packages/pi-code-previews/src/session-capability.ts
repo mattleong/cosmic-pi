@@ -3,7 +3,7 @@ import * as Fiber from "effect/Fiber";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import type * as Layer from "effect/Layer";
-import { nodeFilePlatformLayer, type PiSessionRuntimeSlot } from "pi-cosmic-core";
+import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import type { CodePreviewRuntimeError } from "./application-layer";
 import type { CodePreviewSession } from "./session-service";
 import type { CodePreviewSettingsService } from "./settings/service";
@@ -98,18 +98,6 @@ export function installCodePreviewSessionCapability(
   );
 }
 
-export function installCodePreviewSessionSlot<
-  Input,
-  R,
-  RuntimeError extends CodePreviewRuntimeError,
->(slot: PiSessionRuntimeSlot<Input, SessionRequirements | R, RuntimeError>, token: number): void {
-  installCodePreviewSessionCapability({
-    token,
-    run: (effect, signal) => slot.run(effect, signal),
-    fork: (effect, signal) => slot.fork(effect, signal),
-  });
-}
-
 export function clearCodePreviewSessionCapability(token?: number): void {
   if (token === undefined || activeCapability?.token === token) {
     activeCapability = undefined;
@@ -135,13 +123,6 @@ export function runCodePreviewSessionEffect<A, E>(
       message: "Code preview session is not active.",
     }),
   );
-}
-
-export function forkCodePreviewSessionEffect<A, E>(
-  effect: Effect.Effect<A, E, SessionRequirements>,
-  signal?: AbortSignal,
-): CodePreviewSessionFiber<A, E> | undefined {
-  return activeCapability?.fork(effect, signal);
 }
 
 /** Queue only inside the active session; outside it the synchronous renderer remains unchanged. */

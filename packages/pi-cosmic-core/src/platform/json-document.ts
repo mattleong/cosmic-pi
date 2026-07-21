@@ -92,9 +92,9 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
         );
       });
 
-      const readObject = Effect.fn("JsonDocumentStore.readObject")(function* (path: string) {
-        return yield* readObjectUnlocked(path);
-      });
+      const readObject = Effect.fn("JsonDocumentStore.readObject")((path: string) =>
+        readObjectUnlocked(path),
+      );
 
       const encodeObject = (path: string, document: JsonObject) =>
         Schema.encodeUnknownEffect(JsonObjectFromString)(document).pipe(
@@ -161,15 +161,13 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
         );
       });
 
-      const writeObject = Effect.fn("JsonDocumentStore.writeObject")(function* (
-        path: string,
-        document: JsonObject,
-      ) {
-        yield* coordinator.withLock(
-          pathService.resolve(path),
-          writeObjectUnlocked(path, document, Effect.void),
-        );
-      });
+      const writeObject = Effect.fn("JsonDocumentStore.writeObject")(
+        (path: string, document: JsonObject) =>
+          coordinator.withLock(
+            pathService.resolve(path),
+            writeObjectUnlocked(path, document, Effect.void),
+          ),
+      );
 
       const modifyObject: AtomicJsonDocumentStoreShape["modifyObject"] = Effect.fn(
         "JsonDocumentStore.modifyObject",
@@ -190,11 +188,10 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
         );
       });
 
-      const updateObject = Effect.fn("JsonDocumentStore.updateObject")(function* (
-        path: string,
-        update: (document: JsonObject) => JsonObject,
-      ) {
-        return yield* modifyObject(path, (current) =>
+      const updateObject: JsonDocumentStoreShape["updateObject"] = Effect.fn(
+        "JsonDocumentStore.updateObject",
+      )((path, update) =>
+        modifyObject(path, (current) =>
           Effect.try({
             try: () => {
               const next = update(current);
@@ -202,8 +199,8 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
             },
             catch: mapError("update", path, "Unable to update JSON document."),
           }),
-        );
-      });
+        ),
+      );
 
       return JsonDocumentStore.of({ exists, readObject, writeObject, modifyObject, updateObject });
     }),

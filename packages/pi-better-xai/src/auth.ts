@@ -3,13 +3,18 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
+  decodeJwtPayloadText,
   JsonDocumentStore,
   JsonHttpClient,
   readSchemaDocument,
   type JsonObject,
 } from "pi-cosmic-core";
-import type { XaiAuthResult } from "./auth-result.ts";
-import { ModelRegistryAuth } from "./boundary/model-registry-auth.ts";
+import { PositiveIntegerSchema, type XaiAuthResult } from "./auth-result.ts";
+import {
+  ModelRegistryAuth,
+  provideModelRegistryAuth,
+  type WithoutModelRegistry,
+} from "./boundary/model-registry-auth.ts";
 import { isRecord } from "./utils.ts";
 
 export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
@@ -17,11 +22,6 @@ export const XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token";
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 
-const PositiveIntegerSchema = Schema.Number.check(
-  Schema.isFinite(),
-  Schema.isInt(),
-  Schema.isGreaterThan(0),
-);
 const XaiAuthDocumentSchema = Schema.Struct({ xai: Schema.optional(Schema.Unknown) });
 const XaiAuthEntrySchema = Schema.Struct({
   type: Schema.Literal("oauth"),
@@ -56,23 +56,14 @@ export interface XaiCredentialsWithSource extends XaiCredentials {
   readonly source: "modelRegistry" | "authFile";
 }
 
-const decodeBase64Url = (value: string) =>
-  Effect.try({
-    try: () => {
-      const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-      const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-      return Buffer.from(padded, "base64").toString("utf8");
-    },
-    catch: () =>
-      new XaiAuthError({ operation: "jwt", message: "Unable to decode xAI token metadata." }),
-  });
-
 export const extractTeamIdFromJwt = Effect.fn("XaiAuth.extractTeamIdFromJwt")(function* (
   token: string,
 ) {
-  const payload = token.split(".")[1];
-  if (!payload) return undefined;
-  const source = yield* decodeBase64Url(payload).pipe(Effect.catch(() => Effect.succeed("")));
+  const source = yield* Effect.try({
+    try: () => decodeJwtPayloadText(token),
+    catch: () =>
+      new XaiAuthError({ operation: "jwt", message: "Unable to decode xAI token metadata." }),
+  }).pipe(Effect.catch(() => Effect.succeed("")));
   if (!source) return undefined;
   const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(JwtPayloadSchema))(
     source,
@@ -247,12 +238,12 @@ const getXaiCredentialsResultEffect = Effect.fn("XaiAuth.getXaiCredentialsResult
     refreshFailure = refreshed.failure;
   }
 
-  const registryLookup = ModelRegistryAuth.use((registry) => registry.getApiKey).pipe(
+  const registryToken = yield* ModelRegistryAuth.use((registry) => registry.getApiKey).pipe(
     Effect.mapError(
       () => new XaiAuthError({ operation: "registry", message: "Unable to read xAI credentials." }),
     ),
+    Effect.result,
   );
-  const registryToken = yield* registryLookup.pipe(Effect.result);
   if (registryToken._tag === "Success") {
     const registryAccess = registryToken.success?.trim();
     if (registryAccess) {
@@ -294,12 +285,6 @@ const getXaiCredentialsEffect = Effect.fn("XaiAuth.getXaiCredentials")(function*
   return yield* new XaiAuthError({ operation: result.operation, message: result.message });
 });
 
-type WithoutModelRegistry<T extends Effect.Effect<unknown, unknown, unknown>> = Effect.Effect<
-  Effect.Success<T>,
-  Effect.Error<T>,
-  Exclude<Effect.Services<T>, ModelRegistryAuth>
->;
-
 export function getXaiCredentialsResult(
   authPath: string,
 ): ReturnType<typeof getXaiCredentialsResultEffect>;
@@ -312,14 +297,7 @@ export function getXaiCredentialsResult(
   ctx?: Pick<ExtensionContext, "modelRegistry">,
 ) {
   const effect = getXaiCredentialsResultEffect(authPath);
-  return ctx
-    ? effect.pipe(
-        Effect.provideService(
-          ModelRegistryAuth,
-          ModelRegistryAuth.make(() => ctx.modelRegistry),
-        ),
-      )
-    : effect;
+  return ctx ? provideModelRegistryAuth(effect, ctx) : effect;
 }
 
 export function getXaiCredentials(authPath: string): ReturnType<typeof getXaiCredentialsEffect>;
@@ -329,12 +307,5 @@ export function getXaiCredentials(
 ): WithoutModelRegistry<ReturnType<typeof getXaiCredentialsEffect>>;
 export function getXaiCredentials(authPath: string, ctx?: Pick<ExtensionContext, "modelRegistry">) {
   const effect = getXaiCredentialsEffect(authPath);
-  return ctx
-    ? effect.pipe(
-        Effect.provideService(
-          ModelRegistryAuth,
-          ModelRegistryAuth.make(() => ctx.modelRegistry),
-        ),
-      )
-    : effect;
+  return ctx ? provideModelRegistryAuth(effect, ctx) : effect;
 }

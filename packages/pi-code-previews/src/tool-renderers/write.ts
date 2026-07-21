@@ -139,18 +139,15 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
               0,
               0,
             );
-          if (shouldSkipWriteDiffBytes(beforeContent, content)) {
+          const skippedFor = shouldSkipWriteDiffBytes(beforeContent, content)
+            ? "large content"
+            : shouldSkipWriteDiffComplexity(beforeContent, content)
+              ? "complex rewrite"
+              : undefined;
+          if (skippedFor) {
             return new Text(
               theme.fg("success", "✓ Write applied") +
-                theme.fg("muted", " · diff skipped for large content"),
-              0,
-              0,
-            );
-          }
-          if (shouldSkipWriteDiffComplexity(beforeContent, content)) {
-            return new Text(
-              theme.fg("success", "✓ Write applied") +
-                theme.fg("muted", " · diff skipped for complex rewrite"),
+                theme.fg("muted", ` · diff skipped for ${skippedFor}`),
               0,
               0,
             );

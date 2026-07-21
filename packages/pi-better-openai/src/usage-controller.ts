@@ -14,11 +14,15 @@ import {
   JsonDocumentStore,
   freezeSnapshot,
   JsonHttpClient,
+  maskIdentifier,
   type JsonObject,
   makeFrozenProjection,
+  mergeRefreshRequest,
   makeSubscriptionRefresh,
+  sanitizeDiagnosticError,
   type RefreshRequest,
 } from "pi-cosmic-core";
+import { ignoreHostUi } from "./boundary/host-ui.ts";
 import type { ResolvedConfig } from "./config.ts";
 import {
   modifyConfig,
@@ -31,13 +35,11 @@ import {
 } from "./config.ts";
 import { isModelUsingOAuth } from "./boundary/model-registry.ts";
 import { currentModelKey } from "./fast-controller.ts";
-import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import { getCodexCredentialsResult } from "./codex-auth.ts";
 import {
   USAGE_URL,
   type CodexUsageResult,
   type UsageSnapshot,
-  formatResetCountdown,
   formatUsageDetails,
   formatUsageSnapshot,
   requestCodexUsageWithCredentials,
@@ -175,7 +177,6 @@ export interface OpenAIUsageServiceShape {
     desiredActive: boolean,
     afterCommit?: Effect.Effect<void>,
   ) => Effect.Effect<void, OpenAIConfigError>;
-  readonly reloadConfig: () => Effect.Effect<ResolvedConfig, OpenAIConfigError>;
   readonly readConfigDocument: () => Effect.Effect<JsonObject, OpenAIConfigError>;
 }
 type RefreshValue =
@@ -241,23 +242,9 @@ export class OpenAIUsageService extends Context.Service<
               return Effect.succeed([next, next] as const);
             })
             .pipe(Effect.orDie);
-        const notifyChanged = Effect.try({
-          try: onChange,
-          catch: () =>
-            new OpenAIBoundaryError({
-              operation: "render",
-              message: "Unable to update Better OpenAI UI.",
-            }),
-        }).pipe(Effect.catch(() => Effect.void));
+        const notifyChanged = ignoreHostUi("usage.render", onChange);
         const notifyUser = (message: string, level: "info" | "warning") =>
-          Effect.try({
-            try: () => MutableRef.get(context).ui.notify(message, level),
-            catch: () =>
-              new OpenAIBoundaryError({
-                operation: "notify",
-                message: "Unable to notify Better OpenAI status.",
-              }),
-          }).pipe(Effect.catch(() => Effect.void));
+          ignoreHostUi("usage.notify", () => MutableRef.get(context).ui.notify(message, level));
         const synchronize = (clearUsage = false) =>
           updateState((current) =>
             synchronizedProjection(current, MutableRef.get(context), clearUsage),
@@ -275,10 +262,7 @@ export class OpenAIUsageService extends Context.Service<
           never,
           Path.Path | JsonDocumentStore | JsonHttpClient
         >({
-          mergeRequest: (current, next) => ({
-            force: current?.force === true || next.force === true,
-            notify: current?.notify === true || next.notify === true,
-          }),
+          mergeRequest: mergeRefreshRequest,
           currentKey: key,
           interval: state.getState.pipe(
             Effect.map((current) => current.config?.usage.refreshIntervalMs ?? 60_000),
@@ -440,16 +424,6 @@ export class OpenAIUsageService extends Context.Service<
           provideDependencies(refreshEngine.request(request));
         const contextChanged = (clearUsage = false) =>
           synchronize(clearUsage).pipe(Effect.andThen(refreshEngine.invalidate), Effect.asVoid);
-        const reloadConfigWithRequirements = Effect.fn("OpenAIUsage.reloadConfig")(function* () {
-          const current = yield* state.getState;
-          const next = yield* resolveConfig(cwd, agentDir, projectTrusted);
-          const clearUsage = current.config ? usageConfigChanged(current.config, next) : true;
-          yield* updateState((current) => ({ ...current, config: next }));
-          yield* synchronize(clearUsage);
-          return next;
-        });
-        const reloadConfig = () =>
-          provideDependencies(configMutation.withPermit(reloadConfigWithRequirements()));
         const readGlobalFallback = Effect.fn("OpenAIUsage.readGlobalFallback")(function* (
           current: ResolvedConfig,
         ) {
@@ -544,7 +518,6 @@ export class OpenAIUsageService extends Context.Service<
           contextChanged,
           updateSetting,
           persistFast,
-          reloadConfig,
           readConfigDocument,
         });
       }).pipe(Effect.withSpan("pi-better-openai.usage.initialize")),
@@ -552,22 +525,6 @@ export class OpenAIUsageService extends Context.Service<
   }
 }
 
-export function formatStatus(
-  projection: MutableRef.MutableRef<OpenAIProjection>,
-  now: number,
-): string {
-  const state = MutableRef.get(projection);
-  if (!state.config?.usage.enabled) return "Usage display is disabled.";
-  if (!state.eligible) return "Usage hidden: current model is not an OpenAI subscription model.";
-  if (state.error) return `Usage unavailable: ${state.error}`;
-  if (!state.snapshot) return state.statusText;
-  const stale =
-    state.updatedAt !== undefined &&
-    now - state.updatedAt > state.config.usage.refreshIntervalMs * 2
-      ? ` | stale ${formatResetCountdown((now - state.updatedAt) / 1000)}`
-      : "";
-  return `${formatUsageDetails(state.snapshot, now)}${stale}`;
-}
 export function formatDebug(
   projection: MutableRef.MutableRef<OpenAIProjection>,
   ctx: ExtensionContext,

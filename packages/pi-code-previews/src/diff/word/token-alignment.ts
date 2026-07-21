@@ -1,5 +1,5 @@
 import type { WordChangeConfidence } from "./types";
-import { wordEmphasisTokenWeight, type WordEmphasisToken } from "./tokens";
+import { tokenAt, wordEmphasisTokenWeight, type WordEmphasisToken } from "./tokens";
 import { suffixAlignedPairs } from "./alignment";
 import type { TokenGroup } from "./ranges";
 
@@ -218,12 +218,6 @@ function appendChangedTokenGap(
     removed: { start: beforeStart, end: beforeEnd },
     added: { start: afterStart, end: afterEnd },
   });
-}
-
-function tokenAt(tokens: WordEmphasisToken[], index: number): WordEmphasisToken {
-  const token = tokens[index];
-  if (token === undefined) throw new RangeError(`Missing word-emphasis token ${index}`);
-  return token;
 }
 
 function candidateAt(

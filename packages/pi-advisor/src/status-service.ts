@@ -1,9 +1,6 @@
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
-import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import { interruptFiber } from "./boundary/clock.ts";
 import type { AdvisorEffectExecutor } from "./boundary/executor.ts";
@@ -17,11 +14,6 @@ export interface AdvisorStatusStartOptions {
   readonly render: (frame: number) => void;
 }
 
-export class AdvisorStatusRenderError extends Schema.TaggedErrorClass<AdvisorStatusRenderError>()(
-  "AdvisorStatusRenderError",
-  { message: Schema.String },
-) {}
-
 export const advisorStatusFramesEffect = (
   options: Pick<AdvisorStatusStartOptions, "delayMs" | "intervalMs" | "animated" | "frameCount">,
   render: (frame: number) => void,
@@ -29,11 +21,13 @@ export const advisorStatusFramesEffect = (
   Effect.suspend(() => {
     let frame = 1;
     const renderFrame = (nextFrame: number): Effect.Effect<void> =>
-      Effect.try({
-        try: () => render(nextFrame),
-        catch: () =>
-          new AdvisorStatusRenderError({ message: "Advisor status rendering failed safely." }),
-      }).pipe(Effect.catch(() => Effect.void));
+      Effect.sync(() => {
+        try {
+          render(nextFrame);
+        } catch {
+          // Status rendering is diagnostic-only and remains fail-open.
+        }
+      });
     const animation = Effect.suspend(() => {
       const nextFrame = frame % Math.max(1, options.frameCount);
       frame += 1;
@@ -58,11 +52,6 @@ export interface AdvisorStatusServiceShape {
   readonly clear: () => void;
   readonly shutdown: Effect.Effect<void>;
 }
-
-export class AdvisorStatusService extends Context.Service<
-  AdvisorStatusService,
-  AdvisorStatusServiceShape
->()("pi-advisor/status-service/AdvisorStatusService") {}
 
 /**
  * Owns the status delay/animation fiber. Generation checks make replacement and settlement
@@ -103,8 +92,5 @@ export const makeAdvisorStatusService = (
     };
     const shutdown = Effect.sync(clear);
     yield* Effect.addFinalizer(() => shutdown);
-    return AdvisorStatusService.of({ start, settle, clear, shutdown });
+    return { start, settle, clear, shutdown };
   });
-
-export const advisorStatusServiceLayer = (executor: AdvisorEffectExecutor) =>
-  Layer.effect(AdvisorStatusService, makeAdvisorStatusService(executor));

@@ -1,8 +1,8 @@
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/processEnv:off
 import { describe, expect, test } from "vitest";
+import { maskIdentifier, sanitizeDiagnosticError } from "pi-cosmic-core";
 import { _test } from "../index.ts";
-import { maskIdentifier, sanitizeDiagnosticError } from "../src/format.ts";
 
 const NOW = 1_752_883_200_000;
 const payload = () => ({

@@ -1,14 +1,10 @@
 import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "./names";
-import { requiresBashResultPolicy } from "./shell-result-policy";
+import { requiresBashResultPolicy, type ShellResultPreviewSettings } from "./shell-result-policy";
 
-interface RequiredToolSettings {
+interface RequiredToolSettings extends ShellResultPreviewSettings {
   readContentPreview: boolean;
   writeContentPreview: boolean;
   editDiffPreview: boolean;
-  bashResultPreview: boolean;
-  grepResultPreview: boolean;
-  findResultPreview: boolean;
-  lsResultPreview: boolean;
 }
 
 export function formatToolsSettingValue(tools: readonly CodePreviewToolName[]): string {
@@ -40,10 +36,6 @@ export function getEffectiveCodePreviewTools(
   configuredTools: Iterable<CodePreviewToolName>,
   settings: RequiredToolSettings,
 ): CodePreviewToolName[] {
-  return orderCodePreviewTools(getEffectiveCodePreviewToolSet(configuredTools, settings));
-}
-
-function orderCodePreviewTools(tools: Iterable<CodePreviewToolName>): CodePreviewToolName[] {
-  const enabled = new Set(tools);
+  const enabled = getEffectiveCodePreviewToolSet(configuredTools, settings);
   return ALL_CODE_PREVIEW_TOOLS.filter((tool) => enabled.has(tool));
 }

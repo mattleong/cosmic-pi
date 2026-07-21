@@ -1,5 +1,5 @@
 import type { AddedDiffLine, RemovedDiffLine } from "../parse";
-import type { IndexedChangedLine } from "./changed-line";
+import { changedLineAt, changedLinePositions, type IndexedChangedLine } from "./changed-line";
 import {
   changedLineSimilarityDocuments,
   fallbackLineSimilarity,
@@ -389,28 +389,4 @@ function hasStrongSparseEvidence(candidate: SparseChangedLinePairCandidate): boo
     candidate.evidence - candidate.competingEvidence > MIN_SPARSE_EVIDENCE_MARGIN &&
     candidate.competingEvidence < candidate.evidence * MIN_SPARSE_EVIDENCE_RATIO
   );
-}
-
-type ChangedLinePositions = {
-  removed: Map<number, number>;
-  added: Map<number, number>;
-};
-
-function changedLinePositions(
-  removed: Array<IndexedChangedLine<RemovedDiffLine>>,
-  added: Array<IndexedChangedLine<AddedDiffLine>>,
-): ChangedLinePositions {
-  return {
-    removed: new Map(removed.map((line, index) => [line.index, index])),
-    added: new Map(added.map((line, index) => [line.index, index])),
-  };
-}
-
-function changedLineAt<T extends AddedDiffLine | RemovedDiffLine>(
-  lines: Array<IndexedChangedLine<T>>,
-  index: number,
-): IndexedChangedLine<T> {
-  const line = lines[index];
-  if (line === undefined) throw new RangeError(`Missing changed line ${index}`);
-  return line;
 }

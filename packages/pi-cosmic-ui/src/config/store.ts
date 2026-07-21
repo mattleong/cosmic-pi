@@ -31,6 +31,11 @@ const mapError = (operation: string, path: string) => () =>
     message: `Unable to ${operation} Cosmic UI configuration.`,
   });
 
+const stringArray = (candidate: unknown): readonly string[] | undefined =>
+  Array.isArray(candidate)
+    ? candidate.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+
 export const configPaths = Effect.fn("pi-cosmic-ui.config.paths")(function* (
   cwd: string,
   agentDir: string,
@@ -56,12 +61,8 @@ function decodeConfig(value: unknown): CosmicUiConfigFile {
     },
     { path: "footer" },
   ).value;
-  const strings = (candidate: unknown): readonly string[] | undefined => {
-    if (!Array.isArray(candidate)) return undefined;
-    return candidate.filter((entry): entry is string => typeof entry === "string");
-  };
-  const order = strings(root.footer?.order);
-  const hidden = strings(root.footer?.hidden);
+  const order = stringArray(root.footer?.order);
+  const hidden = stringArray(root.footer?.hidden);
   return {
     footer: {
       ...footer,
@@ -77,16 +78,7 @@ const resolveDocuments = (
   project: CosmicUiConfigFile | undefined,
   global: CosmicUiConfigFile | undefined,
 ): ResolvedCosmicUiConfig => {
-  const footer = {
-    enabled: project?.footer?.enabled ?? global?.footer?.enabled ?? DEFAULT_CONFIG.footer.enabled,
-    density: project?.footer?.density ?? global?.footer?.density ?? DEFAULT_CONFIG.footer.density,
-    order: project?.footer?.order ?? global?.footer?.order ?? DEFAULT_CONFIG.footer.order,
-    hidden: project?.footer?.hidden ?? global?.footer?.hidden ?? DEFAULT_CONFIG.footer.hidden,
-    mediaPlacement:
-      project?.footer?.mediaPlacement ??
-      global?.footer?.mediaPlacement ??
-      DEFAULT_CONFIG.footer.mediaPlacement,
-  };
+  const footer = Object.assign({}, DEFAULT_CONFIG.footer, global?.footer, project?.footer);
   return {
     configPath: projectExists ? paths.project : paths.global,
     projectConfigPath: paths.project,
@@ -217,11 +209,7 @@ export const setFooterVisibility = Effect.fn("pi-cosmic-ui.config.set-visibility
     cwd,
     agentDir,
     (footer, fresh) => {
-      const hidden = new Set(
-        Array.isArray(footer.hidden)
-          ? footer.hidden.filter((entry): entry is string => typeof entry === "string")
-          : fresh.footer.hidden,
-      );
+      const hidden = new Set(stringArray(footer.hidden) ?? fresh.footer.hidden);
       if (visible) hidden.delete(id);
       else hidden.add(id);
       return { ...footer, hidden: [...hidden] };

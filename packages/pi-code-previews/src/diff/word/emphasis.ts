@@ -2,7 +2,12 @@ import type { DiffWordEmphasis } from "../../settings/types";
 import { refinedRangesForChangedTokens } from "./range-refinement";
 import { filterLowSignalWordEmphasis } from "./smart-filter";
 import { collectChangedTokenGaps, type ChangedTokenGap } from "./token-alignment";
-import type { ConfidentWordChangeRanges, WordChangeConfidence, WordChangeRanges } from "./types";
+import {
+  hasWordChangeRanges,
+  type ConfidentWordChangeRanges,
+  type WordChangeConfidence,
+  type WordChangeRanges,
+} from "./types";
 import { wordEmphasisTokens, type WordEmphasisToken } from "./tokens";
 
 export type { ConfidentWordChangeRanges, WordChangeConfidence, WordChangeRanges } from "./types";
@@ -71,10 +76,6 @@ export function changedRangesForTokensWithConfidence(
 
 function stripWordChangeConfidence(ranges: ConfidentWordChangeRanges): WordChangeRanges {
   return { removed: ranges.removed, added: ranges.added };
-}
-
-function hasWordChangeRanges(ranges: WordChangeRanges): boolean {
-  return ranges.removed.length > 0 || ranges.added.length > 0;
 }
 
 function emptyWordChangeRanges(): ConfidentWordChangeRanges {

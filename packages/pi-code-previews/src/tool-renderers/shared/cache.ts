@@ -46,6 +46,3 @@ export function cachedDeferredPreview(
     source,
   );
 }
-
-/** Compatibility alias; new internal call sites use deferred terminology. */
-export const cachedAsyncPreview = cachedDeferredPreview;

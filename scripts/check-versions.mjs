@@ -1,19 +1,9 @@
-import { readFile, readdir } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 
-const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const packagesDir = join(rootDir, "packages");
+import { workspaceManifestPaths } from "./workspace-manifest-paths.mjs";
+
 const expectedVersion = process.argv[2];
-
-const packageDirectories = (await readdir(packagesDir, { withFileTypes: true }))
-  .filter((entry) => entry.isDirectory())
-  .map((entry) => join(packagesDir, entry.name))
-  .sort();
-
-const manifestPaths = [rootDir, ...packageDirectories].map((directory) =>
-  join(directory, "package.json"),
-);
+const manifestPaths = await workspaceManifestPaths();
 const manifests = await Promise.all(
   manifestPaths.map(async (path) => JSON.parse(await readFile(path, "utf8"))),
 );

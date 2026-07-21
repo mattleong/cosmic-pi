@@ -14,6 +14,7 @@ import {
   timingState,
   updateToolCallTiming,
   unwrapTimingComponent,
+  withLastComponent,
 } from "./tool-timing";
 import { codePreviewSettings, type ToolCallBackgroundMode } from "../settings/index";
 
@@ -156,11 +157,4 @@ function renderCodePreviewResult<TState, TArgs>(
   return shouldRenderBorderResultSeparately(state, context.isPartial)
     ? resultComponent
     : new Container();
-}
-
-function withLastComponent<TState, TArgs>(
-  context: PreviewRenderContext<TState, TArgs>,
-  lastComponent: Component | undefined,
-): PreviewRenderContext<TState, TArgs> {
-  return { ...context, lastComponent };
 }

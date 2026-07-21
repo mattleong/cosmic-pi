@@ -41,6 +41,9 @@ export interface StreamingHttpClientShape {
   ) => Effect.Effect<StreamingHttpResponse, StreamingHttpError, R>;
 }
 
+const streamingHttpError = (operation: StreamingHttpError["operation"], message: string) => () =>
+  new StreamingHttpError({ operation, message });
+
 export const encodeStreamingJsonBody = <A, E, R>(
   bodySchema: StreamingJsonBodyCodec<A, E, R>,
   body: A,
@@ -48,17 +51,12 @@ export const encodeStreamingJsonBody = <A, E, R>(
   Schema.encodeEffect(bodySchema)(body).pipe(
     Effect.flatMap((encodedBody) => Schema.decodeUnknownEffect(Schema.Json)(encodedBody)),
     Effect.mapError(
-      () =>
-        new StreamingHttpError({
-          operation: "encode",
-          message: "Streaming HTTP request body did not match the expected schema.",
-        }),
+      streamingHttpError(
+        "encode",
+        "Streaming HTTP request body did not match the expected schema.",
+      ),
     ),
   );
-
-type StreamingRequestBody =
-  | { readonly _tag: "None" }
-  | { readonly _tag: "Json"; readonly value: Schema.Json };
 
 export class StreamingHttpClient extends Context.Service<
   StreamingHttpClient,
@@ -70,45 +68,29 @@ export class StreamingHttpClient extends Context.Service<
       const client = yield* HttpClient.HttpClient;
       const execute = Effect.fn("StreamingHttpClient.execute")(function* (
         input: StreamingHttpRequest,
-        body: StreamingRequestBody,
+        body?: Schema.Json,
       ) {
         let outgoing =
           input.method === "POST"
             ? HttpClientRequest.post(input.url)
             : HttpClientRequest.get(input.url);
         if (input.headers) outgoing = HttpClientRequest.setHeaders(outgoing, input.headers);
-        if (body._tag === "Json") {
-          outgoing = yield* HttpClientRequest.bodyJson(outgoing, body.value).pipe(
+        if (body !== undefined) {
+          outgoing = yield* HttpClientRequest.bodyJson(outgoing, body).pipe(
             Effect.mapError(
-              () =>
-                new StreamingHttpError({
-                  operation: "encode",
-                  message: "Streaming HTTP request body could not be encoded.",
-                }),
+              streamingHttpError("encode", "Streaming HTTP request body could not be encoded."),
             ),
           );
         }
         const response = yield* client.execute(outgoing).pipe(
           Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
-          Effect.mapError(
-            () =>
-              new StreamingHttpError({
-                operation: "request",
-                message: "Streaming HTTP request failed.",
-              }),
-          ),
+          Effect.mapError(streamingHttpError("request", "Streaming HTTP request failed.")),
           Effect.withSpan("pi-cosmic-core.http.streaming.request", {
             attributes: { "http.request.method": input.method ?? "GET" },
           }),
         );
         const rawBody = response.stream.pipe(
-          Stream.mapError(
-            () =>
-              new StreamingHttpError({
-                operation: "stream",
-                message: "Streaming HTTP response failed.",
-              }),
-          ),
+          Stream.mapError(streamingHttpError("stream", "Streaming HTTP response failed.")),
         );
         return {
           status: response.status,
@@ -122,14 +104,14 @@ export class StreamingHttpClient extends Context.Service<
         } satisfies StreamingHttpResponse;
       });
       const requestRawBytes: StreamingHttpClientShape["requestRawBytes"] = (input) =>
-        execute(input, { _tag: "None" });
+        execute(input);
       const requestJsonRawBytes: StreamingHttpClientShape["requestJsonRawBytes"] = (
         input,
         bodySchema,
         body,
       ) =>
         encodeStreamingJsonBody(bodySchema, body).pipe(
-          Effect.flatMap((encodedBody) => execute(input, { _tag: "Json", value: encodedBody })),
+          Effect.flatMap((encodedBody) => execute(input, encodedBody)),
         );
       return StreamingHttpClient.of({ requestRawBytes, requestJsonRawBytes });
     }),

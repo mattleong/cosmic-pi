@@ -2,15 +2,6 @@ import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
-export interface AdvisorOwnedResource<A> {
-  readonly value: A;
-  readonly release: Effect.Effect<void>;
-}
-
-export interface AdvisorResourceState {
-  readonly child: AdvisorOwnedResource<unknown> | undefined;
-}
-
 export interface AdvisorResourceStateService {
   readonly replaceChild: <A, E, R>(
     acquire: Effect.Effect<A, E, R>,
@@ -22,14 +13,14 @@ export interface AdvisorResourceStateService {
 /** Effect-owned resource authority. Resource handles never enter AdvisorApplicationState. */
 export const makeAdvisorResourceState = (): Effect.Effect<AdvisorResourceStateService> =>
   Effect.gen(function* () {
-    const state = yield* SynchronizedRef.make<AdvisorResourceState>({ child: undefined });
+    const state = yield* SynchronizedRef.make<Effect.Effect<void> | undefined>(undefined);
     const lifecycleLock = yield* Semaphore.make(1);
-    const detachChild = SynchronizedRef.getAndSet(state, { child: undefined });
+    const detachChild = SynchronizedRef.getAndSet(state, undefined);
     const stopChild = lifecycleLock.withPermits(1)(
       Effect.uninterruptible(
         Effect.gen(function* () {
           const current = yield* detachChild;
-          if (current.child) yield* current.child.release;
+          if (current) yield* current;
         }),
       ),
     );
@@ -39,11 +30,12 @@ export const makeAdvisorResourceState = (): Effect.Effect<AdvisorResourceStateSe
           Effect.gen(function* () {
             const current = yield* detachChild;
             // Replacement stays fail-open if the previous finalizer defects.
-            if (current.child) yield* current.child.release.pipe(Effect.ignoreCause);
+            if (current) yield* current.pipe(Effect.ignoreCause);
             const value = yield* restore(acquire);
-            yield* SynchronizedRef.set(state, {
-              child: { value, release: Effect.suspend(() => release(value)) },
-            });
+            yield* SynchronizedRef.set(
+              state,
+              Effect.suspend(() => release(value)),
+            );
             return value;
           }),
         ),

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AddedDiffLine, RemovedDiffLine } from "../parse";
 import { indexedChangedLine, type IndexedChangedLine } from "./changed-line";
+import { profileLine, profilePlacement } from "./fixtures/profile-lines";
 import { matchChangedLines, type ChangedLinePair } from "./line-matching";
 
 test("line matching recovers a 33-line reversal above the full-matrix cutoff", () => {
@@ -141,27 +142,6 @@ test("sparse anchors do not preempt a stronger positional competitor", () => {
 
 function uniqueLine(index: number, value: "new" | "old"): string {
   return `const record${index}Checksum${1000 + index} = transform${index}(${value}${index});`;
-}
-
-function profileLine(logicalIndex: number, placement: string, side: "added" | "removed"): string {
-  const code = profileIdentifierCode(logicalIndex);
-  const changedArguments =
-    side === "removed" ? "oldRecord, legacyOptions" : "newAccount, modernSettings, metadata";
-  return `const profile${code} = build${code}Profile(profile${code}Type, slot("${placement}"), rank("${placement}"), ${changedArguments});`;
-}
-
-function profileIdentifierCode(index: number): string {
-  return `${String.fromCharCode(65 + Math.floor(index / 26))}${String.fromCharCode(
-    97 + (index % 26),
-  )}`;
-}
-
-function profilePlacement(position: number, count: number): string {
-  if (position * 2 === count - 1) return "center";
-  const index = position * 2 < count - 1 ? position : count - position - 1;
-  return `${position * 2 < count - 1 ? "cold" : "warm"}${profileIdentifierCode(
-    index,
-  ).toLowerCase()}`;
 }
 
 function removedLines(

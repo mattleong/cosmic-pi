@@ -20,6 +20,7 @@ import {
 } from "./boundary/node.ts";
 import { standaloneAdvisorExecutor } from "./boundary/executor.ts";
 import { snapshotDataRecord } from "./boundary/safe-data.ts";
+import { isOneOf } from "./utils.ts";
 export { isRecord } from "./utils.ts";
 
 export const ADVISOR_CONFIG_BASENAME = "pi-advisor.json";
@@ -28,7 +29,17 @@ export const MAX_TIMEOUT_MS = 180_000;
 export const MIN_CONTEXT_CHARS = 16_000;
 export const MAX_CONTEXT_CHARS = 240_000;
 
-export type AdvisorReviewPolicy = "corrective" | "guardrail" | "advisory";
+export const ADVISOR_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const satisfies readonly ModelThinkingLevel[];
+export const ADVISOR_REVIEW_POLICIES = ["corrective", "guardrail", "advisory"] as const;
+export type AdvisorReviewPolicy = (typeof ADVISOR_REVIEW_POLICIES)[number];
 export interface AdvisorConfig {
   enabled?: boolean | undefined;
   provider?: string | undefined;
@@ -53,16 +64,8 @@ export interface ResolvedAdvisorConfig {
 }
 export type AdvisorConfigPatch = Partial<AdvisorConfig>;
 
-export const AdvisorThinkingLevelSchema = Schema.Literals([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
-export const AdvisorReviewPolicySchema = Schema.Literals(["corrective", "guardrail", "advisory"]);
+export const AdvisorThinkingLevelSchema = Schema.Literals(ADVISOR_THINKING_LEVELS);
+export const AdvisorReviewPolicySchema = Schema.Literals(ADVISOR_REVIEW_POLICIES);
 export const ResolvedAdvisorConfigSchema = Schema.Struct({
   configPath: Schema.String,
   enabled: Schema.Boolean,
@@ -379,9 +382,7 @@ function normalizeReviewPolicy(value: unknown): AdvisorReviewPolicy {
   return validReviewPolicy(value) ?? DEFAULT_ADVISOR_CONFIG.reviewPolicy;
 }
 function validReviewPolicy(value: unknown): AdvisorReviewPolicy | undefined {
-  return value === "corrective" || value === "guardrail" || value === "advisory"
-    ? value
-    : undefined;
+  return isOneOf(value, ADVISOR_REVIEW_POLICIES) ? value : undefined;
 }
 function migrateLegacyReviewPolicy(raw: JsonObject): JsonObject {
   if (raw.reviewPolicy === "strict") return { ...raw, reviewPolicy: "corrective" };
@@ -390,15 +391,7 @@ function migrateLegacyReviewPolicy(raw: JsonObject): JsonObject {
   return raw;
 }
 function validThinkingLevel(value: unknown): ModelThinkingLevel | undefined {
-  return value === "off" ||
-    value === "minimal" ||
-    value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "xhigh" ||
-    value === "max"
-    ? value
-    : undefined;
+  return isOneOf(value, ADVISOR_THINKING_LEVELS) ? value : undefined;
 }
 function nonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;

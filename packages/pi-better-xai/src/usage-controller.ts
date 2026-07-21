@@ -15,11 +15,13 @@ import {
   JsonDocumentStore,
   JsonHttpClient,
   makeFrozenProjection,
+  mergeRefreshRequest,
   makeSubscriptionRefresh,
+  maskIdentifier,
+  sanitizeDiagnosticError,
   type RefreshRequest,
 } from "pi-cosmic-core";
 import { ModelRegistryAuth, isUsingOAuthAtHostBoundary } from "./boundary/model-registry-auth.ts";
-import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import { readXaiAuth } from "./auth.ts";
 import {
   decodeSettingUpdate,
@@ -34,7 +36,6 @@ import {
 import {
   BILLING_BASE_URL,
   type UsageSnapshot,
-  formatResetCountdown,
   formatUsageDetails,
   formatUsageSnapshot,
   requestXaiUsage,
@@ -68,6 +69,31 @@ const initialProjection = (): XaiProjection => ({
   teamId: undefined,
 });
 
+function withEligibility(
+  current: XaiProjection,
+  eligible: boolean,
+  clearUsage: boolean,
+): XaiProjection {
+  const statusText = eligible
+    ? "Usage unavailable."
+    : "Usage hidden: current model is not an xAI subscription model.";
+  return {
+    ...current,
+    eligible,
+    ...(clearUsage
+      ? {
+          snapshot: undefined,
+          statusLine: undefined,
+          error: undefined,
+          updatedAt: undefined,
+          statusText,
+        }
+      : eligible
+        ? {}
+        : { statusLine: undefined, error: undefined, statusText }),
+  };
+}
+
 export const makeProjection = (): MutableRef.MutableRef<XaiProjection> =>
   MutableRef.make(freezeSnapshot(initialProjection()));
 
@@ -97,26 +123,9 @@ export function synchronizeProjectionContext(
       ? isUsingOAuthAtHostBoundary(ctx.modelRegistry, model)
       : false;
   const eligible = state.config ? isXaiSubscriptionModel(ctx, state.config, isUsingOAuth) : false;
-  const statusText = eligible
-    ? "Usage unavailable."
-    : "Usage hidden: current model is not an xAI subscription model.";
   MutableRef.set(
     projection,
-    freezeSnapshot({
-      ...state,
-      eligible,
-      ...(options.clearUsage
-        ? {
-            snapshot: undefined,
-            statusLine: undefined,
-            error: undefined,
-            updatedAt: undefined,
-            statusText,
-          }
-        : !eligible
-          ? { statusLine: undefined, error: undefined, statusText }
-          : {}),
-    }),
+    freezeSnapshot(withEligibility(state, eligible, options.clearUsage ?? false)),
   );
 }
 
@@ -249,27 +258,10 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                 ? subscriptionEligibility(ctx, current.config)
                 : Effect.succeed(false);
               return eligible.pipe(
-                Effect.map((isEligible) => {
-                  const statusText = isEligible
-                    ? "Usage unavailable."
-                    : "Usage hidden: current model is not an xAI subscription model.";
-                  const next = {
-                    ...current,
-                    eligible: isEligible,
-                    ...(clearUsage
-                      ? {
-                          snapshot: undefined,
-                          statusLine: undefined,
-                          error: undefined,
-                          updatedAt: undefined,
-                          statusText,
-                        }
-                      : !isEligible
-                        ? { statusLine: undefined, error: undefined, statusText }
-                        : {}),
-                  };
-                  return [undefined, next] as const;
-                }),
+                Effect.map(
+                  (eligible) =>
+                    [undefined, withEligibility(current, eligible, clearUsage)] as const,
+                ),
               );
             })
             .pipe(Effect.orDie, Effect.asVoid);
@@ -287,10 +279,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
           never,
           Path.Path | JsonDocumentStore | JsonHttpClient | ModelRegistryAuth
         >({
-          mergeRequest: (current, next) => ({
-            force: current?.force === true || next.force === true,
-            notify: current?.notify === true || next.notify === true,
-          }),
+          mergeRequest: mergeRefreshRequest,
           currentKey: key,
           interval: state.getState.pipe(
             Effect.map((current) => current.config?.usage.refreshIntervalMs ?? 60_000),
@@ -357,36 +346,23 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                 yield* Effect.logWarning("Better xAI usage recovery: credentials_missing.");
               const latest = yield* updateState((current) => {
                 const cfg = current.config!;
-                if (value._tag === "Disabled")
+                if (value._tag === "Disabled" || value._tag === "Hidden")
                   return {
                     ...current,
                     eligible: false,
                     snapshot: undefined,
                     statusLine: undefined,
                     error: undefined,
-                    statusText: "Usage display is disabled.",
+                    statusText:
+                      value._tag === "Disabled"
+                        ? "Usage display is disabled."
+                        : "Usage hidden: current model is not an xAI subscription model.",
                   };
-                if (value._tag === "Hidden")
-                  return {
-                    ...current,
-                    eligible: false,
-                    snapshot: undefined,
-                    statusLine: undefined,
-                    error: undefined,
-                    statusText: "Usage hidden: current model is not an xAI subscription model.",
-                  };
-                if (value._tag === "Failure")
-                  return {
-                    ...current,
-                    eligible: true,
-                    snapshot: undefined,
-                    statusLine: undefined,
-                    error: value.message,
-                    statusText: `Usage unavailable: ${value.message}`,
-                    lastFetchAt: value.fetchedAt,
-                  };
-                if (value._tag === "Missing") {
-                  const message = `Missing xAI OAuth credentials in ${authPath}. Run /login xai.`;
+                if (value._tag === "Failure" || value._tag === "Missing") {
+                  const missing = value._tag === "Missing";
+                  const message = missing
+                    ? `Missing xAI OAuth credentials in ${authPath}. Run /login xai.`
+                    : value.message;
                   return {
                     ...current,
                     eligible: true,
@@ -395,8 +371,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                     error: message,
                     statusText: `Usage unavailable: ${message}`,
                     lastFetchAt: value.fetchedAt,
-                    authFound: false,
-                    teamId: undefined,
+                    ...(missing ? { authFound: false, teamId: undefined } : {}),
                   };
                 }
                 return {
@@ -468,23 +443,6 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
       Layer.provide(ModelRegistryAuth.layer(() => MutableRef.get(options.context).modelRegistry)),
     );
   }
-}
-
-export function formatStatus(
-  projection: MutableRef.MutableRef<XaiProjection>,
-  now: number,
-): string {
-  const state = MutableRef.get(projection);
-  if (!state.config?.usage.enabled) return "Usage display is disabled.";
-  if (!state.eligible) return "Usage hidden: current model is not an xAI subscription model.";
-  if (state.error) return `Usage unavailable: ${state.error}`;
-  if (!state.snapshot) return state.statusText;
-  const stale =
-    state.updatedAt !== undefined &&
-    now - state.updatedAt > state.config.usage.refreshIntervalMs * 2
-      ? ` | stale ${formatResetCountdown((now - state.updatedAt) / 1000)}`
-      : "";
-  return `${formatUsageDetails(state.snapshot, now)}${stale}`;
 }
 
 export function formatDebug(

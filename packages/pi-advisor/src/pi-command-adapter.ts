@@ -1,4 +1,3 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -11,16 +10,6 @@ export class PiCommandError extends Schema.TaggedErrorClass<PiCommandError>()("P
 
 export interface PiCommandAdapterShape {
   readonly fromPromise: <A>(operation: () => Promise<A>) => Effect.Effect<A, PiCommandError>;
-  readonly notify: (
-    ctx: ExtensionCommandContext,
-    message: string,
-    level: "info" | "warning" | "error",
-  ) => Effect.Effect<void>;
-  readonly select: (
-    ctx: ExtensionCommandContext,
-    title: string,
-    options: readonly string[],
-  ) => Effect.Effect<string | undefined, PiCommandError>;
 }
 
 /** The sole adapter for Pi's Promise-returning command UI. */
@@ -37,24 +26,6 @@ export class PiCommandAdapter extends Context.Service<PiCommandAdapter, PiComman
             new PiCommandError({
               operation: "handler",
               message: "Advisor command failed.",
-            }),
-        }),
-      notify: (ctx, message, level) =>
-        Effect.try({
-          try: () => ctx.ui.notify(message, level),
-          catch: () =>
-            new PiCommandError({
-              operation: "notify",
-              message: "Advisor command notification failed.",
-            }),
-        }).pipe(Effect.catch(() => Effect.void)),
-      select: (ctx, title, options) =>
-        Effect.tryPromise({
-          try: () => ctx.ui.select(title, [...options]),
-          catch: () =>
-            new PiCommandError({
-              operation: "select",
-              message: "Advisor command selection failed.",
             }),
         }),
     }),

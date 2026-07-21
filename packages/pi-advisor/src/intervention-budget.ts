@@ -1,4 +1,4 @@
-import type { AdvisorSeverity } from "./review.ts";
+import { advisorSeverityRank, type AdvisorSeverity } from "./review.ts";
 
 export const MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST = 2;
 export interface AdvisorInterventionBudgetSnapshot {
@@ -32,7 +32,10 @@ export const canDeliverAdvisorIntervention = (
 ): boolean => {
   if (severity === "nit" || state.delivered >= MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST)
     return false;
-  return state.highestSeverity === undefined || rank(severity) > rank(state.highestSeverity);
+  return (
+    state.highestSeverity === undefined ||
+    advisorSeverityRank(severity) > advisorSeverityRank(state.highestSeverity)
+  );
 };
 
 export const canCorrectAdvisorIntervention = (state: AdvisorInterventionBudgetSnapshot): boolean =>
@@ -45,7 +48,8 @@ export const commitAdvisorIntervention = (
 ): AdvisorInterventionBudgetSnapshot => {
   if (severity === "nit") return state;
   const highestSeverity =
-    !state.highestSeverity || rank(severity) > rank(state.highestSeverity)
+    !state.highestSeverity ||
+    advisorSeverityRank(severity) > advisorSeverityRank(state.highestSeverity)
       ? severity
       : state.highestSeverity;
   return {
@@ -76,8 +80,4 @@ export class AdvisorInterventionBudget {
   reset(): void {
     this.#state = emptyAdvisorInterventionBudget();
   }
-}
-
-function rank(severity: AdvisorSeverity): number {
-  return severity === "blocker" ? 2 : severity === "concern" ? 1 : 0;
 }

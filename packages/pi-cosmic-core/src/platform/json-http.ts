@@ -48,6 +48,9 @@ export interface JsonHttpClientShape {
 }
 
 const acceptsSuccessStatus = (status: number) => status >= 200 && status < 300;
+const jsonHttpError = (operation: JsonHttpError["operation"], message: string) => () =>
+  new JsonHttpError({ operation, message });
+const responseReadError = jsonHttpError("response", "Unable to read HTTP response.");
 
 export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClientShape>()(
   "pi-cosmic-core/platform/json-http/JsonHttpClient",
@@ -67,50 +70,23 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
 
           const response = yield* client.execute(outgoing).pipe(
             Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
-            Effect.mapError(
-              () =>
-                new JsonHttpError({
-                  operation: "request",
-                  message: "HTTP request failed.",
-                }),
-            ),
+            Effect.mapError(jsonHttpError("request", "HTTP request failed.")),
             Effect.withSpan("pi-cosmic-core.http.json.request", {
               attributes: { "http.request.method": input.method ?? "GET" },
             }),
           );
-          const accepted = (input.acceptStatus ?? acceptsSuccessStatus)(response.status);
-          if (!accepted) {
-            const errorBody = yield* response.text.pipe(
-              Effect.mapError(
-                () =>
-                  new JsonHttpError({
-                    operation: "response",
-                    message: "Unable to read HTTP response.",
-                  }),
-              ),
-            );
+          if (!(input.acceptStatus ?? acceptsSuccessStatus)(response.status)) {
+            const errorBody = yield* response.text.pipe(Effect.mapError(responseReadError));
             return {
               _tag: "Rejected",
               status: response.status,
               errorBody,
             } satisfies JsonHttpRejectedResponse;
           }
-          const rawBody = yield* response.json.pipe(
-            Effect.mapError(
-              () =>
-                new JsonHttpError({
-                  operation: "response",
-                  message: "Unable to read HTTP response.",
-                }),
-            ),
-          );
+          const rawBody = yield* response.json.pipe(Effect.mapError(responseReadError));
           const body = yield* Schema.decodeUnknownEffect(input.responseSchema)(rawBody).pipe(
             Effect.mapError(
-              () =>
-                new JsonHttpError({
-                  operation: "decode",
-                  message: "HTTP response did not match the expected schema.",
-                }),
+              jsonHttpError("decode", "HTTP response did not match the expected schema."),
             ),
             Effect.withSpan("pi-cosmic-core.http.json.decode", {
               attributes: { "http.response.status_code": response.status },

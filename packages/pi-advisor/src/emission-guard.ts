@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AdvisorReview, AdvisorSeverity } from "./review.ts";
+import { advisorSeverityRank, type AdvisorReview, type AdvisorSeverity } from "./review.ts";
 
 export const MAX_EMISSION_HISTORY = 32;
 export type EmissionSuppressionReason = "pass" | "content-free" | "duplicate" | "checkpoint-budget";
@@ -21,8 +21,6 @@ export interface AdvisorEmissionGuardState {
   readonly acceptedCheckpoints: readonly string[];
   readonly checkpointOrder: readonly string[];
 }
-const SEVERITY_RANK: Record<AdvisorSeverity, number> = { nit: 0, concern: 1, blocker: 2 };
-
 export function normalizeEmissionContent(value: string): string {
   return value
     .normalize("NFKC")
@@ -34,7 +32,7 @@ export function normalizeEmissionContent(value: string): string {
 export function highestAdvisorSeverity(review: AdvisorReview): AdvisorSeverity | undefined {
   let highest: AdvisorSeverity | undefined;
   for (const finding of review.findings)
-    if (!highest || SEVERITY_RANK[finding.severity] > SEVERITY_RANK[highest])
+    if (!highest || advisorSeverityRank(finding.severity) > advisorSeverityRank(highest))
       highest = finding.severity;
   return highest;
 }
@@ -70,7 +68,7 @@ export const createAdvisorEmissionGuardState = (
         current,
         match[2]!.toLowerCase(),
         match[1]!.toLowerCase() as AdvisorSeverity,
-      ).state;
+      );
   }
   return current;
 };
@@ -91,7 +89,7 @@ export const evaluateAdvisorEmission = (
     return { state, decision: { accepted: false, reason: "content-free" } };
   const hash = createHash("sha256").update(normalized).digest("hex");
   const previousSeverity = state.seen[hash];
-  if (previousSeverity && SEVERITY_RANK[previousSeverity] >= SEVERITY_RANK[severity])
+  if (previousSeverity && advisorSeverityRank(previousSeverity) >= advisorSeverityRank(severity))
     return { state, decision: { accepted: false, reason: "duplicate" } };
   const rollback: AdvisorEmissionRollback = {
     checkpointId,
@@ -111,13 +109,13 @@ export const evaluateAdvisorEmission = (
       if (index >= 0) acceptedCheckpoints.splice(index, 1);
     }
   }
-  const recorded = recordHash(
+  const next = recordHash(
     { ...state, acceptedCheckpoints, checkpointOrder },
     hash,
     severity,
     rollback.hashEvicted,
   );
-  return { state: recorded.state, decision: { accepted: true, hash, severity, rollback } };
+  return { state: next, decision: { accepted: true, hash, severity, rollback } };
 };
 
 export const rollbackAdvisorEmission = (
@@ -162,7 +160,7 @@ function recordHash(
     if (staleSeverity) evicted.push({ hash: stale, severity: staleSeverity });
     delete seen[stale];
   }
-  return { state: { ...state, seen, order }, evicted };
+  return { ...state, seen, order };
 }
 
 /** Compatibility facade for external callers; application state uses the reducers above. */

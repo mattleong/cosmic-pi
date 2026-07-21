@@ -10,6 +10,7 @@ export {
 export {
   makeRefreshCoordinator,
   makeRefreshCoordinatorWith,
+  mergeRefreshRequest,
   type RefreshCoordinator,
   type RefreshRequest,
 } from "./src/refresh-coordinator.ts";
@@ -96,6 +97,7 @@ export {
   layer as nodePlatformLayer,
 } from "./src/platform/node.ts";
 export {
+  decodeJwtPayloadText,
   maskIdentifier,
   redactDiagnosticValue,
   sanitizeDiagnosticError,

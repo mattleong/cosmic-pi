@@ -41,18 +41,15 @@ const defineOwnJsonProperties = (target: JsonObject, source: JsonObject): void =
   }
 };
 
-const copyJsonObject = (source: JsonObject): JsonObject => {
-  const target: JsonObject = {};
-  defineOwnJsonProperties(target, source);
-  return target;
-};
+const decodeSchemaObject = <A>(path: string, schema: Schema.Decoder<A>, raw: JsonObject) =>
+  Schema.decodeUnknownEffect(schema)(raw).pipe(
+    Effect.map((value): DecodedDocument<A> => ({ value, raw })),
+    Effect.mapError(mapError("decode", path, "Unable to decode schema document.")),
+  );
 
 /** Decode an owned JSON object while retaining its unknown fields for forward-compatible updates. */
 export const decodeSchemaDocument = <A>(schema: Schema.Decoder<A>, raw: JsonObject) =>
-  Schema.decodeUnknownEffect(schema)(raw).pipe(
-    Effect.map((value): DecodedDocument<A> => ({ value, raw })),
-    Effect.mapError(mapError("decode", "unknown", "Unable to decode schema document.")),
-  );
+  decodeSchemaObject("unknown", schema, raw);
 
 export const readSchemaDocument = Effect.fn("SchemaDocument.read")(function* <A>(
   path: string,
@@ -63,10 +60,7 @@ export const readSchemaDocument = Effect.fn("SchemaDocument.read")(function* <A>
     .readObject(path)
     .pipe(Effect.mapError(mapError("read", path, "Unable to read schema document.")));
   if (raw === undefined) return undefined;
-  return yield* Schema.decodeUnknownEffect(schema)(raw).pipe(
-    Effect.map((value): DecodedDocument<A> => ({ value, raw })),
-    Effect.mapError(mapError("decode", path, "Unable to decode schema document.")),
-  );
+  return yield* decodeSchemaObject(path, schema, raw);
 });
 
 /**
@@ -98,7 +92,8 @@ export const updateSchemaDocument = Effect.fn("SchemaDocument.update")(function*
         catch: mapError("update", path, "Unable to update schema document."),
       });
       const encoded = yield* encodeSchemaObject(path, schema, value);
-      const document = copyJsonObject(raw);
+      const document: JsonObject = {};
+      defineOwnJsonProperties(document, raw);
       for (const key of Object.keys(currentEncoded)) delete document[key];
       defineOwnJsonProperties(document, encoded);
       return { value, document } satisfies JsonDocumentModification<A>;

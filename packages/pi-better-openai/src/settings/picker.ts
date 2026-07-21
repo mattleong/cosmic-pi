@@ -1,6 +1,5 @@
 import { getSettingsListTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey } from "@earendil-works/pi-tui";
-import { truncateToWidth, visibleWidth } from "../format.ts";
+import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { SettingsPickerItem } from "./items.ts";
 
 export function textPanel(title: string, lines: string[], done: () => void) {
@@ -40,9 +39,6 @@ export function createSettingsSubmenu(
   }
   function selectedItem(): SettingsPickerItem | undefined {
     return currentItems()[selectedIndex];
-  }
-  function close(): void {
-    done();
   }
   function closeNestedSubmenu(): void {
     submenuComponent = undefined;
@@ -132,7 +128,7 @@ export function createSettingsSubmenu(
       }
       const current = currentItems();
       if (current.length === 0) {
-        if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) close();
+        if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) done();
         else if (matchesKey(data, Key.backspace)) searchQuery = searchQuery.slice(0, -1);
         else if (data.length === 1 && data >= "!" && data <= "~") searchQuery += data;
         return;
@@ -149,7 +145,7 @@ export function createSettingsSubmenu(
       )
         activateSelected();
       else if (matchesKey(data, Key.left)) cycleSelected(-1);
-      else if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) close();
+      else if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) done();
       else if (matchesKey(data, Key.backspace)) {
         searchQuery = searchQuery.slice(0, -1);
         selectedIndex = 0;

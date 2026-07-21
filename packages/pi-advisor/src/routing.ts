@@ -32,10 +32,10 @@ export function routeAdvisorFinding(input: AdvisorRoutingInput): AdvisorRoute {
   if (input.cancellationLatched || input.parentState === "aborting") return "silent";
   if (input.severity === "concern" && input.immunityActive) return "silent";
 
-  if (input.policy === "advisory") {
-    return input.parentState === "active" ? "push-direct" : "silent";
-  }
-  if (input.severity === "concern" && input.policy === "guardrail") {
+  if (
+    input.policy === "advisory" ||
+    (input.severity === "concern" && input.policy === "guardrail")
+  ) {
     return input.parentState === "active" ? "push-direct" : "silent";
   }
 
@@ -101,57 +101,46 @@ export const clearAdvisorCancellation = (
 
 /** Compatibility facade. New application code stores the immutable snapshot directly. */
 export class AdvisorRoutingState {
-  private completed = 0;
-  private immunityUntil = 0;
-  private cancelled = false;
+  private state = emptyAdvisorRoutingState();
 
   constructor(snapshot?: Partial<AdvisorRoutingStateSnapshot>) {
-    if (snapshot) this.restore(snapshot);
+    if (snapshot) this.state = sanitizeAdvisorRoutingState(snapshot);
   }
 
   get snapshot(): AdvisorRoutingStateSnapshot {
-    return {
-      completedPrimaryTurns: this.completed,
-      immunityUntilCompletedTurn: this.immunityUntil,
-      cancellationLatched: this.cancelled,
-    };
+    return { ...this.state };
   }
 
   get immunityActive(): boolean {
-    return this.immunityUntil > 0 && this.completed <= this.immunityUntil;
+    return isAdvisorImmunityActive(this.state);
   }
 
   get cancellationLatched(): boolean {
-    return this.cancelled;
+    return this.state.cancellationLatched;
   }
 
   completePrimaryTurn(): void {
-    this.completed += 1;
+    this.state = completeAdvisorPrimaryTurn(this.state);
   }
 
   armInterruption(): void {
-    this.immunityUntil = this.completed + ADVISOR_IMMUNITY_COMPLETED_TURNS;
+    this.state = armAdvisorInterruption(this.state);
   }
 
   latchCancellation(): void {
-    this.cancelled = true;
+    this.state = latchAdvisorCancellation(this.state);
   }
 
   clearCancellationForGenuineUserPrompt(): void {
-    this.cancelled = false;
+    this.state = clearAdvisorCancellation(this.state);
   }
 
   restore(snapshot: Partial<AdvisorRoutingStateSnapshot>): void {
-    const state = sanitizeAdvisorRoutingState(snapshot);
-    this.completed = state.completedPrimaryTurns;
-    this.immunityUntil = state.immunityUntilCompletedTurn;
-    this.cancelled = state.cancellationLatched;
+    this.state = sanitizeAdvisorRoutingState(snapshot);
   }
 
   reset(): void {
-    this.completed = 0;
-    this.immunityUntil = 0;
-    this.cancelled = false;
+    this.state = emptyAdvisorRoutingState();
   }
 }
 

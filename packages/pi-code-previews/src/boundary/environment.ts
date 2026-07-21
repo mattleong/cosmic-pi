@@ -9,11 +9,6 @@ export function currentWorkingDirectory(): string {
   return process.cwd();
 }
 
-export function warnBoundary(message: string): void {
-  const warn = Reflect.get(console, "warn") as (message: string) => void;
-  warn(message);
-}
-
 export function setEnvironmentValueForTest(name: string, value: string | undefined): void {
   const environment = Reflect.get(process, "env") as Record<string, string | undefined>;
   if (value === undefined) delete environment[name];

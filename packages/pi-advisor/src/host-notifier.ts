@@ -28,17 +28,3 @@ export const hostNotifierLayer = Layer.succeed(
     },
   }),
 );
-
-export const hostNotifierTestLayer = (notify: HostNotifierShape["notify"]) =>
-  Layer.succeed(
-    HostNotifier,
-    HostNotifier.of({
-      notify: (ctx, message, level) => {
-        try {
-          notify(ctx, message, level);
-        } catch {
-          // Test callbacks obey the same hostile-boundary isolation as production.
-        }
-      },
-    }),
-  );

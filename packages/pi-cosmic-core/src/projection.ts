@@ -19,11 +19,10 @@ export interface FrozenProjection<State, Snapshot> {
   ) => Effect.Effect<A, E | ProjectionError, R>;
 }
 
+const projectionError = (path: string, message: string) => new ProjectionError({ path, message });
+
 const unsupported = (path: string, kind: string): never => {
-  throw new ProjectionError({
-    path,
-    message: `Projection snapshot value at ${path} is not plain data (${kind}).`,
-  });
+  throw projectionError(path, `Projection snapshot value at ${path} is not plain data (${kind}).`);
 };
 
 const childPath = (path: string, key: string | number): string =>
@@ -96,10 +95,7 @@ const projectSnapshot = <State, Snapshot>(
     catch: (error) =>
       error instanceof ProjectionError
         ? error
-        : new ProjectionError({
-            path: "$",
-            message: "Unable to publish a plain immutable state snapshot.",
-          }),
+        : projectionError("$", "Unable to publish a plain immutable state snapshot."),
   });
 
 /** Creates one authoritative synchronized state with an immutable synchronous snapshot projection. */
@@ -115,8 +111,7 @@ export const makeFrozenProjection = <State, Snapshot>(
     if (publish) {
       yield* Effect.try({
         try: () => publish(initialSnapshot),
-        catch: () =>
-          new ProjectionError({ path: "$", message: "Unable to publish the initial snapshot." }),
+        catch: () => projectionError("$", "Unable to publish the initial snapshot."),
       });
     }
 
@@ -132,8 +127,7 @@ export const makeFrozenProjection = <State, Snapshot>(
                     MutableRef.set(snapshot, published);
                     return [result, next] as const;
                   },
-                  catch: () =>
-                    new ProjectionError({ path: "$", message: "Unable to publish the snapshot." }),
+                  catch: () => projectionError("$", "Unable to publish the snapshot."),
                 }),
               ),
             ),

@@ -5,10 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { ProcessCoordinator } from "pi-cosmic-core";
-import { advisorIsoNow } from "./boundary/clock.ts";
-import { stringifyJson } from "./boundary/json.ts";
-import { appendRotatingTextSync, nodeDirname, nodeJoin } from "./boundary/node.ts";
-import { standaloneAdvisorExecutor } from "./boundary/executor.ts";
+import { nodeDirname, nodeJoin } from "./boundary/node.ts";
 import { snapshotDataRecord } from "./boundary/safe-data.ts";
 import { safeAdvisorLabel } from "./advisor-label.ts";
 import { redactSensitiveText } from "./observation-protocol.ts";
@@ -89,33 +86,6 @@ export const logAdvisorFailureEffect = Effect.fn("AdvisorFailureLog.append")(fun
     .pipe(Effect.catch(() => Effect.sync((): undefined => undefined)));
 });
 
-export function logAdvisorFailure(
-  configPath: string,
-  details: AdvisorFailureDetails,
-): string | undefined {
-  const logPath = getAdvisorFailureLogPath(configPath);
-  const provider = safeAdvisorLabel(details.provider);
-  const model = safeAdvisorLabel(details.model);
-  const record = {
-    timestamp: advisorIsoNow(standaloneAdvisorExecutor),
-    ...(provider ? { provider } : {}),
-    ...(model ? { model } : {}),
-    timeoutMs: details.timeoutMs,
-    contextChars: details.contextChars,
-    durationMs: Math.round(details.durationMs),
-    error: serializeError(details.error),
-  };
-  return appendRotatingTextSync(logPath, `${stringifyJson(record)}\n`, MAX_LOG_BYTES)
-    ? logPath
-    : undefined;
-}
-
-export function logAdvisorFailureAsync(
-  configPath: string,
-  details: AdvisorFailureDetails,
-): Promise<string | undefined> {
-  return standaloneAdvisorExecutor.run(logAdvisorFailureEffect(configPath, details));
-}
 function serializeError(error: unknown): { name: string; message: string; stack?: string } {
   if (typeof error !== "object" || error === null) {
     const primitive =

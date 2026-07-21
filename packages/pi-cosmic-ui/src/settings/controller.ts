@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
+  DEFAULT_FOOTER_ORDER,
   FOOTER_DENSITIES,
   FooterDensitySchema,
   MEDIA_PLACEMENTS,
@@ -20,24 +21,8 @@ import {
 } from "../boundary/host-callback.ts";
 import { CosmicUiService } from "../host-service.ts";
 
-const VISIBILITY_IDS = [
-  "model",
-  "effort",
-  "location",
-  "openai.fast",
-  "branch",
-  "pullRequest",
-  "git",
-  "context",
-  "session",
-  "metrics",
-  "openai.usage",
-  "xai.usage",
-  "extensions",
-] as const;
-
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
-const VisibilityIdSchema = Schema.Literals(VISIBILITY_IDS);
+const VisibilityIdSchema = Schema.Literals(DEFAULT_FOOTER_ORDER);
 
 export type CosmicUiSettingChange =
   | {
@@ -104,16 +89,16 @@ export function registerSettingsCommand(
     callbacks: HostCallbackBoundaryShape;
   },
 ): void {
+  const hostQuery = <A>(callback: () => A, fallback: A) =>
+    options.callbacks.invoke("host-query", callback, fallback);
   pi.registerCommand("cosmic-ui", {
     description: "Configure Cosmic UI elements",
     handler: (_args, ctx) => {
       options.updateContext(ctx);
-      if (options.callbacks.invoke("host-query", () => ctx.mode, "rpc") !== "tui") {
-        options.callbacks.invoke(
-          "notify",
-          () => ctx.ui.notify("Cosmic UI settings require interactive TUI mode.", "warning"),
-          undefined,
-        );
+      const notify = (message: string, level: "warning" | "error") =>
+        options.callbacks.invoke("notify", () => ctx.ui.notify(message, level), undefined);
+      if (hostQuery(() => ctx.mode, "rpc") !== "tui") {
+        notify("Cosmic UI settings require interactive TUI mode.", "warning");
         return Promise.resolve();
       }
       const abort = snapshotHostAbortSignal(options.callbacks, () => ctx.signal);
@@ -138,7 +123,7 @@ export function registerSettingsCommand(
           currentValue: cfg.footer.mediaPlacement,
           values: [...MEDIA_PLACEMENTS],
         },
-        ...VISIBILITY_IDS.map((id) => ({
+        ...DEFAULT_FOOTER_ORDER.map((id) => ({
           id: `visible:${id}`,
           label: `Show ${id}`,
           currentValue: String(!cfg.footer.hidden.includes(id)),
@@ -151,101 +136,71 @@ export function registerSettingsCommand(
         handleInput: () => undefined,
       });
       let opened: Promise<unknown> | undefined;
-      const invoked = options.callbacks.invoke(
-        "host-query",
-        () => {
-          opened = ctx.ui.custom((tui, theme, _keybindings, done) =>
-            options.callbacks.invoke(
-              "host-query",
-              () => {
-                const container = new Container();
-                container.addChild(new Text(theme.fg("accent", theme.bold("Cosmic UI")), 1, 1));
-                const list = new SettingsList(
-                  items,
-                  Math.min(14, items.length + 2),
-                  getSettingsListTheme(),
-                  (id, value) => {
-                    const change = decodeCosmicUiSettingChange(id, value);
-                    if (!change) return;
-                    const update =
-                      change._tag === "SetVisibility"
-                        ? CosmicUiService.use((service) =>
-                            service.setFooterVisibility(change.id, change.visible),
-                          )
-                        : CosmicUiService.use((service) =>
-                            service.updateFooterConfig(change.patch),
-                          );
-                    const pending = options.callbacks.invoke<Promise<unknown> | undefined>(
-                      "host-query",
-                      () => options.run(update, signal),
-                      undefined,
-                    );
-                    if (!pending) {
-                      options.callbacks.invoke(
-                        "notify",
-                        () => ctx.ui.notify("Unable to update Cosmic UI configuration.", "error"),
-                        undefined,
-                      );
-                      return;
-                    }
-                    void recoverSettingsUpdate(
-                      pending.then(() => {
-                        options.callbacks.invoke(
-                          "request-render",
-                          () => {
-                            list.updateValue(id, value);
-                            options.update(ctx);
-                            tui.requestRender();
-                          },
-                          undefined,
-                        );
-                      }),
-                      options.callbacks,
-                      () => ctx.ui.notify("Unable to update Cosmic UI configuration.", "error"),
-                    );
-                  },
-                  () => options.callbacks.invoke("host-query", () => done(undefined), undefined),
-                  { enableSearch: true },
+      const invoked = hostQuery(() => {
+        opened = ctx.ui.custom((tui, theme, _keybindings, done) =>
+          hostQuery(() => {
+            const container = new Container();
+            container.addChild(new Text(theme.fg("accent", theme.bold("Cosmic UI")), 1, 1));
+            const list = new SettingsList(
+              items,
+              Math.min(14, items.length + 2),
+              getSettingsListTheme(),
+              (id, value) => {
+                const change = decodeCosmicUiSettingChange(id, value);
+                if (!change) return;
+                const update =
+                  change._tag === "SetVisibility"
+                    ? CosmicUiService.use((service) =>
+                        service.setFooterVisibility(change.id, change.visible),
+                      )
+                    : CosmicUiService.use((service) => service.updateFooterConfig(change.patch));
+                const pending = hostQuery<Promise<unknown> | undefined>(
+                  () => options.run(update, signal),
+                  undefined,
                 );
-                container.addChild(list);
-                return {
-                  render: (width: number) =>
-                    options.callbacks.invoke("host-query", () => container.render(width), []),
-                  invalidate: () =>
-                    options.callbacks.invoke("host-query", () => container.invalidate(), undefined),
-                  handleInput: (data: string) =>
+                if (!pending) {
+                  notify("Unable to update Cosmic UI configuration.", "error");
+                  return;
+                }
+                void recoverSettingsUpdate(
+                  pending.then(() => {
                     options.callbacks.invoke(
-                      "host-query",
-                      () => list.handleInput?.(data),
+                      "request-render",
+                      () => {
+                        list.updateValue(id, value);
+                        options.update(ctx);
+                        tui.requestRender();
+                      },
                       undefined,
-                    ),
-                };
+                    );
+                  }),
+                  options.callbacks,
+                  () => ctx.ui.notify("Unable to update Cosmic UI configuration.", "error"),
+                );
               },
-              inertComponent(),
-            ),
-          );
-          return true;
-        },
-        false,
-      );
+              () => hostQuery(() => done(undefined), undefined),
+              { enableSearch: true },
+            );
+            container.addChild(list);
+            return {
+              render: (width: number) => hostQuery(() => container.render(width), []),
+              invalidate: () => hostQuery(() => container.invalidate(), undefined),
+              handleInput: (data: string) => hostQuery(() => list.handleInput?.(data), undefined),
+            };
+          }, inertComponent()),
+        );
+        return true;
+      }, false);
       if (!invoked) {
         abort?.release();
-        options.callbacks.invoke(
-          "notify",
-          () => ctx.ui.notify("Unable to open Cosmic UI settings.", "error"),
-          undefined,
-        );
+        notify("Unable to open Cosmic UI settings.", "error");
         return Promise.resolve();
       }
       return Promise.resolve(opened)
         .then(
           () => undefined,
           () => {
-            options.callbacks.invoke(
-              "notify",
-              () => ctx.ui.notify("Unable to open Cosmic UI settings.", "error"),
-              undefined,
-            );
+            notify("Unable to open Cosmic UI settings.", "error");
           },
         )
         .finally(() => abort?.release());

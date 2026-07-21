@@ -83,7 +83,6 @@ import {
   createAdvisorEmissionGuardState,
   evaluateAdvisorEmission,
   exportAdvisorEmissionRecords,
-  highestAdvisorSeverity,
   rollbackAdvisorEmission,
   type AdvisorEmissionRollback,
 } from "./emission-guard.ts";
@@ -138,7 +137,6 @@ import {
   type AdvisorSessionInput,
 } from "./boundary/host-context.ts";
 import {
-  emptyAdvisorOutcomes,
   type AdvisorCommandActions,
   type AdvisorSessionMetrics,
   registerAdvisorCommands,
@@ -156,6 +154,7 @@ import {
   startAdvisorToolTrajectory,
 } from "./trajectory.ts";
 import {
+  emptyAdvisorSessionMetrics,
   initialAdvisorApplicationState,
   makeAdvisorApplicationStateStore,
   recordAdvisorReceipt,
@@ -200,7 +199,6 @@ export const awaitAdvisorCatchUpEffect = (
 interface AdvisorCheckpointHandle {
   readonly abortInput: AdvisorAbortInput;
   invalidate(): void;
-  cancel(): void;
   cancelEffect: Effect.Effect<void>;
   settlement: Effect.Effect<CheckpointSettlement>;
 }
@@ -217,15 +215,11 @@ export type AdvisorSkipReason =
   | "disabled"
   | "empty"
   | "incomplete"
-  | "pending-input"
   | "session-paused"
   | "unconfigured";
 
 interface LastCandidate {
   candidate: string;
-  generation: number;
-  messages: unknown[];
-  sessionEpoch: number;
 }
 
 type AdvisorHostEventHandler = (event: never, ctx: ExtensionContext) => unknown | Promise<unknown>;
@@ -286,7 +280,7 @@ export const advisorControllerLayer = Layer.effect(
     const resources = yield* makeAdvisorResourceState();
     const projection = yield* makeAdvisorProjection({
       config: normalizeAdvisorConfig({}, ""),
-      metrics: emptySessionMetrics(),
+      metrics: emptyAdvisorSessionMetrics(),
       paused: false,
       started: false,
     });
@@ -359,7 +353,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       const statusService = yield* makeAdvisorStatusService(options.executor);
       const projection = yield* makeAdvisorProjection({
         config: normalizeAdvisorConfig({}, ""),
-        metrics: emptySessionMetrics(),
+        metrics: emptyAdvisorSessionMetrics(),
         paused: false,
         started: false,
       });
@@ -386,7 +380,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         },
       }) as ExtensionAPI;
       const parentExecutor: AdvisorEffectExecutor = options.executor;
-      let parentGeneration = 0;
       let removeHostCancellation: (() => void) | undefined;
       let configRevision = 0;
       let checkpointId = 0;
@@ -458,16 +451,10 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       const cloneMetrics = (current: AdvisorSessionMetrics): AdvisorSessionMetrics => ({
         ...current,
         outcomes: { ...current.outcomes },
-        ...(current.skippedReviews
-          ? { skippedReviews: { ...current.skippedReviews } }
-          : { skippedReviews: {} }),
-        ...(current.usageByModel
-          ? {
-              usageByModel: Object.fromEntries(
-                Object.entries(current.usageByModel).map(([key, usage]) => [key, { ...usage }]),
-              ),
-            }
-          : { usageByModel: {} }),
+        skippedReviews: { ...current.skippedReviews },
+        usageByModel: Object.fromEntries(
+          Object.entries(current.usageByModel ?? {}).map(([key, usage]) => [key, { ...usage }]),
+        ),
       });
       const mutateMetrics = (mutate: (next: AdvisorSessionMetrics) => void): void => {
         updateApplicationState((state) => {
@@ -502,16 +489,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
       ): number => setDomainCounter(key, applicationStateStore.get()[key] + 1);
       const recordReceipt = (ids: readonly string[]): void => {
-        updateApplicationState((state) =>
-          recordAdvisorReceipt(
-            {
-              ...state,
-              cancellationEpoch: applicationStateStore.get().cancellationEpoch,
-              requestSequence: applicationStateStore.get().requestSequence,
-            },
-            ids,
-          ),
-        );
+        updateApplicationState((state) => recordAdvisorReceipt(state, ids));
       };
       const clearPendingReceipt = (): void => {
         updateApplicationState((state) => ({ ...state, pendingReceipt: undefined }));
@@ -540,20 +518,10 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       let latestStateSummary = "";
       let latestDurableSummary: AdvisorDurableReviewSummary = summarizeAdvisorReview();
 
-      const executorForSession = (): AdvisorEffectExecutor | undefined => parentExecutor;
       const runSessionEffect = <A, E>(
         effect: Effect.Effect<A, E, AdvisorPlatform | PiCommandAdapter>,
-      ): Promise<A> => {
-        const executor = executorForSession();
-        return executor
-          ? executor.run(effect.pipe(Effect.provideService(PiCommandAdapter, commandAdapter)))
-          : Promise.reject(
-              new AdvisorExtensionError({
-                operation: "session execution",
-                message: "Advisor session runtime is not active.",
-              }),
-            );
-      };
+      ): Promise<A> =>
+        parentExecutor.run(effect.pipe(Effect.provideService(PiCommandAdapter, commandAdapter)));
 
       const notifyBestEffort = hostNotifier.notify;
 
@@ -668,10 +636,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         startedAt: number,
       ): AdvisorSessionMetrics => {
         const next = cloneMetrics(target);
-        const duration = Math.max(
-          0,
-          (parentExecutor ? advisorNow(parentExecutor) : startedAt) - startedAt,
-        );
+        const duration = Math.max(0, advisorNow(parentExecutor) - startedAt);
         next.latestDurationMs = duration;
         next.settledReviews = incrementBounded(next.settledReviews);
         next.totalDurationMs = (next.totalDurationMs ?? 0) + duration;
@@ -759,9 +724,9 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       };
 
       const clearPendingRecovery = (): void => {
-        const pending = applicationStateStore.get().pendingPersistentRecovery;
-        if (pending) {
-          updateApplicationState((state) => {
+        updateApplicationState((state) => {
+          const pending = state.pendingPersistentRecovery;
+          if (pending) {
             const nextMetrics = cloneMetrics(state.metrics);
             nextMetrics.outcomes.suppressed += 1;
             return {
@@ -782,14 +747,13 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                 correctionUsed: true,
               }),
             };
-          });
-        } else {
-          updateApplicationState((state) => ({
+          }
+          return {
             ...state,
             pendingPersistentRecovery: undefined,
             abortInProgress: undefined,
-          }));
-        }
+          };
+        });
       };
 
       let activeChildStart: CancellationLatch | undefined;
@@ -847,11 +811,10 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
               !currentConfig().configured
             )
               return undefined;
-            const executor = executorForSession();
             const sessionInput = activeSessionInput;
-            if (!executor || !sessionInput) return undefined;
+            if (!sessionInput) return undefined;
             nextRuntime = createRuntime
-              ? advisorRuntimeEffectsFromDriver(createRuntime(executor))
+              ? advisorRuntimeEffectsFromDriver(createRuntime(parentExecutor))
               : productionRuntimeService;
             runtime = nextRuntime;
             const branch =
@@ -888,12 +851,8 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                   : emptyAdvisorFindingLifecycle(),
                 emissionGuard: createAdvisorEmissionGuardState(ledger?.emissionHashes),
               }));
-              latestStateSummary = "";
-              latestDurableSummary = summarizeAdvisorReview();
-              if (ledger) {
-                latestDurableSummary = ledger.reviewSummary;
-                latestStateSummary = renderDurableReviewSummary(ledger.reviewSummary);
-              }
+              latestDurableSummary = ledger?.reviewSummary ?? summarizeAdvisorReview();
+              latestStateSummary = ledger ? renderDurableReviewSummary(ledger.reviewSummary) : "";
             }
             const runtimeConfig = { ...currentConfig() };
             const startCancellation = makeCancellationLatch();
@@ -905,10 +864,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
               },
               config: runtimeConfig,
               seed: startSeed,
-              stateSummary:
-                restoration === "restore-branch" && ledger
-                  ? renderDurableReviewSummary(ledger.reviewSummary)
-                  : latestStateSummary,
+              stateSummary: latestStateSummary,
               ...(instructions.content ? { instructions: instructions.content } : {}),
               onUsage: (usage: AdvisorUsageTelemetry) => {
                 if (startEpoch !== applicationStateStore.get().epoch) return;
@@ -945,7 +901,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
               ),
             );
             if (activeChildStart === startCancellation) activeChildStart = undefined;
-            if (startEpoch !== applicationStateStore.get().epoch || executor !== parentExecutor) {
+            if (startEpoch !== applicationStateStore.get().epoch) {
               yield* nextRuntime.dispose();
               return undefined;
             }
@@ -966,7 +922,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
               },
               getReprimeState: () => ({ seed: activeSeed(ctx), stateSummary: latestStateSummary }),
             });
-            if (startEpoch !== applicationStateStore.get().epoch || executor !== parentExecutor) {
+            if (startEpoch !== applicationStateStore.get().epoch) {
               yield* nextQueue.disposeEffect();
               return undefined;
             }
@@ -1069,7 +1025,8 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       const persistLedger = (anchor: ParentAnchor): void => {
         if (!anchor || anchor === UNREADABLE_PARENT_ANCHOR || typeof pi.appendEntry !== "function")
           return;
-        const route = applicationStateStore.get().routing;
+        const state = applicationStateStore.get();
+        const pending = state.pendingPersistentRecovery;
         try {
           pi.appendEntry(
             ADVISOR_CHECKPOINT_ENTRY_TYPE,
@@ -1077,24 +1034,18 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
               fingerprint: fingerprint(),
               anchorId: anchor,
               reviewSummary: latestDurableSummary,
-              cancellationLatched: route.cancellationLatched,
-              completedPrimaryTurns: route.completedPrimaryTurns,
-              immunityUntilCompletedTurn: route.immunityUntilCompletedTurn,
-              interventionBudget: applicationStateStore.get().pendingPersistentRecovery
+              cancellationLatched: state.routing.cancellationLatched,
+              completedPrimaryTurns: state.routing.completedPrimaryTurns,
+              immunityUntilCompletedTurn: state.routing.immunityUntilCompletedTurn,
+              interventionBudget: pending
                 ? {
-                    ...applicationStateStore.get().pendingPersistentRecovery!.budgetBefore,
+                    ...pending.budgetBefore,
                     correctionUsed: true,
                   }
-                : applicationStateStore.get().interventionBudget,
-              findingLifecycle: applicationStateStore.get().findingLifecycle.records,
-              emissionHashes: exportAdvisorEmissionRecords(
-                applicationStateStore.get().emissionGuard,
-              ).filter(
-                (record) =>
-                  !applicationStateStore.get().pendingPersistentRecovery ||
-                  !record.endsWith(
-                    `:${applicationStateStore.get().pendingPersistentRecovery!.emission.hash}`,
-                  ),
+                : state.interventionBudget,
+              findingLifecycle: state.findingLifecycle.records,
+              emissionHashes: exportAdvisorEmissionRecords(state.emissionGuard).filter(
+                (record) => !pending || !record.endsWith(`:${pending.emission.hash}`),
               ),
             }),
           );
@@ -1125,12 +1076,10 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           });
           return "silent";
         };
-        if (
+        const deliveryCancelled = () =>
           parentSignalAborted(abortInput) ||
-          expectedCancellationEpoch !== applicationStateStore.get().cancellationEpoch
-        ) {
-          return discardAtDeliveryBoundary();
-        }
+          expectedCancellationEpoch !== applicationStateStore.get().cancellationEpoch;
+        if (deliveryCancelled()) return discardAtDeliveryBoundary();
         const review: AdvisorReview = {
           verdict: checkpoint.verdict,
           summary: checkpoint.summary,
@@ -1161,12 +1110,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             review.suggestions ?? [],
           );
           if (!suggestion) return suppress();
-          if (
-            parentSignalAborted(abortInput) ||
-            expectedCancellationEpoch !== applicationStateStore.get().cancellationEpoch
-          ) {
-            return discardAtDeliveryBoundary();
-          }
+          if (deliveryCancelled()) return discardAtDeliveryBoundary();
           const perspectiveReview: AdvisorReview = {
             verdict: "suggest",
             summary: review.summary,
@@ -1273,11 +1217,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         mutateMetrics((next) => {
           next.revise += 1;
         });
-        const severity = highestAdvisorSeverity(filteredReview);
-        if (!severity) {
-          rollbackUndelivered(emission);
-          return "silent";
-        }
+        const { severity } = emission;
         const currentState = applicationStateStore.get();
         const trajectory =
           trajectoryId !== undefined && currentState.activeTrajectory?.id === trajectoryId
@@ -1342,10 +1282,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
 
         // Cancellation is synchronous and wins over a provider completion queued in
         // the same tick. Recheck at the exact delivery boundary before every send path.
-        if (
-          parentSignalAborted(abortInput) ||
-          expectedCancellationEpoch !== applicationStateStore.get().cancellationEpoch
-        ) {
+        if (deliveryCancelled()) {
           rollbackUndelivered(emission);
           return discardAtDeliveryBoundary();
         }
@@ -1496,7 +1433,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         let activeQueue: AdvisorReviewQueue | undefined;
         let activeCheckpointId: string | undefined;
         const ledgerScope = lifecycleScope(options.ctx);
-        const startedAt = parentExecutor ? advisorNow(parentExecutor) : 0;
+        const startedAt = advisorNow(parentExecutor);
         let durationRecorded = false;
         let outcomeRecorded = false;
         const finishReviewDuration = () => {
@@ -1604,27 +1541,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             });
           }
           finishReviewDuration();
-          if (
-            !validForDelivery ||
-            requestEpoch !== applicationStateStore.get().epoch ||
-            requestCancellationEpoch !== applicationStateStore.get().cancellationEpoch ||
-            requestParentTurnId !== applicationStateStore.get().parentTurnId ||
-            requestConfigRevision !== configRevision ||
-            parentSignalAborted(requestAbortInput) ||
-            (options.requiresEnabled &&
-              (!currentConfig().enabled || isPaused() || !currentConfig().configured)) ||
-            parentHasPendingMessages(options.ctx) ||
-            !branchContains(options.ctx, anchor)
-          ) {
-            mutateMetrics((next) => {
-              next.lastAction = "discarded";
-            });
-            return discardRequest();
-          }
-          if (
-            options.trajectoryId !== undefined &&
-            applicationStateStore.get().activeTrajectory?.id !== options.trajectoryId
-          ) {
+          if (!requestIsCurrent()) {
             mutateMetrics((next) => {
               next.lastAction = "discarded";
             });
@@ -1714,7 +1631,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         return {
           abortInput: requestAbortInput,
           invalidate: orchestrated.invalidate,
-          cancel: orchestrated.cancel,
           cancelEffect: orchestrated.cancelEffect,
           settlement: orchestrated.settlement.pipe(
             Effect.map(
@@ -1736,10 +1652,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             next.catchUpWaits = incrementBounded(next.catchUpWaits);
             next.activeCatchUpWaits = incrementBounded(next.activeCatchUpWaits);
           });
-          let timeoutRecorded = false;
           const recordTimeout = () => {
-            if (timeoutRecorded) return;
-            timeoutRecorded = true;
             mutateMetrics((next) => {
               next.catchUpTimeouts = incrementBounded(next.catchUpTimeouts);
             });
@@ -1791,9 +1704,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           ).pipe(
             Effect.tap((outcome) =>
               Effect.sync(() => {
-                if (outcome === "timeout") {
-                  recordTimeout();
-                } else if (outcome === "failed" && !timeoutRecorded) {
+                if (outcome === "failed") {
                   mutateMetrics((next) => {
                     next.catchUpFailures = incrementBounded(next.catchUpFailures);
                   });
@@ -1917,10 +1828,8 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           const ctx = activeContext;
           if (!ctx) return;
           persistCurrentLedger(ctx);
-          const executor = executorForSession();
-          if (!executor) return;
           try {
-            executor.fork(startRuntimeEffect(ctx));
+            parentExecutor.fork(startRuntimeEffect(ctx));
           } catch {
             // Slot deactivation already owns runtime cleanup; the next session reloads disk state.
           }
@@ -1931,17 +1840,8 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         {
           get: () => projection.getSnapshot().config,
           getMetrics: () => projection.getSnapshot().metrics,
-          persist: (patch, path) => {
-            const executor = executorForSession();
-            return executor
-              ? executor.run(configRepository.patch(patch, path, applyCommittedConfigEffect))
-              : Promise.reject(
-                  new AdvisorExtensionError({
-                    operation: "config persistence",
-                    message: "Advisor session runtime is not active.",
-                  }),
-                );
-          },
+          persist: (patch, path) =>
+            parentExecutor.run(configRepository.patch(patch, path, applyCommittedConfigEffect)),
           update: (next) => runSessionEffect(applyCommittedConfigEffect(next)),
         },
         commandActions,
@@ -1951,7 +1851,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       const sessionInitializeEffect = (input: AdvisorSessionInput) =>
         Effect.gen(function* () {
           const ctx = input.ctx;
-          ++parentGeneration;
           advanceDomainCounter("epoch");
           advanceDomainCounter("cancellationEpoch");
           pendingExplicitStart = undefined;
@@ -2047,7 +1946,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         });
       const sessionShutdownEffect = () =>
         Effect.sync(() => {
-          ++parentGeneration;
           advanceDomainCounter("epoch");
           pendingExplicitStart = undefined;
           activeContext = undefined;
@@ -2137,22 +2035,24 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         };
         updateApplicationState((state) => ({ ...state, activeTrajectory: observation }));
         activeTrajectoryResource = { id: observation.id, ctx };
-        const executor = executorForSession();
-        if (!executor) return;
-        activeTrajectoryResource.cancelTimer = advisorDelay(executor, LONG_TURN_REVIEW_MS, () => {
-          const current = applicationStateStore.get().activeTrajectory;
-          if (!current || current.id !== observation.id || current.reviewQueued) return;
-          mutateTrajectory(observation.id, (next) => ({ ...next, reviewQueued: true }));
-          requestCheckpoint({
-            ctx,
-            focus: "trajectory",
-            phase: "progress",
-            source: "automatic-progress",
-            requiresEnabled: true,
-            trajectoryId: observation.id,
-            abortOnBlocker: false,
-          });
-        });
+        activeTrajectoryResource.cancelTimer = advisorDelay(
+          parentExecutor,
+          LONG_TURN_REVIEW_MS,
+          () => {
+            const current = applicationStateStore.get().activeTrajectory;
+            if (!current || current.id !== observation.id || current.reviewQueued) return;
+            mutateTrajectory(observation.id, (next) => ({ ...next, reviewQueued: true }));
+            requestCheckpoint({
+              ctx,
+              focus: "trajectory",
+              phase: "progress",
+              source: "automatic-progress",
+              requiresEnabled: true,
+              trajectoryId: observation.id,
+              abortOnBlocker: false,
+            });
+          },
+        );
       });
 
       capturingPi.on("message_update", (event, _ctx) => {
@@ -2399,14 +2299,8 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           }
           return;
         }
-        const messages = activeContextMessages(ctx);
         if (classification.phase === "final") {
-          lastCandidate = {
-            candidate: classification.candidate,
-            generation: applicationStateStore.get().parentTurnId,
-            messages,
-            sessionEpoch: applicationStateStore.get().epoch,
-          };
+          lastCandidate = { candidate: classification.candidate };
           updateApplicationState((state) => ({ ...state, hasLastCandidate: true }));
         }
         const explicitlyRequested =
@@ -2429,11 +2323,11 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             ),
           );
         }
-        if (!explicitlyRequested && !currentConfig().enabled) {
+        if (!currentConfig().enabled) {
           recordSkip("disabled");
           return;
         }
-        if (!explicitlyRequested && isPaused()) {
+        if (isPaused()) {
           recordSkip("session-paused");
           return;
         }
@@ -2508,7 +2402,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
-          ++parentGeneration;
           removeHostCancellation?.();
           removeHostCancellation = undefined;
           activeContext = undefined;
@@ -2589,6 +2482,13 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     const runController = <A, E>(
       operation: (controller: AdvisorControllerShape) => Effect.Effect<A, E>,
     ): Promise<A> => parentSlot.run(Effect.flatMap(AdvisorController, operation));
+    const ignoreFailure = <A>(promise: Promise<A>): Promise<void> =>
+      promise.then(
+        () => undefined,
+        () => undefined,
+      );
+    const forwardEvent = (name: string, event: unknown, ctx: ExtensionContext): Promise<void> =>
+      ignoreFailure(runController((controller) => controller.event(name, event as never, ctx)));
 
     for (const name of ["advisor", "advisor-settings", "advisor-status", "advisor-usage"]) {
       pi.registerCommand(name, {
@@ -2598,18 +2498,13 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         handler: (args, ctx) => {
           const projected = commandHandlers.get(name);
           if ((name === "advisor-status" || name === "advisor-usage") && projected) {
-            return runController((controller) => controller.refreshProjection)
-              .catch(() => undefined)
-              .then(() => projected(args, ctx))
-              .then(
-                () => undefined,
-                () => undefined,
-              );
+            return ignoreFailure(
+              runController((controller) => controller.refreshProjection)
+                .catch(() => undefined)
+                .then(() => projected(args, ctx)),
+            );
           }
-          return runController((controller) => controller.command(name, args, ctx)).then(
-            () => undefined,
-            () => undefined,
-          );
+          return ignoreFailure(runController((controller) => controller.command(name, args, ctx)));
         },
       });
     }
@@ -2626,71 +2521,21 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         .then(() => parentSlot.shutdown()),
     );
     pi.on("session_compact", (event, ctx) =>
-      runController((controller) => controller.compact(event as never, ctx)).then(
-        () => undefined,
-        () => undefined,
-      ),
+      ignoreFailure(runController((controller) => controller.compact(event as never, ctx))),
     );
     pi.on("session_tree", (event, ctx) =>
-      runController((controller) => controller.tree(event as never, ctx)).then(
-        () => undefined,
-        () => undefined,
-      ),
+      ignoreFailure(runController((controller) => controller.tree(event as never, ctx))),
     );
-    pi.on("message_end", (event, ctx) =>
-      runController((controller) => controller.event("message_end", event as never, ctx)).then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    pi.on("turn_start", (event, ctx) =>
-      runController((controller) => controller.event("turn_start", event as never, ctx)).then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    pi.on("message_update", (event, ctx) =>
-      runController((controller) => controller.event("message_update", event as never, ctx)).then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    pi.on("tool_execution_start", (event, ctx) =>
-      runController((controller) =>
-        controller.event("tool_execution_start", event as never, ctx),
-      ).then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
+    pi.on("message_end", (event, ctx) => forwardEvent("message_end", event, ctx));
+    pi.on("turn_start", (event, ctx) => forwardEvent("turn_start", event, ctx));
+    pi.on("message_update", (event, ctx) => forwardEvent("message_update", event, ctx));
+    pi.on("tool_execution_start", (event, ctx) => forwardEvent("tool_execution_start", event, ctx));
     pi.on("tool_execution_update", (event, ctx) =>
-      runController((controller) =>
-        controller.event("tool_execution_update", event as never, ctx),
-      ).then(
-        () => undefined,
-        () => undefined,
-      ),
+      forwardEvent("tool_execution_update", event, ctx),
     );
-    pi.on("tool_execution_end", (event, ctx) =>
-      runController((controller) =>
-        controller.event("tool_execution_end", event as never, ctx),
-      ).then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    pi.on("agent_settled", (event, ctx) =>
-      runController((controller) => controller.event("agent_settled", event as never, ctx)).then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    pi.on("turn_end", (event, ctx) =>
-      runController((controller) => controller.event("turn_end", event as never, ctx)).then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
+    pi.on("tool_execution_end", (event, ctx) => forwardEvent("tool_execution_end", event, ctx));
+    pi.on("agent_settled", (event, ctx) => forwardEvent("agent_settled", event, ctx));
+    pi.on("turn_end", (event, ctx) => forwardEvent("turn_end", event, ctx));
   };
 }
 
@@ -2842,29 +2687,6 @@ function incrementBounded(value: number | undefined): number {
   return Math.min(Number.MAX_SAFE_INTEGER, (value ?? 0) + 1);
 }
 
-function emptySessionMetrics(): AdvisorSessionMetrics {
-  return {
-    attempted: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    cost: 0,
-    discarded: 0,
-    failure: 0,
-    inputTokens: 0,
-    modelResponses: 0,
-    outputTokens: 0,
-    outcomes: emptyAdvisorOutcomes(),
-    pass: 0,
-    revise: 0,
-    skippedReviews: {},
-    suppressedFindings: 0,
-    settledReviews: 0,
-    totalDurationMs: 0,
-    totalTokens: 0,
-    usageByModel: {},
-  };
-}
-
 function activeContextMessages(ctx: ExtensionContext): unknown[] {
   const result = readAdvisorContextEntriesAtHostBoundary(ctx);
   return result.ok ? result.value.flatMap(sessionEntryToContextMessages) : [];
@@ -3010,17 +2832,6 @@ function classifyReviewCheckpoint(event: TurnEndEvent): CandidateClassification 
     : { eligible: false, reason: "empty" };
 }
 
-function classifyReviewCandidate(event: TurnEndEvent): CandidateClassification {
-  const result = classifyReviewCheckpoint(event);
-  return result.eligible && result.phase !== "final"
-    ? { eligible: false, reason: "incomplete" }
-    : result;
-}
-
-function isReviewCandidate(event: TurnEndEvent): boolean {
-  return classifyReviewCandidate(event).eligible;
-}
-
 function assistantCheckpointText(message: unknown): string | undefined {
   message = snapshotData(message);
   if (!isRecord(message) || message.role !== "assistant" || !Array.isArray(message.content)) {
@@ -3058,17 +2869,6 @@ function assistantText(message: unknown): string | undefined {
     .trim();
   return text || undefined;
 }
-
-export const _extensionTest = {
-  activeContextMessages,
-  assistantCheckpointText,
-  assistantText,
-  classifyFailure,
-  classifyReviewCandidate,
-  classifyReviewCheckpoint,
-  isGenuineUserMessage,
-  isReviewCandidate,
-};
 
 export const _advisorControllerTest = {
   runtimeEffectsFromDriver: advisorRuntimeEffectsFromDriver,

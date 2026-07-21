@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { JsonObject } from "pi-cosmic-core";
 import type { ResolvedConfig } from "./schema.ts";
-import { FOOTER_MODES, FooterModeSchema } from "./schema.ts";
+import { FiniteNumberSchema, FOOTER_MODES, FooterModeSchema } from "./schema.ts";
 
 export type SettingsOptionSection = "usage" | "footer";
 
@@ -22,31 +22,16 @@ export type SettingsOptionDescriptor = {
   currentValue(cfg: ResolvedConfig): string;
 };
 
-const decodeJson = (id: string, schema: Schema.Decoder<boolean | number>) => (raw: string) =>
-  Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(raw).pipe(
-    Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
-  );
-const decodeLiteral = (id: string, schema: Schema.Decoder<string>) => (raw: string) =>
-  Schema.decodeUnknownEffect(schema)(raw).pipe(
-    Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
-  );
-const finiteNumber = Schema.Number.check(Schema.isFinite());
+const decode =
+  <A extends boolean | number | string>(id: string, schema: Schema.Decoder<A>) =>
+  (raw: string) =>
+    Schema.decodeUnknownEffect(schema)(raw).pipe(
+      Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
+    );
+const decodeJson = (id: string, schema: Schema.Decoder<boolean | number>) =>
+  decode(id, Schema.fromJsonString(schema));
 
-export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
-  {
-    id: "footer.mode",
-    section: "footer",
-    key: "mode",
-    label: "Footer mode",
-    currentValue: (cfg) => cfg.footer.mode,
-    values: FOOTER_MODES,
-    description:
-      "replace = custom footer line, status = pi status line, off = no Better xAI footer/status.",
-    decode: decodeLiteral("footer.mode", FooterModeSchema),
-  },
-];
-
-export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
+export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   {
     id: "usage.enabled",
     section: "usage",
@@ -65,7 +50,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     currentValue: (cfg) => String(cfg.usage.refreshIntervalMs),
     values: ["15000", "30000", "60000", "120000", "300000", "600000"],
     description: "Usage refresh interval in milliseconds.",
-    decode: decodeJson("usage.refreshIntervalMs", finiteNumber),
+    decode: decodeJson("usage.refreshIntervalMs", FiniteNumberSchema),
   },
   {
     id: "usage.showOnlyOnSubscriptionModels",
@@ -87,11 +72,17 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     description: "Include compact reset countdowns and local reset times.",
     decode: decodeJson("usage.showResetTimes", Schema.Boolean),
   },
-];
-
-export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
-  ...USAGE_SETTING_DESCRIPTORS,
-  ...FOOTER_SETTING_DESCRIPTORS,
+  {
+    id: "footer.mode",
+    section: "footer",
+    key: "mode",
+    label: "Footer mode",
+    currentValue: (cfg) => cfg.footer.mode,
+    values: FOOTER_MODES,
+    description:
+      "replace = custom footer line, status = pi status line, off = no Better xAI footer/status.",
+    decode: decode("footer.mode", FooterModeSchema),
+  },
 ];
 const SETTINGS_OPTION_BY_ID = new Map(
   SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),

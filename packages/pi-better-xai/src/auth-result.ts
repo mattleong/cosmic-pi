@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-const PositiveIntegerSchema = Schema.Number.check(
+export const PositiveIntegerSchema = Schema.Number.check(
   Schema.isFinite(),
   Schema.isInt(),
   Schema.isGreaterThan(0),

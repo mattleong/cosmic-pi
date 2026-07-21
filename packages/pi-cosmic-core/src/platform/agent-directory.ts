@@ -21,8 +21,7 @@ export class AgentDirectory extends Context.Service<AgentDirectory, string>()(
   static readonly layerFromHost = (
     load: () => string,
   ): Layer.Layer<AgentDirectory, AgentDirectoryError> =>
-    Layer.effect(
-      this,
+    this.layerEffect(
       Effect.try({
         try: load,
         catch: () =>

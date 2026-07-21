@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ResolvedConfig } from "../config.ts";
-import { truncateToWidth } from "../format.ts";
 import { STATUS_KEY } from "../identity.ts";
 import type * as MutableRef from "effect/MutableRef";
 import { visibleStatusLine, type XaiProjection } from "../usage-controller.ts";
@@ -101,11 +101,7 @@ export function createFooterController(deps: {
       const cfg = config(ctx);
       const line = visibleStatusLine(projection);
       if (!hasTerminalUI(ctx)) {
-        if (cfg.footer.mode === "off") {
-          setStatus(ctx, undefined);
-          return;
-        }
-        setStatus(ctx, line);
+        setStatus(ctx, cfg.footer.mode === "off" ? undefined : line);
         return;
       }
 
@@ -116,12 +112,7 @@ export function createFooterController(deps: {
       }
 
       clearFooter(ctx);
-      if (cfg.footer.mode === "off") {
-        setStatus(ctx, undefined);
-        return;
-      }
-
-      setStatus(ctx, line);
+      setStatus(ctx, cfg.footer.mode === "off" ? undefined : line);
     }, undefined);
   }
 

@@ -3,21 +3,39 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { stringifyJson } from "./boundary/json.ts";
 import { redactSensitiveText } from "./observation-protocol.ts";
-import { isRecord } from "./utils.ts";
-export type AdvisorVerdict = "pass" | "suggest" | "revise";
-export type AdvisorSeverity = "nit" | "concern" | "blocker";
-export type AdvisorSuggestionKind =
-  | "alternative"
-  | "investigation"
-  | "verification"
-  | "simplification"
-  | "tradeoff"
-  | "edge-case";
-export type AdvisorSuggestionRelevance = "possible" | "likely" | "high";
-export type AdvisorConfidence = "low" | "medium" | "high";
-export type AdvisorEvidenceBasis = "none" | "inferred" | "direct";
-export type AdvisorFindingStatus = "open" | "acknowledged" | "resolved" | "superseded";
-export type AdvisorFindingCategory = "intent" | "correctness" | "completeness" | "evidence";
+import { isOneOf, isRecord } from "./utils.ts";
+
+export const ADVISOR_VERDICTS = ["pass", "suggest", "revise"] as const;
+export const ADVISOR_SEVERITIES = ["nit", "concern", "blocker"] as const;
+export const ADVISOR_SUGGESTION_KINDS = [
+  "alternative",
+  "investigation",
+  "verification",
+  "simplification",
+  "tradeoff",
+  "edge-case",
+] as const;
+export const ADVISOR_SUGGESTION_RELEVANCES = ["possible", "likely", "high"] as const;
+export const ADVISOR_CONFIDENCES = ["low", "medium", "high"] as const;
+export const ADVISOR_EVIDENCE_BASES = ["none", "inferred", "direct"] as const;
+export const ADVISOR_FINDING_STATUSES = ["open", "acknowledged", "resolved", "superseded"] as const;
+export const ADVISOR_FINDING_CATEGORIES = [
+  "intent",
+  "correctness",
+  "completeness",
+  "evidence",
+] as const;
+
+export type AdvisorVerdict = (typeof ADVISOR_VERDICTS)[number];
+export type AdvisorSeverity = (typeof ADVISOR_SEVERITIES)[number];
+export type AdvisorSuggestionKind = (typeof ADVISOR_SUGGESTION_KINDS)[number];
+export type AdvisorSuggestionRelevance = (typeof ADVISOR_SUGGESTION_RELEVANCES)[number];
+export type AdvisorConfidence = (typeof ADVISOR_CONFIDENCES)[number];
+export type AdvisorEvidenceBasis = (typeof ADVISOR_EVIDENCE_BASES)[number];
+export type AdvisorFindingStatus = (typeof ADVISOR_FINDING_STATUSES)[number];
+export type AdvisorFindingCategory = (typeof ADVISOR_FINDING_CATEGORIES)[number];
+export const advisorSeverityRank = (severity: AdvisorSeverity): number =>
+  ADVISOR_SEVERITIES.indexOf(severity);
 export type AdvisorReviewFocus =
   | "standard"
   | "observation"
@@ -42,30 +60,23 @@ const boundedNonEmpty = (maximum: number) =>
 const FingerprintWireSchema = boundedNonEmpty(MAX_ADVISOR_FINGERPRINT_CHARS);
 export const AdvisorSuggestionWireSchema = Schema.Struct({
   fingerprint: FingerprintWireSchema,
-  kind: Schema.Literals([
-    "alternative",
-    "investigation",
-    "verification",
-    "simplification",
-    "tradeoff",
-    "edge-case",
-  ]),
+  kind: Schema.Literals(ADVISOR_SUGGESTION_KINDS),
   suggestion: boundedNonEmpty(MAX_ADVISOR_SUGGESTION_CHARS),
   rationale: boundedNonEmpty(MAX_ADVISOR_RATIONALE_CHARS),
-  relevance: Schema.Literals(["possible", "likely", "high"]),
+  relevance: Schema.Literals(ADVISOR_SUGGESTION_RELEVANCES),
 });
 export const AdvisorFindingWireSchema = Schema.Struct({
   fingerprint: FingerprintWireSchema,
-  category: Schema.Literals(["intent", "correctness", "completeness", "evidence"]),
-  severity: Schema.Literals(["nit", "concern", "blocker"]),
-  confidence: Schema.Literals(["low", "medium", "high"]),
-  evidenceBasis: Schema.Literals(["none", "inferred", "direct"]),
+  category: Schema.Literals(ADVISOR_FINDING_CATEGORIES),
+  severity: Schema.Literals(ADVISOR_SEVERITIES),
+  confidence: Schema.Literals(ADVISOR_CONFIDENCES),
+  evidenceBasis: Schema.Literals(ADVISOR_EVIDENCE_BASES),
   issue: boundedNonEmpty(MAX_ADVISOR_ISSUE_CHARS),
   evidence: boundedNonEmpty(MAX_ADVISOR_EVIDENCE_CHARS),
   recommendation: boundedNonEmpty(MAX_ADVISOR_RECOMMENDATION_CHARS),
 });
 const ReviewFields = {
-  verdict: Schema.Literals(["pass", "suggest", "revise"]),
+  verdict: Schema.Literals(ADVISOR_VERDICTS),
   summary: boundedNonEmpty(MAX_ADVISOR_SUMMARY_CHARS),
   findings: Schema.Array(AdvisorFindingWireSchema).check(Schema.isMaxLength(MAX_ADVISOR_FINDINGS)),
 };
@@ -218,7 +229,7 @@ function diagnoseAdvisorReview(raw: string): AdvisorReview {
       "Advisor review must contain exactly verdict, summary, suggestions, and findings.",
     );
   }
-  if (parsed.verdict !== "pass" && parsed.verdict !== "suggest" && parsed.verdict !== "revise") {
+  if (!isOneOf(parsed.verdict, ADVISOR_VERDICTS)) {
     throw reviewError('Advisor verdict must be "pass", "suggest", or "revise".');
   }
   const summary = requireBoundedString(parsed.summary, "summary", MAX_ADVISOR_SUMMARY_CHARS);
@@ -422,14 +433,10 @@ function parseSuggestion(value: unknown, index: number): AdvisorSuggestion {
       `Advisor suggestion ${index + 1} must contain exactly fingerprint, kind, suggestion, rationale, and relevance.`,
     );
   }
-  if (!isSuggestionKind(value.kind)) {
+  if (!isOneOf(value.kind, ADVISOR_SUGGESTION_KINDS)) {
     throw reviewError(`Advisor suggestion ${index + 1} has an invalid kind.`);
   }
-  if (
-    value.relevance !== "possible" &&
-    value.relevance !== "likely" &&
-    value.relevance !== "high"
-  ) {
+  if (!isOneOf(value.relevance, ADVISOR_SUGGESTION_RELEVANCES)) {
     throw reviewError(`Advisor suggestion ${index + 1} has invalid relevance.`);
   }
   return {
@@ -471,20 +478,16 @@ function parseFinding(value: unknown, index: number): AdvisorFinding {
       `Advisor finding ${index + 1} must contain exactly fingerprint, category, severity, confidence, evidenceBasis, issue, evidence, and recommendation.`,
     );
   }
-  if (!isFindingCategory(value.category)) {
+  if (!isOneOf(value.category, ADVISOR_FINDING_CATEGORIES)) {
     throw reviewError(`Advisor finding ${index + 1} has an invalid category.`);
   }
-  if (value.severity !== "nit" && value.severity !== "concern" && value.severity !== "blocker") {
+  if (!isOneOf(value.severity, ADVISOR_SEVERITIES)) {
     throw reviewError(`Advisor finding ${index + 1} has an invalid severity.`);
   }
-  if (value.confidence !== "low" && value.confidence !== "medium" && value.confidence !== "high") {
+  if (!isOneOf(value.confidence, ADVISOR_CONFIDENCES)) {
     throw reviewError(`Advisor finding ${index + 1} has invalid confidence.`);
   }
-  if (
-    value.evidenceBasis !== "none" &&
-    value.evidenceBasis !== "inferred" &&
-    value.evidenceBasis !== "direct"
-  ) {
+  if (!isOneOf(value.evidenceBasis, ADVISOR_EVIDENCE_BASES)) {
     throw reviewError(`Advisor finding ${index + 1} has invalid evidenceBasis.`);
   }
   return {
@@ -509,26 +512,6 @@ function parseFinding(value: unknown, index: number): AdvisorFinding {
       MAX_ADVISOR_RECOMMENDATION_CHARS,
     ),
   };
-}
-
-function isSuggestionKind(value: unknown): value is AdvisorSuggestionKind {
-  return (
-    value === "alternative" ||
-    value === "investigation" ||
-    value === "verification" ||
-    value === "simplification" ||
-    value === "tradeoff" ||
-    value === "edge-case"
-  );
-}
-
-function isFindingCategory(value: unknown): value is AdvisorFindingCategory {
-  return (
-    value === "intent" ||
-    value === "correctness" ||
-    value === "completeness" ||
-    value === "evidence"
-  );
 }
 
 function requireBoundedString(value: unknown, field: string, maxChars: number): string {

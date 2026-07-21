@@ -39,6 +39,15 @@ type Active<Input, R, RuntimeError> = {
   readonly removeAbort: () => void;
 };
 
+/** Host callbacks cannot take ownership away from the runtime slot. */
+const runBestEffort = (operation: () => void): void => {
+  try {
+    operation();
+  } catch {
+    // Best effort at this host boundary.
+  }
+};
+
 /**
  * The minimal imperative island that owns the runtime which cannot own its own creation.
  * All resources acquired after `start` are scoped by the managed runtime.
@@ -66,16 +75,8 @@ export function makePiSessionRuntimeSlot<Input, R, StartupError = unknown, Runti
     const current = active;
     if (!current || (expected && current !== expected)) return Promise.resolve();
     active = undefined;
-    try {
-      current.removeAbort();
-    } catch {
-      // Host AbortSignal implementations cannot prevent runtime cleanup.
-    }
-    try {
-      hooks.onDeactivated?.(current.input, current.token);
-    } catch {
-      // Package cleanup hooks are best effort at the host boundary.
-    }
+    runBestEffort(current.removeAbort);
+    runBestEffort(() => hooks.onDeactivated?.(current.input, current.token));
     return dispose(current.runtime);
   };
 
@@ -90,12 +91,14 @@ export function makePiSessionRuntimeSlot<Input, R, StartupError = unknown, Runti
 
   const notifyStartFailure = (input: Input, token: number): void => {
     if (token !== generation) return;
-    try {
-      hooks.onStartFailure?.(input, token);
-    } catch {
-      // Failure notification is best effort.
-    }
+    runBestEffort(() => hooks.onStartFailure?.(input, token));
   };
+
+  const failStart = (current: Active<Input, R, RuntimeError>): Promise<undefined> =>
+    removeActive(current).then(() => {
+      notifyStartFailure(current.input, current.token);
+      return undefined;
+    });
 
   const start = (input: Input, signal?: AbortSignal): Promise<number | undefined> => {
     const token = ++generation;
@@ -128,10 +131,7 @@ export function makePiSessionRuntimeSlot<Input, R, StartupError = unknown, Runti
             return dispose(runtime).then(() => undefined);
           }
         } catch {
-          return removeActive(current).then(() => {
-            notifyStartFailure(input, token);
-            return undefined;
-          });
+          return failStart(current);
         }
         let started: Promise<unknown>;
         try {
@@ -140,26 +140,15 @@ export function makePiSessionRuntimeSlot<Input, R, StartupError = unknown, Runti
             ? runtime.run(startup.pipe(Effect.withSpan("pi-cosmic-core.runtime.startup")), signal)
             : Promise.resolve();
         } catch {
-          return removeActive(current).then(() => {
-            notifyStartFailure(input, token);
-            return undefined;
-          });
+          return failStart(current);
         }
         return Promise.resolve(started).then(
           () => {
             if (active !== current || token !== generation) return undefined;
-            try {
-              hooks.onActivated?.(input, token);
-            } catch {
-              // Activation hooks cannot take ownership away from the slot.
-            }
+            runBestEffort(() => hooks.onActivated?.(input, token));
             return token;
           },
-          () =>
-            removeActive(current).then(() => {
-              notifyStartFailure(input, token);
-              return undefined;
-            }),
+          () => failStart(current),
         );
       }),
     );

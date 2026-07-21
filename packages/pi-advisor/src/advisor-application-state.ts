@@ -141,24 +141,15 @@ export const emptyAdvisorSessionMetrics = (): AdvisorSessionMetrics => ({
   usageByModel: {},
 });
 
-export interface AdvisorApplicationStateStore {
-  readonly get: () => AdvisorApplicationState;
-  readonly transition: (
-    update: (state: AdvisorApplicationState) => AdvisorApplicationState,
-  ) => AdvisorApplicationState;
-}
-
 /**
  * Synchronous atomic domain boundary required by Pi's immediate callbacks. Transitions replace one
  * immutable state snapshot before any renderer projection is published; resources are never stored.
  */
-export const makeAdvisorApplicationStateStore = (
-  initial: AdvisorApplicationState,
-): AdvisorApplicationStateStore => {
+export const makeAdvisorApplicationStateStore = (initial: AdvisorApplicationState) => {
   let current = initial;
   return {
     get: () => current,
-    transition: (update) => {
+    transition: (update: (state: AdvisorApplicationState) => AdvisorApplicationState) => {
       current = update(current);
       return current;
     },
@@ -240,9 +231,4 @@ export const setAdvisorSpinnerOwner = (
 ): AdvisorApplicationState => ({
   ...state,
   spinner: owner === undefined ? { frame: 0 } : { owner, frame: 0 },
-});
-
-export const advanceAdvisorSpinner = (state: AdvisorApplicationState): AdvisorApplicationState => ({
-  ...state,
-  spinner: { ...state.spinner, frame: state.spinner.frame + 1 },
 });

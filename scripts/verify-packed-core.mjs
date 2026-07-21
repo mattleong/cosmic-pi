@@ -7,24 +7,21 @@ const root = resolve(import.meta.dirname, "..");
 const workspace = await readFile(join(root, "pnpm-workspace.yaml"), "utf8");
 const expectedEffectVersion = /\n  effect: ([^\n]+)/.exec(workspace)?.[1];
 if (!expectedEffectVersion) throw new Error("Missing Effect version from the pnpm catalog.");
-const coreManifest = JSON.parse(
-  await readFile(join(root, "packages/pi-cosmic-core/package.json"), "utf8"),
-);
-const xaiManifest = JSON.parse(
-  await readFile(join(root, "packages/pi-better-xai/package.json"), "utf8"),
-);
-const openaiManifest = JSON.parse(
-  await readFile(join(root, "packages/pi-better-openai/package.json"), "utf8"),
-);
-const cosmicUiManifest = JSON.parse(
-  await readFile(join(root, "packages/pi-cosmic-ui/package.json"), "utf8"),
-);
-const codePreviewsManifest = JSON.parse(
-  await readFile(join(root, "packages/pi-code-previews/package.json"), "utf8"),
-);
-const advisorManifest = JSON.parse(
-  await readFile(join(root, "packages/pi-advisor/package.json"), "utf8"),
-);
+const extensionPackages = [
+  "pi-better-xai",
+  "pi-better-openai",
+  "pi-cosmic-ui",
+  "pi-code-previews",
+  "pi-advisor",
+];
+const packageNames = ["pi-cosmic-core", ...extensionPackages];
+const manifests = new Map();
+for (const packageName of packageNames) {
+  const path = join(root, "packages", packageName, "package.json");
+  manifests.set(packageName, JSON.parse(await readFile(path, "utf8")));
+}
+const coreManifest = manifests.get("pi-cosmic-core");
+const xaiManifest = manifests.get("pi-better-xai");
 const piVersion = coreManifest.devDependencies["@earendil-works/pi-coding-agent"];
 const tuiVersion = xaiManifest.peerDependencies["@earendil-works/pi-tui"];
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "cosmic-pi-pack-"));
@@ -33,54 +30,31 @@ function run(command, args, cwd) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
-    env: process.env,
   });
   if (result.status !== 0) {
     throw new Error(
       `${command} ${args.join(" ")} failed:\n${result.stdout ?? ""}${result.stderr ?? ""}`,
     );
   }
-  return result;
 }
 
 try {
-  for (const packageName of [
-    "pi-cosmic-core",
-    "pi-better-xai",
-    "pi-better-openai",
-    "pi-cosmic-ui",
-    "pi-code-previews",
-    "pi-advisor",
-  ]) {
+  for (const packageName of packageNames) {
     run("pnpm", ["--filter", packageName, "pack", "--pack-destination", temporaryDirectory], root);
   }
   const tarballs = (await readdir(temporaryDirectory)).filter((name) => name.endsWith(".tgz"));
-  const coreTarballName = tarballs.find((name) => name.startsWith("pi-cosmic-core-"));
-  const xaiTarballName = tarballs.find((name) => name.startsWith("pi-better-xai-"));
-  const openaiTarballName = tarballs.find((name) => name.startsWith("pi-better-openai-"));
-  const cosmicUiTarballName = tarballs.find((name) => name.startsWith("pi-cosmic-ui-"));
-  const codePreviewsTarballName = tarballs.find((name) => name.startsWith("pi-code-previews-"));
-  const advisorTarballName = tarballs.find((name) => name.startsWith("pi-advisor-"));
-  if (
-    !coreTarballName ||
-    !xaiTarballName ||
-    !openaiTarballName ||
-    !cosmicUiTarballName ||
-    !codePreviewsTarballName ||
-    !advisorTarballName ||
-    tarballs.length !== 6
-  ) {
+  const tarballNames = new Map(
+    packageNames.map((packageName) => [
+      packageName,
+      tarballs.find((name) => name.startsWith(`${packageName}-`)),
+    ]),
+  );
+  if (tarballs.length !== packageNames.length || [...tarballNames.values()].some((name) => !name)) {
     throw new Error(
       `Expected core, xAI, OpenAI, Cosmic UI, code-preview, and advisor tarballs, found: ${tarballs.join(", ")}.`,
     );
   }
-
-  const coreTarball = join(temporaryDirectory, coreTarballName);
-  const xaiTarball = join(temporaryDirectory, xaiTarballName);
-  const openaiTarball = join(temporaryDirectory, openaiTarballName);
-  const cosmicUiTarball = join(temporaryDirectory, cosmicUiTarballName);
-  const codePreviewsTarball = join(temporaryDirectory, codePreviewsTarballName);
-  const advisorTarball = join(temporaryDirectory, advisorTarballName);
+  const tarballPath = (packageName) => join(temporaryDirectory, tarballNames.get(packageName));
   await writeFile(
     join(temporaryDirectory, "package.json"),
     `${JSON.stringify(
@@ -92,19 +66,19 @@ try {
           "@earendil-works/pi-coding-agent": piVersion,
           "@earendil-works/pi-tui": tuiVersion,
           jiti: "2.7.0",
-          "pi-better-openai": `file:${openaiTarball}`,
-          "pi-better-xai": `file:${xaiTarball}`,
-          "pi-cosmic-core": `file:${coreTarball}`,
-          "pi-cosmic-ui": `file:${cosmicUiTarball}`,
-          "pi-code-previews": `file:${codePreviewsTarball}`,
-          "pi-advisor": `file:${advisorTarball}`,
+          "pi-better-openai": `file:${tarballPath("pi-better-openai")}`,
+          "pi-better-xai": `file:${tarballPath("pi-better-xai")}`,
+          "pi-cosmic-core": `file:${tarballPath("pi-cosmic-core")}`,
+          "pi-cosmic-ui": `file:${tarballPath("pi-cosmic-ui")}`,
+          "pi-code-previews": `file:${tarballPath("pi-code-previews")}`,
+          "pi-advisor": `file:${tarballPath("pi-advisor")}`,
         },
         pnpm: {
           overrides: {
-            "pi-cosmic-core": `file:${coreTarball}`,
-            "pi-cosmic-ui": `file:${cosmicUiTarball}`,
-            "pi-better-openai": `file:${openaiTarball}`,
-            "pi-better-xai": `file:${xaiTarball}`,
+            "pi-cosmic-core": `file:${tarballPath("pi-cosmic-core")}`,
+            "pi-cosmic-ui": `file:${tarballPath("pi-cosmic-ui")}`,
+            "pi-better-openai": `file:${tarballPath("pi-better-openai")}`,
+            "pi-better-xai": `file:${tarballPath("pi-better-xai")}`,
           },
         },
       },
@@ -147,57 +121,18 @@ try {
   ) {
     throw new Error("Packed pi-cosmic-core dependencies do not use the pinned Effect beta.");
   }
-  const packedXaiManifest = JSON.parse(
-    await readFile(join(temporaryDirectory, "node_modules/pi-better-xai/package.json"), "utf8"),
-  );
-  if (
-    packedXaiManifest.dependencies.effect !== expectedEffectVersion ||
-    packedXaiManifest.dependencies["pi-cosmic-core"] !== coreManifest.version
-  ) {
-    throw new Error("Packed pi-better-xai dependencies are not synchronized.");
-  }
-  const packedOpenaiManifest = JSON.parse(
-    await readFile(join(temporaryDirectory, "node_modules/pi-better-openai/package.json"), "utf8"),
-  );
-  if (
-    packedOpenaiManifest.dependencies.effect !== expectedEffectVersion ||
-    packedOpenaiManifest.dependencies["pi-cosmic-core"] !== coreManifest.version ||
-    packedOpenaiManifest.version !== openaiManifest.version
-  ) {
-    throw new Error("Packed pi-better-openai dependencies are not synchronized.");
-  }
-
-  const packedCosmicUiManifest = JSON.parse(
-    await readFile(join(temporaryDirectory, "node_modules/pi-cosmic-ui/package.json"), "utf8"),
-  );
-  if (
-    packedCosmicUiManifest.dependencies.effect !== expectedEffectVersion ||
-    packedCosmicUiManifest.dependencies["pi-cosmic-core"] !== coreManifest.version ||
-    packedCosmicUiManifest.version !== cosmicUiManifest.version
-  ) {
-    throw new Error("Packed pi-cosmic-ui dependencies are not synchronized.");
-  }
-
-  const packedCodePreviewsManifest = JSON.parse(
-    await readFile(join(temporaryDirectory, "node_modules/pi-code-previews/package.json"), "utf8"),
-  );
-  if (
-    packedCodePreviewsManifest.dependencies.effect !== expectedEffectVersion ||
-    packedCodePreviewsManifest.dependencies["pi-cosmic-core"] !== coreManifest.version ||
-    packedCodePreviewsManifest.version !== codePreviewsManifest.version
-  ) {
-    throw new Error("Packed pi-code-previews dependencies are not synchronized.");
-  }
-
-  const packedAdvisorManifest = JSON.parse(
-    await readFile(join(temporaryDirectory, "node_modules/pi-advisor/package.json"), "utf8"),
-  );
-  if (
-    packedAdvisorManifest.dependencies.effect !== expectedEffectVersion ||
-    packedAdvisorManifest.dependencies["pi-cosmic-core"] !== coreManifest.version ||
-    packedAdvisorManifest.version !== advisorManifest.version
-  ) {
-    throw new Error("Packed pi-advisor dependencies are not synchronized.");
+  for (const packageName of extensionPackages) {
+    const packedManifest = JSON.parse(
+      await readFile(join(temporaryDirectory, "node_modules", packageName, "package.json"), "utf8"),
+    );
+    const sourceManifest = manifests.get(packageName);
+    if (
+      packedManifest.dependencies.effect !== expectedEffectVersion ||
+      packedManifest.dependencies["pi-cosmic-core"] !== coreManifest.version ||
+      packedManifest.version !== sourceManifest.version
+    ) {
+      throw new Error(`Packed ${packageName} dependencies are not synchronized.`);
+    }
   }
 
   console.log(

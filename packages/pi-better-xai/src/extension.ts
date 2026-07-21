@@ -13,10 +13,11 @@ import {
   makePiSessionRuntimeSlot,
   nodePlatformLayer,
 } from "pi-cosmic-core";
+import { createCosmicFooterClient } from "pi-cosmic-ui/client";
 import type { ResolvedConfig } from "./config.ts";
 import { createFooterController } from "./footer/controller.ts";
 import { registerSettingsController } from "./settings/controller.ts";
-import { createCosmicUiAdapter } from "./ui/cosmic-adapter.ts";
+import { xaiUsageFooterPrimitive, xaiUsageUiStateFromProjection } from "./ui/primitives.ts";
 import {
   XaiBoundaryError,
   XaiUsageService,
@@ -119,15 +120,16 @@ export function betterXaiWithDependencies(
   const projection = makeProjection();
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
   let footerController: ReturnType<typeof createFooterController>;
-  const cosmicUiAdapter = createCosmicUiAdapter({ pi, projection });
+  const cosmicUi = createCosmicFooterClient(pi.events, "pi-better-xai");
 
   const config = (_ctx: ExtensionContext) => requiredConfig(projection);
   const updateFooter = (fallback: ExtensionContext) => {
     const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
-    const cfg = MutableRef.get(projection).config;
-    if (!cfg) return;
-    if (cosmicUiAdapter.active) cosmicUiAdapter.update(ctx, cfg);
-    else footerController.update(ctx);
+    if (!MutableRef.get(projection).config) return;
+    if (!cosmicUi.active) return footerController.update(ctx);
+    const usage = xaiUsageFooterPrimitive(xaiUsageUiStateFromProjection(projection));
+    if (usage) cosmicUi.upsert(usage);
+    else cosmicUi.remove("xai.usage");
   };
 
   footerController = createFooterController({ config, projection, hasTerminalUI });
@@ -160,14 +162,14 @@ export function betterXaiWithDependencies(
     makeRuntime: (input) => makePiManagedRuntime(pi, makeApplicationLayer(input)),
     startup: ({ generation }) => dependencies.startupEffect(generation),
     onActivated: ({ ctx }) => {
-      if (hasTerminalUI(ctx)) cosmicUiAdapter.detectHost();
-      else cosmicUiAdapter.shutdown();
+      if (hasTerminalUI(ctx)) cosmicUi.query();
+      else cosmicUi.shutdown();
       updateFooter(ctx);
     },
     onDeactivated: ({ context }) => {
       if (currentContext !== context) return;
       currentContext = undefined;
-      cosmicUiAdapter.shutdown();
+      cosmicUi.shutdown();
       resetProjection(projection);
     },
     onStartFailure: ({ ctx }) => {
@@ -203,7 +205,7 @@ export function betterXaiWithDependencies(
   });
 
   pi.on("session_start", (_event, ctx) => {
-    cosmicUiAdapter.shutdown();
+    cosmicUi.shutdown();
     resetProjection(projection);
     const capturedHost = captureSessionHost(ctx);
     if (capturedHost._tag === "Unavailable") {

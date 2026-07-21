@@ -1,7 +1,6 @@
-import type { AdvisorFinding, AdvisorSeverity } from "./review.ts";
+import { advisorSeverityRank, type AdvisorFinding, type AdvisorSeverity } from "./review.ts";
 
 const DEFAULT_FINDING_HISTORY_CAPACITY = 512;
-const SEVERITY_RANK: Record<AdvisorSeverity, number> = { nit: 0, concern: 1, blocker: 2 };
 
 export function normalizeAdvisorFinding(finding: AdvisorFinding): string {
   return `${finding.category}\n${finding.issue}\n${finding.recommendation}`
@@ -58,7 +57,8 @@ export const filterAdvisorFindingsWithRollback = (
     const previous = seen[key];
     if (
       !key ||
-      (previous !== undefined && SEVERITY_RANK[previous] >= SEVERITY_RANK[finding.severity])
+      (previous !== undefined &&
+        advisorSeverityRank(previous) >= advisorSeverityRank(finding.severity))
     ) {
       suppressed += 1;
       continue;

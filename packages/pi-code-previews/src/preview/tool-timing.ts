@@ -99,7 +99,7 @@ export function unwrapTimingComponent(component: Component | undefined): Compone
   return component instanceof TimingPreservedComponent ? component.component : component;
 }
 
-function withLastComponent<TContext extends ToolTimingRenderContext>(
+export function withLastComponent<TContext extends ToolTimingRenderContext>(
   context: TContext,
   lastComponent: Component | undefined,
 ): TContext {

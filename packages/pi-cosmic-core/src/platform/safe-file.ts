@@ -29,17 +29,16 @@ interface FileHandleWithClose {
   readonly close: () => Promise<void>;
 }
 
+const safeFileError = (operation: string, message: string) => () =>
+  new SafeFileError({ operation, message });
+
 /** Internal Promise adapter kept exported for focused typed-error regression coverage. */
 export const closeSafeFileHandle = (
   handle: FileHandleWithClose,
 ): Effect.Effect<void, SafeFileError> =>
   Effect.tryPromise({
     try: () => handle.close(),
-    catch: () =>
-      new SafeFileError({
-        operation: "close",
-        message: "Unable to close a stable regular file.",
-      }),
+    catch: safeFileError("close", "Unable to close a stable regular file."),
   });
 
 const isStrictlyInside = (root: string, candidate: string): boolean => {
@@ -73,10 +72,10 @@ export class SafeFile extends Context.Service<SafeFile, SafeFileShape>()(
                     .then((handle) => ({ before, handle }));
                 }),
               catch: (error) =>
-                new SafeFileError({
-                  operation: error === "too-large" ? "size" : "open",
-                  message: "Unable to open a stable regular file.",
-                }),
+                safeFileError(
+                  error === "too-large" ? "size" : "open",
+                  "Unable to open a stable regular file.",
+                )(),
             }),
             ({ before, handle }) =>
               Effect.tryPromise({
@@ -123,11 +122,7 @@ export class SafeFile extends Context.Service<SafeFile, SafeFileShape>()(
                       },
                     );
                   }),
-                catch: () =>
-                  new SafeFileError({
-                    operation: "read",
-                    message: "Unable to read a stable contained regular file.",
-                  }),
+                catch: safeFileError("read", "Unable to read a stable contained regular file."),
               }),
             ({ handle }) => closeSafeFileHandle(handle).pipe(Effect.catch(() => Effect.void)),
           ),

@@ -19,10 +19,6 @@ type RedactedCodePreviewBeforeWrite =
   | Exclude<ExistingFilePreview, { kind: "content" }>
   | { kind: "content"; byteLength: number }
   | undefined;
-export type CodePreviewBeforeWriteDetails = {
-  codePreviewBeforeWrite: RedactedCodePreviewBeforeWrite;
-};
-
 export class CodePreviewWriteError extends Schema.TaggedErrorClass<CodePreviewWriteError>()(
   "CodePreviewWriteError",
   { operation: Schema.String, path: Schema.String, message: Schema.String },

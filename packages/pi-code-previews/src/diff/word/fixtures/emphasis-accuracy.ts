@@ -1,4 +1,5 @@
 import { wordEmphasisGoldenCases, type WordEmphasisGoldenCase } from "./emphasis-golden";
+import { profileLine, profilePlacement } from "./profile-lines";
 
 export type WordEmphasisAccuracyCase = WordEmphasisGoldenCase;
 
@@ -31,14 +32,12 @@ function largeReorderedBlockCase(count: number): WordEmphasisAccuracyCase {
 
 function mediumScoreReorderedBlockCase(count: number): WordEmphasisAccuracyCase {
   const removed = Array.from({ length: count }, (_, position) => {
-    const code = profileIdentifierCode(position);
     const placement = profilePlacement(position, count);
-    return `-${position + 1} const profile${code} = build${code}Profile(profile${code}Type, slot("${placement}"), rank("${placement}"), oldRecord, legacyOptions);`;
+    return `-${position + 1} ${profileLine(position, placement, "removed")}`;
   });
   const added = Array.from({ length: count }, (_, position) => {
-    const code = profileIdentifierCode(count - position - 1);
     const placement = profilePlacement(position, count);
-    return `+${position + 1} const profile${code} = build${code}Profile(profile${code}Type, slot("${placement}"), rank("${placement}"), newAccount, modernSettings, metadata);`;
+    return `+${position + 1} ${profileLine(count - position - 1, placement, "added")}`;
   });
 
   return {
@@ -69,18 +68,4 @@ function profileExpectedSpans(
   return side === "removed"
     ? [...spans, "oldRecord", "legacyOptions"]
     : [...spans, "newAccount", "modernSettings, metadata"];
-}
-
-function profileIdentifierCode(index: number): string {
-  return `${String.fromCharCode(65 + Math.floor(index / 26))}${String.fromCharCode(
-    97 + (index % 26),
-  )}`;
-}
-
-function profilePlacement(position: number, count: number): string {
-  if (position * 2 === count - 1) return "center";
-  const index = position * 2 < count - 1 ? position : count - position - 1;
-  return `${position * 2 < count - 1 ? "cold" : "warm"}${profileIdentifierCode(
-    index,
-  ).toLowerCase()}`;
 }

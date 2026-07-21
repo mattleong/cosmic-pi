@@ -1,9 +1,7 @@
-import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import type { AdvisorEffectExecutor, AdvisorPlatform } from "./boundary/executor.ts";
 
@@ -40,19 +38,13 @@ export interface CheckpointOrchestratorShape {
   readonly shutdown: Effect.Effect<void>;
 }
 
-export class CheckpointOrchestrator extends Context.Service<
-  CheckpointOrchestrator,
-  CheckpointOrchestratorShape
->()("pi-advisor/checkpoint-orchestrator/CheckpointOrchestrator") {}
-
 /** Owns checkpoint fibers and their exact-once cancellation bookkeeping. */
 export const makeCheckpointOrchestrator = (
   executor: AdvisorEffectExecutor,
 ): Effect.Effect<CheckpointOrchestratorShape, never, Scope.Scope | AdvisorPlatform> =>
   Effect.gen(function* () {
     const platform = yield* Effect.context<AdvisorPlatform>();
-    let nextId = 0;
-    const active = new Map<number, ActiveCheckpoint>();
+    const active = new Set<ActiveCheckpoint>();
     const cancelling = new Set<ActiveCheckpoint>();
 
     const finalize = (entry: ActiveCheckpoint): void => {
@@ -99,7 +91,6 @@ export const makeCheckpointOrchestrator = (
       }
     };
     const start: CheckpointOrchestratorShape["start"] = (effect, hooks) => {
-      const id = ++nextId;
       const entry: ActiveCheckpoint = {
         hooks,
         fiber: undefined,
@@ -108,12 +99,12 @@ export const makeCheckpointOrchestrator = (
         cancellationClaimed: false,
         cancellationFinalized: false,
       };
-      active.set(id, entry);
+      active.add(entry);
       const fiber = executor.fork(
         effect.pipe(
           Effect.ensuring(
             Effect.sync(() => {
-              active.delete(id);
+              active.delete(entry);
             }),
           ),
         ),
@@ -135,7 +126,7 @@ export const makeCheckpointOrchestrator = (
     };
     const cancelAll = (): Effect.Effect<void> =>
       Effect.suspend(() => {
-        const entries = [...active.values()];
+        const entries = [...active];
         const cancellationEntries = new Set([...cancelling, ...entries]);
         const checkpointFibers = entries.flatMap((entry) => (entry.fiber ? [entry.fiber] : []));
         // Layer finalization runs after the outer slot deactivates, so cancellation must be able
@@ -165,13 +156,10 @@ export const makeCheckpointOrchestrator = (
       });
     const shutdown = cancelAll();
     yield* Effect.addFinalizer(() => cancelAll());
-    return CheckpointOrchestrator.of({
+    return {
       start,
       cancelAll,
       activeCount: () => active.size,
       shutdown,
-    });
+    };
   });
-
-export const checkpointOrchestratorLayer = (executor: AdvisorEffectExecutor) =>
-  Layer.effect(CheckpointOrchestrator, makeCheckpointOrchestrator(executor));

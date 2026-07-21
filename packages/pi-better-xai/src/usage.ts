@@ -11,7 +11,10 @@ import {
   type JsonHttpResponseSchema,
 } from "pi-cosmic-core";
 import { getXaiCredentials } from "./auth.ts";
-import { ModelRegistryAuth } from "./boundary/model-registry-auth.ts";
+import {
+  provideModelRegistryAuth,
+  type WithoutModelRegistry,
+} from "./boundary/model-registry-auth.ts";
 
 export const BILLING_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 export const MONTHLY_BILLING_URL = `${BILLING_BASE_URL}/billing`;
@@ -145,20 +148,11 @@ export function parseUsageSnapshot(
   now: number,
 ): UsageSnapshot {
   const monthly = parseMonthlyBilling(monthlyPayload, now);
-  const weekly =
-    weeklyPayload == null
-      ? {
-          weeklyUsedPercent: null,
-          weeklyLeftPercent: null,
-          weeklyResetInSeconds: null,
-          onDemandUsed: null,
-        }
-      : parseWeeklyBilling(weeklyPayload, now);
+  const weekly = parseWeeklyBilling(weeklyPayload ?? {}, now);
   return {
     capturedAt: now,
     ...weekly,
     ...monthly,
-    onDemandUsed: weekly.onDemandUsed ?? null,
     isLimited:
       (weekly.weeklyUsedPercent !== null && weekly.weeklyUsedPercent >= 100) ||
       (monthly.monthlyUsed !== null &&
@@ -299,12 +293,6 @@ const requestXaiUsageEffect = Effect.fn("XaiUsage.requestXaiUsage")(function* (a
   return parseUsageSnapshot(decodedMonthly, decodedWeekly, now);
 });
 
-type WithoutModelRegistry<T extends Effect.Effect<unknown, unknown, unknown>> = Effect.Effect<
-  Effect.Success<T>,
-  Effect.Error<T>,
-  Exclude<Effect.Services<T>, ModelRegistryAuth>
->;
-
 export function requestXaiUsage(authPath: string): ReturnType<typeof requestXaiUsageEffect>;
 export function requestXaiUsage(
   authPath: string,
@@ -312,12 +300,5 @@ export function requestXaiUsage(
 ): WithoutModelRegistry<ReturnType<typeof requestXaiUsageEffect>>;
 export function requestXaiUsage(authPath: string, ctx?: Pick<ExtensionContext, "modelRegistry">) {
   const effect = requestXaiUsageEffect(authPath);
-  return ctx
-    ? effect.pipe(
-        Effect.provideService(
-          ModelRegistryAuth,
-          ModelRegistryAuth.make(() => ctx.modelRegistry),
-        ),
-      )
-    : effect;
+  return ctx ? provideModelRegistryAuth(effect, ctx) : effect;
 }

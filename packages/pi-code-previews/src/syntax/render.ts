@@ -6,17 +6,14 @@ import { codePreviewSettings } from "../settings";
 import { expandPreviewTabs } from "../shared/preview-tabs";
 import { escapeControlChars } from "../shared/terminal-text";
 import { normalizePreviewLanguageAlias } from "./language";
-import { requestSyntaxInitialize, requestSyntaxLanguage, syntaxProjection } from "./projection";
+import {
+  requestSyntaxInitialize,
+  requestSyntaxLanguage,
+  syntaxProjection,
+  type ShikiStatus,
+} from "./projection";
 
-export type ShikiStatus = {
-  initialized: boolean;
-  cacheSize: number;
-  cacheLimit: number;
-  maxHighlightChars: number;
-  loadedLanguages: number;
-  pendingLanguages: number;
-  statusVersion: number;
-};
+export type { ShikiStatus } from "./projection";
 
 type RenderCacheEntry = {
   readonly source: string;

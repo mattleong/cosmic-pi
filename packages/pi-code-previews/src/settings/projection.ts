@@ -9,11 +9,6 @@ function freezeSettings(settings: CodePreviewSettings): CodePreviewSettings {
 
 let current: CodePreviewSettings;
 
-/** Live immutable projection read only by Pi's synchronous render boundary. */
-export function settingsProjection(): CodePreviewSettings {
-  return current;
-}
-
 export function publishSettingsProjection(settings: CodePreviewSettings): CodePreviewSettings {
   current = freezeSettings(settings);
   return current;

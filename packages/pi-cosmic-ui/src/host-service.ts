@@ -34,9 +34,9 @@ export interface CosmicUiProjection {
   readonly probeRevision: number;
   readonly homeDirectory: string | undefined;
 }
-const initialProjection = (): CosmicUiProjection => ({
+const initialProjection = (totals = emptyTotals()): CosmicUiProjection => ({
   config: undefined,
-  totals: emptyTotals(),
+  totals,
   gitStatus: undefined,
   pullRequestNumber: undefined,
   pullRequestCheckedAt: 0,
@@ -46,6 +46,10 @@ const initialProjection = (): CosmicUiProjection => ({
 const immutable = (state: CosmicUiProjection): CosmicUiProjection => freezeSnapshot(state);
 export const makeProjection = () =>
   MutableRef.make<CosmicUiProjection>(immutable(initialProjection()));
+export const resetProjection = (
+  projection: MutableRef.MutableRef<CosmicUiProjection>,
+  totals = emptyTotals(),
+): void => void MutableRef.set(projection, immutable(initialProjection(totals)));
 /** Compatibility reset used only before a runtime owns the projection. */
 export function invalidateProbes(projection: MutableRef.MutableRef<CosmicUiProjection>): void {
   const current = MutableRef.get(projection);
@@ -82,14 +86,7 @@ export interface CosmicUiServiceShape {
   ) => Effect.Effect<ResolvedCosmicUiConfig, CosmicUiConfigError>;
 }
 
-type GitValue = {
-  readonly cwd: string;
-  readonly revision: number;
-  readonly status: FooterGitStatus | undefined;
-};
 type PullValue = {
-  readonly cwd: string;
-  readonly revision: number;
   readonly checkedAt: number;
   readonly number: number | undefined;
 };
@@ -161,7 +158,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
         const gitRefresh = yield* makeSubscriptionRefresh<
           ProbeRequest,
           string,
-          GitValue,
+          FooterGitStatus | undefined,
           never,
           never
         >({
@@ -172,8 +169,10 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
             Effect.gen(function* () {
               const ctx = MutableRef.get(options.context);
               const revision = (yield* state.getState).probeRevision;
-              if (currentMode(ctx) !== "tui")
-                return { cwd: currentCwd(), revision, status: undefined };
+              if (currentMode(ctx) !== "tui") {
+                currentCwd();
+                return undefined;
+              }
               const cwd = currentCwd();
               const result = yield* probes
                 .git(
@@ -183,10 +182,10 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
                     currentCwd() === cwd,
                 )
                 .pipe(Effect.option);
-              return { cwd, revision, status: Option.getOrUndefined(result) };
+              return Option.getOrUndefined(result);
             }),
-          commit: (value) =>
-            updateState((current) => ({ ...current, gitStatus: value.status })).pipe(
+          commit: (gitStatus) =>
+            updateState((current) => ({ ...current, gitStatus })).pipe(
               Effect.andThen(notifyChanged),
             ),
           spanName: "pi-cosmic-ui.refresh.git",
@@ -215,8 +214,6 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
               const cwd = currentCwd();
               const result = yield* probes.pullRequest(cwd).pipe(Effect.option);
               return {
-                cwd,
-                revision: current.probeRevision,
                 checkedAt: now,
                 number: Option.getOrUndefined(result),
               };
@@ -273,27 +270,25 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
             Effect.andThen(notifyChanged),
             Effect.as(next),
           );
-        const updateFooter = (patch: Partial<ResolvedCosmicUiConfig["footer"]>) =>
+        const persistConfig = (
+          persist: (
+            afterCommit: (next: ResolvedCosmicUiConfig) => Effect.Effect<void>,
+          ) => Effect.Effect<ResolvedCosmicUiConfig, CosmicUiConfigError>,
+        ) =>
           settingsLock.withPermits(1)(
-            Effect.gen(function* () {
-              yield* requireConfig;
-              return yield* repository.updateFooter(options.cwd, patch, projectTrusted, (next) =>
-                installConfig(next).pipe(Effect.asVoid),
-              );
-            }),
+            requireConfig.pipe(
+              Effect.andThen(
+                Effect.suspend(() => persist((next) => installConfig(next).pipe(Effect.asVoid))),
+              ),
+            ),
+          );
+        const updateFooter = (patch: Partial<ResolvedCosmicUiConfig["footer"]>) =>
+          persistConfig((afterCommit) =>
+            repository.updateFooter(options.cwd, patch, projectTrusted, afterCommit),
           );
         const setVisibility = (id: string, visible: boolean) =>
-          settingsLock.withPermits(1)(
-            Effect.gen(function* () {
-              yield* requireConfig;
-              return yield* repository.setVisibility(
-                options.cwd,
-                id,
-                visible,
-                projectTrusted,
-                (next) => installConfig(next).pipe(Effect.asVoid),
-              );
-            }),
+          persistConfig((afterCommit) =>
+            repository.setVisibility(options.cwd, id, visible, projectTrusted, afterCommit),
           );
         if (options.startPolling !== false) {
           yield* gitRefresh.startPolling({}).pipe(Effect.forkScoped);

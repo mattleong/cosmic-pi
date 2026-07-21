@@ -9,7 +9,6 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import {
   AgentDirectory,
-  freezeSnapshot,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
   nodePlatformLayer,
@@ -27,7 +26,7 @@ import {
   FooterRegistryService,
   type FooterRegistryBridge,
 } from "./footer/registry.ts";
-import { CosmicUiService, emptyTotals, makeProjection } from "./host-service.ts";
+import { CosmicUiService, emptyTotals, makeProjection, resetProjection } from "./host-service.ts";
 import { PiExec } from "./probe/pi-exec.ts";
 import {
   FooterProtocolHost,
@@ -502,18 +501,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
       slot.shutdown().then(() => {
         currentContext = undefined;
         resetTotals();
-        MutableRef.set(
-          projection,
-          freezeSnapshot({
-            config: undefined,
-            totals: emptyTotals(),
-            gitStatus: undefined,
-            pullRequestNumber: undefined,
-            pullRequestCheckedAt: 0,
-            probeRevision: 0,
-            homeDirectory: undefined,
-          }),
-        );
+        resetProjection(projection);
       });
     const host = sessionHostFrom(ctx);
     if (host._tag === "Failure") return shutdownFailedStart();
@@ -526,18 +514,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
     uninstallFooter();
     resetTotals();
     const initialTotals = totalsFromSession(ctx);
-    MutableRef.set(
-      projection,
-      freezeSnapshot({
-        config: undefined,
-        totals: initialTotals,
-        gitStatus: undefined,
-        pullRequestNumber: undefined,
-        pullRequestCheckedAt: 0,
-        probeRevision: 0,
-        homeDirectory: undefined,
-      }),
-    );
+    resetProjection(projection, initialTotals);
     const context = MutableRef.make(ctx);
     currentContext = context;
     return slot
@@ -616,11 +593,12 @@ export default function cosmicUi(pi: ExtensionAPI): void {
   };
   pi.on("session_compact", (_event, ctx) => refreshTotals(ctx));
   pi.on("session_tree", (_event, ctx) => refreshTotals(ctx));
-  pi.on("model_select", (_event, ctx) => {
+  const invalidateContextUsage = (_event: unknown, ctx: ExtensionContext) => {
     updateContext(ctx);
     footerComponent?.invalidateContextUsage();
     requestRender();
-  });
+  };
+  pi.on("model_select", invalidateContextUsage);
   pi.on("tool_execution_end", (event, ctx) => {
     updateContext(ctx);
     if (!["bash", "edit", "write"].includes(event.toolName)) return;
@@ -629,19 +607,12 @@ export default function cosmicUi(pi: ExtensionAPI): void {
       ctx,
     ).catch(() => undefined);
   });
-  pi.on("thinking_level_select", (_event, ctx) => {
+  const renderUpdatedContext = (_event: unknown, ctx: ExtensionContext) => {
     updateContext(ctx);
-    requestRender();
-  });
-  pi.on("session_info_changed", (_event, ctx) => {
-    updateContext(ctx);
-    requestRender();
-  });
-  const invalidateContextUsage = (_event: unknown, ctx: ExtensionContext) => {
-    updateContext(ctx);
-    footerComponent?.invalidateContextUsage();
     requestRender();
   };
+  pi.on("thinking_level_select", renderUpdatedContext);
+  pi.on("session_info_changed", renderUpdatedContext);
   pi.on("agent_start", invalidateContextUsage);
   pi.on("message_start", invalidateContextUsage);
   pi.on("message_update", invalidateContextUsage);
@@ -653,18 +624,7 @@ export default function cosmicUi(pi: ExtensionAPI): void {
       currentContext = undefined;
       resetTotals();
       protocolBuffer.reset();
-      MutableRef.set(
-        projection,
-        freezeSnapshot({
-          config: undefined,
-          totals: emptyTotals(),
-          gitStatus: undefined,
-          pullRequestNumber: undefined,
-          pullRequestCheckedAt: 0,
-          probeRevision: 0,
-          homeDirectory: undefined,
-        }),
-      );
+      resetProjection(projection);
     });
   });
 }

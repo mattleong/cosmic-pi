@@ -19,18 +19,11 @@ export interface EditPreviewOperation {
 
 export function getEditPreviewOperations(args: unknown): EditPreviewOperation[] {
   const edits = getObjectValue(args, "edits");
-  if (Array.isArray(edits)) {
-    return edits.flatMap((edit) => {
-      const oldText = getObjectValue(edit, "oldText") ?? getObjectValue(edit, "old_text");
-      const newText = getObjectValue(edit, "newText") ?? getObjectValue(edit, "new_text");
-      return typeof oldText === "string" && typeof newText === "string" && oldText !== newText
-        ? [{ oldText, newText }]
-        : [];
-    });
-  }
-  const oldText = getObjectValue(args, "oldText") ?? getObjectValue(args, "old_text");
-  const newText = getObjectValue(args, "newText") ?? getObjectValue(args, "new_text");
-  return typeof oldText === "string" && typeof newText === "string" && oldText !== newText
-    ? [{ oldText, newText }]
-    : [];
+  return (Array.isArray(edits) ? edits : [args]).flatMap((edit) => {
+    const oldText = getObjectValue(edit, "oldText") ?? getObjectValue(edit, "old_text");
+    const newText = getObjectValue(edit, "newText") ?? getObjectValue(edit, "new_text");
+    return typeof oldText === "string" && typeof newText === "string" && oldText !== newText
+      ? [{ oldText, newText }]
+      : [];
+  });
 }

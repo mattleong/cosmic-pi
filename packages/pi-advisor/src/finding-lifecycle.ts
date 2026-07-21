@@ -1,12 +1,18 @@
 import { createHash } from "node:crypto";
-import { canonicalAdvisorFindingFingerprint } from "./review.ts";
+import {
+  ADVISOR_FINDING_CATEGORIES,
+  ADVISOR_FINDING_STATUSES,
+  ADVISOR_SEVERITIES,
+  advisorSeverityRank,
+  canonicalAdvisorFindingFingerprint,
+} from "./review.ts";
 import type {
   AdvisorFinding,
   AdvisorFindingCategory,
   AdvisorFindingStatus,
   AdvisorSeverity,
 } from "./review.ts";
-import { isRecord } from "./utils.ts";
+import { isOneOf, isRecord } from "./utils.ts";
 
 export const MAX_FINDING_LIFECYCLE_RECORDS = 64;
 export interface AdvisorFindingRecord {
@@ -66,7 +72,7 @@ export const reconcileAdvisorFindings = (
     };
     if (
       record.status === "acknowledged" &&
-      severityRank(finding.severity) > severityRank(record.severity)
+      advisorSeverityRank(finding.severity) > advisorSeverityRank(record.severity)
     )
       record.status = "open";
     record.category = finding.category;
@@ -176,15 +182,9 @@ export function isValidAdvisorFindingRecord(value: unknown): value is AdvisorFin
     typeof value.generation === "number" &&
     Number.isSafeInteger(value.generation) &&
     value.generation >= 0 &&
-    (value.category === "intent" ||
-      value.category === "correctness" ||
-      value.category === "completeness" ||
-      value.category === "evidence") &&
-    (value.severity === "nit" || value.severity === "concern" || value.severity === "blocker") &&
-    (value.status === "open" ||
-      value.status === "acknowledged" ||
-      value.status === "resolved" ||
-      value.status === "superseded") &&
+    isOneOf(value.category, ADVISOR_FINDING_CATEGORIES) &&
+    isOneOf(value.severity, ADVISOR_SEVERITIES) &&
+    isOneOf(value.status, ADVISOR_FINDING_STATUSES) &&
     typeof value.firstSeenTurn === "number" &&
     Number.isSafeInteger(value.firstSeenTurn) &&
     value.firstSeenTurn >= 0 &&
@@ -196,9 +196,6 @@ export function isValidAdvisorFindingRecord(value: unknown): value is AdvisorFin
 }
 function isTerminal(record: AdvisorFindingRecord): boolean {
   return record.status === "resolved" || record.status === "superseded";
-}
-function severityRank(severity: AdvisorSeverity): number {
-  return severity === "blocker" ? 2 : severity === "concern" ? 1 : 0;
 }
 export function advisorFindingId(key: string, generation: number): string {
   return `af_${createHash("sha256").update(`${key}\0${generation}`).digest("hex").slice(0, 32)}`;

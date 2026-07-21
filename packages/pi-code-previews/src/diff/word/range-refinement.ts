@@ -18,10 +18,11 @@ import {
   isMeaningfulOperatorToken,
   isNumberToken,
   splitIdentifierToken,
+  tokenAt,
   wordEmphasisTokenWeight,
   type WordEmphasisToken,
 } from "./tokens";
-import type { WordChangeRanges } from "./types";
+import { hasWordChangeRanges, type WordChangeRanges } from "./types";
 import { suffixAlignedPairs } from "./alignment";
 import { refinedTokenTextRanges } from "./token-text-refinement";
 
@@ -289,14 +290,4 @@ function isNarrowerThanWholeTokens(
     ranges.removed.length === 0 ||
     ranges.added.length === 0
   );
-}
-
-function hasWordChangeRanges(ranges: WordChangeRanges): boolean {
-  return ranges.removed.length > 0 || ranges.added.length > 0;
-}
-
-function tokenAt(tokens: WordEmphasisToken[], index: number): WordEmphasisToken {
-  const token = tokens[index];
-  if (token === undefined) throw new RangeError(`Missing word-emphasis token ${index}`);
-  return token;
 }
