@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { hashString } from "../../cache/hash";
 import { codePreviewSettings } from "../../settings/index";
-import { getShikiStatus } from "../../syntax/shiki";
+import { getShikiStatus } from "../../syntax/render";
 
 let themeCacheIdCounter = 0;
 const themeCacheIds = new WeakMap<object, number>();

@@ -1,6 +1,6 @@
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { SettingsList } from "@earendil-works/pi-tui";
-import { codePreviewSettings, setCodePreviewSettings, updateSetting } from "../../settings/index";
+import { cloneCodePreviewSettings, codePreviewSettings, updateSetting } from "../../settings/index";
 import {
   flushSettingsSaveQueue,
   formatSettingsSaveError,
@@ -19,30 +19,39 @@ export function createCodePreviewSettingsList({
   done,
 }: SettingsListControllerOptions): SettingsList {
   let list: SettingsList;
+  let draftSettings = cloneCodePreviewSettings(codePreviewSettings);
+  let revision = 0;
   const handleSettingChange = (id: string, value: string) => {
     if (isSettingsGroupItemId(id)) {
-      syncSettingsListValues(list, handleSettingChange);
+      syncSettingsListValues(list, draftSettings, handleSettingChange);
       return;
     }
 
-    const previousTheme = codePreviewSettings.shikiTheme;
+    const previousTheme = draftSettings.shikiTheme;
     const resetRequested = id === "resetToDefaults" && value === "reset now";
-    setCodePreviewSettings(updateSetting(codePreviewSettings, id, value));
-    syncSettingsListValues(list, handleSettingChange);
-    if (codePreviewSettings.shikiTheme !== previousTheme)
-      void initializeShiki(codePreviewSettings.shikiTheme);
-    void queueSettingsSave(codePreviewSettings)
+    const next = updateSetting(draftSettings, id, value);
+    const changeRevision = ++revision;
+    draftSettings = next;
+    syncSettingsListValues(list, draftSettings, handleSettingChange);
+    void queueSettingsSave(next)
       .then(() => {
+        if (next.shikiTheme !== previousTheme) void initializeShiki(next.shikiTheme);
         if (resetRequested) notify("Code preview settings reset to defaults", "info");
       })
       .catch((error) => {
+        // Only the latest failed edit rolls the panel draft back. Older saves may fail while a
+        // newer serialized save is still able to publish the complete draft.
+        if (revision === changeRevision) {
+          draftSettings = cloneCodePreviewSettings(codePreviewSettings);
+          syncSettingsListValues(list, draftSettings, handleSettingChange);
+        }
         notify(formatSettingsSaveError(error), "warning");
       });
   };
 
   const items = createSettingsCategoryItems(
-    codePreviewSettings,
-    () => codePreviewSettings,
+    draftSettings,
+    () => draftSettings,
     handleSettingChange,
   );
   list = new SettingsList(
@@ -61,12 +70,9 @@ export function createCodePreviewSettingsList({
 
 function syncSettingsListValues(
   list: SettingsList,
+  settings: typeof codePreviewSettings,
   onSettingChange: (id: string, value: string) => void,
 ): void {
-  for (const item of createSettingsCategoryItems(
-    codePreviewSettings,
-    () => codePreviewSettings,
-    onSettingChange,
-  ))
+  for (const item of createSettingsCategoryItems(settings, () => settings, onSettingChange))
     list.updateValue(item.id, item.currentValue);
 }

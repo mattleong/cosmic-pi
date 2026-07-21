@@ -2,9 +2,9 @@ import type { AdvisorSeverity } from "./review.ts";
 
 export const MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST = 2;
 export interface AdvisorInterventionBudgetSnapshot {
-  delivered: number;
-  highestSeverity?: "concern" | "blocker";
-  correctionUsed: boolean;
+  readonly delivered: number;
+  readonly highestSeverity?: "concern" | "blocker";
+  readonly correctionUsed: boolean;
 }
 
 export function sanitizeInterventionBudgetSnapshot(
@@ -23,48 +23,58 @@ export function sanitizeInterventionBudgetSnapshot(
   };
 }
 
+export const emptyAdvisorInterventionBudget = (): AdvisorInterventionBudgetSnapshot =>
+  sanitizeInterventionBudgetSnapshot(undefined);
+
+export const canDeliverAdvisorIntervention = (
+  state: AdvisorInterventionBudgetSnapshot,
+  severity: AdvisorSeverity,
+): boolean => {
+  if (severity === "nit" || state.delivered >= MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST)
+    return false;
+  return state.highestSeverity === undefined || rank(severity) > rank(state.highestSeverity);
+};
+
+export const canCorrectAdvisorIntervention = (state: AdvisorInterventionBudgetSnapshot): boolean =>
+  !state.correctionUsed;
+
+export const commitAdvisorIntervention = (
+  state: AdvisorInterventionBudgetSnapshot,
+  severity: AdvisorSeverity,
+  correction: boolean,
+): AdvisorInterventionBudgetSnapshot => {
+  if (severity === "nit") return state;
+  const highestSeverity =
+    !state.highestSeverity || rank(severity) > rank(state.highestSeverity)
+      ? severity
+      : state.highestSeverity;
+  return {
+    delivered: Math.min(MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST, state.delivered + 1),
+    highestSeverity,
+    correctionUsed: state.correctionUsed || correction,
+  };
+};
+
+/** Compatibility facade. New application code stores the immutable snapshot directly. */
 export class AdvisorInterventionBudget {
-  #delivered = 0;
-  #highestSeverity: "concern" | "blocker" | undefined;
-  #correctionUsed = false;
-
+  #state = emptyAdvisorInterventionBudget();
   get snapshot(): AdvisorInterventionBudgetSnapshot {
-    return {
-      delivered: this.#delivered,
-      ...(this.#highestSeverity === undefined ? {} : { highestSeverity: this.#highestSeverity }),
-      correctionUsed: this.#correctionUsed,
-    };
+    return this.#state;
   }
-
   canDeliver(severity: AdvisorSeverity): boolean {
-    if (severity === "nit" || this.#delivered >= MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST)
-      return false;
-    if (!this.#highestSeverity) return true;
-    return rank(severity) > rank(this.#highestSeverity);
+    return canDeliverAdvisorIntervention(this.#state, severity);
   }
-
   canCorrect(): boolean {
-    return !this.#correctionUsed;
+    return canCorrectAdvisorIntervention(this.#state);
   }
-
   commit(severity: AdvisorSeverity, correction: boolean): void {
-    if (severity === "nit") return;
-    this.#delivered = Math.min(MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST, this.#delivered + 1);
-    if (!this.#highestSeverity || rank(severity) > rank(this.#highestSeverity)) {
-      this.#highestSeverity = severity;
-    }
-    if (correction) this.#correctionUsed = true;
+    this.#state = commitAdvisorIntervention(this.#state, severity, correction);
   }
-
   restore(snapshot: Partial<AdvisorInterventionBudgetSnapshot> | undefined): void {
-    const sanitized = sanitizeInterventionBudgetSnapshot(snapshot);
-    this.#delivered = sanitized.delivered;
-    this.#highestSeverity = sanitized.highestSeverity;
-    this.#correctionUsed = sanitized.correctionUsed;
+    this.#state = sanitizeInterventionBudgetSnapshot(snapshot);
   }
-
   reset(): void {
-    this.restore(undefined);
+    this.#state = emptyAdvisorInterventionBudget();
   }
 }
 

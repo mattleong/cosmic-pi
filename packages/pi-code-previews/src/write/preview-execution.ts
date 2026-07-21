@@ -3,11 +3,15 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { runCodePreviewSessionEffect } from "../session-capability";
+import {
+  hasCodePreviewSessionCapability,
+  runCodePreviewSessionEffect,
+} from "../session-capability";
 import { resolvePreviewPath } from "../paths/resolve";
 import { getObjectValue } from "../shared/objects";
 import { readExistingFileForPreviewEffect, type ExistingFilePreview } from "./diff";
-import { CodePreviewWriteService, writeServiceProjection } from "./service";
+import { lookupBeforeWrite } from "./projection";
+import { CodePreviewWriteService } from "./service";
 
 const CODE_PREVIEW_BEFORE_WRITE_DETAIL = "codePreviewBeforeWrite";
 export type CodePreviewBeforeWrite = ExistingFilePreview | undefined;
@@ -29,7 +33,7 @@ export function getCodePreviewBeforeWrite(
   details: unknown,
 ): unknown {
   if (toolCallId) {
-    const before = writeServiceProjection()?.takeBeforeWrite(toolCallId);
+    const before = lookupBeforeWrite(toolCallId);
     if (before !== undefined) return before;
   }
   return getObjectValue(details, CODE_PREVIEW_BEFORE_WRITE_DETAIL);
@@ -70,7 +74,7 @@ export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute
           ),
         ),
       );
-      writeService.rememberBeforeWrite(toolCallId, before);
+      yield* writeService.rememberBeforeWrite(toolCallId, before);
       return {
         content: [
           {
@@ -108,11 +112,14 @@ export function withCodePreviewBeforeWrite<T extends { details?: unknown }>(
   result: T,
   before: CodePreviewBeforeWrite,
   toolCallId?: string,
-): T & { details: Record<string, unknown> } {
-  if (toolCallId) writeServiceProjection()?.rememberBeforeWrite(toolCallId, before);
+): Promise<T & { details: Record<string, unknown> }> {
   const details = result.details && typeof result.details === "object" ? result.details : {};
-  return {
+  const enriched = {
     ...result,
     details: { ...details, [CODE_PREVIEW_BEFORE_WRITE_DETAIL]: redactedBeforeWriteDetail(before) },
   };
+  if (!toolCallId || !hasCodePreviewSessionCapability()) return Promise.resolve(enriched);
+  return runCodePreviewSessionEffect(
+    CodePreviewWriteService.use((service) => service.rememberBeforeWrite(toolCallId, before)),
+  ).then(() => enriched);
 }

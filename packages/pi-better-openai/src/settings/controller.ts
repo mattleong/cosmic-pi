@@ -5,6 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, SettingsList } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import * as MutableRef from "effect/MutableRef";
 import {
   FAST_SETTING_DESCRIPTORS,
   FOOTER_SETTING_DESCRIPTORS,
@@ -13,7 +14,8 @@ import {
   USAGE_SETTING_DESCRIPTORS,
   type ResolvedConfig,
 } from "../config.ts";
-import { modelList, type FastController } from "../fast-controller.ts";
+import { modelList, settingsSummary, type FastSnapshot } from "../fast-controller.ts";
+import { FastModeService } from "../fast-service.ts";
 import { redactDiagnosticValue } from "../format.ts";
 import { OpenAIUsageService } from "../usage-controller.ts";
 import { isRecord } from "../utils.ts";
@@ -66,8 +68,11 @@ export function registerSettingsController(
     updateFooter(ctx: ExtensionContext): void;
     hasTerminalUI(ctx: ExtensionContext): boolean;
     formatDebugStatus(ctx: ExtensionContext): string;
-    fastController: FastController;
-    run<A, E>(effect: Effect.Effect<A, E, OpenAIUsageService>, signal?: AbortSignal): Promise<A>;
+    fastProjection: MutableRef.MutableRef<FastSnapshot>;
+    run<A, E>(
+      effect: Effect.Effect<A, E, OpenAIUsageService | FastModeService>,
+      signal?: AbortSignal,
+    ): Promise<A>;
   },
 ): void {
   const {
@@ -76,7 +81,7 @@ export function registerSettingsController(
     updateFooter,
     hasTerminalUI,
     formatDebugStatus,
-    fastController,
+    fastProjection,
     run,
   } = options;
   const descriptors = [
@@ -85,7 +90,7 @@ export function registerSettingsController(
       label: "Fast mode",
       values: ["true", "false"] as const,
       description: "Request OpenAI fast mode for supported models.",
-      currentValue: (_cfg: ResolvedConfig) => String(fastController.desiredActive),
+      currentValue: (_cfg: ResolvedConfig) => String(MutableRef.get(fastProjection).desiredActive),
     },
     ...SETTINGS_OPTION_DESCRIPTORS,
   ];
@@ -100,15 +105,13 @@ export function registerSettingsController(
 
   const applySetting = (ctx: ExtensionContext, id: string, value: string) => {
     updateContext(ctx);
-    const update =
-      id === "fast.enabled"
-        ? Effect.gen(function* () {
-            fastController.setDesired(ctx, value === "true");
-            yield* OpenAIUsageService.use((service) =>
-              service.persistFast(fastController.active, fastController.desiredActive),
-            );
-          })
-        : OpenAIUsageService.use((service) => service.updateSetting(id, value));
+    const update = Effect.gen(function* () {
+      if (id === "fast.enabled") {
+        yield* FastModeService.use((service) => service.setDesired(ctx, value === "true"));
+        return;
+      }
+      yield* OpenAIUsageService.use((service) => service.updateSetting(id, value));
+    });
     return run(
       update.pipe(
         Effect.tap(() =>
@@ -119,6 +122,7 @@ export function registerSettingsController(
           }),
         ),
         Effect.catch((error) => Effect.sync(() => ctx.ui.notify(error.message, "error"))),
+        Effect.asVoid,
       ),
       ctx.signal,
     );
@@ -162,7 +166,7 @@ export function registerSettingsController(
               {
                 id: "fast.enabled",
                 label: "Fast mode",
-                currentValue: String(fastController.desiredActive),
+                currentValue: String(MutableRef.get(fastProjection).desiredActive),
                 values: ["true", "false"],
                 description: `Request OpenAI fast mode. Activates for package-supported models: ${modelList()}.`,
               },
@@ -211,11 +215,11 @@ export function registerSettingsController(
                 {
                   id: "section.fast",
                   label: "Fast mode",
-                  currentValue: fastController.settingsSummary(ctx),
+                  currentValue: settingsSummary(ctx, MutableRef.get(fastProjection)),
                   description: "Configure OpenAI fast mode and persistence.",
                   submenu: (_value, complete) =>
                     submenu("Fast mode settings", fastItems, () =>
-                      complete(fastController.settingsSummary(ctx)),
+                      complete(settingsSummary(ctx, MutableRef.get(fastProjection))),
                     ),
                 },
                 {

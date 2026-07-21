@@ -59,7 +59,47 @@ export interface AdvisorRoutingStateSnapshot {
   cancellationLatched: boolean;
 }
 
-/** Mutable counter holder; routing itself remains the pure function above. */
+export const emptyAdvisorRoutingState = (): AdvisorRoutingStateSnapshot => ({
+  completedPrimaryTurns: 0,
+  immunityUntilCompletedTurn: 0,
+  cancellationLatched: false,
+});
+
+export const sanitizeAdvisorRoutingState = (
+  snapshot: Partial<AdvisorRoutingStateSnapshot> | undefined,
+): AdvisorRoutingStateSnapshot => ({
+  completedPrimaryTurns: nonNegativeInteger(snapshot?.completedPrimaryTurns),
+  immunityUntilCompletedTurn: nonNegativeInteger(snapshot?.immunityUntilCompletedTurn),
+  cancellationLatched: snapshot?.cancellationLatched === true,
+});
+
+export const isAdvisorImmunityActive = (state: AdvisorRoutingStateSnapshot): boolean =>
+  state.immunityUntilCompletedTurn > 0 &&
+  state.completedPrimaryTurns <= state.immunityUntilCompletedTurn;
+
+export const completeAdvisorPrimaryTurn = (
+  state: AdvisorRoutingStateSnapshot,
+): AdvisorRoutingStateSnapshot => ({
+  ...state,
+  completedPrimaryTurns: state.completedPrimaryTurns + 1,
+});
+
+export const armAdvisorInterruption = (
+  state: AdvisorRoutingStateSnapshot,
+): AdvisorRoutingStateSnapshot => ({
+  ...state,
+  immunityUntilCompletedTurn: state.completedPrimaryTurns + ADVISOR_IMMUNITY_COMPLETED_TURNS,
+});
+
+export const latchAdvisorCancellation = (
+  state: AdvisorRoutingStateSnapshot,
+): AdvisorRoutingStateSnapshot => ({ ...state, cancellationLatched: true });
+
+export const clearAdvisorCancellation = (
+  state: AdvisorRoutingStateSnapshot,
+): AdvisorRoutingStateSnapshot => ({ ...state, cancellationLatched: false });
+
+/** Compatibility facade. New application code stores the immutable snapshot directly. */
 export class AdvisorRoutingState {
   private completed = 0;
   private immunityUntil = 0;
@@ -102,9 +142,10 @@ export class AdvisorRoutingState {
   }
 
   restore(snapshot: Partial<AdvisorRoutingStateSnapshot>): void {
-    this.completed = nonNegativeInteger(snapshot.completedPrimaryTurns);
-    this.immunityUntil = nonNegativeInteger(snapshot.immunityUntilCompletedTurn);
-    this.cancelled = snapshot.cancellationLatched === true;
+    const state = sanitizeAdvisorRoutingState(snapshot);
+    this.completed = state.completedPrimaryTurns;
+    this.immunityUntil = state.immunityUntilCompletedTurn;
+    this.cancelled = state.cancellationLatched;
   }
 
   reset(): void {

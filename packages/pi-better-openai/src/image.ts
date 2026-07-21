@@ -707,36 +707,35 @@ export class OpenAIImageService extends Context.Service<
             );
           const inputs = yield* readInputs(params.images, cwd);
           const response = yield* http
-            .request({
-              url: CODEX_RESPONSES_URL,
-              method: "POST",
-              headers: {
-                authorization: `Bearer ${credentials.accessToken}`,
-                "chatgpt-account-id": credentials.accountId,
-                "OpenAI-Beta": "responses=experimental",
-                accept: "text/event-stream",
-                originator: "codex_cli_rs",
-                "User-Agent": "codex_cli_rs/0.0.0 (pi-better-openai)",
+            .requestJsonRawBytes(
+              {
+                url: CODEX_RESPONSES_URL,
+                method: "POST",
+                headers: {
+                  authorization: `Bearer ${credentials.accessToken}`,
+                  "chatgpt-account-id": credentials.accountId,
+                  "OpenAI-Beta": "responses=experimental",
+                  accept: "text/event-stream",
+                  originator: "codex_cli_rs",
+                  "User-Agent": "codex_cli_rs/0.0.0 (pi-better-openai)",
+                },
               },
-              jsonBody: yield* Schema.decodeUnknownEffect(ImageRequestSchema)(
-                buildRequest(params, model, cfg, inputs),
-              ).pipe(
-                Effect.mapError(imageError("request", "Unable to encode Codex image request.")),
-              ),
-            })
+              ImageRequestSchema,
+              buildRequest(params, model, cfg, inputs),
+            )
             .pipe(
               Effect.mapError(imageError("request", "Codex image request failed.")),
               Effect.withSpan("pi-better-openai.image.request"),
             );
           if (response.status < 200 || response.status >= 300) {
-            yield* response.discard.pipe(
+            yield* response.discardRawBody.pipe(
               Effect.timeout("1 second"),
               Effect.catch(() => Effect.void),
             );
             return yield* fail("request", `Codex image request failed (${response.status}).`);
           }
           const parsed = yield* parseSse(
-            response.body,
+            response.rawBody,
             imageMimeType(`image.${outputFormat}`, outputFormat),
           ).pipe(Effect.withSpan("pi-better-openai.image.stream"));
           const validated = yield* validatedGeneratedImage(parsed, outputFormat).pipe(

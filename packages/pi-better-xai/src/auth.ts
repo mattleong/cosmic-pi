@@ -9,6 +9,7 @@ import {
   type JsonObject,
 } from "pi-cosmic-core";
 import type { XaiAuthResult } from "./auth-result.ts";
+import { ModelRegistryAuth } from "./boundary/model-registry-auth.ts";
 import { isRecord } from "./utils.ts";
 
 export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
@@ -16,18 +17,23 @@ export const XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token";
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 
+const PositiveIntegerSchema = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isInt(),
+  Schema.isGreaterThan(0),
+);
 const XaiAuthDocumentSchema = Schema.Struct({ xai: Schema.optional(Schema.Unknown) });
 const XaiAuthEntrySchema = Schema.Struct({
   type: Schema.Literal("oauth"),
   access: Schema.String,
   refresh: Schema.optional(Schema.NullOr(Schema.String)),
-  expires: Schema.optional(Schema.NullOr(Schema.Number)),
+  expires: Schema.optional(Schema.NullOr(PositiveIntegerSchema)),
 });
 
 const RefreshResponseSchema = Schema.Struct({
   access_token: Schema.String,
   refresh_token: Schema.optional(Schema.String),
-  expires_in: Schema.optional(Schema.Number),
+  expires_in: Schema.optional(PositiveIntegerSchema),
 });
 
 const JwtPayloadSchema = Schema.Struct({
@@ -173,31 +179,28 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
         client_id: XAI_OAUTH_CLIENT_ID,
         refresh_token: refreshToken,
       },
+      responseSchema: RefreshResponseSchema,
     })
     .pipe(
-      Effect.mapError(
-        () =>
-          new XaiAuthError({
-            operation: "refresh",
-            message: "xAI OAuth token refresh request failed.",
-          }),
+      Effect.mapError((error) =>
+        error.operation === "decode"
+          ? new XaiAuthError({
+              operation: "refresh-decode",
+              message: "xAI OAuth token refresh returned an invalid payload.",
+            })
+          : new XaiAuthError({
+              operation: "refresh",
+              message: "xAI OAuth token refresh request failed.",
+            }),
       ),
     );
-  if (response.status < 200 || response.status >= 300) {
+  if (response._tag === "Rejected") {
     return yield* new XaiAuthError({
       operation: "refresh",
       message: `xAI OAuth token refresh failed (HTTP ${response.status}).`,
     });
   }
-  const body = yield* Schema.decodeUnknownEffect(RefreshResponseSchema)(response.body).pipe(
-    Effect.mapError(
-      () =>
-        new XaiAuthError({
-          operation: "refresh-decode",
-          message: "xAI OAuth token refresh returned an invalid payload.",
-        }),
-    ),
-  );
+  const body = response.body;
   const accessToken = body.access_token.trim();
   if (!accessToken) {
     return yield* new XaiAuthError({
@@ -206,10 +209,7 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
     });
   }
   const nextRefresh = body.refresh_token?.trim() || refreshToken;
-  const expiresInSeconds =
-    typeof body.expires_in === "number" && Number.isFinite(body.expires_in) && body.expires_in > 0
-      ? body.expires_in
-      : DEFAULT_TOKEN_LIFETIME_SECONDS;
+  const expiresInSeconds = body.expires_in ?? DEFAULT_TOKEN_LIFETIME_SECONDS;
   const now = yield* Clock.currentTimeMillis;
   const expires = now + expiresInSeconds * 1000;
   yield* writeXaiAuth(authPath, { access: accessToken, refresh: nextRefresh, expires });
@@ -222,9 +222,8 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
   } satisfies XaiCredentials;
 });
 
-export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResult")(function* (
+const getXaiCredentialsResultEffect = Effect.fn("XaiAuth.getXaiCredentialsResult")(function* (
   authPath: string,
-  ctx: Pick<ExtensionContext, "modelRegistry">,
 ) {
   const now = yield* Clock.currentTimeMillis;
   const fileResult = yield* readXaiAuthResult(authPath).pipe(
@@ -248,11 +247,12 @@ export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResul
     refreshFailure = refreshed.failure;
   }
 
-  const registryToken = yield* Effect.tryPromise({
-    try: () => ctx.modelRegistry.getApiKeyForProvider("xai"),
-    catch: () =>
-      new XaiAuthError({ operation: "registry", message: "Unable to read xAI credentials." }),
-  }).pipe(Effect.result);
+  const registryLookup = ModelRegistryAuth.use((registry) => registry.getApiKey).pipe(
+    Effect.mapError(
+      () => new XaiAuthError({ operation: "registry", message: "Unable to read xAI credentials." }),
+    ),
+  );
+  const registryToken = yield* registryLookup.pipe(Effect.result);
   if (registryToken._tag === "Success") {
     const registryAccess = registryToken.success?.trim();
     if (registryAccess) {
@@ -285,12 +285,56 @@ export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResul
   return { _tag: "Missing" } as const;
 });
 
-export const getXaiCredentials = Effect.fn("XaiAuth.getXaiCredentials")(function* (
+const getXaiCredentialsEffect = Effect.fn("XaiAuth.getXaiCredentials")(function* (
   authPath: string,
-  ctx: Pick<ExtensionContext, "modelRegistry">,
 ) {
-  const result = yield* getXaiCredentialsResult(authPath, ctx);
+  const result = yield* getXaiCredentialsResultEffect(authPath);
   if (result._tag === "Found") return result.credentials;
   if (result._tag === "Missing") return undefined;
   return yield* new XaiAuthError({ operation: result.operation, message: result.message });
 });
+
+type WithoutModelRegistry<T extends Effect.Effect<unknown, unknown, unknown>> = Effect.Effect<
+  Effect.Success<T>,
+  Effect.Error<T>,
+  Exclude<Effect.Services<T>, ModelRegistryAuth>
+>;
+
+export function getXaiCredentialsResult(
+  authPath: string,
+): ReturnType<typeof getXaiCredentialsResultEffect>;
+export function getXaiCredentialsResult(
+  authPath: string,
+  ctx: Pick<ExtensionContext, "modelRegistry">,
+): WithoutModelRegistry<ReturnType<typeof getXaiCredentialsResultEffect>>;
+export function getXaiCredentialsResult(
+  authPath: string,
+  ctx?: Pick<ExtensionContext, "modelRegistry">,
+) {
+  const effect = getXaiCredentialsResultEffect(authPath);
+  return ctx
+    ? effect.pipe(
+        Effect.provideService(
+          ModelRegistryAuth,
+          ModelRegistryAuth.make(() => ctx.modelRegistry),
+        ),
+      )
+    : effect;
+}
+
+export function getXaiCredentials(authPath: string): ReturnType<typeof getXaiCredentialsEffect>;
+export function getXaiCredentials(
+  authPath: string,
+  ctx: Pick<ExtensionContext, "modelRegistry">,
+): WithoutModelRegistry<ReturnType<typeof getXaiCredentialsEffect>>;
+export function getXaiCredentials(authPath: string, ctx?: Pick<ExtensionContext, "modelRegistry">) {
+  const effect = getXaiCredentialsEffect(authPath);
+  return ctx
+    ? effect.pipe(
+        Effect.provideService(
+          ModelRegistryAuth,
+          ModelRegistryAuth.make(() => ctx.modelRegistry),
+        ),
+      )
+    : effect;
+}

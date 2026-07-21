@@ -27,6 +27,7 @@
     "validate": "pnpm check && pnpm test",
     "bench:queue": "node --experimental-strip-types bench/queue.ts",
     "typecheck": "tsc --noEmit",
+    "effect:diagnostics": "effect-language-service diagnostics --project tsconfig.json",
     "lint": "oxlint --deny-warnings .",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt .",

@@ -1,7 +1,7 @@
 import { codePreviewSettings } from "../../settings/index";
 import type { DiffWordEmphasis } from "../../settings/types";
 import { injectVisibleRanges } from "../../shared/terminal-text";
-import { isLightShikiTheme } from "../../syntax/shiki";
+import { isLightShikiTheme } from "../../syntax/render";
 import type { ParsedDiffLine } from "../parse";
 import { analyzeChangedLineBlock } from "./change-block";
 import { shouldEmphasizeChangedPair } from "./emphasis";

@@ -1,10 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { PiApi } from "../src/pi-api.ts";
 import { makePiRuntime } from "../src/runtime.ts";
+import { makeLifecycleProbe } from "../testing.ts";
 
 it.effect("provides the pi host API through one managed runtime", () =>
   Effect.gen(function* () {
@@ -26,20 +26,16 @@ it.effect("provides the pi host API through one managed runtime", () =>
 
 it.effect("releases layer resources when the managed runtime is disposed", () =>
   Effect.gen(function* () {
-    const events: string[] = [];
-    const resourceLayer = Layer.effectDiscard(
-      Effect.acquireRelease(
-        Effect.sync(() => events.push("acquired")),
-        () => Effect.sync(() => events.push("released")),
-      ),
-    );
+    const probe = makeLifecycleProbe();
 
     yield* Effect.acquireUseRelease(
-      Effect.sync(() => ManagedRuntime.make(resourceLayer)),
+      Effect.sync(() => ManagedRuntime.make(probe.layer)),
       (runtime) => Effect.promise(() => runtime.runPromise(Effect.void)),
       (runtime) => runtime.disposeEffect,
     );
 
-    expect(events).toEqual(["acquired", "released"]);
+    expect(probe.events).toEqual(["acquired", "released"]);
+    expect(probe.acquired()).toBe(1);
+    expect(probe.released()).toBe(1);
   }),
 );

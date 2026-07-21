@@ -48,6 +48,7 @@
     "check": "pnpm typecheck && pnpm lint && pnpm format:check",
     "validate": "pnpm check && pnpm test && pnpm build",
     "typecheck": "tsc --noEmit",
+    "effect:diagnostics": "effect-language-service diagnostics --project tsconfig.json",
     "lint": "oxlint --deny-warnings .",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt .",

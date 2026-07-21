@@ -4,7 +4,7 @@ import { expandPreviewTabs } from "../shared/preview-tabs";
 import { escapeControlChars, injectVisibleRanges } from "../shared/terminal-text";
 import { isToolOutputNoticeLine } from "../shared/tool-output-notice";
 import { resolvePreviewLanguage } from "../syntax/language";
-import { renderHighlightedText } from "../syntax/shiki";
+import { renderHighlightedText } from "../syntax/render";
 
 export type ParsedGrepOutputLine = {
   path: string;

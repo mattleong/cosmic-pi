@@ -10,6 +10,14 @@ export class JsonDocumentError extends Schema.TaggedErrorClass<JsonDocumentError
 ) {}
 
 export class JsonHttpError extends Schema.TaggedErrorClass<JsonHttpError>()("JsonHttpError", {
-  operation: Schema.String,
+  operation: Schema.Literals(["request", "response", "decode"]),
   message: Schema.String,
 }) {}
+
+export class StreamingHttpError extends Schema.TaggedErrorClass<StreamingHttpError>()(
+  "StreamingHttpError",
+  {
+    operation: Schema.Literals(["encode", "request", "stream"]),
+    message: Schema.String,
+  },
+) {}

@@ -18,10 +18,14 @@ import {
   JsonHttpError,
   makePiRuntime,
   type JsonDocumentStoreShape,
-  type JsonHttpClientShape,
   type JsonObject,
 } from "pi-cosmic-core";
-import { makeCapturedTracer } from "pi-cosmic-core/testing";
+import {
+  capturedTelemetrySnapshot,
+  jsonHttpTestLayer,
+  makeCapturedLogger,
+  makeCapturedTracer,
+} from "pi-cosmic-core/testing";
 import { getXaiCredentials, getXaiCredentialsResult } from "../src/auth.ts";
 import {
   applySettingToRawConfig,
@@ -80,8 +84,8 @@ function documentHarness(initial: Readonly<Record<string, JsonObject>> = {}) {
   return { documents, layer: Layer.succeed(JsonDocumentStore, service) };
 }
 
-function httpLayer(request: JsonHttpClientShape["request"]) {
-  return Layer.succeed(JsonHttpClient, JsonHttpClient.of({ request }));
+function httpLayer(request: Parameters<typeof jsonHttpTestLayer>[0]) {
+  return jsonHttpTestLayer(request);
 }
 
 function registryContext(token = "registry-token") {
@@ -139,6 +143,20 @@ describe("xAI usage parsing", () => {
     expect(weekly.weeklyLeftPercent).toBe(100);
   });
 
+  it("rejects non-finite, negative, and out-of-range protocol numbers", () => {
+    expect(
+      parseMonthlyBilling({ config: { monthlyLimit: { val: -1 }, used: { val: 2 } } }, NOW)
+        .monthlyLimit,
+    ).toBeNull();
+    expect(
+      parseMonthlyBilling({ config: { monthlyLimit: { val: Number.POSITIVE_INFINITY } } }, NOW)
+        .monthlyLimit,
+    ).toBeNull();
+    expect(parseWeeklyBilling({ config: { creditUsagePercent: 101 } }, NOW).weeklyUsedPercent).toBe(
+      null,
+    );
+  });
+
   it("keeps monthly-only snapshots", () => {
     const snapshot = parseUsageSnapshot(monthlyFixture, null, NOW);
     expect(snapshot.monthlyUsed).toBe(monthly.monthlyUsed);
@@ -184,6 +202,26 @@ describe("xAI configuration", () => {
       const updated = yield* applySettingToRawConfig(raw, "usage.showResetTimes", "false");
       yield* writeConfig(config.globalConfigPath, updated);
       expect(harness.documents.get(config.globalConfigPath)?.unknown).toBe("keep");
+    }).pipe(Effect.provide(Layer.merge(harness.layer, Path.layer)));
+  });
+
+  it.effect("ignores untrusted project configuration and selects global settings", () => {
+    const harness = documentHarness({
+      "/agent/extensions/pi-better-xai.json": {
+        usage: { enabled: true },
+        footer: { mode: "status" },
+      },
+      "/project/.pi/extensions/pi-better-xai.json": {
+        usage: { enabled: false },
+        footer: { mode: "replace" },
+      },
+    });
+    return Effect.gen(function* () {
+      const config = yield* resolveConfig("/project", "/agent", false);
+      expect(config.configPath).toBe("/agent/extensions/pi-better-xai.json");
+      expect(config.projectConfigExists).toBe(false);
+      expect(config.usage.enabled).toBe(true);
+      expect(config.footer.mode).toBe("status");
     }).pipe(Effect.provide(Layer.merge(harness.layer, Path.layer)));
   });
 
@@ -270,6 +308,25 @@ describe("xAI credentials", () => {
     );
   });
 
+  it.effect("rejects non-positive persisted expiry metadata", () => {
+    const harness = documentHarness({
+      "/agent/auth.json": {
+        xai: { type: "oauth", access: "token", expires: 0 },
+      },
+    });
+    return Effect.gen(function* () {
+      const result = yield* getXaiCredentialsResult("/agent/auth.json", registryContext(""));
+      expect(result._tag).toBe("Malformed");
+    }).pipe(
+      Effect.provide(
+        providers(
+          harness.layer,
+          httpLayer(() => Effect.die("unexpected HTTP")),
+        ),
+      ),
+    );
+  });
+
   it.effect("extracts the team identifier from an OAuth JWT", () => {
     const payload = Buffer.from('{"team_id":"team-42"}').toString("base64url");
     const harness = documentHarness({
@@ -300,7 +357,7 @@ describe("xAI credentials", () => {
           type: "oauth",
           access: "expired",
           refresh: "refresh-token",
-          expires: 0,
+          expires: 1,
           unknown: "keep",
         },
       },
@@ -325,7 +382,7 @@ describe("xAI credentials", () => {
   it.effect("fails closed when auth reread/update cannot be completed", () => {
     const original = {
       otherProvider: { access: "keep" },
-      xai: { type: "oauth", access: "expired", refresh: "refresh", expires: 0 },
+      xai: { type: "oauth", access: "expired", refresh: "refresh", expires: 1 },
     };
     const service: JsonDocumentStoreShape = {
       exists: () => Effect.succeed(true),
@@ -411,7 +468,7 @@ describe("xAI credentials", () => {
   it.effect("falls back to model registry when refresh fails", () => {
     const harness = documentHarness({
       "/agent/auth.json": {
-        xai: { type: "oauth", access: "expired", refresh: "refresh", expires: 0 },
+        xai: { type: "oauth", access: "expired", refresh: "refresh", expires: 1 },
       },
     });
     const http = httpLayer(() => Effect.fail({ _tag: "test" } as never));
@@ -426,7 +483,7 @@ describe("xAI credentials", () => {
   it.effect("fails closed after expired auth refresh fails with no registry token", () => {
     const harness = documentHarness({
       "/agent/auth.json": {
-        xai: { type: "oauth", access: "expired", refresh: "refresh", expires: 0 },
+        xai: { type: "oauth", access: "expired", refresh: "refresh", expires: 1 },
       },
     });
     const requests: Array<{ readonly url: string; readonly authorization?: string }> = [];
@@ -448,7 +505,7 @@ describe("xAI credentials", () => {
 
   it.effect("treats expired auth without a refresh token as missing", () => {
     const harness = documentHarness({
-      "/agent/auth.json": { xai: { type: "oauth", access: "expired", expires: 0 } },
+      "/agent/auth.json": { xai: { type: "oauth", access: "expired", expires: 1 } },
     });
     const requests: string[] = [];
     const http = httpLayer(({ url }) =>
@@ -537,6 +594,9 @@ describe("xAI visibility", () => {
     expect(visibleStatusLine(otherModel, config, projection)).toBeUndefined();
     expect(MutableRef.get(projection).snapshot).toBeUndefined();
     expect(MutableRef.get(projection).error).toBeUndefined();
+    expect(Object.isFrozen(MutableRef.get(projection))).toBe(true);
+    expect(Object.isFrozen(MutableRef.get(projection).config?.usage)).toBe(true);
+    expect(MutableRef.get(projection).config).not.toBe(config);
   });
 });
 
@@ -569,6 +629,7 @@ describe("xAI refresh lifecycle", () => {
   });
 
   it.effect("moves to an error status after a failed billing request", () => {
+    const captured = makeCapturedLogger();
     const harness = documentHarness({
       "/agent/auth.json": {
         xai: { type: "oauth", access: "access", refresh: "refresh", expires: NOW + 60_000 },
@@ -596,7 +657,10 @@ describe("xAI refresh lifecycle", () => {
       yield* XaiUsageService.use((service) => service.refresh({ force: true }));
       expect(MutableRef.get(projection).statusText).toContain("Usage unavailable");
       expect(MutableRef.get(projection).error).not.toContain("access");
-    }).pipe(Effect.provide(serviceLayer));
+      const telemetry = capturedTelemetrySnapshot(captured);
+      expect(telemetry).toContain("refresh_failed");
+      expect(telemetry).not.toContain("access");
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, captured.layer)));
   });
 
   it.effect("uses current context and captures redacted initialization/refresh spans", () => {
@@ -629,9 +693,7 @@ describe("xAI refresh lifecycle", () => {
       const names = captured.spans.map((span) => span.name);
       expect(names).toContain("pi-better-xai.usage.initialize");
       expect(names).toContain("pi-better-xai.usage.refresh");
-      const telemetry = JSON.stringify(
-        captured.spans.map((span) => ({ name: span.name, attributes: [...span.attributes] })),
-      );
+      const telemetry = capturedTelemetrySnapshot(captured);
       expect(telemetry).not.toContain("registry-token");
       expect(telemetry).not.toContain("/project");
       expect(telemetry).not.toContain("/agent");
@@ -669,8 +731,9 @@ describe("xAI refresh lifecycle", () => {
 
   it.effect("suppresses every stale commit after model selection", () => {
     const harness = documentHarness();
-    const monthlyResponse = Deferred.makeUnsafe<{ status: number; body: unknown }>();
-    const weeklyResponse = Deferred.makeUnsafe<{ status: number; body: unknown }>();
+    type BillingFixture = typeof monthlyFixture | typeof weeklyFixture;
+    const monthlyResponse = Deferred.makeUnsafe<{ status: number; body: BillingFixture }>();
+    const weeklyResponse = Deferred.makeUnsafe<{ status: number; body: BillingFixture }>();
     let calls = 0;
     const http = httpLayer(() => Deferred.await(calls++ === 0 ? monthlyResponse : weeklyResponse));
     const contextRef = MutableRef.make(registryContext());

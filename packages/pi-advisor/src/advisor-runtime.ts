@@ -16,12 +16,18 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as SynchronizedRef from "effect/SynchronizedRef";
+import {
+  makeSynchronousIngress,
+  type SynchronousIngress,
+  type SynchronousIngressOfferResult,
+} from "pi-cosmic-core";
 import type { ResolvedAdvisorConfig } from "./config.ts";
 import {
   createAdvisorChildModel,
@@ -55,7 +61,6 @@ export const MAX_ADVISOR_CHECKPOINT_CHARS = 64_000;
 export const MAX_ADVISOR_CHECKPOINT_ID_CHARS = 256;
 export const MAX_ADVISOR_TOOL_ROUNDS = 12;
 export const MAX_ADVISOR_STREAM_CHARS = 128_000;
-export const MAX_ADVISOR_ABORT_MS = 5_000;
 const CheckpointBaseFields = {
   checkpointId: Schema.String.check(
     Schema.isNonEmpty(),
@@ -123,17 +128,42 @@ interface ActiveCheckpointFinalization {
   epoch: number;
   finalPrompt: string;
   abortRequested: Deferred.Deferred<void>;
-  finalizationError?: unknown;
-  finalizationPromise?: Promise<void>;
+  finalization: Deferred.Deferred<void, AdvisorModelError>;
   finalizationQueued: boolean;
 }
 
+interface AdvisorChildReleaseState {
+  aborted: boolean;
+}
+
+interface AdvisorChildEvent {
+  readonly epoch: number;
+  readonly type: "stream" | "tool-round" | "message-end";
+  readonly streamKind?: "thinking" | "text" | "tool";
+  readonly text?: string;
+  readonly toolResults?: number;
+  readonly stopReason?: string;
+  readonly errorMessage?: string;
+  readonly usage?: unknown;
+}
+
+interface AdvisorFinalizationCompletion {
+  readonly epoch: number;
+  readonly succeeded: boolean;
+}
+
+interface ActiveAdvisorChild {
+  readonly epoch: number;
+  readonly session: AgentSession;
+  readonly scope: Scope.Scope;
+  readonly releaseState: AdvisorChildReleaseState;
+  pendingEvents: number;
+  readonly events: SynchronousIngress<AdvisorChildEvent>;
+  readonly finalizations: SynchronousIngress<AdvisorFinalizationCompletion>;
+}
+
 export class AdvisorRuntime {
-  private session: AgentSession | undefined;
-  private unsubscribe: (() => void) | undefined;
-  private resourceFiber: Fiber.Fiber<never, AdvisorModelError> | undefined;
-  private controlFiber: Fiber.Fiber<void, never> | undefined;
-  private sessionAborted = false;
+  private activeChildProjection: ActiveAdvisorChild | undefined;
   private epoch = 0;
   private options: AdvisorRuntimeStartOptions | undefined;
   private toolRounds = 0;
@@ -146,34 +176,54 @@ export class AdvisorRuntime {
   private readonly dependencies: AdvisorRuntimeDependencies;
   private readonly toolRunner: AdvisorToolRunner;
   private readonly resourceScope: Scope.Scope;
-  private readonly controlMailbox: Queue.Queue<void>;
+  private readonly controlMailbox: SynchronousIngress<void>;
+  private readonly activeChild: SynchronizedRef.SynchronizedRef<ActiveAdvisorChild | undefined>;
+  private readonly lifecycleLock: Semaphore.Semaphore;
+  private pendingStartCleanup: Deferred.Deferred<void> | undefined;
   constructor(
     dependencies: AdvisorRuntimeDependencies,
     toolRunner: AdvisorToolRunner,
     resourceScope: Scope.Scope,
-    controlMailbox: Queue.Queue<void>,
+    controlMailbox: SynchronousIngress<void>,
+    activeChild: SynchronizedRef.SynchronizedRef<ActiveAdvisorChild | undefined>,
+    lifecycleLock: Semaphore.Semaphore,
   ) {
     this.dependencies = dependencies;
     this.toolRunner = toolRunner;
     this.resourceScope = resourceScope;
     this.controlMailbox = controlMailbox;
+    this.activeChild = activeChild;
+    this.lifecycleLock = lifecycleLock;
   }
   get activeToolNames(): readonly string[] {
-    return this.session?.getActiveToolNames() ?? [];
+    return this.activeChildProjection?.session.getActiveToolNames() ?? [];
   }
   get childSession(): AgentSession | undefined {
-    return this.session;
+    return this.activeChildProjection?.session;
   }
   startEffect(options: AdvisorRuntimeStartOptions) {
     const self = this;
     return Effect.gen(function* () {
-      if (!self.controlFiber) {
-        self.controlFiber = yield* Effect.forkIn(self.controlLoopEffect(), self.resourceScope, {
-          startImmediately: true,
-        });
-      }
-      yield* self.disposeChildEffect();
-      const startEpoch = self.epoch;
+      // Serialize detachment and exact finalization so no replacement can begin while an older
+      // AgentSession abort Promise is still active. Startup itself remains interruptible and uses
+      // the epoch token to reject stale concurrent initializations.
+      const admission = yield* self.lifecycleLock.withPermits(1)(
+        Effect.gen(function* () {
+          yield* self.awaitPendingStartCleanupEffect();
+          const reserved = yield* SynchronizedRef.modify(self.activeChild, (current) => {
+            const startEpoch = ++self.epoch;
+            if (self.activeChildProjection === current) self.activeChildProjection = undefined;
+            return [{ startEpoch, previous: current } as const, undefined];
+          });
+          self.pendingSeed = undefined;
+          self.activeCheckpoint = undefined;
+          if (reserved.previous) yield* Scope.close(reserved.previous.scope, Exit.void);
+          return reserved;
+        }),
+      );
+      const startEpoch = admission.startEpoch;
+      if (startEpoch !== self.epoch)
+        return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
       self.options = options;
       const initialize = Effect.gen(function* () {
         const child = self.dependencies.createChildModel
@@ -209,77 +259,20 @@ export class AdvisorRuntime {
           customTools: [...tools],
           excludeTools: unsafeToolNames(),
         };
-        const result = yield* createChildSessionEffect(() =>
-          (self.dependencies.createSession ?? createAgentSession)(createOptions),
+        const startCleanup = yield* Deferred.make<void>();
+        self.pendingStartCleanup = startCleanup;
+        const result = yield* createChildSessionEffect(
+          () => (self.dependencies.createSession ?? createAgentSession)(createOptions),
+          startCleanup,
+          self.resourceScope,
         );
         if (startEpoch !== self.epoch) {
-          yield* stopSessionEffect(result.session, 5_000);
+          yield* stopSessionEffect(result.session);
           return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
         }
-        const acquired = yield* Deferred.make<void, AdvisorModelError>();
-        const resource = Effect.acquireUseRelease(
-          Effect.succeed(result.session),
-          (session) =>
-            Effect.acquireRelease(
-              Effect.try({
-                try: () => session.subscribe((event) => self.observeChildEvent(event)),
-                catch: () =>
-                  new AdvisorModelError({ message: "Advisor child event subscription failed." }),
-              }),
-              (unsubscribe) =>
-                Effect.sync(() => {
-                  try {
-                    unsubscribe();
-                  } catch {
-                    /* subscription cleanup is isolated */
-                  }
-                }),
-            ).pipe(
-              Effect.flatMap((unsubscribe) =>
-                startEpoch === self.epoch
-                  ? Effect.sync(() => {
-                      self.session = session;
-                      self.sessionAborted = false;
-                      self.unsubscribe = unsubscribe;
-                    })
-                  : Effect.fail(
-                      new AdvisorModelError({ message: "Advisor runtime start became stale." }),
-                    ),
-              ),
-              Effect.tap(() => Deferred.succeed(acquired, undefined)),
-              Effect.andThen(Effect.never as Effect.Effect<never>),
-              Effect.scoped,
-            ),
-          (session) =>
-            Effect.sync(() => {
-              if (self.session === session) {
-                self.session = undefined;
-                self.unsubscribe = undefined;
-              }
-            }).pipe(
-              Effect.andThen(
-                stopSessionEffect(
-                  session,
-                  Math.min(self.options?.config.timeoutMs ?? 5_000, 5_000),
-                  !self.sessionAborted,
-                ),
-              ),
-            ),
-        ).pipe(
-          Effect.catch((error) =>
-            Deferred.fail(acquired, error).pipe(Effect.andThen(Effect.fail(error))),
-          ),
-          Effect.scoped,
-        );
-        const resourceFiber = yield* Effect.forkIn(resource, self.resourceScope, {
-          startImmediately: true,
-        });
-        if (startEpoch === self.epoch) self.resourceFiber = resourceFiber;
-        yield* Deferred.await(acquired);
-        if (startEpoch !== self.epoch) {
-          yield* Fiber.interrupt(resourceFiber);
+        yield* self.acquireChildEffect(result.session, startEpoch);
+        if (startEpoch !== self.epoch)
           return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
-        }
         yield* self.assertSafeToolsEffect();
         if (result.session.sessionFile !== undefined)
           return yield* self.fatalSafetyFailureEffect(
@@ -299,7 +292,7 @@ export class AdvisorRuntime {
             : new AdvisorModelError({ message: "Advisor child startup timed out." }),
         ),
         Effect.onExit((exit) =>
-          exit._tag === "Failure" && startEpoch === self.epoch ? self.disposeEffect() : Effect.void,
+          exit._tag === "Failure" ? self.invalidateFailedStartEffect(startEpoch) : Effect.void,
         ),
         Effect.withSpan("pi-advisor.child.start"),
       );
@@ -311,7 +304,6 @@ export class AdvisorRuntime {
       const session = yield* self.requireSessionEffect();
       yield* self.assertSafeToolsEffect();
       const checkpointEpoch = self.epoch;
-      self.sessionAborted = false;
       self.toolRounds = 0;
       self.streamedChars = 0;
       self.childStreamDetector.reset();
@@ -321,10 +313,12 @@ export class AdvisorRuntime {
       const prompt = buildCheckpointPrompt(request, seed);
       const finalPrompt = buildCheckpointFinalizationPrompt(request);
       const abortRequested = yield* Deferred.make<void>();
+      const finalization = yield* Deferred.make<void, AdvisorModelError>();
       const active: ActiveCheckpointFinalization = {
         epoch: checkpointEpoch,
         finalPrompt,
         abortRequested,
+        finalization,
         finalizationQueued: false,
       };
       self.activeCheckpoint = active;
@@ -346,13 +340,11 @@ export class AdvisorRuntime {
         ),
       );
       const result = yield* promptEffect.pipe(
+        Effect.andThen(self.awaitChildEventsEffect(checkpointEpoch)),
         Effect.andThen(
           Effect.suspend(() =>
-            active.finalizationPromise
-              ? Effect.tryPromise({
-                  try: () => active.finalizationPromise!,
-                  catch: toModelError("Advisor checkpoint finalization failed."),
-                }).pipe(
+            active.finalizationQueued
+              ? Deferred.await(active.finalization).pipe(
                   Effect.raceFirst(
                     Deferred.await(active.abortRequested).pipe(
                       Effect.andThen(self.abortEffect()),
@@ -369,6 +361,7 @@ export class AdvisorRuntime {
               : Effect.void,
           ),
         ),
+        Effect.andThen(self.awaitChildEventsEffect(checkpointEpoch)),
         Effect.onInterrupt(() => self.abortEffect()),
         Effect.timeout(Duration.millis(self.options?.config.timeoutMs ?? 30_000)),
         Effect.mapError((error) => {
@@ -395,10 +388,6 @@ export class AdvisorRuntime {
         return yield* new AdvisorRuntimeResetRequiredError({
           message:
             self.resetRequiredReason ?? "Advisor checkpoint became stale after runtime reset.",
-        });
-      if (active.finalizationError)
-        return yield* new AdvisorModelError({
-          message: messageOf(active.finalizationError, "Advisor checkpoint finalization failed."),
         });
       if (self.lastStopError) return yield* new AdvisorModelError({ message: self.lastStopError });
       if (!active.finalizationQueued)
@@ -448,68 +437,156 @@ export class AdvisorRuntime {
         }).pipe(Effect.withSpan("pi-advisor.child.reprime"))
       : Effect.fail(new AdvisorModelError({ message: "Advisor runtime is not started." }));
   }
-  abortEffect() {
+  private acquireChildEffect(session: AgentSession, startEpoch: number) {
     const self = this;
-    return Effect.suspend(() => {
-      const session = self.session;
-      self.epoch++;
-      if (!session || self.sessionAborted) return Effect.void;
-      self.sessionAborted = true;
-      return abortSessionEffect(session).pipe(
-        Effect.timeout(Duration.millis(MAX_ADVISOR_ABORT_MS)),
-        Effect.catch(() => Effect.void),
-      );
+    return Effect.gen(function* () {
+      const scope = yield* Scope.fork(self.resourceScope);
+      const releaseState: AdvisorChildReleaseState = { aborted: false };
+      let committed = false;
+      const close = Scope.close(scope, Exit.void);
+      const acquire = Effect.gen(function* () {
+        yield* Scope.addFinalizer(
+          scope,
+          Effect.suspend(() => stopSessionEffect(session, !releaseState.aborted)),
+        );
+        const events = yield* makeSynchronousIngress<AdvisorChildEvent, never, never>({
+          capacity: 128,
+          overflow: "drop",
+          handle: (event) => self.handleChildEventEffect(event),
+        }).pipe(Effect.provideService(Scope.Scope, scope));
+        const finalizations = yield* makeSynchronousIngress<
+          AdvisorFinalizationCompletion,
+          never,
+          never
+        >({
+          capacity: 1,
+          overflow: "coalesce-latest",
+          handle: (completion) => self.handleFinalizationCompletionEffect(completion),
+        }).pipe(Effect.provideService(Scope.Scope, scope));
+        const handle: ActiveAdvisorChild = {
+          epoch: startEpoch,
+          session,
+          scope,
+          releaseState,
+          pendingEvents: 0,
+          events,
+          finalizations,
+        };
+        const unsubscribe = yield* Effect.try({
+          try: () => session.subscribe((event) => self.observeChildEvent(handle, event)),
+          catch: () =>
+            new AdvisorModelError({ message: "Advisor child event subscription failed." }),
+        });
+        yield* Scope.addFinalizer(
+          scope,
+          Effect.sync(() => {
+            try {
+              unsubscribe();
+            } catch {
+              /* subscription cleanup is isolated */
+            }
+          }),
+        );
+        const installed = yield* SynchronizedRef.modifyEffect(self.activeChild, (current) =>
+          Effect.sync(() => {
+            if (startEpoch !== self.epoch || current !== undefined)
+              return [false, current] as const;
+            self.activeChildProjection = handle;
+            committed = true;
+            return [true, handle] as const;
+          }),
+        );
+        if (!installed)
+          return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
+      });
+      yield* acquire.pipe(Effect.onExit(() => (committed ? Effect.void : close)));
     });
   }
-  private disposeChildEffect() {
+  private awaitPendingStartCleanupEffect() {
     const self = this;
-    return Effect.suspend(() => {
-      const resourceFiber = self.resourceFiber;
-      const session = self.session;
-      self.resourceFiber = undefined;
-      self.epoch++;
-      self.pendingSeed = undefined;
-      self.activeCheckpoint = undefined;
-      if (resourceFiber) return Fiber.interrupt(resourceFiber).pipe(Effect.asVoid);
-      self.session = undefined;
-      try {
-        self.unsubscribe?.();
-      } catch {
-        /* subscription cleanup is isolated */
-      }
-      self.unsubscribe = undefined;
-      return session
-        ? stopSessionEffect(session, Math.min(self.options?.config.timeoutMs ?? 5_000, 5_000))
-        : Effect.void;
-    });
-  }
-  disposeEffect() {
-    const self = this;
-    return self.disposeChildEffect().pipe(
+    const pending = self.pendingStartCleanup;
+    if (!pending) return Effect.void;
+    return Deferred.await(pending).pipe(
       Effect.andThen(
-        Effect.suspend(() => {
-          const control = self.controlFiber;
-          self.controlFiber = undefined;
-          return control ? Fiber.interrupt(control).pipe(Effect.asVoid) : Effect.void;
+        Effect.sync(() => {
+          if (self.pendingStartCleanup === pending) self.pendingStartCleanup = undefined;
         }),
       ),
     );
   }
-  private controlLoopEffect() {
+  private invalidateFailedStartEffect(startEpoch: number) {
     const self = this;
-    return Effect.gen(function* () {
-      while (true) {
-        yield* Queue.take(self.controlMailbox);
-        const active = self.activeCheckpoint;
-        if (active) yield* Deferred.succeed(active.abortRequested, undefined);
-        else if (self.resourceFiber) yield* Fiber.interrupt(self.resourceFiber);
-      }
-    });
+    return self.lifecycleLock.withPermits(1)(
+      Effect.gen(function* () {
+        if (startEpoch !== self.epoch) return;
+        const active = yield* SynchronizedRef.modify(self.activeChild, (current) => {
+          self.epoch++;
+          if (self.activeChildProjection === current) self.activeChildProjection = undefined;
+          return [current, undefined] as const;
+        });
+        self.pendingSeed = undefined;
+        self.activeCheckpoint = undefined;
+        if (active) yield* Scope.close(active.scope, Exit.void);
+      }),
+    );
+  }
+  abortEffect() {
+    const self = this;
+    return self.lifecycleLock.withPermits(1)(
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* self.awaitPendingStartCleanupEffect();
+          self.epoch++;
+          const session = yield* SynchronizedRef.modify(self.activeChild, (active) => {
+            if (!active || active.releaseState.aborted) return [undefined, active] as const;
+            active.releaseState.aborted = true;
+            return [active.session, active] as const;
+          });
+          if (!session) return;
+          yield* abortSessionEffect(session);
+        }),
+      ),
+    );
+  }
+  private disposeChildEffect() {
+    const self = this;
+    return self.lifecycleLock.withPermits(1)(
+      Effect.gen(function* () {
+        yield* self.awaitPendingStartCleanupEffect();
+        const active = yield* SynchronizedRef.modify(self.activeChild, (current) => {
+          self.epoch++;
+          if (self.activeChildProjection === current) self.activeChildProjection = undefined;
+          return [current, undefined] as const;
+        });
+        self.pendingSeed = undefined;
+        self.activeCheckpoint = undefined;
+        if (active) yield* Scope.close(active.scope, Exit.void);
+      }),
+    );
+  }
+  disposeEffect() {
+    return this.disposeChildEffect().pipe(
+      Effect.andThen(this.controlMailbox.shutdown),
+      Effect.andThen(this.controlMailbox.awaitShutdown),
+    );
+  }
+  controlEffect() {
+    const active = this.activeCheckpoint;
+    return active
+      ? Deferred.succeed(active.abortRequested, undefined).pipe(Effect.asVoid)
+      : this.disposeChildEffect();
+  }
+  private requireChildEffect() {
+    return SynchronizedRef.get(this.activeChild).pipe(
+      Effect.flatMap((active) =>
+        active
+          ? Effect.succeed(active)
+          : Effect.fail(new AdvisorModelError({ message: "Advisor runtime is not started." })),
+      ),
+    );
   }
   private requireSessionEffect() {
-    return this.session
-      ? Effect.succeed(this.session)
-      : Effect.fail(new AdvisorModelError({ message: "Advisor runtime is not started." }));
+    return this.requireChildEffect().pipe(Effect.map((active) => active.session));
   }
   private assertSafeToolsEffect() {
     const self = this;
@@ -540,70 +617,147 @@ export class AdvisorRuntime {
       Effect.andThen(Effect.fail(new AdvisorModelError({ message: message }))),
     );
   }
-  private observeChildEvent(event: AgentSessionEvent): void {
-    if (event.type === "message_update") {
-      const update = event.assistantMessageEvent;
-      if (update.type === "text_delta" || update.type === "thinking_delta") {
-        this.recordStreamChars(update.delta.length);
-        const signal = this.childStreamDetector.push(
-          update.type === "thinking_delta" ? "thinking" : "text",
-          update.delta,
-        );
-        if (signal) this.invalidateForReprime(`Advisor child stream loop: ${signal.reason}.`);
-      } else if (isToolCallDelta(update)) this.recordStreamChars(update.delta.length);
-      return;
-    }
-    if (event.type === "turn_end" && event.toolResults.length > 0) {
-      this.toolRounds++;
-      if (this.toolRounds > MAX_ADVISOR_TOOL_ROUNDS)
-        this.invalidateForReprime("Advisor exceeded the read-only tool-round limit.");
-      return;
-    }
-    if (event.type !== "message_end") return;
-    const messageSnapshot = snapshotData(event.message);
-    if (!isRecord(messageSnapshot) || messageSnapshot.role !== "assistant") return;
-    const message = messageSnapshot;
-    if (message.stopReason === "aborted") this.lastStopError = "Advisor review was aborted.";
-    if (message.stopReason === "error")
-      this.lastStopError =
-        typeof message.errorMessage === "string" && message.errorMessage
-          ? message.errorMessage
-          : "Advisor review failed.";
-    const active = this.activeCheckpoint;
-    if (
-      active &&
-      active.epoch === this.epoch &&
-      !active.finalizationQueued &&
-      message.stopReason === "stop" &&
-      this.session?.isStreaming
-    ) {
-      active.finalizationQueued = true;
-      try {
-        // AgentSession requires followUp to be queued while the callback still
-        // observes a streaming turn. The owning checkpoint Effect awaits this
-        // Promise and owns cancellation through the session abort finalizer.
-        active.finalizationPromise = this.session.followUp(active.finalPrompt).catch((error) => {
-          active.finalizationError = error;
-        });
-      } catch (error) {
-        active.finalizationError = error;
-        active.finalizationPromise = Promise.resolve();
-      }
-    }
-    const usage = Schema.decodeUnknownOption(AdvisorUsageWireSchema)(snapshotData(message.usage));
-    if (Option.isNone(usage)) return;
+  private observeChildEvent(child: ActiveAdvisorChild, event: AgentSessionEvent): void {
     try {
-      this.options?.onUsage?.({
-        cacheReadTokens: numberValue(usage.value.cacheRead),
-        cacheWriteTokens: numberValue(usage.value.cacheWrite),
-        cost: numberValue(usage.value.cost?.total),
-        inputTokens: numberValue(usage.value.input),
-        outputTokens: numberValue(usage.value.output),
-        totalTokens: numberValue(usage.value.totalTokens),
+      if (child.epoch !== this.epoch || this.activeChildProjection !== child) return;
+      if (event.type === "message_update") {
+        const update = event.assistantMessageEvent;
+        if (update.type === "text_delta" || update.type === "thinking_delta") {
+          this.offerChildEvent(child, {
+            epoch: child.epoch,
+            type: "stream",
+            streamKind: update.type === "thinking_delta" ? "thinking" : "text",
+            text: update.delta,
+          });
+        } else if (isToolCallDelta(update)) {
+          this.offerChildEvent(child, {
+            epoch: child.epoch,
+            type: "stream",
+            streamKind: "tool",
+            text: update.delta,
+          });
+        }
+        return;
+      }
+      if (event.type === "turn_end") {
+        if (event.toolResults.length > 0)
+          this.offerChildEvent(child, {
+            epoch: child.epoch,
+            type: "tool-round",
+            toolResults: event.toolResults.length,
+          });
+        return;
+      }
+      if (event.type !== "message_end") return;
+      const messageSnapshot = snapshotData(event.message);
+      if (!isRecord(messageSnapshot) || messageSnapshot.role !== "assistant") return;
+      const stopReason =
+        typeof messageSnapshot.stopReason === "string" ? messageSnapshot.stopReason : undefined;
+      const active = this.activeCheckpoint;
+      if (
+        active &&
+        active.epoch === child.epoch &&
+        !active.finalizationQueued &&
+        stopReason === "stop" &&
+        child.session.isStreaming
+      ) {
+        active.finalizationQueued = true;
+        try {
+          // AgentSession requires followUp to be invoked before this streaming callback returns.
+          // Its Promise completion is converted to plain bounded ingress and a typed Deferred.
+          void child.session.followUp(active.finalPrompt).then(
+            () => {
+              child.finalizations.offer({ epoch: child.epoch, succeeded: true });
+            },
+            () => {
+              child.finalizations.offer({ epoch: child.epoch, succeeded: false });
+            },
+          );
+        } catch {
+          child.finalizations.offer({ epoch: child.epoch, succeeded: false });
+        }
+      }
+      this.offerChildEvent(child, {
+        epoch: child.epoch,
+        type: "message-end",
+        ...(stopReason === undefined ? {} : { stopReason }),
+        ...(typeof messageSnapshot.errorMessage === "string"
+          ? { errorMessage: messageSnapshot.errorMessage }
+          : {}),
+        usage: snapshotData(messageSnapshot.usage),
       });
     } catch {
-      /* telemetry is isolated */
+      this.invalidateForReprime("Advisor child event boundary failed.");
     }
+  }
+  private offerChildEvent(child: ActiveAdvisorChild, event: AdvisorChildEvent): void {
+    child.pendingEvents++;
+    const result: SynchronousIngressOfferResult = child.events.offer(event);
+    if (result !== "accepted") {
+      child.pendingEvents--;
+      this.invalidateForReprime("Advisor child event ingress overflowed.");
+    }
+  }
+  private awaitChildEventsEffect(epoch: number): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      const child = this.activeChildProjection;
+      return !child || child.epoch !== epoch || child.pendingEvents === 0
+        ? Effect.void
+        : Effect.yieldNow.pipe(Effect.andThen(this.awaitChildEventsEffect(epoch)));
+    });
+  }
+  private handleChildEventEffect(event: AdvisorChildEvent) {
+    return Effect.sync(() => {
+      const child = this.activeChildProjection;
+      if (event.epoch !== this.epoch || !child || child.epoch !== event.epoch) return;
+      if (event.type === "stream") {
+        const text = event.text ?? "";
+        this.recordStreamChars(text.length);
+        if (event.streamKind === "thinking" || event.streamKind === "text") {
+          const signal = this.childStreamDetector.push(event.streamKind, text);
+          if (signal) this.invalidateForReprime(`Advisor child stream loop: ${signal.reason}.`);
+        }
+        return;
+      }
+      if (event.type === "tool-round") {
+        this.toolRounds++;
+        if (this.toolRounds > MAX_ADVISOR_TOOL_ROUNDS)
+          this.invalidateForReprime("Advisor exceeded the read-only tool-round limit.");
+        return;
+      }
+      if (event.stopReason === "aborted") this.lastStopError = "Advisor review was aborted.";
+      if (event.stopReason === "error")
+        this.lastStopError = event.errorMessage || "Advisor review failed.";
+      const usage = Schema.decodeUnknownOption(AdvisorUsageWireSchema)(event.usage);
+      if (Option.isNone(usage)) return;
+      isolateCallback(() =>
+        this.options?.onUsage?.({
+          cacheReadTokens: numberValue(usage.value.cacheRead),
+          cacheWriteTokens: numberValue(usage.value.cacheWrite),
+          cost: numberValue(usage.value.cost?.total),
+          inputTokens: numberValue(usage.value.input),
+          outputTokens: numberValue(usage.value.output),
+          totalTokens: numberValue(usage.value.totalTokens),
+        }),
+      );
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          const child = this.activeChildProjection;
+          if (child?.epoch === event.epoch) child.pendingEvents--;
+        }),
+      ),
+    );
+  }
+  private handleFinalizationCompletionEffect(completion: AdvisorFinalizationCompletion) {
+    const active = this.activeCheckpoint;
+    if (!active || active.epoch !== completion.epoch) return Effect.void;
+    return completion.succeeded
+      ? Deferred.succeed(active.finalization, undefined).pipe(Effect.asVoid)
+      : Deferred.fail(
+          active.finalization,
+          new AdvisorModelError({ message: "Advisor checkpoint finalization failed." }),
+        ).pipe(Effect.asVoid);
   }
   private recordStreamChars(chars: number) {
     this.streamedChars += chars;
@@ -613,7 +767,7 @@ export class AdvisorRuntime {
   private invalidateForReprime(message: string) {
     if (this.resetRequiredReason) return;
     this.resetRequiredReason = message;
-    Queue.offerUnsafe(this.controlMailbox, undefined);
+    this.controlMailbox.offer(undefined);
     isolateCallback(() => this.options?.onDiagnostic?.(message));
   }
 }
@@ -630,6 +784,13 @@ export interface AdvisorRuntimeServiceShape {
   readonly dispose: () => Effect.Effect<void>;
 }
 
+export const makeAdvisorControlMailbox = (handle: () => Effect.Effect<void>) =>
+  makeSynchronousIngress<void, never, never>({
+    capacity: 1,
+    overflow: "coalesce-latest",
+    handle,
+  });
+
 export class AdvisorRuntimeService extends Context.Service<
   AdvisorRuntimeService,
   AdvisorRuntimeServiceShape
@@ -645,8 +806,19 @@ export const advisorRuntimeServiceLayer = (
       Effect.gen(function* () {
         const scope = yield* Effect.scope;
         const platform = yield* Effect.context<AdvisorPlatform>();
-        const controlMailbox = yield* Queue.unbounded<void>();
-        const runtime = new AdvisorRuntime(dependencies, toolRunner, scope, controlMailbox);
+        let handleControl: () => Effect.Effect<void> = () => Effect.void;
+        const controlMailbox = yield* makeAdvisorControlMailbox(() => handleControl());
+        const activeChild = yield* SynchronizedRef.make<ActiveAdvisorChild | undefined>(undefined);
+        const lifecycleLock = yield* Semaphore.make(1);
+        const runtime = new AdvisorRuntime(
+          dependencies,
+          toolRunner,
+          scope,
+          controlMailbox,
+          activeChild,
+          lifecycleLock,
+        );
+        handleControl = () => runtime.controlEffect();
         const provide = <A, E>(effect: Effect.Effect<A, E, AdvisorPlatform>) =>
           effect.pipe(Effect.provide(platform));
         return {
@@ -721,7 +893,9 @@ const decodeAdvisorCheckpoint = Effect.fn("AdvisorCheckpoint.decode")(function* 
   });
 });
 
-export const parseAdvisorCheckpointEffect = (raw: string) =>
+export const parseAdvisorCheckpointEffect = (
+  raw: string,
+): Effect.Effect<AdvisorCheckpoint, AdvisorModelError> =>
   decodeAdvisorCheckpoint(raw).pipe(Effect.withSpan("pi-advisor.checkpoint.decode"));
 
 /** Pure compatibility parser retained for deterministic parser tests. */
@@ -932,68 +1106,72 @@ function unsafeToolNames(): string[] {
   );
 }
 
-const createChildSessionEffect = (operation: () => ReturnType<typeof createAgentSession>) =>
-  Effect.callback<Awaited<ReturnType<typeof createAgentSession>>, AdvisorModelError>(
-    (resume, signal) => {
-      operation().then(
-        (result) => {
-          if (signal.aborted) {
-            // The owning runtime may already be closed, so this third-party callback finalizer
-            // cannot delegate back into it. Detach immediately, then let abort settle best-effort.
-            void result.session.abort().catch(() => undefined);
-            try {
-              result.session.dispose();
-            } catch {
-              /* late cleanup is isolated */
-            }
-            return;
-          }
-          resume(Effect.succeed(result));
-        },
-        () => {
-          if (!signal.aborted) {
-            resume(
-              Effect.fail(
-                new AdvisorModelError({
-                  message: "Advisor child session could not be created.",
-                }),
-              ),
-            );
-          }
-        },
+const createChildSessionEffect = (
+  operation: () => ReturnType<typeof createAgentSession>,
+  cleanupBarrier: Deferred.Deferred<void>,
+  resourceScope: Scope.Scope,
+) =>
+  Effect.callback<Awaited<ReturnType<typeof createAgentSession>>, AdvisorModelError>((resume) => {
+    const completeBarrier = Deferred.succeed(cleanupBarrier, undefined).pipe(Effect.asVoid);
+    let pending: ReturnType<typeof createAgentSession>;
+    try {
+      pending = operation();
+    } catch {
+      resume(
+        Effect.fail(
+          new AdvisorModelError({ message: "Advisor child session could not be created." }),
+        ).pipe(Effect.ensuring(completeBarrier)),
       );
-    },
-  );
+      return;
+    }
+
+    pending.then(
+      (result) => resume(Effect.succeed(result).pipe(Effect.ensuring(completeBarrier))),
+      () =>
+        resume(
+          Effect.fail(
+            new AdvisorModelError({ message: "Advisor child session could not be created." }),
+          ).pipe(Effect.ensuring(completeBarrier)),
+        ),
+    );
+
+    // Timeout preserves its prompt failure response, but its interrupted Promise boundary
+    // remains lifecycle-owned. The uninterruptible cleanup fiber keeps the runtime Scope open;
+    // lifecycle admission, replacement, and shutdown all await cleanupBarrier before proceeding.
+    const cleanupLateResult = Effect.tryPromise({
+      try: () => pending,
+      catch: () =>
+        new AdvisorModelError({ message: "Advisor child session could not be created." }),
+    }).pipe(
+      Effect.flatMap((result) => stopSessionEffect(result.session)),
+      Effect.catchCause(() => Effect.void),
+      Effect.ensuring(completeBarrier),
+      Effect.uninterruptible,
+    );
+    return Effect.forkIn(cleanupLateResult, resourceScope).pipe(Effect.asVoid);
+  });
 
 const abortSessionEffect = (session: AgentSession) =>
   Effect.tryPromise({
     try: () => session.abort(),
     catch: () => new AdvisorModelError({ message: "Advisor child abort failed." }),
   }).pipe(Effect.catch(() => Effect.void));
-const stopSessionEffect = (session: AgentSession, timeoutMs: number, abort = true) =>
-  (abort ? abortSessionEffect(session) : Effect.void).pipe(
-    Effect.timeout(Duration.millis(timeoutMs)),
-    Effect.catch(() => Effect.void),
-    Effect.ensuring(
-      Effect.sync(() => {
-        try {
-          session.dispose();
-        } catch {
-          /* disposal defects are isolated after the resource is detached */
-        }
-      }),
+const stopSessionEffect = (session: AgentSession, abort = true) =>
+  Effect.uninterruptible(
+    (abort ? abortSessionEffect(session) : Effect.void).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          try {
+            session.dispose();
+          } catch {
+            /* disposal defects are isolated after the resource is detached */
+          }
+        }),
+      ),
     ),
   );
 const toModelError = (message: string) => (error: unknown) =>
   error instanceof AdvisorModelError ? error : new AdvisorModelError({ message: message });
-function messageOf(error: unknown, fallback: string): string {
-  return typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-    ? error.message
-    : fallback;
-}
 
 function isToolCallDelta(value: unknown): value is { delta: string } {
   return (

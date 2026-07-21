@@ -323,7 +323,7 @@ test("loadCodePreviewSettings resets to defaults when no settings files exist", 
   );
 });
 
-test("loadSettingsFromDisk warns on invalid JSON and continues", async () => {
+test("loadSettingsFromDisk skips invalid JSON and continues", async () => {
   const root = await createTestTempDirectory("pi-code-previews-invalid-settings-");
   const home = join(root, "home");
   const agentDir = join(root, "agent");
@@ -337,18 +337,9 @@ test("loadSettingsFromDisk warns on invalid JSON and continues", async () => {
   await writeFile(join(home, ".pi", "agent", "settings.json"), "{invalid", "utf8");
   await writeJson(join(agentDir, "code-previews.json"), { grepCollapsedLines: 31 });
 
-  const originalWarn = console.warn;
-  const warnings: unknown[][] = [];
-  console.warn = (...args: unknown[]) => warnings.push(args);
-  try {
-    const loaded = await loadSettingsFromDisk();
-    assert.equal(loaded?.readCollapsedLines, 18);
-    assert.equal(loaded?.grepCollapsedLines, 31);
-    assert.equal(warnings.length, 1);
-    assert.match(String(warnings[0]?.[0]), /Failed to load settings/);
-  } finally {
-    console.warn = originalWarn;
-  }
+  const loaded = await loadSettingsFromDisk();
+  assert.equal(loaded?.readCollapsedLines, 18);
+  assert.equal(loaded?.grepCollapsedLines, 31);
 });
 
 async function writeJson(path: string, data: unknown): Promise<void> {

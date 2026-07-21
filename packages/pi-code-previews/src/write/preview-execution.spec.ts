@@ -149,6 +149,8 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
       const error = yield* Effect.flip(
         executeWriteWithPreviewEffect("tool-dangling", "link.txt", "after", dir),
       );
+      assert.equal("operation" in error, true);
+      if (!("operation" in error)) return;
       assert.equal(error.operation, "write");
       assert.equal((yield* Effect.promise(() => lstat(link))).isSymbolicLink(), true);
       const created = yield* Effect.promise(() =>

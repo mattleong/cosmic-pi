@@ -5,7 +5,6 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as SynchronizedRef from "effect/SynchronizedRef";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   AdvisorController,
@@ -17,15 +16,22 @@ import { advisorRuntimeServiceLayer, type AdvisorRuntimeDriver } from "../src/ad
 import { advisorReviewQueueServiceLayer } from "../src/review-queue.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
 import { PiCommandAdapter } from "../src/pi-command-adapter.ts";
+import { configRepositoryTestLayer } from "../src/config-repository.ts";
+import { failureLoggerLayer } from "../src/failure-logger.ts";
+import { hostNotifierLayer } from "../src/host-notifier.ts";
 
 describe("AdvisorController", () => {
   it.effect("publishes immutable snapshots", () =>
     Effect.gen(function* () {
       const controller = yield* AdvisorController;
-      const before = yield* SynchronizedRef.get(controller.snapshot);
+      const before = controller.getSnapshot();
       const next = { ...before, paused: true };
       yield* controller.publish(next);
-      expect(yield* SynchronizedRef.get(controller.snapshot)).toEqual(next);
+      const published = controller.getSnapshot();
+      expect(published).toEqual(next);
+      expect(Object.isFrozen(published)).toBe(true);
+      expect(Object.isFrozen(published.config)).toBe(true);
+      expect(Object.isFrozen(published.metrics)).toBe(true);
     }).pipe(Effect.provide(advisorControllerLayer)),
   );
 
@@ -172,6 +178,9 @@ describe("AdvisorController", () => {
       advisorRuntimeServiceLayer(standaloneAdvisorExecutor),
       advisorReviewQueueServiceLayer,
       PiCommandAdapter.layer,
+      configRepositoryTestLayer(options.dependencies.loadConfig!),
+      failureLoggerLayer,
+      hostNotifierLayer,
     ).pipe(Layer.provideMerge(advisorPlatformLayer));
     const application = advisorControllerApplicationLayer(options).pipe(
       Layer.provideMerge(dependencies),
@@ -182,13 +191,13 @@ describe("AdvisorController", () => {
         const controller = Context.get(context, AdvisorController);
         yield* controller.sessionInitialize(undefined as never, ctx);
         expect(starts).toBe(1);
-        expect((yield* SynchronizedRef.get(controller.snapshot)).config.model).toBe("model");
+        expect(controller.getSnapshot().config.model).toBe("model");
         yield* controller.sessionInitialize(undefined as never, ctx);
         expect(starts).toBe(2);
         expect(disposals).toBe(1);
         yield* controller.sessionShutdown(undefined as never, ctx);
         expect(disposals).toBe(2);
-        expect((yield* SynchronizedRef.get(controller.snapshot)).started).toBe(false);
+        expect(controller.getSnapshot().started).toBe(false);
       }),
     );
   });

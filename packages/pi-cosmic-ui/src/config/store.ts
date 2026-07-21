@@ -1,9 +1,13 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
+import {
+  decodeTolerantFields,
+  JsonDocumentStore,
+  scopedDocumentPaths,
+  selectScopedDocument,
+  updateScopedSection,
+} from "pi-cosmic-core";
 import {
   DEFAULT_CONFIG,
   FooterDensitySchema,
@@ -19,9 +23,6 @@ export class CosmicUiConfigError extends Schema.TaggedErrorClass<CosmicUiConfigE
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
 
-const isRecord = (value: unknown): value is JsonObject =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
 const mapError = (operation: string, path: string) => () =>
   new CosmicUiConfigError({
     operation,
@@ -33,36 +34,38 @@ export const configPaths = Effect.fn("CosmicUiConfig.paths")(function* (
   cwd: string,
   agentDir: string,
 ) {
-  const path = yield* Path.Path;
-  return {
-    project: path.join(cwd, CONFIG_DIR_NAME, "extensions", CONFIG_BASENAME),
-    global: path.join(agentDir, "extensions", CONFIG_BASENAME),
-  } as const;
+  return yield* scopedDocumentPaths(cwd, agentDir, {
+    projectConfigDirectory: CONFIG_DIR_NAME,
+    basename: CONFIG_BASENAME,
+  });
 });
 
 function decodeConfig(value: unknown): CosmicUiConfigFile {
-  if (!isRecord(value) || !isRecord(value.footer)) return {};
-  const raw = value.footer;
-  const enabled = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Boolean)(raw.enabled));
-  const density = Option.getOrUndefined(
-    Schema.decodeUnknownOption(FooterDensitySchema)(raw.density),
-  );
-  const mediaPlacement = Option.getOrUndefined(
-    Schema.decodeUnknownOption(MediaPlacementSchema)(raw.mediaPlacement),
-  );
+  const root = decodeTolerantFields(
+    value,
+    { footer: Schema.Record(Schema.String, Schema.Unknown) },
+    { path: "config" },
+  ).value;
+  const footer = decodeTolerantFields(
+    root.footer,
+    {
+      enabled: Schema.Boolean,
+      density: FooterDensitySchema,
+      mediaPlacement: MediaPlacementSchema,
+    },
+    { path: "footer" },
+  ).value;
   const strings = (candidate: unknown): readonly string[] | undefined => {
     if (!Array.isArray(candidate)) return undefined;
     return candidate.filter((entry): entry is string => typeof entry === "string");
   };
-  const order = strings(raw.order);
-  const hidden = strings(raw.hidden);
+  const order = strings(root.footer?.order);
+  const hidden = strings(root.footer?.hidden);
   return {
     footer: {
-      ...(enabled !== undefined ? { enabled } : {}),
-      ...(density !== undefined ? { density } : {}),
+      ...footer,
       ...(order !== undefined ? { order } : {}),
       ...(hidden !== undefined ? { hidden } : {}),
-      ...(mediaPlacement !== undefined ? { mediaPlacement } : {}),
     },
   };
 }
@@ -84,15 +87,14 @@ export const readConfig = Effect.fn("CosmicUiConfig.read")(function* (path: stri
 export const resolveConfig = Effect.fn("CosmicUiConfig.resolve")(function* (
   cwd: string,
   agentDir: string,
+  projectTrusted = true,
 ) {
-  const documents = yield* JsonDocumentStore;
   const paths = yield* configPaths(cwd, agentDir);
-  const projectExists = yield* documents
-    .exists(paths.project)
-    .pipe(Effect.mapError(mapError("inspect", paths.project)));
-  const globalExists = yield* documents
-    .exists(paths.global)
-    .pipe(Effect.mapError(mapError("inspect", paths.global)));
+  const selected = yield* selectScopedDocument(paths).pipe(
+    Effect.mapError((error) => mapError("inspect", error.path)()),
+  );
+  const projectExists = projectTrusted && selected.projectExists;
+  const { globalExists } = selected;
   const tolerantRead = (path: string, exists: boolean) =>
     exists
       ? readConfig(path).pipe(
@@ -134,15 +136,13 @@ export const updateFooterConfig = Effect.fn("CosmicUiConfig.updateFooter")(funct
   agentDir: string,
   config: ResolvedCosmicUiConfig,
   patch: Partial<ResolvedCosmicUiConfig["footer"]>,
+  projectTrusted = true,
 ) {
-  const documents = yield* JsonDocumentStore;
-  yield* documents
-    .updateObject(config.configPath, (raw) => ({
-      ...raw,
-      footer: { ...(isRecord(raw.footer) ? raw.footer : {}), ...patch },
-    }))
-    .pipe(Effect.mapError(mapError("update", config.configPath)));
-  return yield* resolveConfig(cwd, agentDir);
+  yield* updateScopedSection(config.configPath, "footer", (footer) => ({
+    ...footer,
+    ...patch,
+  })).pipe(Effect.mapError(mapError("update", config.configPath)));
+  return yield* resolveConfig(cwd, agentDir, projectTrusted);
 });
 
 export const setFooterVisibility = Effect.fn("CosmicUiConfig.setVisibility")(function* (
@@ -151,20 +151,17 @@ export const setFooterVisibility = Effect.fn("CosmicUiConfig.setVisibility")(fun
   config: ResolvedCosmicUiConfig,
   id: string,
   visible: boolean,
+  projectTrusted = true,
 ) {
-  const documents = yield* JsonDocumentStore;
-  yield* documents
-    .updateObject(config.configPath, (raw) => {
-      const footer = isRecord(raw.footer) ? raw.footer : {};
-      const hidden = new Set(
-        Array.isArray(footer.hidden)
-          ? footer.hidden.filter((entry): entry is string => typeof entry === "string")
-          : config.footer.hidden,
-      );
-      if (visible) hidden.delete(id);
-      else hidden.add(id);
-      return { ...raw, footer: { ...footer, hidden: [...hidden] } };
-    })
-    .pipe(Effect.mapError(mapError("update", config.configPath)));
-  return yield* resolveConfig(cwd, agentDir);
+  yield* updateScopedSection(config.configPath, "footer", (footer) => {
+    const hidden = new Set(
+      Array.isArray(footer.hidden)
+        ? footer.hidden.filter((entry): entry is string => typeof entry === "string")
+        : config.footer.hidden,
+    );
+    if (visible) hidden.delete(id);
+    else hidden.add(id);
+    return { ...footer, hidden: [...hidden] };
+  }).pipe(Effect.mapError(mapError("update", config.configPath)));
+  return yield* resolveConfig(cwd, agentDir, projectTrusted);
 });

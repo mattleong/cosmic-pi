@@ -4,7 +4,7 @@ import type { DiffWordEmphasis } from "../settings/types";
 import { expandPreviewTabs } from "../shared/preview-tabs";
 import { escapeControlChars } from "../shared/terminal-text";
 import { splitLinesLimited } from "../shared/text-lines";
-import { renderWithShiki } from "../syntax/shiki";
+import { renderWithShiki } from "../syntax/render";
 import { collectChangedDiffBlock } from "./changed-blocks";
 import { changedLineEmphasis, emphasizeChangedSpans } from "./word/line-emphasis";
 import { DIFF_ADD_MARKER, DIFF_REMOVE_MARKER } from "./markers";

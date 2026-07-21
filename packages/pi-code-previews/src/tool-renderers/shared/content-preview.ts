@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { previewFooter, showingFooter } from "../../preview/format";
-import { shouldSkipHighlight } from "../../syntax/shiki";
+import { shouldSkipHighlight } from "../../syntax/render";
 import { renderHighlightedPreviewText } from "./preview-text";
 import { withSecretWarning } from "./secret-preview";
 

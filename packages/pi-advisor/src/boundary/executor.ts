@@ -6,14 +6,12 @@ import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { AdvisorFailureLogLock } from "./failure-log-lock.ts";
 import { ReadOnlyFileSystem } from "./read-only-fs.ts";
 
 export const advisorPlatformLayer = Layer.mergeAll(
   nodeFilePlatformLayer,
   NodePath.layer,
   ReadOnlyFileSystem.layer,
-  AdvisorFailureLogLock.layer,
 );
 export type AdvisorPlatform = Layer.Success<typeof advisorPlatformLayer>;
 

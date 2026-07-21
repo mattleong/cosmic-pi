@@ -6,10 +6,12 @@
 // @effect-diagnostics effect/strictEffectProvide:off
 import type { AgentSession, CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import { describe, expect, test, vi } from "vitest";
 import {
@@ -20,6 +22,7 @@ import {
   MAX_ADVISOR_CHECKPOINT_ID_CHARS,
   MAX_ADVISOR_STREAM_CHARS,
   MAX_ADVISOR_TOOL_ROUNDS,
+  makeAdvisorControlMailbox,
   NoDiscoveryAdvisorResourceLoader,
   parseAdvisorCheckpoint,
   parseAdvisorCheckpointEffect,
@@ -35,11 +38,21 @@ import type { ResolvedAdvisorConfig } from "../src/config.ts";
 
 type TestRuntime = AdvisorRuntime & AdvisorRuntimeDriver;
 const makeTestRuntime = (dependencies: ConstructorParameters<typeof AdvisorRuntime>[0]) => {
-  const runtime = new AdvisorRuntime(
+  let runtime!: TestRuntime;
+  runtime = new AdvisorRuntime(
     dependencies,
     standaloneAdvisorExecutor,
     Scope.makeUnsafe(),
-    Effect.runSync(Queue.unbounded<void>()),
+    {
+      offer: () => {
+        standaloneAdvisorExecutor.fork(runtime.controlEffect());
+        return "accepted";
+      },
+      shutdown: Effect.void,
+      awaitShutdown: Effect.void,
+    },
+    Effect.runSync(SynchronizedRef.make(undefined)) as never,
+    Effect.runSync(Semaphore.make(1)),
   ) as TestRuntime;
   Object.defineProperties(runtime, {
     start: {
@@ -323,6 +336,62 @@ describe("AdvisorRuntime", () => {
     );
   });
 
+  test("invokes followUp synchronously while the child callback is streaming", async () => {
+    const value = harness();
+    let streamingDuringFollowUp = false;
+    value.session.followUp.mockImplementation(async (text: string) => {
+      streamingDuringFollowUp = value.session.isStreaming;
+      value.actions.push("followUp");
+      const messages = value.session.messages as unknown[];
+      messages.push({ role: "user", content: [{ type: "text", text }] });
+      const id = /checkpointId "([^"]+)"/.exec(text)?.[1] ?? "sync";
+      const processed = Number(/processedThrough (\d+)/.exec(text)?.[1] ?? 0);
+      const assistant = {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: checkpointJson({
+              checkpointId: id,
+              processedThrough: processed,
+              observations: "",
+              focus: "standard",
+            }),
+          },
+        ],
+        stopReason: "stop",
+      };
+      messages.push(assistant);
+      value.emit({ type: "message_end", message: assistant });
+    });
+    await start(value.runtime);
+
+    await expect(
+      value.runtime.checkpoint({
+        checkpointId: "sync-follow-up",
+        processedThrough: 1,
+        observations: "batch",
+        focus: "standard",
+      }),
+    ).resolves.toMatchObject({ checkpointId: "sync-follow-up" });
+    expect(streamingDuringFollowUp).toBe(true);
+  });
+
+  test("bridges followUp rejection through a typed checkpoint failure", async () => {
+    const value = harness();
+    value.session.followUp.mockRejectedValue(new Error("secret provider rejection"));
+    await start(value.runtime);
+
+    await expect(
+      value.runtime.checkpoint({
+        checkpointId: "rejected-follow-up",
+        processedThrough: 1,
+        observations: "batch",
+        focus: "standard",
+      }),
+    ).rejects.toThrow("Advisor checkpoint finalization failed.");
+  });
+
   test("retains an idle-race observation without launching an uncorrelated prompt", async () => {
     const value = harness();
     await start(value.runtime);
@@ -354,6 +423,7 @@ describe("AdvisorRuntime", () => {
         },
       },
     });
+    await vi.waitFor(() => expect(onUsage).toHaveBeenCalledOnce());
     expect(onUsage).toHaveBeenCalledWith({
       cacheReadTokens: 2,
       cacheWriteTokens: 3,
@@ -387,7 +457,7 @@ describe("AdvisorRuntime", () => {
         usage: { input: Number.NaN, output: Number.POSITIVE_INFINITY, totalTokens: -1 },
       },
     });
-    expect(onUsage).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(onUsage).toHaveBeenCalledOnce());
     expect(onUsage).toHaveBeenCalledWith({
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
@@ -542,6 +612,106 @@ describe("AdvisorRuntime", () => {
     }
   });
 
+  test("replacement and reprime wait for the prior abort before creating a new child", async () => {
+    let releaseOldAbort!: () => void;
+    const oldAbortGate = new Promise<void>((resolve) => {
+      releaseOldAbort = resolve;
+    });
+    const makeSession = (abort: () => Promise<void>) => ({
+      sessionFile: undefined,
+      messages: [],
+      isStreaming: false,
+      getActiveToolNames: vi.fn(() => []),
+      getToolDefinition: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
+      prompt: vi.fn(async () => undefined),
+      steer: vi.fn(async () => undefined),
+      followUp: vi.fn(async () => undefined),
+      abort: vi.fn(abort),
+      dispose: vi.fn(),
+    });
+    const oldSession = makeSession(() => oldAbortGate);
+    const latestSession = makeSession(async () => undefined);
+    const sessions = [oldSession, latestSession];
+    const createSession = vi.fn(async () => ({
+      session: sessions.shift() as unknown as AgentSession,
+      extensionsResult: {} as never,
+    }));
+    const layer = advisorRuntimeServiceLayer(standaloneAdvisorExecutor, {
+      createChildModel: vi.fn(async () => ({
+        modelRuntime: {} as never,
+        model: { provider: "p", id: "m" } as never,
+        thinkingLevel: "medium" as const,
+      })),
+      createTools: vi.fn(async () => []),
+      createSession,
+    }).pipe(Layer.provideMerge(advisorPlatformLayer));
+    const managed = ManagedRuntime.make(layer);
+    try {
+      const service = await managed.runPromise(AdvisorRuntimeService);
+      const options = {
+        ctx: { cwd: process.cwd(), modelRegistry: {} as never },
+        config: config(),
+        seed: "seed",
+      };
+      await managed.runPromise(service.start(options));
+
+      let replacementSettled = false;
+      const replacement = managed.runPromise(service.reprime("replacement"));
+      const observeReplacement = replacement.finally(() => {
+        replacementSettled = true;
+      });
+      await vi.waitFor(() => expect(oldSession.abort).toHaveBeenCalledOnce());
+      await Promise.resolve();
+      expect(replacementSettled).toBe(false);
+      expect(createSession).toHaveBeenCalledTimes(1);
+      expect(latestSession.dispose).not.toHaveBeenCalled();
+
+      releaseOldAbort();
+      await observeReplacement;
+      expect(createSession).toHaveBeenCalledTimes(2);
+      expect(oldSession.dispose).toHaveBeenCalledOnce();
+      expect(latestSession.dispose).not.toHaveBeenCalled();
+
+      await managed.runPromise(service.dispose());
+      expect(oldSession.dispose).toHaveBeenCalledOnce();
+      expect(latestSession.abort).toHaveBeenCalledOnce();
+      expect(latestSession.dispose).toHaveBeenCalledOnce();
+    } finally {
+      releaseOldAbort();
+      await managed.dispose();
+    }
+  });
+
+  test("replacement still disposes the prior child when abort rejects", async () => {
+    const instance = harness();
+    await start(instance.runtime);
+    instance.session.abort.mockRejectedValueOnce(new Error("abort failed"));
+
+    await start(instance.runtime, {}, { seed: "replacement" });
+    expect(instance.session.abort).toHaveBeenCalledTimes(1);
+    expect(instance.session.dispose).toHaveBeenCalledTimes(1);
+
+    await instance.runtime.dispose();
+    expect(instance.session.abort).toHaveBeenCalledTimes(2);
+    expect(instance.session.dispose).toHaveBeenCalledTimes(2);
+  });
+
+  test("replacement and repeated disposal release each child exactly once", async () => {
+    const first = harness();
+    await start(first.runtime);
+    await start(first.runtime, {}, { seed: "replacement" });
+    expect(first.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(first.session.abort).toHaveBeenCalledTimes(1);
+    expect(first.session.dispose).toHaveBeenCalledTimes(1);
+
+    await first.runtime.dispose();
+    await first.runtime.dispose();
+    expect(first.unsubscribe).toHaveBeenCalledTimes(2);
+    expect(first.session.abort).toHaveBeenCalledTimes(2);
+    expect(first.session.dispose).toHaveBeenCalledTimes(2);
+  });
+
   test("ManagedRuntime disposal alone releases the active child exactly once", async () => {
     const session = {
       sessionFile: undefined,
@@ -595,14 +765,94 @@ describe("AdvisorRuntime", () => {
     }
   });
 
-  test("disposes a child session that arrives after the startup deadline", async () => {
+  test("blocks replacement until a timed-out late child finishes abort and disposal", async () => {
     vi.useFakeTimers();
+    let releaseAbort!: () => void;
+    let resolveLate!: (value: { session: AgentSession; extensionsResult: never }) => void;
+    const abortGate = new Promise<undefined>((resolve) => {
+      releaseAbort = () => resolve(undefined);
+    });
     try {
-      let resolveSession!: (value: { session: AgentSession; extensionsResult: never }) => void;
       const late = new Promise<{ session: AgentSession; extensionsResult: never }>((resolve) => {
-        resolveSession = resolve;
+        resolveLate = resolve;
       });
-      const base = harness();
+      const first = harness();
+      const replacement = harness();
+      replacement.session.getActiveToolNames.mockReturnValue([]);
+      first.session.abort.mockImplementationOnce(() => abortGate);
+      const sessions = [
+        late,
+        Promise.resolve({
+          session: replacement.session as unknown as AgentSession,
+          extensionsResult: {} as never,
+        }),
+      ];
+      const createSession = vi.fn(() => sessions.shift()!);
+      const runtime = makeTestRuntime({
+        createChildModel: vi.fn(async () => ({
+          modelRuntime: {} as never,
+          model: { provider: "p", id: "m" } as never,
+          thinkingLevel: "medium" as const,
+        })),
+        createTools: vi.fn(async () => []),
+        createSession,
+      });
+
+      const firstStart = start(runtime, { timeoutMs: 25 });
+      const firstRejection = expect(firstStart).rejects.toThrow("startup timed out");
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(25);
+      await firstRejection;
+
+      let replacementSettled = false;
+      const secondStart = start(runtime, { timeoutMs: 1_000 }).finally(() => {
+        replacementSettled = true;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(createSession).toHaveBeenCalledTimes(1);
+      expect(replacementSettled).toBe(false);
+
+      resolveLate({
+        session: first.session as unknown as AgentSession,
+        extensionsResult: {} as never,
+      });
+      await vi.runAllTimersAsync();
+      await Promise.resolve();
+      expect(first.session.abort).toHaveBeenCalledOnce();
+      expect(first.session.dispose).not.toHaveBeenCalled();
+      expect(createSession).toHaveBeenCalledTimes(1);
+      expect(replacementSettled).toBe(false);
+
+      releaseAbort();
+      await vi.advanceTimersByTimeAsync(0);
+      await secondStart;
+      expect(first.session.dispose).toHaveBeenCalledOnce();
+      expect(createSession).toHaveBeenCalledTimes(2);
+      expect(runtime.childSession).toBe(replacement.session);
+      await runtime.dispose();
+      expect(replacement.session.abort).toHaveBeenCalledOnce();
+      expect(replacement.session.dispose).toHaveBeenCalledOnce();
+    } finally {
+      releaseAbort();
+      vi.useRealTimers();
+    }
+  });
+
+  test("blocks shutdown behind timed-out late-child cleanup", async () => {
+    vi.useFakeTimers();
+    let resolveLate!: (value: { session: AgentSession; extensionsResult: never }) => void;
+    let releaseAbort!: () => void;
+    const late = new Promise<{ session: AgentSession; extensionsResult: never }>((resolve) => {
+      resolveLate = resolve;
+    });
+    const abortGate = new Promise<undefined>((resolve) => {
+      releaseAbort = () => resolve(undefined);
+    });
+    try {
+      const value = harness();
+      value.session.abort.mockImplementationOnce(() => abortGate);
       const runtime = makeTestRuntime({
         createChildModel: vi.fn(async () => ({
           modelRuntime: {} as never,
@@ -612,23 +862,106 @@ describe("AdvisorRuntime", () => {
         createTools: vi.fn(async () => []),
         createSession: vi.fn(() => late),
       });
-      const pending = start(runtime, { timeoutMs: 25 });
-      const rejection = expect(pending).rejects.toThrow("startup timed out");
+      const firstStart = start(runtime, { timeoutMs: 25 });
+      const firstRejection = expect(firstStart).rejects.toThrow("startup timed out");
       await Promise.resolve();
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(25);
-      await rejection;
-      resolveSession({
-        session: base.session as unknown as AgentSession,
+      await firstRejection;
+
+      let shutdownSettled = false;
+      const shutdown = runtime.dispose().finally(() => {
+        shutdownSettled = true;
+      });
+      await Promise.resolve();
+      expect(shutdownSettled).toBe(false);
+
+      resolveLate({
+        session: value.session as unknown as AgentSession,
         extensionsResult: {} as never,
       });
       await vi.runAllTimersAsync();
-      await Promise.resolve();
-      expect(base.session.abort).toHaveBeenCalled();
-      expect(base.session.dispose).toHaveBeenCalled();
+      expect(value.session.abort).toHaveBeenCalledOnce();
+      expect(value.session.dispose).not.toHaveBeenCalled();
+      expect(shutdownSettled).toBe(false);
+
+      releaseAbort();
+      await vi.advanceTimersByTimeAsync(0);
+      await shutdown;
+      expect(value.session.dispose).toHaveBeenCalledOnce();
     } finally {
+      releaseAbort();
       vi.useRealTimers();
     }
+  });
+
+  test.each(["throws", "rejects"] as const)(
+    "disposes a late child even when its abort %s",
+    async (failure) => {
+      vi.useFakeTimers();
+      try {
+        let resolveSession!: (value: { session: AgentSession; extensionsResult: never }) => void;
+        const late = new Promise<{ session: AgentSession; extensionsResult: never }>((resolve) => {
+          resolveSession = resolve;
+        });
+        const base = harness();
+        base.session.abort.mockImplementationOnce(() => {
+          if (failure === "throws") throw new Error("synchronous abort defect");
+          return Promise.reject(new Error("asynchronous abort defect"));
+        });
+        const runtime = makeTestRuntime({
+          createChildModel: vi.fn(async () => ({
+            modelRuntime: {} as never,
+            model: { provider: "p", id: "m" } as never,
+            thinkingLevel: "medium" as const,
+          })),
+          createTools: vi.fn(async () => []),
+          createSession: vi.fn(() => late),
+        });
+        const pending = start(runtime, { timeoutMs: 25 });
+        const rejection = expect(pending).rejects.toThrow("startup timed out");
+        await Promise.resolve();
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(25);
+        await rejection;
+        resolveSession({
+          session: base.session as unknown as AgentSession,
+          extensionsResult: {} as never,
+        });
+        await vi.runAllTimersAsync();
+        await Promise.resolve();
+        expect(base.session.abort).toHaveBeenCalled();
+        expect(base.session.dispose).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  test("event ingress overflow requests a reset and releases its child without leaks", async () => {
+    const value = harness("stop", true);
+    await start(value.runtime);
+    const pending = value.runtime.checkpoint({
+      checkpointId: "overflow",
+      processedThrough: 1,
+      observations: "batch",
+      focus: "standard",
+    });
+    await vi.waitFor(() => expect(value.session.isStreaming).toBe(true));
+
+    for (let index = 0; index < 256; index += 1) {
+      value.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "x" },
+      });
+    }
+
+    await expect(pending).rejects.toThrow(/ingress overflowed|fresh context|stale/i);
+    await value.runtime.dispose();
+    expect(value.session.abort).toHaveBeenCalled();
+    expect(value.unsubscribe).toHaveBeenCalledOnce();
+    expect(value.session.dispose).toHaveBeenCalledOnce();
+    expect(value.runtime.childSession).toBeUndefined();
   });
 
   test.each(["aborted", "error"] as const)(
@@ -912,4 +1245,21 @@ describe("AdvisorRuntime", () => {
       ),
     ).toThrow("distinct fingerprints");
   });
+});
+
+test("control mailbox is capacity-one, coalescing, and rejects offers after shutdown", async () => {
+  await standaloneAdvisorExecutor.run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const mailbox = yield* makeAdvisorControlMailbox(() => Deferred.await(gate));
+        expect(mailbox.offer()).toBe("accepted");
+        const overflow = Array.from({ length: 40 }, () => mailbox.offer());
+        expect(overflow).toContain("coalesced");
+        yield* mailbox.shutdown;
+        yield* mailbox.awaitShutdown;
+        expect(mailbox.offer()).toBe("closed");
+      }),
+    ),
+  );
 });

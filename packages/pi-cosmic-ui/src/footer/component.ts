@@ -21,7 +21,13 @@ import {
   renderOpenAIUsageLine,
   renderXaiUsageLine,
 } from "./layout.ts";
-import type { FooterContributionRegistry } from "./registry.ts";
+import type { HostCallbackBoundaryShape } from "../boundary/host-callback.ts";
+import { footerContributions, footerSurfaces, type FooterRegistrySnapshot } from "./registry.ts";
+
+export interface FooterContributionView {
+  readonly snapshot: () => FooterRegistrySnapshot;
+  readonly invalidate: () => void;
+}
 
 export interface FooterTotals {
   input: number;
@@ -261,7 +267,8 @@ export function createFooterComponent(options: {
   homeDirectory(): string | undefined;
   footerData: ReadonlyFooterDataProvider;
   theme: CosmicFooterTheme;
-  registry: FooterContributionRegistry;
+  registry: FooterContributionView;
+  callbacks: HostCallbackBoundaryShape;
   config(): ResolvedCosmicUiConfig;
   totals(): FooterTotals;
   gitStatus(): FooterGitStatus | undefined;
@@ -314,7 +321,7 @@ export function createFooterComponent(options: {
           options.pullRequestNumber(),
           options.homeDirectory(),
         ),
-        ...registry.list(),
+        ...footerContributions(registry.snapshot()),
       ];
       const text = ordered(
         contributions.filter(
@@ -392,7 +399,9 @@ export function createFooterComponent(options: {
       } else if (otherDetails.length && width >= 64) {
         lines.push(renderContributionLine(otherDetails, width, theme, true));
       }
-      const surface = registry.surfaces().find((entry) => !config.footer.hidden.includes(entry.id));
+      const surface = footerSurfaces(registry.snapshot()).find(
+        (entry) => !config.footer.hidden.includes(entry.id),
+      );
       if (surface) {
         const requestedPlacement =
           config.footer.mediaPlacement ?? surface.preferredPlacement ?? "inline-right";
@@ -406,12 +415,18 @@ export function createFooterComponent(options: {
           placement === "stacked" || placement === "habitat"
             ? width
             : Math.min(surface.preferredWidth, Math.max(1, width - 20));
-        try {
-          const surfaceLines = surface.render({ width: surfaceWidth, placement, theme });
-          lines = combineSurface(surfaceLines, lines, width, placement, surfaceWidth);
-        } catch {
-          // Third-party surfaces are isolated from the synchronous footer renderer.
-        }
+        lines = options.callbacks.invoke(
+          "surface-render",
+          () =>
+            combineSurface(
+              surface.render({ width: surfaceWidth, placement, theme }),
+              lines,
+              width,
+              placement,
+              surfaceWidth,
+            ),
+          lines,
+        );
       }
       return lines.map((line) =>
         isTerminalImageLine(line) ? line : truncateToWidth(line, width, ""),

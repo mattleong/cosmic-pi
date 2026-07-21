@@ -95,6 +95,9 @@ describe("Cosmic UI host service", () => {
         linesChanged: 4,
       });
       expect(MutableRef.get(projection).pullRequestNumber).toBe(42);
+      expect(Object.isFrozen(MutableRef.get(projection))).toBe(true);
+      expect(Object.isFrozen(MutableRef.get(projection).totals)).toBe(true);
+      expect(Object.isFrozen(MutableRef.get(projection).config?.footer.order)).toBe(true);
       expect(calls).toBe(3);
       yield* service.refreshPullRequest();
       expect(calls).toBe(3);

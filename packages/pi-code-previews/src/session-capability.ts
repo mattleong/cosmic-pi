@@ -8,6 +8,11 @@ import type { CodePreviewSession } from "./session-service";
 import type { CodePreviewSettingsService } from "./settings/service";
 import type { CodePreviewSyntaxService } from "./syntax/service";
 import type { CodePreviewWriteService } from "./write/service";
+import {
+  deferProjectedCodePreview,
+  publishCodePreviewDefer,
+  publishCodePreviewSessionActive,
+} from "./session-projection";
 
 type SessionRequirements =
   | CodePreviewSession
@@ -39,6 +44,17 @@ export function installCodePreviewSessionCapability(
   capability: CodePreviewSessionCapability | undefined,
 ): void {
   activeCapability = capability;
+  publishCodePreviewSessionActive(capability !== undefined);
+  publishCodePreviewDefer(
+    capability
+      ? (task) => {
+          const fiber = capability.fork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
+          return () => {
+            if (fiber) capability.fork(Fiber.interrupt(fiber));
+          };
+        }
+      : undefined,
+  );
 }
 
 export function installCodePreviewSessionSlot<R, E>(
@@ -53,7 +69,11 @@ export function installCodePreviewSessionSlot<R, E>(
 }
 
 export function clearCodePreviewSessionCapability(token?: number): void {
-  if (token === undefined || activeCapability?.token === token) activeCapability = undefined;
+  if (token === undefined || activeCapability?.token === token) {
+    activeCapability = undefined;
+    publishCodePreviewSessionActive(false);
+    publishCodePreviewDefer(undefined);
+  }
 }
 
 export function hasCodePreviewSessionCapability(): boolean {
@@ -83,12 +103,7 @@ export function forkCodePreviewSessionEffect<A, E>(
 
 /** Queue only inside the active session; outside it the synchronous renderer remains unchanged. */
 export function deferCodePreview(task: () => void): () => void {
-  const active = activeCapability;
-  if (!active) return () => undefined;
-  const fiber = active.fork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
-  return () => {
-    if (fiber) active.fork(Fiber.interrupt(fiber));
-  };
+  return deferProjectedCodePreview(task);
 }
 
 /** Fixed cadence avoids recursive-sleep drift while remaining TestClock driven. */

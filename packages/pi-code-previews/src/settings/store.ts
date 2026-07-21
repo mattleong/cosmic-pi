@@ -16,6 +16,13 @@ import type { CodePreviewSettings } from "./types";
 
 export * from "./store-core";
 
+let lastCompatibilityLoadOptions: LoadSettingsOptions = {};
+
+/** Plain compatibility input only; authoritative save context remains inside the service. */
+export function compatibilitySettingsLoadOptions(): LoadSettingsOptions {
+  return { ...lastCompatibilityLoadOptions };
+}
+
 /** Synchronous health-panel compatibility; persistence resolves AgentDirectory in Effect. */
 export function getSettingsPath(): string {
   return getSettingsPathFrom(getAgentDir());
@@ -29,6 +36,7 @@ export function getSettingsSaveContext(): SettingsSaveContext {
 export function loadSettingsFromDisk(
   options: LoadSettingsOptions = {},
 ): Promise<CodePreviewSettings | undefined> {
+  lastCompatibilityLoadOptions = { ...options };
   const effect = CodePreviewSettingsService.use((service) => service.loadFromDisk(options));
   return hasCodePreviewSessionCapability()
     ? runCodePreviewSessionEffect(effect)

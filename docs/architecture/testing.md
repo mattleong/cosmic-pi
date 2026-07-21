@@ -25,9 +25,9 @@ Each migrated package must prove:
 
 ## Shared test Layers and telemetry capture
 
-`pi-cosmic-core/testing` publishes in-memory JSON documents, JSON/streaming HTTP adapters, acquisition/release probes, and capture logger/tracer Layers without a Vitest dependency. Capture assertions serialize only span names and attributes, verify the stable operation name, and inject representative URLs, paths, prompts, bodies, tokens, and account IDs to prove absence. Tests cover core HTTP, provider refresh, OpenAI image streaming, Cosmic UI probes, Shiki initialization/degradation logging, and advisor checkpoint decoding.
+`pi-cosmic-core/testing` publishes only helpers with multiple proven consumers: in-memory JSON documents, schema-aware JSON/streaming HTTP adapters, a lifecycle acquisition/release probe, bounded `yieldUntil` polling for scoped workers, and capture logger/tracer Layers with a stable telemetry snapshot. They have no Vitest dependency. Capture assertions serialize only log values plus span names and attributes, verify stable operation names, and inject representative URLs, paths, prompts, bodies, tokens, and account IDs to prove absence.
 
-Test Layers are merged and provided once at the test entry point so resource lifetimes match production. No test installs a global telemetry exporter.
+Test Layers are merged and provided once at the test entry point so resource lifetimes match production. No test installs a global telemetry exporter. Session/Pi harnesses, fault policies, and fiber probes remain package-local because the current host/session and failure shapes are materially different; they should move into core only when a second consumer would use the same contract. Schema boundaries are exercised through the shared schema-aware HTTP/document fakes rather than a second assertion DSL.
 
 ## Validation order
 
@@ -40,4 +40,4 @@ pnpm --filter <package> lint
 pnpm validate
 ```
 
-`pnpm effect:lsp:verify` proves both the patched compiler and every dynamically enumerated package's inherited plugin configuration. `pnpm effect:diagnostics` dynamically runs diagnostics for the same projects. `pnpm architecture:check` first executes positive/negative fixtures and then enforces the exact migration ratchet and direct catalog dependency declarations. Root recursive typecheck and test gates are serialized because focused package hooks reliably build the shared core distribution; this prevents concurrent cleaning builds from mutating the same `pi-cosmic-core/dist` directory.
+`pnpm effect:lsp:check` uses the official language-service patch check, while `pnpm effect:diagnostics` runs the official diagnostics command declared by each package. TypeScript, Oxlint, Effect diagnostics, tests, and review are the architecture safeguards; repository conventions that those tools cannot express remain guidance rather than custom static-analysis rules. Root recursive typecheck and test gates are serialized because focused package hooks reliably build the shared core distribution; this prevents concurrent cleaning builds from mutating the same `pi-cosmic-core/dist` directory.

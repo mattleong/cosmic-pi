@@ -1,9 +1,13 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
+import {
+  decodeTolerantFields,
+  JsonDocumentStore,
+  scopedDocumentPaths,
+  selectScopedDocument,
+  type JsonObject,
+} from "pi-cosmic-core";
 import { CONFIG_BASENAME } from "../identity.ts";
 import {
   DEFAULT_CONFIG,
@@ -35,11 +39,10 @@ export const configPaths = Effect.fn("OpenAIConfig.configPaths")(function* (
   cwd: string,
   agentDir: string,
 ) {
-  const path = yield* Path.Path;
-  return {
-    project: path.join(cwd, CONFIG_DIR_NAME, "extensions", CONFIG_BASENAME),
-    global: path.join(agentDir, "extensions", CONFIG_BASENAME),
-  } as const;
+  return yield* scopedDocumentPaths(cwd, agentDir, {
+    projectConfigDirectory: CONFIG_DIR_NAME,
+    basename: CONFIG_BASENAME,
+  });
 });
 
 export const readRawConfig = Effect.fn("OpenAIConfig.readRawConfig")(function* (path: string) {
@@ -50,60 +53,61 @@ export const readRawConfig = Effect.fn("OpenAIConfig.readRawConfig")(function* (
   );
 });
 
-const decodeBoolean = (value: unknown) =>
-  Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Boolean)(value));
-const decodeNumber = (value: unknown) =>
-  Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Number)(value));
-const decodeString = (value: unknown) =>
-  Option.getOrUndefined(Schema.decodeUnknownOption(Schema.String)(value));
-
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
-const record = (value: unknown) =>
-  Option.getOrUndefined(Schema.decodeUnknownOption(UnknownRecordSchema)(value));
-const finiteNumber = (value: unknown) => {
-  const decoded = decodeNumber(value);
-  return decoded !== undefined && Number.isFinite(decoded) ? decoded : undefined;
-};
-const compact = <A extends Record<string, unknown>>(value: A) =>
-  Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined));
+const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
 
 /** Tolerant field-level wire decode: one malformed field never discards valid siblings. */
 function decodeConfig(value: unknown): ConfigFile {
-  const root = record(value);
-  if (!root) return {};
-  const usageRaw = record(root.usage);
-  const footerRaw = record(root.footer);
-  const imageRaw = record(root.image);
-  const usage = compact({
-    enabled: decodeBoolean(usageRaw?.enabled),
-    refreshIntervalMs: finiteNumber(usageRaw?.refreshIntervalMs),
-    showOnlyOnSubscriptionModels: decodeBoolean(usageRaw?.showOnlyOnSubscriptionModels),
-    showResetTimes: decodeBoolean(usageRaw?.showResetTimes),
-  }) as UsageConfig;
-  const footerMode = Option.getOrUndefined(
-    Schema.decodeUnknownOption(FooterModeSchema)(footerRaw?.mode),
-  );
-  const defaultModel = decodeString(imageRaw?.defaultModel)?.trim();
-  const image = compact({
-    enabled: decodeBoolean(imageRaw?.enabled),
-    defaultModel: defaultModel || undefined,
-    defaultSave: Option.getOrUndefined(
-      Schema.decodeUnknownOption(ImageSaveModeSchema)(imageRaw?.defaultSave),
-    ),
-    outputFormat: Option.getOrUndefined(
-      Schema.decodeUnknownOption(ImageOutputFormatSchema)(imageRaw?.outputFormat),
-    ),
-    timeoutMs: finiteNumber(imageRaw?.timeoutMs),
-  }) as ImageConfig;
+  const root = decodeTolerantFields(
+    value,
+    {
+      persistState: Schema.Boolean,
+      active: Schema.Boolean,
+      desiredActive: Schema.Boolean,
+      usage: UnknownRecordSchema,
+      footer: UnknownRecordSchema,
+      image: UnknownRecordSchema,
+    },
+    { path: "config" },
+  ).value;
+  const usage = decodeTolerantFields(
+    root.usage,
+    {
+      enabled: Schema.Boolean,
+      refreshIntervalMs: FiniteNumberSchema,
+      showOnlyOnSubscriptionModels: Schema.Boolean,
+      showResetTimes: Schema.Boolean,
+    },
+    { path: "usage" },
+  ).value as UsageConfig;
+  const footer = decodeTolerantFields(
+    root.footer,
+    { mode: FooterModeSchema },
+    { path: "footer" },
+  ).value;
+  const imageFields = decodeTolerantFields(
+    root.image,
+    {
+      enabled: Schema.Boolean,
+      defaultModel: Schema.String,
+      defaultSave: ImageSaveModeSchema,
+      outputFormat: ImageOutputFormatSchema,
+      timeoutMs: FiniteNumberSchema,
+    },
+    { path: "image" },
+  ).value;
+  const defaultModel = imageFields.defaultModel?.trim();
+  const image: ImageConfig = {
+    ...imageFields,
+    ...(defaultModel ? { defaultModel } : { defaultModel: undefined }),
+  };
   return {
-    ...compact({
-      persistState: decodeBoolean(root.persistState),
-      active: decodeBoolean(root.active),
-      desiredActive: decodeBoolean(root.desiredActive),
-    }),
+    ...(root.persistState !== undefined ? { persistState: root.persistState } : {}),
+    ...(root.active !== undefined ? { active: root.active } : {}),
+    ...(root.desiredActive !== undefined ? { desiredActive: root.desiredActive } : {}),
     ...(Object.keys(usage).length ? { usage } : {}),
-    ...(footerMode ? { footer: { mode: footerMode } } : {}),
-    ...(Object.keys(image).length ? { image } : {}),
+    ...(footer.mode !== undefined ? { footer: { mode: footer.mode } } : {}),
+    ...(Object.values(image).some((field) => field !== undefined) ? { image } : {}),
   };
 }
 
@@ -132,15 +136,14 @@ export const updateConfig = Effect.fn("OpenAIConfig.updateConfig")(function* (
 export const resolveConfig = Effect.fn("OpenAIConfig.resolveConfig")(function* (
   cwd: string,
   agentDir: string,
+  projectTrusted = true,
 ) {
-  const documents = yield* JsonDocumentStore;
   const paths = yield* configPaths(cwd, agentDir);
-  let projectExists = yield* documents
-    .exists(paths.project)
-    .pipe(Effect.mapError(mapError("inspect", paths.project)));
-  let globalExists = yield* documents
-    .exists(paths.global)
-    .pipe(Effect.mapError(mapError("inspect", paths.global)));
+  const selected = yield* selectScopedDocument(paths).pipe(
+    Effect.mapError((error) => mapError("inspect", error.path)()),
+  );
+  let projectExists = projectTrusted && selected.projectExists;
+  let globalExists = selected.globalExists;
   if (!projectExists && !globalExists) {
     yield* writeConfig(paths.global, DEFAULT_CONFIG as JsonObject);
     globalExists = true;

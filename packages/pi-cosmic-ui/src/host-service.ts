@@ -8,8 +8,7 @@ import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import * as SynchronizedRef from "effect/SynchronizedRef";
-import { makeSubscriptionRefresh } from "pi-cosmic-core";
+import { freezeSnapshot, makeFrozenProjection, makeSubscriptionRefresh } from "pi-cosmic-core";
 import type { ResolvedCosmicUiConfig } from "./config/schema.ts";
 import { CosmicUiConfigRepository } from "./config/repository.ts";
 import { CosmicUiConfigError } from "./config/store.ts";
@@ -43,8 +42,7 @@ const initialProjection = (): CosmicUiProjection => ({
   probeRevision: 0,
   homeDirectory: undefined,
 });
-const immutable = (state: CosmicUiProjection): CosmicUiProjection =>
-  Object.freeze({ ...state, totals: Object.freeze({ ...state.totals }) });
+const immutable = (state: CosmicUiProjection): CosmicUiProjection => freezeSnapshot(state);
 export const makeProjection = () =>
   MutableRef.make<CosmicUiProjection>(immutable(initialProjection()));
 /** Compatibility reset used only before a runtime owns the projection. */
@@ -108,6 +106,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
     readonly projection: MutableRef.MutableRef<CosmicUiProjection>;
     readonly onChange: () => void;
     readonly startPolling?: boolean;
+    readonly projectTrusted?: boolean;
   }) {
     return Layer.effect(
       this,
@@ -116,28 +115,32 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
         const probes = yield* RepositoryProbe;
         const settingsLock = yield* Semaphore.make(1);
         const home = yield* Config.option(Config.string("HOME"));
-        const config = yield* repository.resolve(options.cwd);
-        const state = yield* SynchronizedRef.make<CosmicUiProjection>({
-          ...initialProjection(),
-          totals: MutableRef.get(options.projection).totals,
-          config,
-          homeDirectory: Option.getOrUndefined(home),
-        });
-        const publish = (next: CosmicUiProjection) =>
-          Effect.sync(() => MutableRef.set(options.projection, immutable(next)));
+        const projectTrusted = options.projectTrusted ?? true;
+        const config = yield* repository.resolve(options.cwd, projectTrusted);
+        const state = yield* makeFrozenProjection<CosmicUiProjection, CosmicUiProjection>(
+          {
+            ...initialProjection(),
+            totals: MutableRef.get(options.projection).totals,
+            config,
+            homeDirectory: Option.getOrUndefined(home),
+          },
+          (current) => current,
+          (published) => MutableRef.set(options.projection, published),
+        );
         const updateState = (f: (current: CosmicUiProjection) => CosmicUiProjection) =>
-          SynchronizedRef.modifyEffect(state, (current) => {
-            const next = f(current);
-            return publish(next).pipe(Effect.as([next, next] as const));
-          });
-        yield* SynchronizedRef.get(state).pipe(Effect.flatMap(publish));
+          state
+            .transition((current) => {
+              const next = f(current);
+              return Effect.succeed([next, next] as const);
+            })
+            .pipe(Effect.orDie);
         const notifyChanged = Effect.try({
           try: options.onChange,
           catch: () =>
             new CosmicProbeError({ operation: "render", message: "Unable to render Cosmic UI." }),
         }).pipe(Effect.catch(() => Effect.void));
         const currentCwd = () => MutableRef.get(options.context).sessionManager.getCwd();
-        const currentKey = SynchronizedRef.get(state).pipe(
+        const currentKey = state.getState.pipe(
           Effect.map((current) => `${currentCwd()}\u0000${current.probeRevision}`),
         );
         const gitRefresh = yield* makeSubscriptionRefresh<
@@ -153,7 +156,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
           fetch: () =>
             Effect.gen(function* () {
               const ctx = MutableRef.get(options.context);
-              const revision = (yield* SynchronizedRef.get(state)).probeRevision;
+              const revision = (yield* state.getState).probeRevision;
               if (ctx.mode !== "tui") return { cwd: currentCwd(), revision, status: undefined };
               const cwd = currentCwd();
               const result = yield* probes
@@ -186,7 +189,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
             Effect.gen(function* () {
               const ctx = MutableRef.get(options.context);
               if (ctx.mode !== "tui") return undefined;
-              const current = yield* SynchronizedRef.get(state);
+              const current = yield* state.getState;
               const now = yield* Clock.currentTimeMillis;
               if (
                 !request.force &&
@@ -236,7 +239,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
             Effect.andThen(notifyChanged),
             Effect.asVoid,
           );
-        const requireConfig = SynchronizedRef.get(state).pipe(
+        const requireConfig = state.getState.pipe(
           Effect.flatMap((current) =>
             current.config
               ? Effect.succeed(current.config)
@@ -259,7 +262,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
             Effect.gen(function* () {
               const current = yield* requireConfig;
               return yield* repository
-                .updateFooter(options.cwd, current, patch)
+                .updateFooter(options.cwd, current, patch, projectTrusted)
                 .pipe(Effect.flatMap(installConfig));
             }),
           );
@@ -268,7 +271,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
             Effect.gen(function* () {
               const current = yield* requireConfig;
               return yield* repository
-                .setVisibility(options.cwd, current, id, visible)
+                .setVisibility(options.cwd, current, id, visible, projectTrusted)
                 .pipe(Effect.flatMap(installConfig));
             }),
           );

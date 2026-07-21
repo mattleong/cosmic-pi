@@ -17,7 +17,7 @@ import { countLabel, formatBytes } from "../shared/format";
 import { getObjectValue } from "../shared/objects";
 import { escapeControlChars } from "../shared/terminal-text";
 import { resolvePreviewLanguage } from "../syntax/language";
-import { normalizeShikiLanguage } from "../syntax/shiki";
+import { normalizeShikiLanguage } from "../syntax/render";
 import { getPathArg } from "../tool-data/args";
 import { getTextContent } from "../tool-data/results";
 import { renderCodePreviewToolTitle } from "../tools/presentation";
@@ -32,7 +32,7 @@ import {
   getCodePreviewBeforeWrite,
   withCodePreviewBeforeWrite,
 } from "../write/preview-execution";
-import { cachedAsyncPreview, cachedPreview } from "./shared/cache";
+import { cachedDeferredPreview, cachedPreview } from "./shared/cache";
 import { diffPreviewCacheKey, writeCallPreviewCacheKey } from "./shared/preview-cache-key";
 import { renderContentPreview } from "./shared/content-preview";
 import { createDiffPreviewText, diffPreviewLineLimit } from "./shared/diff-preview";
@@ -173,7 +173,7 @@ export function registerWrite(pi: ExtensionAPI, cwd: string) {
             theme,
             codePreviewSettings.writeCollapsedLines,
           );
-          return cachedAsyncPreview(
+          return cachedDeferredPreview(
             renderContext.state,
             "writeResultPreviewKey",
             "writeResultPreviewComponent",

@@ -8,10 +8,16 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import { makeCapturedLogger, makeCapturedTracer } from "pi-cosmic-core/testing";
+import {
+  capturedTelemetrySnapshot,
+  makeCapturedLogger,
+  makeCapturedTracer,
+} from "pi-cosmic-core/testing";
 import { ShikiAdapter, ShikiBoundaryError, type ShikiHighlighter } from "../boundary/shiki";
 import { codePreviewSettings, setCodePreviewSettings } from "../settings";
-import { CodePreviewSyntaxService, isExactShikiCacheHit } from "./service";
+import { requestSyntaxInitialize, requestSyntaxLanguage, syntaxProjection } from "./projection";
+import { CodePreviewSyntaxService } from "./service";
+import { isExactShikiCacheHit } from "./shiki";
 
 const highlighter = (dispose: () => void) =>
   ({
@@ -53,7 +59,7 @@ describe("session syntax service", () => {
         },
       );
       assert.equal(created, 1);
-      assert.equal(service.status().initialized, true);
+      assert.equal((yield* service.status).initialized, true);
       assert.ok(captured.spans.some((span) => span.name === "pi-code-previews.shiki.initialize"));
       assert.equal(
         JSON.stringify(
@@ -71,6 +77,54 @@ describe("session syntax service", () => {
       Effect.ensuring(Effect.sync(() => assert.equal(disposed, 1))),
     );
   });
+
+  it.effect("rejects late initialization replacement and invokes language callbacks once", () =>
+    Effect.gen(function* () {
+      setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
+      const first = yield* Deferred.make<ShikiHighlighter>();
+      let firstDisposed = 0;
+      let secondDisposed = 0;
+      let languageLoads = 0;
+      const adapter = ShikiAdapter.of({
+        create: (theme) =>
+          theme === "first"
+            ? Deferred.await(first)
+            : Effect.succeed(highlighter(() => secondDisposed++)),
+        loadLanguage: () => Effect.sync(() => languageLoads++),
+      });
+      yield* CodePreviewSyntaxService.use((service) =>
+        Effect.gen(function* () {
+          const old = yield* service.initialize("first").pipe(Effect.forkScoped);
+          yield* Effect.yieldNow;
+          yield* service.initialize("second");
+          yield* Deferred.succeed(
+            first,
+            highlighter(() => firstDisposed++),
+          );
+          yield* Fiber.join(old);
+          assert.equal(firstDisposed, 1);
+          assert.equal(syntaxProjection()?.theme, "second");
+          let callbacks = 0;
+          requestSyntaxLanguage("rust", () => callbacks++);
+          yield* Effect.yieldNow;
+          yield* Effect.yieldNow;
+          assert.equal(languageLoads, 1);
+          assert.equal(callbacks, 1);
+          assert.equal(syntaxProjection()?.loadedLanguages.includes("rust"), true);
+          requestSyntaxLanguage("rust", () => callbacks++);
+          yield* Effect.yieldNow;
+          yield* Effect.yieldNow;
+          assert.equal(languageLoads, 1);
+          assert.equal(callbacks, 2);
+        }),
+      ).pipe(
+        Effect.provide(
+          CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+        ),
+      );
+      assert.equal(secondDisposed, 1);
+    }).pipe(Effect.scoped),
+  );
 
   it.effect("logs only a redacted actionable Shiki degradation", () => {
     setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
@@ -94,13 +148,215 @@ describe("session syntax service", () => {
       ),
       Effect.tap(() =>
         Effect.sync(() => {
-          const telemetry = JSON.stringify(captured.entries);
+          const telemetry = capturedTelemetrySnapshot(captured);
           assert.match(telemetry, /Shiki failed to initialize/);
           assert.equal(telemetry.includes("secret-theme"), false);
           assert.equal(telemetry.includes("secret\/path"), false);
           assert.equal(telemetry.includes("sk-secret"), false);
         }),
       ),
+    );
+  });
+
+  it.effect("interrupted initialization clears its flight and permits retry", () => {
+    let interrupted = 0;
+    let creates = 0;
+    return Effect.gen(function* () {
+      setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
+      const started = yield* Deferred.make<void>();
+      const adapter = ShikiAdapter.of({
+        create: () => {
+          creates++;
+          return creates === 1
+            ? Deferred.succeed(started, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.ensuring(Effect.sync(() => interrupted++)),
+              )
+            : Effect.succeed(highlighter(() => undefined));
+        },
+        loadLanguage: () => Effect.void,
+      });
+      yield* CodePreviewSyntaxService.use((service) =>
+        Effect.gen(function* () {
+          const first = yield* service.initialize("dark-plus").pipe(Effect.forkScoped);
+          yield* Deferred.await(started);
+          yield* Fiber.interrupt(first);
+          yield* service.initialize("dark-plus");
+          assert.equal(creates, 2);
+          assert.equal(interrupted, 1);
+          assert.equal((yield* service.status).initialized, true);
+        }),
+      ).pipe(
+        Effect.provide(
+          CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+        ),
+      );
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("notifies every duplicate initialization request exactly once", () => {
+    let callbacks = 0;
+    let creates = 0;
+    const adapter = ShikiAdapter.of({
+      create: () =>
+        Effect.yieldNow.pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              creates++;
+              return highlighter(() => undefined);
+            }),
+          ),
+        ),
+      loadLanguage: () => Effect.void,
+    });
+    return CodePreviewSyntaxService.use(() =>
+      Effect.gen(function* () {
+        requestSyntaxInitialize("dark-plus", () => callbacks++);
+        requestSyntaxInitialize("dark-plus", () => callbacks++);
+        for (let attempt = 0; attempt < 10; attempt++) yield* Effect.yieldNow;
+        assert.equal(creates, 1);
+        assert.equal(callbacks, 2);
+      }),
+    ).pipe(
+      Effect.provide(
+        CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+      ),
+    );
+  });
+
+  it.effect("bounds duplicate initialization ingress without losing invalidations", () => {
+    const requests = 200;
+    let callbacks = 0;
+    let creates = 0;
+    return Effect.gen(function* () {
+      setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const adapter = ShikiAdapter.of({
+        create: () => {
+          creates++;
+          return Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(highlighter(() => undefined)),
+          );
+        },
+        loadLanguage: () => Effect.void,
+      });
+      yield* CodePreviewSyntaxService.use(() =>
+        Effect.gen(function* () {
+          for (let index = 0; index < requests; index++)
+            requestSyntaxInitialize("dark-plus", () => callbacks++);
+          yield* Deferred.await(started);
+          assert.ok(callbacks > 0, "overflow callbacks should invalidate immediately");
+          assert.ok(callbacks < requests, "bounded retained callbacks should await completion");
+          yield* Deferred.succeed(release, undefined);
+          for (let attempt = 0; attempt < 20; attempt++) yield* Effect.yieldNow;
+          assert.equal(creates, 1);
+          assert.equal(callbacks, requests);
+        }),
+      ).pipe(
+        Effect.provide(
+          CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+        ),
+      );
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("bounds duplicate language ingress and isolates invalidation failures", () => {
+    const requests = 200;
+    let callbacks = 0;
+    let languageLoads = 0;
+    return Effect.gen(function* () {
+      setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const adapter = ShikiAdapter.of({
+        create: () => Effect.succeed(highlighter(() => undefined)),
+        loadLanguage: () => {
+          languageLoads++;
+          return Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release)));
+        },
+      });
+      yield* CodePreviewSyntaxService.use((service) =>
+        Effect.gen(function* () {
+          yield* service.initialize("dark-plus");
+          for (let index = 0; index < requests; index++)
+            requestSyntaxLanguage(
+              "rust",
+              index === 0
+                ? () => {
+                    throw new Error("host callback failure");
+                  }
+                : () => callbacks++,
+            );
+          yield* Deferred.await(started);
+          assert.ok(callbacks > 0, "overflow callbacks should invalidate immediately");
+          yield* Deferred.succeed(release, undefined);
+          for (let attempt = 0; attempt < 20; attempt++) yield* Effect.yieldNow;
+          assert.equal(languageLoads, 1);
+          assert.equal(callbacks, requests - 1);
+          assert.equal(syntaxProjection()?.loadedLanguages.includes("rust"), true);
+        }),
+      ).pipe(
+        Effect.provide(
+          CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+        ),
+      );
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("rejects syntax requests safely after ingress has closed", () => {
+    let callbacks = 0;
+    const adapter = ShikiAdapter.of({
+      create: () => Effect.succeed(highlighter(() => undefined)),
+      loadLanguage: () => Effect.void,
+    });
+    return CodePreviewSyntaxService.use(() => Effect.void).pipe(
+      Effect.provide(
+        CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+      ),
+      Effect.andThen(
+        Effect.sync(() => {
+          requestSyntaxInitialize("dark-plus", () => callbacks++);
+          requestSyntaxLanguage("rust", () => callbacks++);
+          requestSyntaxInitialize("dark-plus", () => {
+            throw new Error("closed callback failure");
+          });
+          assert.equal(callbacks, 0);
+        }),
+      ),
+    );
+  });
+
+  it.effect("preserves the working highlighter when theme replacement fails", () => {
+    setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
+    let oldDisposed = 0;
+    const old = highlighter(() => oldDisposed++);
+    const adapter = ShikiAdapter.of({
+      create: (theme) =>
+        theme === "old"
+          ? Effect.succeed(old)
+          : Effect.fail(
+              new ShikiBoundaryError({ operation: "initialize", message: "expected failure" }),
+            ),
+      loadLanguage: () => Effect.void,
+    });
+    return CodePreviewSyntaxService.use((service) =>
+      Effect.gen(function* () {
+        yield* service.initialize("old");
+        const before = syntaxProjection();
+        yield* service.initialize("bad");
+        const after = syntaxProjection();
+        assert.equal(after?.highlighter, old);
+        assert.equal(after?.theme, "old");
+        assert.equal(after?.generation, before?.generation);
+        assert.equal(oldDisposed, 0);
+      }),
+    ).pipe(
+      Effect.provide(
+        CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+      ),
+      Effect.ensuring(Effect.sync(() => assert.equal(oldDisposed, 1))),
     );
   });
 

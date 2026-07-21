@@ -28,13 +28,15 @@ import * as TestClock from "effect/testing/TestClock";
 import {
   AgentDirectory,
   SafeFile,
-  StreamingHttpClient,
   StreamingHttpError,
   nodePlatformLayer,
-  type StreamingHttpRequest,
   type StreamingHttpResponse,
 } from "pi-cosmic-core";
-import { makeCapturedTracer } from "pi-cosmic-core/testing";
+import {
+  makeCapturedTracer,
+  streamingHttpTestLayer,
+  type StreamingHttpTestRequest,
+} from "pi-cosmic-core/testing";
 import sharp from "sharp";
 import { SharpAdapter } from "../src/boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG } from "../src/config.ts";
@@ -67,14 +69,14 @@ const completed = (data = PNG_BASE64) => ({
   type: "response.output_item.done",
   item: { type: "image_generation_call", id: "ig_test", status: "completed", result: data },
 });
-const httpResponse = (status: number, body: Stream.Stream<Uint8Array, StreamingHttpError>) => ({
+const httpResponse = (status: number, rawBody: Stream.Stream<Uint8Array, StreamingHttpError>) => ({
   status,
-  body,
-  discard: body.pipe(Stream.runDrain),
+  rawBody,
+  discardRawBody: rawBody.pipe(Stream.runDrain),
 });
 
 function harness(
-  response: (request: StreamingHttpRequest) => Effect.Effect<StreamingHttpResponse>,
+  response: (request: StreamingHttpTestRequest) => Effect.Effect<StreamingHttpResponse>,
   timeoutMs = DEFAULT_IMAGE_CONFIG.timeoutMs,
   fileSystemLayer?: Layer.Layer<FileSystem.FileSystem>,
 ) {
@@ -115,10 +117,7 @@ function harness(
   const projection = makeProjection();
   MutableRef.set(projection, { ...MutableRef.get(projection), config } satisfies OpenAIProjection);
   const context = MutableRef.make(ctx);
-  const mockHttp = Layer.succeed(
-    StreamingHttpClient,
-    StreamingHttpClient.of({ request: response }),
-  );
+  const mockHttp = streamingHttpTestLayer(response);
   const platform = fileSystemLayer
     ? Layer.mergeAll(nodePlatformLayer, mockHttp, fileSystemLayer, AgentDirectory.layer(agentDir))
     : Layer.mergeAll(nodePlatformLayer, mockHttp, AgentDirectory.layer(agentDir));
@@ -137,7 +136,7 @@ function harness(
 
 describe("Effect-native OpenAI image service", () => {
   it.effect("preserves prompts, uploads edit inputs, consumes SSE, and saves output", () => {
-    let request: StreamingHttpRequest | undefined;
+    let request: StreamingHttpTestRequest | undefined;
     const h = harness((input) => {
       request = input;
       return Effect.succeed(httpResponse(200, sse([{ partial_image_b64: "cA==" }, completed()])));
@@ -163,7 +162,7 @@ describe("Effect-native OpenAI image service", () => {
       expect(result.data).toBe(PNG_BASE64);
       expect(result.savedPath).toContain(join(h.cwd, ".pi", "generated-images"));
       expect(readFileSync(result.savedPath!).toString("base64")).toBe(PNG_BASE64);
-      expect(request?.jsonBody).toMatchObject({
+      expect(request?.encodedJsonBody).toMatchObject({
         input: [
           {
             content: [
@@ -173,7 +172,7 @@ describe("Effect-native OpenAI image service", () => {
           },
         ],
       });
-      const requestBody = request?.jsonBody as {
+      const requestBody = request?.encodedJsonBody as {
         input?: Array<{ content?: Array<{ image_url?: string }> }>;
       };
       expect(requestBody.input?.[0]?.content?.[1]?.image_url).toMatch(/^data:image\/png;base64,/);
@@ -416,7 +415,7 @@ describe("Effect-native OpenAI image service", () => {
   it.effect("keeps an earlier completion when the later transport would fail", () => {
     const first = Stream.make(new TextEncoder().encode(`data: ${JSON.stringify(completed())}\n\n`));
     const later = Stream.fail(
-      new StreamingHttpError({ operation: "test", message: "late transport failure" }),
+      new StreamingHttpError({ operation: "stream", message: "late transport failure" }),
     );
     const h = harness(() => Effect.succeed(httpResponse(200, Stream.concat(first, later))));
     return Effect.gen(function* () {
@@ -559,8 +558,8 @@ describe("Effect-native OpenAI image service", () => {
     const h = harness(() =>
       Effect.succeed({
         status: 429,
-        body: Stream.never,
-        discard: Effect.sync(() => discarded++),
+        rawBody: Stream.never,
+        discardRawBody: Effect.sync(() => discarded++),
       }),
     );
     return Effect.gen(function* () {

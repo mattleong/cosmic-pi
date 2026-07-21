@@ -2426,7 +2426,7 @@ describe("persistent extension cutover", () => {
     expect(value.runtimes[0]!.requests).toHaveLength(0);
   });
 
-  test("cancel stops once while its runtime is starting", async () => {
+  test("cancel uses the starting-child token without aborting its replacement", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pi-advisor-once-cancel-"));
     try {
       const configPath = join(directory, "pi-advisor.json");
@@ -2450,6 +2450,7 @@ describe("persistent extension cutover", () => {
       await turn;
       await tick();
       expect(value.runtimes[1]!.requests).toHaveLength(0);
+      expect(value.runtimes[1]!.driver.abort).not.toHaveBeenCalled();
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

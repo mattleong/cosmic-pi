@@ -58,6 +58,30 @@ describe("Cosmic UI config", () => {
     ),
   );
 
+  it.effect("ignores untrusted project configuration and writes through the global document", () =>
+    withTempConfig(({ cwd, agent }) =>
+      Effect.gen(function* () {
+        const documents = yield* JsonDocumentStore;
+        const paths = yield* configPaths(cwd, agent);
+        yield* documents.writeObject(paths.global, {
+          footer: { enabled: true, density: "comfortable" },
+        });
+        yield* documents.writeObject(paths.project, {
+          footer: { enabled: false, density: "compact" },
+        });
+
+        const config = yield* resolveConfig(cwd, agent, false);
+        expect(config.configPath).toBe(paths.global);
+        expect(config.footer).toMatchObject({ enabled: true, density: "comfortable" });
+        const updated = yield* updateFooterConfig(cwd, agent, config, { enabled: false }, false);
+        expect(updated.configPath).toBe(paths.global);
+        expect(yield* documents.readObject(paths.project)).toEqual({
+          footer: { enabled: false, density: "compact" },
+        });
+      }),
+    ),
+  );
+
   it.effect("logs a safe diagnostic when an existing config cannot be read", () => {
     const messages: string[] = [];
     const failure = new JsonDocumentError({

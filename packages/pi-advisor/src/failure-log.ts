@@ -4,8 +4,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { ProcessCoordinator } from "pi-cosmic-core";
 import { advisorIsoNow } from "./boundary/clock.ts";
-import { AdvisorFailureLogLock } from "./boundary/failure-log-lock.ts";
 import { stringifyJson } from "./boundary/json.ts";
 import { appendRotatingTextSync, nodeDirname, nodeJoin } from "./boundary/node.ts";
 import { standaloneAdvisorExecutor } from "./boundary/executor.ts";
@@ -50,10 +50,11 @@ export const logAdvisorFailureEffect = Effect.fn("AdvisorFailureLog.append")(fun
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const lock = yield* AdvisorFailureLogLock;
+  const coordinator = yield* ProcessCoordinator;
   const logPath = path.join(path.dirname(path.dirname(configPath)), "logs", "pi-advisor.jsonl");
-  return yield* lock
+  return yield* coordinator
     .withLock(
+      path.resolve(logPath),
       Effect.gen(function* () {
         const logDirectory = path.dirname(logPath);
         yield* fs.makeDirectory(logDirectory, { recursive: true, mode: 0o700 });

@@ -1,9 +1,15 @@
 import * as Schema from "effect/Schema";
 
+const PositiveIntegerSchema = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isInt(),
+  Schema.isGreaterThan(0),
+);
+
 const CredentialsSchema = Schema.Struct({
   accessToken: Schema.String,
   refreshToken: Schema.optional(Schema.String),
-  expires: Schema.optional(Schema.Number),
+  expires: Schema.optional(PositiveIntegerSchema),
   teamId: Schema.optional(Schema.String),
   source: Schema.Literals(["modelRegistry", "authFile"]),
 });

@@ -6,9 +6,9 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as Ref from "effect/Ref";
+import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import { describe, expect, test, vi } from "vitest";
 import type {
   AdvisorCheckpoint,
@@ -18,11 +18,21 @@ import type {
 } from "../src/advisor-runtime.ts";
 import {
   AdvisorReviewQueue,
+  AdvisorQueueBacklogExceededError,
+  AdvisorQueueBatchDroppedError,
+  AdvisorQueueCancelledError,
+  AdvisorQueueCorrelationMismatchError,
+  AdvisorQueueDisposedError,
   AdvisorQueueError,
+  AdvisorQueueResetRequiredError,
+  AdvisorQueueStaleEpochError,
   AdvisorReviewQueueService,
+  MAX_PENDING_CHECKPOINTS,
   advisorReviewQueueServiceLayer,
   type AdvisorReviewQueueOptions,
+  type QueuedCheckpoint,
 } from "../src/review-queue.ts";
+import { initialReviewQueueState } from "../src/review-queue-state.ts";
 import { AdvisorModelError } from "../src/client.ts";
 
 type TestQueue = AdvisorReviewQueue & {
@@ -53,9 +63,8 @@ async function makeQueue(
     runtime,
     options,
     scope,
-    Effect.runSync(Semaphore.make(1)),
-    Effect.runSync(Semaphore.make(1)),
-    Effect.runSync(Ref.make(0)),
+    Effect.runSync(SynchronizedRef.make(initialReviewQueueState())),
+    Effect.runSync(Queue.dropping<QueuedCheckpoint>(MAX_PENDING_CHECKPOINTS + 1)),
   ) as TestQueue;
   await Effect.runPromise(queue.initializeEffect());
   queue.checkpoint = (request) => Effect.runPromise(queue.checkpointEffect(request));
@@ -267,6 +276,99 @@ describe("AdvisorReviewQueue", () => {
     await second;
   });
 
+  test("retains a shared-target barrier when one queued checkpoint is cancelled", async () => {
+    const harness = runtimeHarness();
+    const queue = await makeQueue(harness.runtime);
+    queue.ingest(1, { type: "user", text: "active" });
+    const active = queue.checkpoint({
+      checkpointId: "active",
+      focus: "standard",
+      parentTurnId: 1,
+      targetSequence: 1,
+    });
+    await tick();
+
+    queue.ingest(1, { type: "assistant_text_delta", text: "frozen-seq2" });
+    const cancelled = queue
+      .checkpoint({
+        checkpointId: "cancel-shared",
+        focus: "standard",
+        parentTurnId: 1,
+        targetSequence: 2,
+      })
+      .catch((error: unknown) => error);
+    const survivor = queue.checkpoint({
+      checkpointId: "survive-shared",
+      focus: "standard",
+      parentTurnId: 1,
+      targetSequence: 2,
+    });
+    await queue.cancelCheckpointEffect("cancel-shared").pipe(Effect.runPromise);
+    expect(await cancelled).toBeInstanceOf(AdvisorQueueCancelledError);
+    queue.ingest(1, { type: "assistant_text_delta", text: "later-seq3" });
+
+    harness.pending[0]?.resolve(result(harness.requests[0]!));
+    await active;
+    await tick();
+    expect(harness.requests[1]?.checkpointId).toBe("survive-shared");
+    expect(harness.requests[1]?.observations).toContain("frozen-seq2");
+    expect(harness.requests[1]?.observations).not.toContain("later-seq3");
+    harness.pending[1]?.resolve(result(harness.requests[1]!));
+    await survivor;
+    await queue.dispose();
+  });
+
+  test("retains a shared-target barrier when the oldest queued checkpoint is evicted", async () => {
+    const harness = runtimeHarness();
+    const queue = await makeQueue(harness.runtime);
+    queue.ingest(1, { type: "user", text: "active" });
+    const active = queue.checkpoint({
+      checkpointId: "active",
+      focus: "standard",
+      parentTurnId: 1,
+      targetSequence: 1,
+    });
+    await tick();
+
+    queue.ingest(1, { type: "assistant_text_delta", text: "frozen-seq2" });
+    const evicted = queue
+      .checkpoint({
+        checkpointId: "evicted-shared",
+        focus: "standard",
+        parentTurnId: 1,
+        targetSequence: 2,
+      })
+      .catch((error: unknown) => error);
+    const survivor = queue.checkpoint({
+      checkpointId: "survive-shared",
+      focus: "standard",
+      parentTurnId: 1,
+      targetSequence: 2,
+    });
+    const filler = Array.from({ length: MAX_PENDING_CHECKPOINTS - 1 }, (_, index) =>
+      queue
+        .checkpoint({
+          checkpointId: `filler-${index}`,
+          focus: "standard",
+          parentTurnId: 1,
+          targetSequence: 2,
+        })
+        .catch((error: unknown) => error),
+    );
+    await tick();
+    expect(await evicted).toBeInstanceOf(AdvisorQueueBatchDroppedError);
+    queue.ingest(1, { type: "assistant_text_delta", text: "later-seq3" });
+
+    harness.pending[0]?.resolve(result(harness.requests[0]!));
+    await active;
+    await tick();
+    expect(harness.requests[1]?.checkpointId).toBe("survive-shared");
+    expect(harness.requests[1]?.observations).toContain("frozen-seq2");
+    expect(harness.requests[1]?.observations).not.toContain("later-seq3");
+    await queue.dispose();
+    await Promise.allSettled([survivor, ...filler]);
+  });
+
   test("freezes seq1 tool_update before seq2 same-tool replacement in the pre-pump race", async () => {
     const harness = runtimeHarness();
     const queue = await makeQueue(harness.runtime);
@@ -344,7 +446,11 @@ describe("AdvisorReviewQueue", () => {
     if (exit._tag === "Failure") {
       const failure = Cause.findErrorOption(exit.cause);
       expect(failure._tag).toBe("Some");
-      if (failure._tag === "Some") expect(failure.value).toBeInstanceOf(AdvisorQueueError);
+      if (failure._tag === "Some") {
+        expect(failure.value).toBeInstanceOf(AdvisorQueueCorrelationMismatchError);
+        expect(failure.value).toBeInstanceOf(AdvisorQueueError);
+        expect(failure.value._tag).toBe("CorrelationMismatch");
+      }
       expect(Cause.hasDies(exit.cause)).toBe(false);
     }
     await queue.dispose();
@@ -400,9 +506,14 @@ describe("AdvisorReviewQueue", () => {
       getReprimeState: () => ({ seed: "current cursor", stateSummary: "compact" }),
     });
     queue.ingest(1, { type: "user", text: "oversized" });
-    await expect(
-      queue.checkpoint({ checkpointId: "drop", focus: "standard", parentTurnId: 1 }),
-    ).rejects.toThrow("dropped");
+    const dropped = await queue
+      .checkpoint({ checkpointId: "drop", focus: "standard", parentTurnId: 1 })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(dropped).toBeInstanceOf(AdvisorQueueBatchDroppedError);
+    expect((dropped as AdvisorQueueBatchDroppedError)._tag).toBe("BatchDropped");
     expect(queue.backlog).toBe(0);
     queue.ingest(2, { type: "user", text: "small" });
     await expect(
@@ -437,6 +548,216 @@ describe("AdvisorReviewQueue", () => {
     expect(harness.runtime.checkpoint).toHaveBeenCalledOnce();
     expect(harness.runtime.abort).toHaveBeenCalledOnce();
     expect(harness.runtime.reprime).not.toHaveBeenCalled();
+  });
+
+  test("drop-oldest admission fails the evicted Deferred with BatchDropped", async () => {
+    const harness = runtimeHarness();
+    const queue = await makeQueue(harness.runtime);
+    queue.ingest(1, { type: "user", text: "active" });
+    const active = queue
+      .checkpoint({ checkpointId: "active", focus: "standard", parentTurnId: 1 })
+      .catch((error: unknown) => error);
+    await tick();
+
+    const queued = Array.from({ length: MAX_PENDING_CHECKPOINTS + 1 }, (_, index) =>
+      queue
+        .checkpoint({
+          checkpointId: `queued-${index}`,
+          focus: "standard",
+          parentTurnId: 1,
+        })
+        .catch((error: unknown) => error),
+    );
+    await tick();
+
+    const evicted = await queued[0];
+    expect(evicted).toBeInstanceOf(AdvisorQueueBatchDroppedError);
+    expect((evicted as AdvisorQueueBatchDroppedError)._tag).toBe("BatchDropped");
+    expect(queue.pendingCheckpoints).toBe(MAX_PENDING_CHECKPOINTS + 1);
+
+    await queue.dispose();
+    await Promise.allSettled([active, ...queued]);
+  });
+
+  test("compacts cancelled queued tombstones so live admission capacity is reusable", async () => {
+    const harness = runtimeHarness();
+    const queue = await makeQueue(harness.runtime);
+    queue.ingest(1, { type: "user", text: "active" });
+    const active = queue
+      .checkpoint({ checkpointId: "active", focus: "standard", parentTurnId: 1 })
+      .catch((error: unknown) => error);
+    await tick();
+
+    for (let index = 0; index < MAX_PENDING_CHECKPOINTS + 1; index += 1) {
+      const checkpointId = `cancelled-${index}`;
+      const cancelled = queue
+        .checkpoint({ checkpointId, focus: "standard", parentTurnId: 1 })
+        .catch((error: unknown) => error);
+      await tick();
+      await queue.cancelCheckpointEffect(checkpointId).pipe(Effect.runPromise);
+      expect(await cancelled).toBeInstanceOf(AdvisorQueueCancelledError);
+    }
+    expect(queue.pendingCheckpoints).toBe(1);
+
+    const admitted = queue.checkpoint({
+      checkpointId: "admitted-after-compaction",
+      focus: "standard",
+      parentTurnId: 1,
+    });
+    await tick();
+    expect(queue.pendingCheckpoints).toBe(2);
+    harness.pending[0]?.resolve(result(harness.requests[0]!));
+    await active;
+    await tick();
+    expect(harness.requests[1]?.checkpointId).toBe("admitted-after-compaction");
+    harness.pending[1]?.resolve(result(harness.requests[1]!));
+    await expect(admitted).resolves.toMatchObject({ checkpointId: "admitted-after-compaction" });
+    await queue.dispose();
+  });
+
+  test("dispose shuts down and awaits the queue-owned steering ingress across replacements", async () => {
+    for (let replacement = 0; replacement < 3; replacement += 1) {
+      const queue = await makeQueue(runtimeHarness().runtime);
+      const ingress = (
+        queue as unknown as {
+          steeringIngress?: { readonly awaitShutdown: Effect.Effect<void> };
+        }
+      ).steeringIngress;
+      expect(ingress).toBeDefined();
+      await Effect.runPromise(queue.disposeEffect());
+      await expect(Effect.runPromise(ingress!.awaitShutdown)).resolves.toBeUndefined();
+      await queue.dispose();
+    }
+  });
+
+  test("active cancellation waits for abort settlement before starting replacement work", async () => {
+    const harness = runtimeHarness();
+    const abortRelease = deferred<void>();
+    (harness.runtime.abort as ReturnType<typeof vi.fn>).mockImplementation(
+      () => abortRelease.promise,
+    );
+    const queue = await makeQueue(harness.runtime);
+    queue.ingest(1, { type: "user", text: "first" });
+    const first = queue
+      .checkpoint({ checkpointId: "first", focus: "standard", parentTurnId: 1 })
+      .catch((error: unknown) => error);
+    await tick();
+    const second = queue.checkpoint({
+      checkpointId: "second",
+      focus: "standard",
+      parentTurnId: 1,
+    });
+    await tick();
+
+    const cancellation = Effect.runPromise(queue.cancelCheckpointEffect("first"));
+    await tick();
+    expect(harness.runtime.abort).toHaveBeenCalledOnce();
+    expect(harness.requests.map((request) => request.checkpointId)).toEqual(["first"]);
+    let cancellationSettled = false;
+    void cancellation.then(() => {
+      cancellationSettled = true;
+    });
+    await tick();
+    expect(cancellationSettled).toBe(false);
+
+    abortRelease.resolve();
+    await cancellation;
+    expect(await first).toBeInstanceOf(AdvisorQueueCancelledError);
+    await tick();
+    expect(harness.requests.map((request) => request.checkpointId)).toEqual(["first", "second"]);
+    harness.pending[1]?.resolve(result(harness.requests[1]!));
+    await second;
+    await queue.dispose();
+  });
+
+  test("reset and dispose await active abort finalizers before settling", async () => {
+    for (const operation of ["reset", "dispose"] as const) {
+      const harness = runtimeHarness();
+      const abortRelease = deferred<void>();
+      (harness.runtime.abort as ReturnType<typeof vi.fn>).mockImplementation(
+        () => abortRelease.promise,
+      );
+      const queue = await makeQueue(harness.runtime);
+      queue.ingest(1, { type: "user", text: operation });
+      const checkpoint = queue
+        .checkpoint({ checkpointId: operation, focus: "standard", parentTurnId: 1 })
+        .catch((error: unknown) => error);
+      await tick();
+
+      const settlement = operation === "reset" ? queue.reset("seed") : queue.dispose();
+      let settled = false;
+      void settlement.then(() => {
+        settled = true;
+      });
+      await tick();
+      expect(harness.runtime.abort).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+      if (operation === "reset") expect(harness.runtime.reprime).not.toHaveBeenCalled();
+
+      abortRelease.resolve();
+      await settlement;
+      if (operation === "reset") expect(harness.runtime.reprime).toHaveBeenCalledOnce();
+      await checkpoint;
+      if (operation === "reset") await queue.dispose();
+    }
+  });
+
+  test("active cancellation fails with Cancelled and interrupts the runtime", async () => {
+    const harness = runtimeHarness();
+    const queue = await makeQueue(harness.runtime);
+    queue.ingest(1, { type: "user", text: "cancel" });
+    const checkpoint = queue
+      .checkpoint({ checkpointId: "cancel-me", focus: "standard", parentTurnId: 1 })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    await tick();
+    await queue.cancelCheckpointEffect("cancel-me").pipe(Effect.runPromise);
+    const cancelled = await checkpoint;
+    expect(cancelled).toBeInstanceOf(AdvisorQueueCancelledError);
+    expect((cancelled as AdvisorQueueCancelledError)._tag).toBe("Cancelled");
+    expect(harness.runtime.abort).toHaveBeenCalledOnce();
+    await queue.dispose();
+  });
+
+  test("reports ResetRequired when recovery has no current re-prime state", async () => {
+    const harness = runtimeHarness();
+    (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("context overflow"),
+    );
+    const queue = await makeQueue(harness.runtime);
+    queue.ingest(1, { type: "user", text: "overflow" });
+    const failure = await queue
+      .checkpoint({ checkpointId: "reset", focus: "standard", parentTurnId: 1 })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(AdvisorQueueResetRequiredError);
+    expect((failure as AdvisorQueueResetRequiredError)._tag).toBe("ResetRequired");
+    await queue.dispose();
+  });
+
+  test.each([
+    ["BacklogExceeded", AdvisorQueueBacklogExceededError],
+    ["StaleEpoch", AdvisorQueueStaleEpochError],
+  ] as const)("keeps the %s compatibility tag schema-backed", (tag, ErrorClass) => {
+    const error = new ErrorClass({ message: "characterized" });
+    expect(error._tag).toBe(tag);
+    expect(error).toBeInstanceOf(AdvisorQueueError);
+  });
+
+  test("maps post-disposal synchronous ingestion to the Disposed queue tag", async () => {
+    const queue = await makeQueue(runtimeHarness().runtime);
+    await queue.dispose();
+    try {
+      queue.ingest(1, { type: "user", text: "late" });
+      throw new Error("expected disposed ingestion to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AdvisorQueueDisposedError);
+      expect((error as AdvisorQueueDisposedError)._tag).toBe("Disposed");
+    }
   });
 
   test("hard reset aborts and rejects stale checkpoint work", async () => {

@@ -5,31 +5,60 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-
-export class StreamingHttpError extends Schema.TaggedErrorClass<StreamingHttpError>()(
-  "StreamingHttpError",
-  { operation: Schema.String, message: Schema.String },
-) {}
+import { StreamingHttpError } from "./errors.ts";
 
 export interface StreamingHttpRequest {
   readonly url: string;
   readonly method?: "GET" | "POST";
   readonly headers?: Readonly<Record<string, string>>;
-  readonly jsonBody?: unknown;
 }
 
 export interface StreamingHttpResponse {
   readonly status: number;
-  readonly body: Stream.Stream<Uint8Array, StreamingHttpError>;
-  /** Consume and release an otherwise-unused response body. */
-  readonly discard: Effect.Effect<void, StreamingHttpError>;
+  /** Raw response bytes for provider streaming protocol parsers. */
+  readonly rawBody: Stream.Stream<Uint8Array, StreamingHttpError>;
+  /** Consume and release otherwise-unused raw response bytes. */
+  readonly discardRawBody: Effect.Effect<void, StreamingHttpError>;
 }
 
+type IsAny<A> = 0 extends 1 & A ? true : false;
+
+export type StreamingJsonBodyCodec<A, E, R> =
+  IsAny<E> extends true
+    ? never
+    : undefined extends E
+      ? never
+      : Schema.ConstraintCodec<A, E, unknown, R>;
+
 export interface StreamingHttpClientShape {
-  readonly request: (
+  readonly requestRawBytes: (
     request: StreamingHttpRequest,
   ) => Effect.Effect<StreamingHttpResponse, StreamingHttpError>;
+  readonly requestJsonRawBytes: <A, E, R>(
+    request: StreamingHttpRequest,
+    bodySchema: StreamingJsonBodyCodec<A, E, R>,
+    body: A,
+  ) => Effect.Effect<StreamingHttpResponse, StreamingHttpError, R>;
 }
+
+export const encodeStreamingJsonBody = <A, E, R>(
+  bodySchema: StreamingJsonBodyCodec<A, E, R>,
+  body: A,
+): Effect.Effect<Schema.Json, StreamingHttpError, R> =>
+  Schema.encodeEffect(bodySchema)(body).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(Schema.Json)),
+    Effect.mapError(
+      () =>
+        new StreamingHttpError({
+          operation: "encode",
+          message: "Streaming HTTP request body did not match the expected schema.",
+        }),
+    ),
+  );
+
+type StreamingRequestBody =
+  | { readonly _tag: "None" }
+  | { readonly _tag: "Json"; readonly value: Schema.Json };
 
 export class StreamingHttpClient extends Context.Service<
   StreamingHttpClient,
@@ -39,21 +68,22 @@ export class StreamingHttpClient extends Context.Service<
     this,
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
-      const request = Effect.fn("StreamingHttpClient.request")(function* (
+      const execute = Effect.fn("StreamingHttpClient.execute")(function* (
         input: StreamingHttpRequest,
+        body: StreamingRequestBody,
       ) {
         let outgoing =
           input.method === "POST"
             ? HttpClientRequest.post(input.url)
             : HttpClientRequest.get(input.url);
         if (input.headers) outgoing = HttpClientRequest.setHeaders(outgoing, input.headers);
-        if (input.jsonBody !== undefined) {
-          outgoing = yield* HttpClientRequest.bodyJson(outgoing, input.jsonBody).pipe(
+        if (body._tag === "Json") {
+          outgoing = yield* HttpClientRequest.bodyJson(outgoing, body.value).pipe(
             Effect.mapError(
               () =>
                 new StreamingHttpError({
                   operation: "encode",
-                  message: "Streaming HTTP request body was not valid JSON.",
+                  message: "Streaming HTTP request body could not be encoded.",
                 }),
             ),
           );
@@ -71,7 +101,7 @@ export class StreamingHttpClient extends Context.Service<
             attributes: { "http.request.method": input.method ?? "GET" },
           }),
         );
-        const body = response.stream.pipe(
+        const rawBody = response.stream.pipe(
           Stream.mapError(
             () =>
               new StreamingHttpError({
@@ -82,8 +112,8 @@ export class StreamingHttpClient extends Context.Service<
         );
         return {
           status: response.status,
-          body,
-          discard: body.pipe(
+          rawBody,
+          discardRawBody: rawBody.pipe(
             Stream.runDrain,
             Effect.withSpan("pi-cosmic-core.http.streaming.discard", {
               attributes: { "http.response.status_code": response.status },
@@ -91,7 +121,17 @@ export class StreamingHttpClient extends Context.Service<
           ),
         } satisfies StreamingHttpResponse;
       });
-      return StreamingHttpClient.of({ request });
+      const requestRawBytes: StreamingHttpClientShape["requestRawBytes"] = (input) =>
+        execute(input, { _tag: "None" });
+      const requestJsonRawBytes: StreamingHttpClientShape["requestJsonRawBytes"] = (
+        input,
+        bodySchema,
+        body,
+      ) =>
+        encodeStreamingJsonBody(bodySchema, body).pipe(
+          Effect.flatMap((encodedBody) => execute(input, { _tag: "Json", value: encodedBody })),
+        );
+      return StreamingHttpClient.of({ requestRawBytes, requestJsonRawBytes });
     }),
   );
 }

@@ -5,7 +5,7 @@ import {
   selectPreviewTextLines,
   type PreviewLineEntry,
 } from "../../preview/format";
-import { renderHighlightedText } from "../../syntax/shiki";
+import { renderHighlightedText } from "../../syntax/render";
 import { expandPreviewTabs } from "../../shared/preview-tabs";
 import { escapeControlChars } from "../../shared/terminal-text";
 

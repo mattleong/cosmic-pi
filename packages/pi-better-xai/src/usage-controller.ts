@@ -7,14 +7,17 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as Tracer from "effect/Tracer";
 import {
   AgentDirectory,
+  freezeSnapshot,
   JsonDocumentStore,
   JsonHttpClient,
+  makeFrozenProjection,
   makeSubscriptionRefresh,
   type RefreshRequest,
 } from "pi-cosmic-core";
+import { ModelRegistryAuth } from "./boundary/model-registry-auth.ts";
 import { maskIdentifier, sanitizeDiagnosticError } from "./format.ts";
 import { readXaiAuth } from "./auth.ts";
 import {
@@ -64,10 +67,10 @@ const initialProjection = (): XaiProjection => ({
 });
 
 export const makeProjection = (): MutableRef.MutableRef<XaiProjection> =>
-  MutableRef.make(initialProjection());
+  MutableRef.make(freezeSnapshot(initialProjection()));
 
 export function resetProjection(projection: MutableRef.MutableRef<XaiProjection>): void {
-  MutableRef.set(projection, initialProjection());
+  MutableRef.set(projection, freezeSnapshot(initialProjection()));
 }
 
 export function isXaiSubscriptionModel(
@@ -93,21 +96,24 @@ export function synchronizeProjectionContext(
   const statusText = eligible
     ? "Usage unavailable."
     : "Usage hidden: current model is not an xAI subscription model.";
-  MutableRef.set(projection, {
-    ...state,
-    eligible,
-    ...(options.clearUsage
-      ? {
-          snapshot: undefined,
-          statusLine: undefined,
-          error: undefined,
-          updatedAt: undefined,
-          statusText,
-        }
-      : !eligible
-        ? { statusLine: undefined, error: undefined, statusText }
-        : {}),
-  });
+  MutableRef.set(
+    projection,
+    freezeSnapshot({
+      ...state,
+      eligible,
+      ...(options.clearUsage
+        ? {
+            snapshot: undefined,
+            statusLine: undefined,
+            error: undefined,
+            updatedAt: undefined,
+            statusText,
+          }
+        : !eligible
+          ? { statusLine: undefined, error: undefined, statusText }
+          : {}),
+    }),
+  );
 }
 
 export function visibleStatusLine(
@@ -155,8 +161,6 @@ type RefreshValue =
       readonly teamId?: string;
     };
 
-const freezeProjection = (state: XaiProjection): XaiProjection => Object.freeze({ ...state });
-
 export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageServiceShape>()(
   "pi-better-xai/usage-controller/XaiUsageService",
 ) {
@@ -167,30 +171,41 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
     readonly onChange: () => void;
     readonly startPolling?: boolean;
     readonly agentDir?: string;
+    readonly projectTrusted?: boolean;
   }) {
     return Layer.effect(
       this,
       Effect.gen(function* () {
         const { context, cwd, projection, onChange } = options;
         const path = yield* Path.Path;
-        const dependencies = yield* Effect.context<
-          Path.Path | JsonDocumentStore | JsonHttpClient
-        >();
+        const documents = yield* JsonDocumentStore;
+        const http = yield* JsonHttpClient;
+        const registryAuth = yield* ModelRegistryAuth;
+        const tracer = yield* Tracer.Tracer;
+        const provideDependencies = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          effect.pipe(
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(JsonDocumentStore, documents),
+            Effect.provideService(JsonHttpClient, http),
+            Effect.provideService(ModelRegistryAuth, registryAuth),
+            Effect.provideService(Tracer.Tracer, tracer),
+          );
         const agentDir = options.agentDir ?? (yield* AgentDirectory);
         const authPath = path.join(agentDir, "auth.json");
-        const config = yield* resolveConfig(cwd, agentDir);
-        const state = yield* SynchronizedRef.make<XaiProjection>({
-          ...initialProjection(),
-          config,
-          authPath,
-        });
-        const publish = (next: XaiProjection) =>
-          Effect.sync(() => MutableRef.set(projection, freezeProjection(next)));
+        const projectTrusted = options.projectTrusted ?? true;
+        const config = yield* resolveConfig(cwd, agentDir, projectTrusted);
+        const state = yield* makeFrozenProjection<XaiProjection, XaiProjection>(
+          { ...initialProjection(), config, authPath },
+          (current) => current,
+          (published) => MutableRef.set(projection, published),
+        );
         const updateState = (f: (current: XaiProjection) => XaiProjection) =>
-          SynchronizedRef.modifyEffect(state, (current) => {
-            const next = f(current);
-            return publish(next).pipe(Effect.as([next, next] as const));
-          });
+          state
+            .transition((current) => {
+              const next = f(current);
+              return Effect.succeed([next, next] as const);
+            })
+            .pipe(Effect.orDie);
         const notifyChanged = Effect.try({
           try: onChange,
           catch: () =>
@@ -235,7 +250,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
 
         const key = Effect.gen(function* () {
           const ctx = MutableRef.get(context);
-          const current = yield* SynchronizedRef.get(state);
+          const current = yield* state.getState;
           return `${ctx.model?.provider ?? "none"}/${ctx.model?.id ?? "none"}:${current.config?.usage.enabled ?? false}:${current.config?.usage.showOnlyOnSubscriptionModels ?? true}`;
         });
         const refreshEngine = yield* makeSubscriptionRefresh<
@@ -243,20 +258,20 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
           string,
           RefreshValue,
           never,
-          Path.Path | JsonDocumentStore | JsonHttpClient
+          Path.Path | JsonDocumentStore | JsonHttpClient | ModelRegistryAuth
         >({
           mergeRequest: (current, next) => ({
             force: current?.force === true || next.force === true,
             notify: current?.notify === true || next.notify === true,
           }),
           currentKey: key,
-          interval: SynchronizedRef.get(state).pipe(
+          interval: state.getState.pipe(
             Effect.map((current) => current.config?.usage.refreshIntervalMs ?? 60_000),
           ),
           fetch: (request) =>
             Effect.gen(function* () {
               const ctx = MutableRef.get(context);
-              const current = yield* SynchronizedRef.get(state);
+              const current = yield* state.getState;
               const cfg = current.config;
               if (!cfg) return { _tag: "Skipped" } as const;
               const now = yield* Clock.currentTimeMillis;
@@ -277,7 +292,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                 error: undefined,
                 lastFetchAt: now,
               }));
-              const result = yield* requestXaiUsage(authPath, ctx).pipe(
+              const result = yield* requestXaiUsage(authPath).pipe(
                 Effect.timeout("10 seconds"),
                 Effect.result,
               );
@@ -315,6 +330,10 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
           commit: (value) =>
             Effect.gen(function* () {
               if (value._tag === "Skipped") return;
+              if (value._tag === "Failure")
+                yield* Effect.logWarning("Better xAI usage recovery: refresh_failed.");
+              if (value._tag === "Missing")
+                yield* Effect.logWarning("Better xAI usage recovery: credentials_missing.");
               const latest = yield* updateState((current) => {
                 const cfg = current.config!;
                 if (value._tag === "Disabled")
@@ -374,34 +393,36 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
           spanName: "pi-better-xai.usage.refresh",
         });
         const refresh = (request: RefreshOptions = {}) =>
-          refreshEngine.request(request).pipe(Effect.provideContext(dependencies));
+          provideDependencies(refreshEngine.request(request));
         const contextChanged = (clearUsage = false) =>
           synchronize(clearUsage).pipe(Effect.andThen(refreshEngine.invalidate), Effect.asVoid);
         const updateSettingWithRequirements = Effect.fn("XaiUsageService.updateSetting")(function* (
           id: string,
           value: string,
         ) {
-          const current = yield* SynchronizedRef.get(state);
+          const current = yield* state.getState;
           if (!current.config) return;
           const raw = yield* readRawConfig(current.config.configPath);
           const nextRaw = yield* applySettingToRawConfig(raw, id, value);
           yield* writeConfig(current.config.configPath, nextRaw);
-          const nextConfig = yield* resolveConfig(cwd, agentDir);
+          const nextConfig = yield* resolveConfig(cwd, agentDir, projectTrusted);
           yield* updateState((latest) => ({ ...latest, config: nextConfig }));
           yield* synchronize(true);
           yield* refreshEngine.invalidate;
           yield* refresh({ force: true });
         });
         const updateSetting = (id: string, value: string) =>
-          updateSettingWithRequirements(id, value).pipe(Effect.provideContext(dependencies));
+          provideDependencies(updateSettingWithRequirements(id, value));
         if (options.startPolling !== false) {
           yield* Effect.gen(function* () {
             yield* refresh({ force: true });
-            yield* refreshEngine.startPolling({}).pipe(Effect.provideContext(dependencies));
+            yield* provideDependencies(refreshEngine.startPolling({}));
           }).pipe(Effect.forkScoped);
         }
         return XaiUsageService.of({ refresh, contextChanged, updateSetting });
       }).pipe(Effect.withSpan("pi-better-xai.usage.initialize")),
+    ).pipe(
+      Layer.provide(ModelRegistryAuth.layer(() => MutableRef.get(options.context).modelRegistry)),
     );
   }
 }

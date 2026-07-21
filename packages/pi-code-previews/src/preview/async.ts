@@ -1,14 +1,18 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { codePreviewPerformanceConfig } from "../config/env";
-import { deferCodePreview } from "../session-capability";
+import { deferProjectedCodePreview } from "../session-projection";
 import { escapeControlChars } from "../shared/terminal-text";
 
-export function shouldRenderAsync(text: string): boolean {
+export function shouldRenderDeferred(text: string): boolean {
   return text.length > codePreviewPerformanceConfig.asyncRenderChars;
 }
 
-export class AsyncPreview implements Component {
+/**
+ * Deferred same-thread publication. This deliberately does not claim CPU offload: the pure render
+ * still runs on the session fiber after a yield and remains synchronously compatible with Pi/TUI.
+ */
+export class DeferredPreview implements Component {
   private component: Component;
   private generation = 0;
   private cancellation: (() => void) | undefined;
@@ -16,7 +20,7 @@ export class AsyncPreview implements Component {
   constructor(message: string, theme: Theme, compute: () => Component, invalidate: () => void) {
     this.component = new Text(theme.fg("muted", message), 0, 0);
     const generation = ++this.generation;
-    this.cancellation = deferCodePreview(() => {
+    this.cancellation = deferProjectedCodePreview(() => {
       if (generation !== this.generation) return;
       let next: Component;
       try {
@@ -52,3 +56,8 @@ export class AsyncPreview implements Component {
     this.component.invalidate();
   }
 }
+
+/** Public compatibility name retained for existing imports. */
+export const AsyncPreview = DeferredPreview;
+/** Public compatibility name retained for existing imports. */
+export const shouldRenderAsync = shouldRenderDeferred;

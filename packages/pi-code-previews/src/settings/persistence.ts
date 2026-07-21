@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import {
   hasCodePreviewSessionCapability,
   runCodePreviewSessionEffect,
@@ -5,14 +6,21 @@ import {
 import { cloneCodePreviewSettings, type CodePreviewSettings } from "./index";
 import { runOneShotSettingsEffect } from "../boundary/settings-one-shot";
 import { CodePreviewSettingsService } from "./service";
+import { compatibilitySettingsLoadOptions } from "./store";
 
 export function queueSettingsSave(settings: CodePreviewSettings): Promise<void> {
-  const effect = CodePreviewSettingsService.use((service) =>
-    service.save(cloneCodePreviewSettings(settings)),
+  const next = cloneCodePreviewSettings(settings);
+  const save = CodePreviewSettingsService.use((service) => service.save(next));
+  if (hasCodePreviewSessionCapability()) return runCodePreviewSessionEffect(save);
+
+  // A one-shot runtime cannot retain service state. Rehydrate its authoritative state from the
+  // last compatibility load inputs, then save within that same service instance.
+  const saveAfterLoad = CodePreviewSettingsService.use((service) =>
+    service
+      .loadFromDisk(compatibilitySettingsLoadOptions())
+      .pipe(Effect.andThen(service.save(next))),
   );
-  return hasCodePreviewSessionCapability()
-    ? runCodePreviewSessionEffect(effect)
-    : runOneShotSettingsEffect(effect);
+  return runOneShotSettingsEffect(saveAfterLoad);
 }
 
 export function flushSettingsSaveQueue(): Promise<void> {

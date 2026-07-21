@@ -46,185 +46,213 @@ export interface ToolTrajectoryEndInput {
   isError: boolean;
 }
 
-/**
- * Detects strong repetition in streamed reasoning or prose. The detector is
- * intentionally conservative: it requires either a long verbatim suffix or a
- * cluster of several highly similar substantial segments.
- */
-export class AdvisorTrajectoryDetector {
-  readonly #states = new Map<TrajectoryChannel, ChannelState>();
-
-  push(channel: TrajectoryChannel, delta: string): TrajectorySignal | undefined {
-    if (!delta) return undefined;
-    const state = this.#states.get(channel) ?? createChannelState();
-    this.#states.set(channel, state);
-
-    state.tail = `${state.tail}${delta}`.slice(-TAIL_LIMIT);
-    const repeatedUnit = repeatedTailUnit(state.tail);
-    if (repeatedUnit) {
-      return {
+export interface AdvisorTrajectoryDetectorState {
+  readonly channels: Readonly<Partial<Record<TrajectoryChannel, ChannelSnapshot>>>;
+}
+interface ChannelSnapshot {
+  readonly pending: string;
+  readonly recent: readonly (readonly string[])[];
+  readonly similarRun: number;
+  readonly tail: string;
+}
+export const emptyAdvisorTrajectoryDetector = (): AdvisorTrajectoryDetectorState => ({
+  channels: {},
+});
+export const pushAdvisorTrajectory = (
+  state: AdvisorTrajectoryDetectorState,
+  channel: TrajectoryChannel,
+  delta: string,
+): { readonly state: AdvisorTrajectoryDetectorState; readonly signal?: TrajectorySignal } => {
+  if (!delta) return { state };
+  const previous = state.channels[channel] ?? { pending: "", recent: [], similarRun: 0, tail: "" };
+  let tail = `${previous.tail}${delta}`.slice(-TAIL_LIMIT);
+  const repeatedUnit = repeatedTailUnit(tail);
+  if (repeatedUnit)
+    return {
+      state: { channels: { ...state.channels, [channel]: { ...previous, tail } } },
+      signal: {
         channel,
         reason: `repeated the same ${repeatedUnit.length}-character sequence several times`,
+      },
+    };
+  let pending = previous.pending + delta;
+  let recent = previous.recent.map((words) => [...words]);
+  let similarRun = previous.similarRun;
+  let signal: TrajectorySignal | undefined;
+  while (pending.length > 0) {
+    const boundary = /\n\s*\n/.exec(pending);
+    let segment: string | undefined;
+    if (boundary) {
+      segment = pending.slice(0, boundary.index);
+      pending = pending.slice(boundary.index + boundary[0].length);
+    } else if (pending.length >= MAX_PENDING_CHARS) {
+      segment = pending.slice(0, MAX_PENDING_CHARS);
+      pending = pending.slice(MAX_PENDING_CHARS);
+    }
+    if (segment === undefined) break;
+    const normalized = normalizeSegment(segment);
+    if (normalized.length < MIN_SEGMENT_CHARS) continue;
+    const words = [...wordSet(normalized)];
+    const wordsSet = new Set(words);
+    const similar = recent.some(
+      (item) => jaccardSimilarity(new Set(item), wordsSet) >= SIMILARITY_THRESHOLD,
+    );
+    similarRun = similar ? similarRun + 1 : 0;
+    recent = [...recent, words].slice(-RECENT_SEGMENT_LIMIT);
+    if (similarRun >= REPEATED_SEGMENT_THRESHOLD - 1) {
+      signal = {
+        channel,
+        reason: `produced ${REPEATED_SEGMENT_THRESHOLD} near-duplicate substantial segments`,
       };
+      break;
     }
-
-    state.pending += delta;
-    while (state.pending.length > 0) {
-      const boundary = /\n\s*\n/.exec(state.pending);
-      let segment: string | undefined;
-      if (boundary) {
-        segment = state.pending.slice(0, boundary.index);
-        state.pending = state.pending.slice(boundary.index + boundary[0].length);
-      } else if (state.pending.length >= MAX_PENDING_CHARS) {
-        segment = state.pending.slice(0, MAX_PENDING_CHARS);
-        state.pending = state.pending.slice(MAX_PENDING_CHARS);
-      }
-      if (segment === undefined) break;
-
-      const normalized = normalizeSegment(segment);
-      if (normalized.length < MIN_SEGMENT_CHARS) continue;
-      const words = wordSet(normalized);
-      const similar = state.recent.some(
-        (previous) => jaccardSimilarity(previous, words) >= SIMILARITY_THRESHOLD,
-      );
-      state.similarRun = similar ? state.similarRun + 1 : 0;
-      state.recent.push(words);
-      if (state.recent.length > RECENT_SEGMENT_LIMIT) state.recent.shift();
-      if (state.similarRun >= REPEATED_SEGMENT_THRESHOLD - 1) {
-        return {
-          channel,
-          reason: `produced ${REPEATED_SEGMENT_THRESHOLD} near-duplicate substantial segments`,
-        };
-      }
-    }
-    return undefined;
   }
+  return {
+    state: { channels: { ...state.channels, [channel]: { pending, recent, similarRun, tail } } },
+    ...(signal ? { signal } : {}),
+  };
+};
 
+export interface AdvisorToolTrajectoryDetectorState {
+  readonly active: readonly string[];
+  readonly history: readonly ToolEventFingerprint[];
+  readonly loopDetected: boolean;
+}
+export const emptyAdvisorToolTrajectoryDetector = (): AdvisorToolTrajectoryDetectorState => ({
+  active: [],
+  history: [],
+  loopDetected: false,
+});
+export const startAdvisorToolTrajectory = (
+  state: AdvisorToolTrajectoryDetectorState,
+  toolCallId: string,
+): AdvisorToolTrajectoryDetectorState => ({
+  ...state,
+  active: [...new Set([...state.active, toolCallId])],
+});
+export const advisorActiveToolCount = (state: AdvisorToolTrajectoryDetectorState): number =>
+  state.active.length;
+export const isMateriallyNovelAdvisorTerminal = (
+  state: AdvisorToolTrajectoryDetectorState,
+  input: ToolTrajectoryEndInput,
+  loopSuspicionActive = state.loopDetected,
+): boolean => {
+  if (!loopSuspicionActive || input.isError) return false;
+  const event = fingerprintToolEvent(input);
+  return !state.history.some(
+    (previous) => previous.call === event.call && previous.outcome === event.outcome,
+  );
+};
+export const markConcreteAdvisorProgress = (
+  state: AdvisorToolTrajectoryDetectorState,
+): AdvisorToolTrajectoryDetectorState => ({ ...state, history: [], loopDetected: false });
+export const endAdvisorToolTrajectory = (
+  state: AdvisorToolTrajectoryDetectorState,
+  input: ToolTrajectoryEndInput,
+): {
+  readonly state: AdvisorToolTrajectoryDetectorState;
+  readonly signal?: ToolTrajectorySignal;
+} => {
+  const active = state.active.filter((id) => id !== input.toolCallId);
+  const event = fingerprintToolEvent(input);
+  const history = [...state.history, event].slice(-MAX_TOOL_HISTORY);
+  const same = trailingRun(
+    history,
+    (item) => item.call === event.call && item.outcome === event.outcome,
+  );
+  let kind: ToolLoopKind | undefined;
+  let reason = "";
+  if (same >= REPEATED_TOOL_THRESHOLD) {
+    kind = input.isError
+      ? "repeated-error"
+      : isInspectionTool(input.toolName)
+        ? "repeated-inspection"
+        : "identical-call-result";
+    reason = input.isError
+      ? `repeated the same ${input.toolName} failure ${same} times`
+      : isInspectionTool(input.toolName)
+        ? "repeatedly inspected the same target without materially new evidence"
+        : `repeated the same tool call and result ${same} times`;
+  } else {
+    const errors = trailingRun(history, (item) => item.isError && item.call === event.call);
+    if (input.isError && errors >= REPEATED_TOOL_THRESHOLD) {
+      kind = "repeated-error";
+      reason = `repeated the same failing tool call ${errors} times`;
+    } else {
+      const tail = history.slice(-OSCILLATION_WINDOW);
+      if (
+        tail.length === OSCILLATION_WINDOW &&
+        tail[0]?.call === tail[2]?.call &&
+        tail[0]?.call === tail[4]?.call &&
+        tail[1]?.call === tail[3]?.call &&
+        tail[1]?.call === tail[5]?.call &&
+        tail[0]?.call !== tail[1]?.call &&
+        tail[0]?.outcome === tail[2]?.outcome &&
+        tail[0]?.outcome === tail[4]?.outcome &&
+        tail[1]?.outcome === tail[3]?.outcome &&
+        tail[1]?.outcome === tail[5]?.outcome
+      ) {
+        kind = "oscillation";
+        reason = "oscillated between the same two tool actions without new evidence";
+      }
+    }
+  }
+  const next = { active, history, loopDetected: state.loopDetected || kind !== undefined };
+  return kind
+    ? {
+        state: next,
+        signal: {
+          kind,
+          parentTurnId: input.parentTurnId,
+          confidence: "strong",
+          reason,
+          evidence: `${event.toolName} call=${event.call.slice(0, 20)} outcome=${event.outcomeClass}`,
+          abortSafe: active.length === 0,
+        },
+      }
+    : { state: next };
+};
+
+/** Compatibility facades; application state stores the immutable states above. */
+export class AdvisorTrajectoryDetector {
+  #state = emptyAdvisorTrajectoryDetector();
+  push(channel: TrajectoryChannel, delta: string): TrajectorySignal | undefined {
+    const result = pushAdvisorTrajectory(this.#state, channel, delta);
+    this.#state = result.state;
+    return result.signal;
+  }
   reset(): void {
-    this.#states.clear();
+    this.#state = emptyAdvisorTrajectoryDetector();
   }
 }
-
-/** Bounded detector for main-agent tool trajectories. */
 export class AdvisorToolTrajectoryDetector {
-  private readonly active = new Set<string>();
-  private history: ToolEventFingerprint[] = [];
-  private loopDetected = false;
-
+  #state = emptyAdvisorToolTrajectoryDetector();
   get activeToolCount(): number {
-    return this.active.size;
+    return advisorActiveToolCount(this.#state);
   }
-
   start(toolCallId: string): void {
-    this.active.add(toolCallId);
+    this.#state = startAdvisorToolTrajectory(this.#state, toolCallId);
   }
-
   end(input: ToolTrajectoryEndInput): ToolTrajectorySignal | undefined {
-    this.active.delete(input.toolCallId);
-    const event = fingerprintToolEvent(input);
-    this.history.push(event);
-    if (this.history.length > MAX_TOOL_HISTORY) this.history.shift();
-
-    const same = trailingRun(
-      this.history,
-      (item) => item.call === event.call && item.outcome === event.outcome,
-    );
-    if (same >= REPEATED_TOOL_THRESHOLD) {
-      return this.signal(
-        input,
-        input.isError
-          ? "repeated-error"
-          : isInspectionTool(input.toolName)
-            ? "repeated-inspection"
-            : "identical-call-result",
-        input.isError
-          ? `repeated the same ${input.toolName} failure ${same} times`
-          : isInspectionTool(input.toolName)
-            ? `repeatedly inspected the same target without materially new evidence`
-            : `repeated the same tool call and result ${same} times`,
-        event,
-      );
-    }
-
-    const errors = trailingRun(this.history, (item) => item.isError && item.call === event.call);
-    if (input.isError && errors >= REPEATED_TOOL_THRESHOLD) {
-      return this.signal(
-        input,
-        "repeated-error",
-        `repeated the same failing tool call ${errors} times`,
-        event,
-      );
-    }
-
-    const tail = this.history.slice(-OSCILLATION_WINDOW);
-    if (
-      tail.length === OSCILLATION_WINDOW &&
-      tail[0]?.call === tail[2]?.call &&
-      tail[0]?.call === tail[4]?.call &&
-      tail[1]?.call === tail[3]?.call &&
-      tail[1]?.call === tail[5]?.call &&
-      tail[0]?.call !== tail[1]?.call &&
-      tail[0]?.outcome === tail[2]?.outcome &&
-      tail[0]?.outcome === tail[4]?.outcome &&
-      tail[1]?.outcome === tail[3]?.outcome &&
-      tail[1]?.outcome === tail[5]?.outcome
-    ) {
-      return this.signal(
-        input,
-        "oscillation",
-        "oscillated between the same two tool actions without new evidence",
-        event,
-      );
-    }
-    return undefined;
+    const result = endAdvisorToolTrajectory(this.#state, input);
+    this.#state = result.state;
+    return result.signal;
   }
-
-  /**
-   * A successful terminal result is concrete progress only after a loop was
-   * established and when its call/result pair is novel relative to that loop.
-   */
   isMateriallyNovelTerminal(
     input: ToolTrajectoryEndInput,
-    loopSuspicionActive = this.loopDetected,
+    loopSuspicionActive = this.#state.loopDetected,
   ): boolean {
-    if (!loopSuspicionActive || input.isError) return false;
-    const event = fingerprintToolEvent(input);
-    return !this.history.some(
-      (previous) => previous.call === event.call && previous.outcome === event.outcome,
-    );
+    return isMateriallyNovelAdvisorTerminal(this.#state, input, loopSuspicionActive);
   }
-
-  /** Explicit concrete progress invalidates accumulated loop suspicion. */
   markConcreteProgress(): void {
-    this.history = [];
-    this.loopDetected = false;
+    this.#state = markConcreteAdvisorProgress(this.#state);
   }
-
   reset(): void {
-    this.active.clear();
-    this.history = [];
-    this.loopDetected = false;
-  }
-
-  private signal(
-    input: ToolTrajectoryEndInput,
-    kind: ToolLoopKind,
-    reason: string,
-    event: ToolEventFingerprint,
-  ): ToolTrajectorySignal {
-    this.loopDetected = true;
-    return {
-      kind,
-      parentTurnId: input.parentTurnId,
-      confidence: "strong",
-      reason,
-      evidence: `${event.toolName} call=${event.call.slice(0, 20)} outcome=${event.outcomeClass}`,
-      abortSafe: this.active.size === 0,
-    };
+    this.#state = emptyAdvisorToolTrajectoryDetector();
   }
 }
 
-interface ToolEventFingerprint {
+export interface ToolEventFingerprint {
   toolName: string;
   call: string;
   outcome: string;
@@ -307,17 +335,6 @@ function trailingRun<T>(items: readonly T[], predicate: (item: T) => boolean): n
 
 function isInspectionTool(name: string): boolean {
   return /^(?:read|grep|find|ls)$/i.test(name);
-}
-
-interface ChannelState {
-  pending: string;
-  recent: Set<string>[];
-  similarRun: number;
-  tail: string;
-}
-
-function createChannelState(): ChannelState {
-  return { pending: "", recent: [], similarRun: 0, tail: "" };
 }
 
 function normalizeSegment(value: string): string {

@@ -22,7 +22,17 @@ import {
   type OpenAIConfigError,
   type ResolvedConfig,
 } from "./config.ts";
-import { FastController, supportsFast } from "./fast-controller.ts";
+import {
+  fastDebugLines,
+  fastStateText,
+  inactiveForModelMessage,
+  initialFastSnapshot,
+  injectProviderPayload,
+  isFastActive,
+  supportsFast,
+  unsupportedRequestMessage,
+} from "./fast-controller.ts";
+import { FastModeService } from "./fast-service.ts";
 import { FAST_SERVICE_TIER, SUPPORTED_FAST_MODELS } from "./fast-models.ts";
 import { createFooterController, type FooterController } from "./footer/controller.ts";
 import { abbreviateHomePath } from "./footer-layout.ts";
@@ -56,6 +66,13 @@ const defaultDependencies: BetterOpenAIExtensionDependencies = {
 
 const hasTerminalUI = (ctx: ExtensionContext) =>
   ctx.mode === "tui" || (ctx.mode === undefined && ctx.hasUI);
+const isProjectTrusted = (ctx: ExtensionContext): boolean => {
+  try {
+    return typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
+  } catch {
+    return false;
+  }
+};
 const requiredConfig = (projection: MutableRef.MutableRef<OpenAIProjection>): ResolvedConfig => {
   const cfg = MutableRef.get(projection).config;
   if (cfg) return cfg;
@@ -75,7 +92,11 @@ export function betterOpenAIWithDependencies(
   dependencies: BetterOpenAIExtensionDependencies,
 ): void {
   const projection = makeProjection();
-  const fastController = new FastController(SERVICE_TIER);
+  const fastProjection = MutableRef.make(initialFastSnapshot());
+  let recordFastInjection: (event: {
+    readonly model: string;
+    readonly tier: string;
+  }) => void = () => undefined;
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
   const updateContext = (ctx: ExtensionContext) => {
     if (currentContext) MutableRef.set(currentContext, ctx);
@@ -93,11 +114,11 @@ export function betterOpenAIWithDependencies(
   footerController = createFooterController({
     pi,
     config,
-    fastController,
+    fastProjection,
     projection,
     hasTerminalUI,
   });
-  cosmicUiAdapter = createCosmicUiAdapter({ pi, fastController, projection });
+  cosmicUiAdapter = createCosmicUiAdapter({ pi, fastProjection, projection });
 
   let startGeneration = 0;
   let sessionActive = false;
@@ -105,21 +126,30 @@ export function betterOpenAIWithDependencies(
     readonly ctx: ExtensionContext;
     readonly context: MutableRef.MutableRef<ExtensionContext>;
     readonly generation: number;
+    readonly projectTrusted: boolean;
   };
   const slot = makePiSessionRuntimeSlot<
     SessionInput,
-    OpenAIUsageService | OpenAIImageService,
+    OpenAIUsageService | OpenAIImageService | FastModeService,
     OpenAIConfigError
   >({
-    makeRuntime: ({ ctx, context }) => {
+    makeRuntime: ({ ctx, context, projectTrusted }) => {
       const usage = OpenAIUsageService.layer({
         context,
         cwd: ctx.cwd,
         projection,
+        projectTrusted,
         onChange: () => {
           if (sessionActive) updateFooter(MutableRef.get(context));
         },
       });
+      const fast = FastModeService.layer({
+        serviceTier: SERVICE_TIER,
+        projection: fastProjection,
+        registerInjectionIngress: (offer) => {
+          recordFastInjection = offer;
+        },
+      }).pipe(Layer.provide(usage));
       const image = OpenAIImageService.layer({ context, projection }).pipe(
         Layer.provide(Layer.merge(SharpAdapter.layer, SafeFile.layer)),
       );
@@ -127,37 +157,38 @@ export function betterOpenAIWithDependencies(
         nodePlatformLayer,
         AgentDirectory.layerFromHost(() => getAgentDir()),
       );
-      return makePiManagedRuntime(pi, Layer.merge(usage, image).pipe(Layer.provide(platform)));
+      return makePiManagedRuntime(
+        pi,
+        Layer.mergeAll(usage, fast, image).pipe(Layer.provide(platform)),
+      );
     },
     startup: ({ ctx, generation }) =>
-      dependencies.startupEffect(generation).pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            const cfg = config(ctx);
-            fastController.initializeForSession(ctx, cfg, pi.getFlag(FLAG) === true);
-          }),
-        ),
-        Effect.andThen(
-          OpenAIUsageService.use((service) =>
-            service.persistFast(fastController.active, fastController.desiredActive),
+      dependencies
+        .startupEffect(generation)
+        .pipe(
+          Effect.andThen(
+            FastModeService.use((service) =>
+              service.initialize(ctx, config(ctx), pi.getFlag(FLAG) === true),
+            ),
           ),
         ),
-      ),
     onActivated: ({ ctx }) => {
       sessionActive = true;
       if (hasTerminalUI(ctx)) cosmicUiAdapter.detectHost();
       else cosmicUiAdapter.shutdown();
       footerController.refreshTotals(ctx);
       updateFooter(ctx);
-      if (fastController.desiredActive && !fastController.active)
-        ctx.ui.notify(fastController.unsupportedRequestMessage(ctx), "warning");
-      if (fastController.active) ctx.ui.notify(fastController.stateText(ctx), "info");
+      const fast = MutableRef.get(fastProjection);
+      if (fast.desiredActive && !isFastActive(ctx, fast))
+        ctx.ui.notify(unsupportedRequestMessage(ctx), "warning");
+      if (isFastActive(ctx, fast)) ctx.ui.notify(fastStateText(ctx, fast), "info");
     },
     onDeactivated: () => {
       sessionActive = false;
       currentContext = undefined;
       cosmicUiAdapter.shutdown();
       resetProjection(projection);
+      MutableRef.set(fastProjection, initialFastSnapshot());
     },
     onStartFailure: ({ ctx }) => {
       try {
@@ -168,7 +199,7 @@ export function betterOpenAIWithDependencies(
     },
   });
   const run = <A, E>(
-    effect: Effect.Effect<A, E, OpenAIUsageService | OpenAIImageService>,
+    effect: Effect.Effect<A, E, OpenAIUsageService | OpenAIImageService | FastModeService>,
     signal?: AbortSignal,
   ) =>
     sessionActive
@@ -193,19 +224,22 @@ export function betterOpenAIWithDependencies(
         ctx.ui.notify("Usage: /fast", "error");
         return Promise.resolve();
       }
-      fastController.setDesired(ctx, !fastController.desiredActive);
-      updateFooter(ctx);
-      const message =
-        fastController.desiredActive && !fastController.active
-          ? fastController.unsupportedRequestMessage(ctx)
-          : fastController.stateText(ctx);
-      ctx.ui.notify(
-        message,
-        fastController.desiredActive && !fastController.active ? "warning" : "info",
-      );
+      const desired = !MutableRef.get(fastProjection).desiredActive;
       return run(
-        OpenAIUsageService.use((service) =>
-          service.persistFast(fastController.active, fastController.desiredActive),
+        FastModeService.use((service) => service.setDesired(ctx, desired)).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              updateFooter(ctx);
+              const fast = MutableRef.get(fastProjection);
+              const active = isFastActive(ctx, fast);
+              ctx.ui.notify(
+                fast.desiredActive && !active
+                  ? unsupportedRequestMessage(ctx)
+                  : fastStateText(ctx, fast),
+                fast.desiredActive && !active ? "warning" : "info",
+              );
+            }),
+          ),
         ),
         ctx.signal,
       );
@@ -224,7 +258,7 @@ export function betterOpenAIWithDependencies(
   const formatDebugStatus = (ctx: ExtensionContext) => {
     const cfg = config(ctx);
     return [
-      ...fastController.debugLines(ctx),
+      ...fastDebugLines(ctx, MutableRef.get(fastProjection), SERVICE_TIER),
       `Footer mode: ${cfg.footer.mode}`,
       "",
       formatDebug(projection, ctx),
@@ -240,7 +274,7 @@ export function betterOpenAIWithDependencies(
     updateFooter,
     hasTerminalUI,
     formatDebugStatus,
-    fastController,
+    fastProjection,
     run,
   });
   registerOpenAIImage(pi, run, updateContext);
@@ -248,6 +282,7 @@ export function betterOpenAIWithDependencies(
   pi.on("session_start", (_event, ctx) => {
     cosmicUiAdapter.shutdown();
     resetProjection(projection);
+    MutableRef.set(fastProjection, initialFastSnapshot());
     footerController.invalidateContextUsage();
     footerController.invalidateSessionName();
     const context = MutableRef.make(ctx);
@@ -260,7 +295,10 @@ export function betterOpenAIWithDependencies(
       }
     }
     return slot
-      .start({ ctx, context, generation: ++startGeneration }, ctx.signal)
+      .start(
+        { ctx, context, generation: ++startGeneration, projectTrusted: isProjectTrusted(ctx) },
+        ctx.signal,
+      )
       .then(() => undefined);
   });
   pi.on("agent_start", (_event, ctx) => {
@@ -289,23 +327,20 @@ export function betterOpenAIWithDependencies(
   pi.on("session_compact", (_event, ctx) => refreshFooter(ctx));
   pi.on("session_tree", (_event, ctx) => refreshFooter(ctx));
   pi.on("model_select", (_event, ctx) => {
+    const before = MutableRef.get(fastProjection).active;
     updateContext(ctx);
     footerController.invalidateContextUsage();
-    const wasActive = fastController.active;
-    fastController.applyDesiredState(ctx);
     synchronizeProjectionContext(projection, ctx, { clearUsage: true });
     updateFooter(ctx);
-    if (fastController.active !== wasActive)
+    const fast = MutableRef.get(fastProjection);
+    const active = isFastActive(ctx, fast);
+    if (active !== before)
       ctx.ui.notify(
-        fastController.active
-          ? fastController.stateText(ctx)
-          : fastController.inactiveForModelMessage(ctx),
-        fastController.active ? "info" : "warning",
+        active ? fastStateText(ctx, fast) : inactiveForModelMessage(ctx),
+        active ? "info" : "warning",
       );
     slot.fork(
-      OpenAIUsageService.use((service) =>
-        service.persistFast(fastController.active, fastController.desiredActive),
-      ),
+      FastModeService.use((service) => service.modelChanged(ctx)),
       ctx.signal,
     );
     slot.fork(
@@ -323,7 +358,13 @@ export function betterOpenAIWithDependencies(
   });
   pi.on("before_provider_request", (event, ctx) => {
     updateContext(ctx);
-    return fastController.injectProviderPayload(event, ctx);
+    return injectProviderPayload(
+      event,
+      ctx,
+      MutableRef.get(fastProjection),
+      SERVICE_TIER,
+      recordFastInjection,
+    );
   });
   pi.on("message_start", (_event, ctx) => {
     updateContext(ctx);

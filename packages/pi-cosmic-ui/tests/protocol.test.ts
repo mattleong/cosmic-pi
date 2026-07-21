@@ -1,10 +1,15 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import {
   COSMIC_UI_PROTOCOL_VERSION,
   isCosmicFooterInvalidateEvent,
   isCosmicFooterRemoveEvent,
   isCosmicFooterUpsertEvent,
   isCosmicUiHostQuery,
+  normalizeCosmicFooterInvalidateEvent,
+  normalizeCosmicFooterRemoveEvent,
+  normalizeCosmicFooterUpsertEvent,
+  normalizeCosmicUiHostQuery,
 } from "../src/protocol.ts";
 
 function event(contribution: Record<string, unknown>) {
@@ -86,6 +91,97 @@ describe("Cosmic UI protocol validation", () => {
       expect(() => guard(throwingVersion)).not.toThrow();
       expect(guard(throwingVersion)).toBe(false);
     }
+  });
+
+  test("normalizes stateful getters exactly once into detached plain events", () => {
+    const respond = vi.fn();
+    const once = <A>(value: A) => {
+      let reads = 0;
+      return {
+        get value() {
+          reads++;
+          if (reads > 1) throw new Error("read twice");
+          return value;
+        },
+        reads: () => reads,
+      };
+    };
+    const queryRespond = once(respond);
+    const owner = once("owner");
+    const text = once("ready");
+    const removeId = once("item");
+    const invalidateOwner = once("owner");
+
+    const query = normalizeCosmicUiHostQuery({
+      version: 1,
+      get respond() {
+        return queryRespond.value;
+      },
+    });
+    const upsert = normalizeCosmicFooterUpsertEvent({
+      version: 1,
+      get owner() {
+        return owner.value;
+      },
+      contribution: {
+        kind: "text",
+        id: "status",
+        region: "details",
+        get text() {
+          return text.value;
+        },
+      },
+    });
+    const remove = normalizeCosmicFooterRemoveEvent({
+      version: 1,
+      owner: "owner",
+      get id() {
+        return removeId.value;
+      },
+    });
+    const invalidate = normalizeCosmicFooterInvalidateEvent({
+      version: 1,
+      get owner() {
+        return invalidateOwner.value;
+      },
+      id: "item",
+    });
+
+    query?.respond();
+    expect(respond).toHaveBeenCalledOnce();
+    expect(upsert).toEqual(expect.objectContaining({ owner: "owner" }));
+    expect(upsert?.contribution).toEqual(expect.objectContaining({ text: "ready" }));
+    expect(remove).toEqual({ version: 1, owner: "owner", id: "item" });
+    expect(invalidate).toEqual({ version: 1, owner: "owner", id: "item" });
+    expect([
+      queryRespond.reads(),
+      owner.reads(),
+      text.reads(),
+      removeId.reads(),
+      invalidateOwner.reads(),
+    ]).toEqual([1, 1, 1, 1, 1]);
+  });
+
+  test("turns throwing getter reads into bounded operation-only diagnostics", () => {
+    const callbacks = makeHostCallbackBoundary(2);
+    const throwing = Object.defineProperty({}, "version", {
+      get() {
+        throw new Error("secret protocol payload");
+      },
+    });
+    for (const [operation, normalize] of [
+      ["host-query", normalizeCosmicUiHostQuery],
+      ["protocol-upsert", normalizeCosmicFooterUpsertEvent],
+      ["protocol-remove", normalizeCosmicFooterRemoveEvent],
+      ["protocol-invalidate", normalizeCosmicFooterInvalidateEvent],
+    ] as const)
+      expect(callbacks.invoke(operation, () => normalize(throwing), undefined)).toBeUndefined();
+
+    expect(callbacks.diagnostics()).toEqual([
+      { operation: "protocol-remove" },
+      { operation: "protocol-invalidate" },
+    ]);
+    expect(callbacks.diagnostics().some((entry) => "message" in entry)).toBe(false);
   });
 
   test("validates surface placement and lifecycle callbacks", () => {

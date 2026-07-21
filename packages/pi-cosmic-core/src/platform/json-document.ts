@@ -6,17 +6,11 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import * as Semaphore from "effect/Semaphore";
 import * as Random from "effect/Random";
 import { JsonDocumentError } from "./errors.ts";
+import { ProcessCoordinator } from "./process-coordinator.ts";
 
 export type JsonObject = Record<string, unknown>;
-
-/**
- * Process-wide coordination is intentional shared persistence infrastructure, not
- * session state. Separate extension runtimes can update the same document.
- */
-const processWriteLock = Semaphore.makeUnsafe(1);
 
 const UnknownFromPrettyJsonString = Schema.String.pipe(
   Schema.decodeTo(
@@ -52,6 +46,7 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
+      const coordinator = yield* ProcessCoordinator;
 
       const mapError = (operation: string, path: string, message: string) => () =>
         new JsonDocumentError({ operation, path, message });
@@ -150,14 +145,15 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
         path: string,
         document: JsonObject,
       ) {
-        yield* processWriteLock.withPermits(1)(writeObjectUnlocked(path, document));
+        yield* coordinator.withLock(pathService.resolve(path), writeObjectUnlocked(path, document));
       });
 
       const updateObject = Effect.fn("JsonDocumentStore.updateObject")(function* (
         path: string,
         update: (document: JsonObject) => JsonObject,
       ) {
-        return yield* processWriteLock.withPermits(1)(
+        return yield* coordinator.withLock(
+          pathService.resolve(path),
           Effect.gen(function* () {
             const current = (yield* readObjectUnlocked(path)) ?? {};
             const next = yield* Effect.try({

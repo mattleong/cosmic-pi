@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { FullWidthDiffText, renderPlainDiff, renderSyntaxHighlightedDiff } from "../../diff";
 import { previewFooter, showingFooter } from "../../preview/format";
 import type { CodePreviewSettings } from "../../settings/types";
-import { shouldSkipHighlight } from "../../syntax/shiki";
+import { shouldSkipHighlight } from "../../syntax/render";
 
 export function createDiffPreviewText(
   diff: string,

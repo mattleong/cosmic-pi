@@ -1,17 +1,18 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { bundledThemesInfo } from "shiki";
+import * as SynchronizedRef from "effect/SynchronizedRef";
+import { makeSynchronousIngress, type SynchronousIngress } from "pi-cosmic-core";
 import { ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
-import { hashString } from "../cache/hash";
 import { codePreviewPerformanceConfig } from "../config/env";
-import { forkCodePreviewSessionEffect } from "../session-capability";
 import { codePreviewSettings } from "../settings";
-import { expandPreviewTabs } from "../shared/preview-tabs";
-import { escapeControlChars } from "../shared/terminal-text";
-import { normalizePreviewLanguageAlias } from "./language";
+import {
+  clearSyntaxProjection,
+  installSyntaxRequests,
+  publishSyntaxProjection,
+  type CodePreviewSyntaxSnapshot,
+} from "./projection";
 
 const PRELOADED_SHIKI_LANGUAGES = [
   "bash",
@@ -25,16 +26,39 @@ const PRELOADED_SHIKI_LANGUAGES = [
   "yaml",
 ] as const;
 
+type InitializationOutcome = "Completed" | "Interrupted";
 type InitializationFlight = {
   readonly theme: string;
   readonly version: number;
-  readonly done: Deferred.Deferred<void>;
+  readonly done: Deferred.Deferred<InitializationOutcome>;
 };
-type RenderCacheEntry = {
-  readonly source: string;
-  readonly value: string[];
-  readonly size: number;
+type SyntaxState = {
+  readonly highlighter: ShikiHighlighter | undefined;
+  readonly theme: string | undefined;
+  readonly generation: number;
+  readonly initVersion: number;
+  readonly initialization: InitializationFlight | undefined;
+  readonly loadedLanguages: ReadonlySet<string>;
+  readonly pendingLanguages: ReadonlySet<string>;
+  readonly languageCallbacks: ReadonlyMap<string, readonly (() => void)[]>;
+  readonly statusVersion: number;
 };
+type SyntaxRequest =
+  | { readonly tag: "Initialize"; readonly theme: string }
+  | { readonly tag: "Language"; readonly language: string };
+type InitializeDecision =
+  | { readonly tag: "Ready" }
+  | { readonly tag: "Await"; readonly done: Deferred.Deferred<InitializationOutcome> }
+  | { readonly tag: "Start"; readonly flight: InitializationFlight };
+type LanguageDecision =
+  | {
+      readonly kind: "Load";
+      readonly highlighter: ShikiHighlighter;
+      readonly generation: number;
+    }
+  | { readonly kind: "Notify"; readonly callbacks: readonly (() => void)[] }
+  | undefined;
+
 export type ShikiStatus = {
   initialized: boolean;
   cacheSize: number;
@@ -47,15 +71,42 @@ export type ShikiStatus = {
 
 export interface CodePreviewSyntaxServiceShape {
   readonly initialize: (theme: string) => Effect.Effect<void>;
-  readonly render: (code: string, lang: string, invalidate?: () => void) => string[] | undefined;
-  readonly status: () => ShikiStatus;
+  readonly status: Effect.Effect<Omit<ShikiStatus, "cacheSize">>;
   readonly dispose: Effect.Effect<void>;
 }
 
-let activeSyntaxProjection: CodePreviewSyntaxServiceShape | undefined;
-export function syntaxServiceProjection(): CodePreviewSyntaxServiceShape | undefined {
-  return activeSyntaxProjection;
-}
+const invokeCallbacks = (callbacks: readonly (() => void)[]) =>
+  Effect.forEach(
+    callbacks,
+    (callback) => Effect.try({ try: callback, catch: () => undefined }).pipe(Effect.ignore),
+    { discard: true },
+  );
+
+const syntaxRequestKey = (request: SyntaxRequest): string =>
+  request.tag === "Initialize" ? `initialize:${request.theme}` : `language:${request.language}`;
+
+const invokeHostInvalidation = (callback: (() => void) | undefined): void => {
+  if (!callback) return;
+  try {
+    callback();
+  } catch {
+    // Renderer invalidation is a hostile synchronous host capability.
+  }
+};
+
+const syntaxSnapshot = (current: SyntaxState): CodePreviewSyntaxSnapshot =>
+  Object.freeze({
+    generation: current.generation,
+    theme: current.theme,
+    highlighter: current.highlighter,
+    loadedLanguages: Object.freeze([...current.loadedLanguages]),
+    status: Object.freeze({
+      initialized: current.highlighter !== undefined,
+      loadedLanguages: current.loadedLanguages.size,
+      pendingLanguages: current.pendingLanguages.size,
+      statusVersion: current.statusVersion,
+    }),
+  });
 
 export class CodePreviewSyntaxService extends Context.Service<
   CodePreviewSyntaxService,
@@ -65,55 +116,104 @@ export class CodePreviewSyntaxService extends Context.Service<
     this,
     Effect.gen(function* () {
       const adapter = yield* ShikiAdapter;
-      let highlighter: ShikiHighlighter | undefined;
-      let initVersion = 0;
-      let generation = 0;
-      let initialization: InitializationFlight | undefined;
-      let statusVersion = 0;
-      let renderCacheChars = 0;
-      const loadedLanguages = new Set<string>();
-      const pendingLanguages = new Set<string>();
-      const renderCache = new Map<string, RenderCacheEntry>();
-      const languageCallbacks = new Map<string, Set<() => void>>();
-      const readyCallbacks = new Set<() => void>();
-
-      const clearLanguageState = () => {
-        renderCache.clear();
-        renderCacheChars = 0;
-        loadedLanguages.clear();
-        pendingLanguages.clear();
-        languageCallbacks.clear();
+      const owner = Symbol("code-preview-syntax-projection");
+      const initial: SyntaxState = {
+        highlighter: undefined,
+        theme: undefined,
+        generation: 0,
+        initVersion: 0,
+        initialization: undefined,
+        loadedLanguages: new Set(),
+        pendingLanguages: new Set(),
+        languageCallbacks: new Map(),
+        statusVersion: 0,
       };
-      const dispose = Effect.sync(() => {
-        ++initVersion;
-        initialization = undefined;
-        highlighter?.dispose();
-        highlighter = undefined;
-        generation++;
-        clearLanguageState();
-        readyCallbacks.clear();
-        statusVersion++;
-      });
+      const state = yield* SynchronizedRef.make(initial);
 
-      let service: CodePreviewSyntaxServiceShape;
-      const initialize = Effect.fn("CodePreviewShiki.initialize")(function* (theme: string) {
+      const publish = (current: SyntaxState) =>
+        publishSyntaxProjection(owner, syntaxSnapshot(current));
+      publish(initial);
+
+      const modify = <A>(
+        transition: (current: SyntaxState) => Effect.Effect<readonly [A, SyntaxState]>,
+      ) =>
+        SynchronizedRef.modifyEffect(state, (current) =>
+          transition(current).pipe(Effect.tap(([, next]) => Effect.sync(() => publish(next)))),
+        );
+
+      const dispose = modify((current) =>
+        Effect.sync(() => {
+          current.highlighter?.dispose();
+          return [
+            undefined,
+            {
+              ...initial,
+              generation: current.generation + 1,
+              initVersion: current.initVersion + 1,
+              statusVersion: current.statusVersion + 1,
+            },
+          ] as const;
+        }),
+      );
+
+      const initialize: (theme: string) => Effect.Effect<void> = Effect.fn(
+        "CodePreviewShiki.initialize",
+      )(function* (theme: string) {
         if (!codePreviewSettings.syntaxHighlighting) return;
-        if (initialization?.theme === theme) return yield* Deferred.await(initialization.done);
-        const version = ++initVersion;
-        const done = yield* Deferred.make<void>();
-        const flight = { theme, version, done } satisfies InitializationFlight;
-        initialization = flight;
-        yield* adapter.create(theme, PRELOADED_SHIKI_LANGUAGES).pipe(
+        const decision = yield* modify<InitializeDecision>((current) =>
+          Effect.gen(function* () {
+            if (current.highlighter && current.theme === theme)
+              return [{ tag: "Ready" } as const, current] as const;
+            if (current.initialization?.theme === theme)
+              return [
+                { tag: "Await" as const, done: current.initialization.done },
+                current,
+              ] as const;
+            const done = yield* Deferred.make<InitializationOutcome>();
+            const version = current.initVersion + 1;
+            const flight = { theme, version, done } satisfies InitializationFlight;
+            return [
+              { tag: "Start" as const, flight },
+              { ...current, initVersion: version, initialization: flight },
+            ] as const;
+          }),
+        );
+        if (decision.tag === "Ready") return;
+        if (decision.tag === "Await") {
+          const outcome = yield* Deferred.await(decision.done);
+          if (outcome === "Interrupted") return yield* initialize(theme);
+          return;
+        }
+
+        const { flight } = decision;
+        const clearInterruptedFlight = modify((current) =>
+          Effect.succeed([
+            undefined,
+            current.initialization?.version === flight.version
+              ? {
+                  ...current,
+                  initialization: undefined,
+                  statusVersion: current.statusVersion + 1,
+                }
+              : current,
+          ] as const),
+        ).pipe(Effect.andThen(Deferred.succeed(flight.done, "Interrupted")), Effect.asVoid);
+        return yield* adapter.create(theme, PRELOADED_SHIKI_LANGUAGES).pipe(
           Effect.matchEffect({
             onFailure: () =>
-              Effect.sync(() => {
-                if (version !== initVersion) return;
-                highlighter?.dispose();
-                highlighter = undefined;
-                generation++;
-                statusVersion++;
-                clearLanguageState();
-                readyCallbacks.clear();
+              modify((current) => {
+                if (current.initVersion !== flight.version)
+                  return Effect.succeed([undefined, current] as const);
+                // Replacement is transactional: a failed candidate only clears its flight.
+                // The working highlighter and renderer projection remain installed.
+                return Effect.succeed([
+                  undefined,
+                  {
+                    ...current,
+                    initialization: undefined,
+                    statusVersion: current.statusVersion + 1,
+                  },
+                ] as const);
               }).pipe(
                 Effect.andThen(
                   Effect.logWarning(
@@ -122,225 +222,218 @@ export class CodePreviewSyntaxService extends Context.Service<
                 ),
               ),
             onSuccess: (next) =>
-              Effect.sync(() => {
-                if (version !== initVersion) {
+              modify((current) => {
+                if (current.initVersion !== flight.version) {
                   next.dispose();
-                  return;
+                  return Effect.succeed([[] as readonly (() => void)[], current] as const);
                 }
-                const previous = highlighter;
-                highlighter = next;
-                generation++;
-                statusVersion++;
-                previous?.dispose();
-                clearLanguageState();
-                for (const language of PRELOADED_SHIKI_LANGUAGES) loadedLanguages.add(language);
-                const callbacks = [...readyCallbacks];
-                readyCallbacks.clear();
-                callbacks.forEach((callback) => callback());
+                current.highlighter?.dispose();
+                return Effect.succeed([
+                  undefined,
+                  {
+                    ...current,
+                    highlighter: next,
+                    theme,
+                    generation: current.generation + 1,
+                    initialization: undefined,
+                    loadedLanguages: new Set(PRELOADED_SHIKI_LANGUAGES),
+                    pendingLanguages: new Set(),
+                    languageCallbacks: new Map(),
+                    statusVersion: current.statusVersion + 1,
+                  },
+                ] as const);
               }),
           }),
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (initialization === flight) initialization = undefined;
-            }).pipe(Effect.andThen(Deferred.succeed(done, undefined)), Effect.asVoid),
-          ),
+          Effect.onInterrupt(() => clearInterruptedFlight),
+          Effect.ensuring(Deferred.succeed(flight.done, "Completed").pipe(Effect.asVoid)),
           Effect.withSpan("pi-code-previews.shiki.initialize", {
             attributes: { operation: "initialize" },
           }),
         );
       });
 
-      const requestInitialize = (theme: string, invalidate?: () => void) => {
-        if (invalidate) readyCallbacks.add(invalidate);
-        if (initialization?.theme === theme) return;
-        forkCodePreviewSessionEffect(
-          CodePreviewSyntaxService.use((current) => current.initialize(theme)),
+      const requestLanguage = Effect.fn("CodePreviewShiki.requestLanguage")(function* (
+        language: string,
+        invalidate?: () => void,
+      ) {
+        const decision = yield* modify<LanguageDecision>((current) => {
+          if (current.loadedLanguages.has(language))
+            return Effect.succeed([
+              {
+                kind: "Notify" as const,
+                callbacks: invalidate ? [invalidate] : [],
+              },
+              current,
+            ] as const);
+          if (!current.highlighter) return Effect.succeed([undefined, current] as const);
+          const callbacks = new Map(current.languageCallbacks);
+          if (invalidate) callbacks.set(language, [...(callbacks.get(language) ?? []), invalidate]);
+          if (current.pendingLanguages.has(language))
+            return Effect.succeed([
+              undefined,
+              { ...current, languageCallbacks: callbacks },
+            ] as const);
+          const pending = new Set(current.pendingLanguages);
+          pending.add(language);
+          return Effect.succeed([
+            {
+              kind: "Load" as const,
+              highlighter: current.highlighter,
+              generation: current.generation,
+            },
+            { ...current, pendingLanguages: pending, languageCallbacks: callbacks },
+          ] as const);
+        });
+        if (!decision) return;
+        if (decision.kind === "Notify") return yield* invokeCallbacks(decision.callbacks);
+        return yield* adapter.loadLanguage(decision.highlighter, language).pipe(
+          Effect.matchEffect({
+            onFailure: () =>
+              modify((current) => {
+                if (current.generation !== decision.generation)
+                  return Effect.succeed([undefined, current] as const);
+                const pending = new Set(current.pendingLanguages);
+                pending.delete(language);
+                const callbacks = new Map(current.languageCallbacks);
+                callbacks.delete(language);
+                return Effect.succeed([
+                  undefined,
+                  {
+                    ...current,
+                    pendingLanguages: pending,
+                    languageCallbacks: callbacks,
+                    statusVersion: current.statusVersion + 1,
+                  },
+                ] as const);
+              }),
+            onSuccess: () =>
+              modify((current) => {
+                if (current.generation !== decision.generation)
+                  return Effect.succeed([[] as readonly (() => void)[], current] as const);
+                const pending = new Set(current.pendingLanguages);
+                pending.delete(language);
+                const loaded = new Set(current.loadedLanguages);
+                loaded.add(language);
+                const callbacks = new Map(current.languageCallbacks);
+                const notify = callbacks.get(language) ?? [];
+                callbacks.delete(language);
+                return Effect.succeed([
+                  notify,
+                  {
+                    ...current,
+                    loadedLanguages: loaded,
+                    pendingLanguages: pending,
+                    languageCallbacks: callbacks,
+                    statusVersion: current.statusVersion + 1,
+                  },
+                ] as const);
+              }).pipe(Effect.flatMap(invokeCallbacks)),
+          }),
         );
-      };
-      const requestLanguage = (language: string, invalidate?: () => void) => {
-        if (invalidate) {
-          const callbacks = languageCallbacks.get(language) ?? new Set<() => void>();
-          callbacks.add(invalidate);
-          languageCallbacks.set(language, callbacks);
-        }
-        if (pendingLanguages.has(language) || !highlighter) return;
-        const currentHighlighter = highlighter;
-        const currentGeneration = generation;
-        pendingLanguages.add(language);
-        forkCodePreviewSessionEffect(
-          adapter.loadLanguage(currentHighlighter, language).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                if (currentGeneration !== generation) return;
-                loadedLanguages.add(language);
-                statusVersion++;
-                const callbacks = languageCallbacks.get(language);
-                languageCallbacks.delete(language);
-                callbacks?.forEach((callback) => callback());
-              }),
-            ),
-            Effect.catch(() =>
-              Effect.sync(() => {
-                if (currentGeneration === generation) {
-                  statusVersion++;
-                  languageCallbacks.delete(language);
-                }
-              }),
-            ),
-            Effect.ensuring(
-              Effect.sync(() => {
-                if (currentGeneration === generation) pendingLanguages.delete(language);
-              }),
-            ),
-          ),
-        );
-      };
+      });
 
-      const render = (code: string, lang: string, invalidate?: () => void) => {
-        if (!codePreviewSettings.syntaxHighlighting || shouldSkipHighlight(code)) return undefined;
-        if (!highlighter) {
-          requestInitialize(codePreviewSettings.shikiTheme, invalidate);
-          return undefined;
-        }
-        const language = normalizePreviewLanguageAlias(lang);
-        const key = `${codePreviewSettings.shikiTheme}\0${language}\0${code.length}\0${hashString(code)}`;
-        const cached = renderCache.get(key);
-        if (cached && isExactShikiCacheHit(cached, code)) {
-          renderCache.delete(key);
-          renderCache.set(key, cached);
-          return cached.value;
-        }
-        try {
-          if (!loadedLanguages.has(language)) requestLanguage(language, invalidate);
-          const tokens = highlighter.codeToTokensBase(code, {
-            lang: language as never,
-            theme: codePreviewSettings.shikiTheme as never,
-          });
-          const rendered = tokens.map((line) =>
-            normalizeContrast(
-              line.map((token) => ansiFromToken(token)).join(""),
-              codePreviewSettings.shikiTheme,
-            ),
-          );
-          const size = rendered.reduce((total, line) => total + line.length, 0);
-          renderCache.set(key, { source: code, value: rendered, size });
-          renderCacheChars += size;
-          while (
-            renderCache.size > codePreviewPerformanceConfig.cacheLimit ||
-            renderCacheChars > codePreviewPerformanceConfig.cacheCharLimit
-          ) {
-            const oldest = renderCache.keys().next().value;
-            if (oldest === undefined) break;
-            const removed = renderCache.get(oldest);
-            renderCache.delete(oldest);
-            renderCacheChars -= removed?.size ?? 0;
+      // Host renderers may synchronously repeat the same request many times. Retain at most one
+      // queued operation per key and a finite number of callbacks; once the callback budget is
+      // full, invalidate that caller immediately instead of retaining another capability.
+      const INGRESS_CAPACITY = 32;
+      const CALLBACK_CAPACITY = 128;
+      type PendingRequest = {
+        readonly callbacks: (() => void)[];
+      };
+      const pendingRequests = new Map<string, PendingRequest>();
+      let retainedCallbacks = 0;
+      let acceptingRequests = true;
+      const takeCallbacks = (key: string): readonly (() => void)[] => {
+        const pending = pendingRequests.get(key);
+        if (!pending) return [];
+        pendingRequests.delete(key);
+        retainedCallbacks -= pending.callbacks.length;
+        return pending.callbacks;
+      };
+      const completeRequest = (key: string) =>
+        Effect.sync(() => takeCallbacks(key)).pipe(Effect.flatMap(invokeCallbacks));
+      const flushPendingCallbacks = Effect.sync(() => {
+        const callbacks = [...pendingRequests.values()].flatMap((pending) => pending.callbacks);
+        pendingRequests.clear();
+        retainedCallbacks = 0;
+        for (const callback of callbacks) invokeHostInvalidation(callback);
+      });
+
+      let ingress: SynchronousIngress<SyntaxRequest>;
+      ingress = yield* makeSynchronousIngress<SyntaxRequest, never, never>({
+        capacity: INGRESS_CAPACITY,
+        overflow: "drop",
+        handle: (request) => {
+          const key = syntaxRequestKey(request);
+          const operation =
+            request.tag === "Language"
+              ? requestLanguage(request.language)
+              : initialize(request.theme);
+          return operation.pipe(Effect.ensuring(completeRequest(key)));
+        },
+      });
+      const offerRequest = (request: SyntaxRequest, invalidate?: () => void): void => {
+        if (!acceptingRequests) return;
+        const key = syntaxRequestKey(request);
+        const pending = pendingRequests.get(key);
+        if (pending) {
+          if (invalidate) {
+            if (retainedCallbacks < CALLBACK_CAPACITY) {
+              pending.callbacks.push(invalidate);
+              retainedCallbacks++;
+            } else {
+              invokeHostInvalidation(invalidate);
+            }
           }
-          return rendered;
-        } catch {
-          return undefined;
+          return;
+        }
+        if (pendingRequests.size >= INGRESS_CAPACITY) {
+          invokeHostInvalidation(invalidate);
+          return;
+        }
+        const callbacks = invalidate ? [invalidate] : [];
+        pendingRequests.set(key, { callbacks });
+        retainedCallbacks += callbacks.length;
+        const result = ingress.offer(request);
+        switch (result) {
+          case "accepted":
+            return;
+          case "dropped":
+          case "coalesced":
+          case "closed":
+            for (const callback of takeCallbacks(key)) invokeHostInvalidation(callback);
+            return;
         }
       };
+      installSyntaxRequests(owner, {
+        initialize: (theme, invalidate) => offerRequest({ tag: "Initialize", theme }, invalidate),
+        language: (language, invalidate) => offerRequest({ tag: "Language", language }, invalidate),
+      });
 
-      service = CodePreviewSyntaxService.of({
+      const service = CodePreviewSyntaxService.of({
         initialize,
-        render,
-        status: () => ({
-          initialized: Boolean(highlighter),
-          cacheSize: renderCache.size,
-          cacheLimit: codePreviewPerformanceConfig.cacheLimit,
-          maxHighlightChars: codePreviewPerformanceConfig.maxHighlightChars,
-          loadedLanguages: loadedLanguages.size,
-          pendingLanguages: pendingLanguages.size,
-          statusVersion,
-        }),
+        status: SynchronizedRef.get(state).pipe(
+          Effect.map((current) => ({
+            initialized: current.highlighter !== undefined,
+            cacheLimit: codePreviewPerformanceConfig.cacheLimit,
+            maxHighlightChars: codePreviewPerformanceConfig.maxHighlightChars,
+            loadedLanguages: current.loadedLanguages.size,
+            pendingLanguages: current.pendingLanguages.size,
+            statusVersion: current.statusVersion,
+          })),
+        ),
         dispose,
       });
-      activeSyntaxProjection = service;
-      return yield* Effect.acquireRelease(Effect.succeed(service), (owned) =>
-        owned.dispose.pipe(
-          Effect.tap(() =>
-            Effect.sync(() => {
-              if (activeSyntaxProjection === owned) activeSyntaxProjection = undefined;
-            }),
-          ),
+
+      return yield* Effect.acquireRelease(Effect.succeed(service), () =>
+        Effect.sync(() => {
+          acceptingRequests = false;
+        }).pipe(
+          Effect.andThen(flushPendingCallbacks),
+          Effect.andThen(dispose),
+          Effect.ensuring(Effect.sync(() => clearSyntaxProjection(owner))),
         ),
       );
     }),
   );
-}
-
-export function isExactShikiCacheHit(
-  cached: { readonly source: string } | undefined,
-  source: string,
-): boolean {
-  return cached?.source === source;
-}
-
-export function shouldSkipHighlight(text: string): boolean {
-  return text.length > codePreviewPerformanceConfig.maxHighlightChars;
-}
-
-const themeTypes = new Map(bundledThemesInfo.map((theme) => [theme.id, theme.type]));
-export function isLightShikiTheme(theme: string): boolean {
-  return themeTypes.get(theme) === "light";
-}
-function normalizeContrast(ansi: string, theme: string): string {
-  if (isLightShikiTheme(theme)) return ansi;
-  return ansi.replace(/\x1b\[([0-9;]*)m/g, (sequence, parameters: string) =>
-    isLowContrastFg(parameters) ? "\x1b[38;2;139;148;158m" : sequence,
-  );
-}
-function isLowContrastFg(parameters: string): boolean {
-  if (
-    parameters === "30" ||
-    parameters === "90" ||
-    parameters === "38;5;0" ||
-    parameters === "38;5;8"
-  )
-    return true;
-  if (!parameters.startsWith("38;2;")) return false;
-  const [, , red, green, blue] = parameters.split(";").map(Number);
-  if (
-    red === undefined ||
-    green === undefined ||
-    blue === undefined ||
-    ![red, green, blue].every(Number.isFinite)
-  )
-    return false;
-  return 0.2126 * red + 0.7152 * green + 0.0722 * blue < 72;
-}
-function ansiFromToken(token: { content: string; color?: string; fontStyle?: number }): string {
-  let open = token.color ? ansiFg(token.color) : "";
-  let close = token.color ? "\x1b[39m" : "";
-  const fontStyle = token.fontStyle ?? 0;
-  if (fontStyle & 2) {
-    open += "\x1b[1m";
-    close = "\x1b[22m" + close;
-  }
-  if (fontStyle & 1) {
-    open += "\x1b[3m";
-    close = "\x1b[23m" + close;
-  }
-  if (fontStyle & 4) {
-    open += "\x1b[4m";
-    close = "\x1b[24m" + close;
-  }
-  return open + escapeControlChars(token.content) + close;
-}
-const ansiCache = new Map<string, string>();
-function ansiFg(hex: string): string {
-  const cached = ansiCache.get(hex);
-  if (cached !== undefined) return cached;
-  const value = Number.parseInt(hex.replace(/^#/, "").slice(0, 6), 16);
-  const ansi = Number.isFinite(value)
-    ? `\x1b[38;2;${(value >> 16) & 255};${(value >> 8) & 255};${value & 255}m`
-    : "";
-  ansiCache.set(hex, ansi);
-  return ansi;
-}
-
-export function plainHighlightedText(text: string, theme: Theme): string[] {
-  return expandPreviewTabs(text)
-    .split("\n")
-    .map((line) => theme.fg("toolOutput", escapeControlChars(line)));
 }

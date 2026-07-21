@@ -40,11 +40,11 @@ pi install "$PWD/packages/pi-advisor"
 
 ```bash
 pnpm install
-pnpm effect:lsp:verify
+pnpm effect:lsp:check
 pnpm validate
 ```
 
-The workspace uses the Effect language service and an architecture migration ratchet. Editors must use the workspace TypeScript installation. See [`docs/architecture/effect-v4.md`](docs/architecture/effect-v4.md) for the Effect v4 conventions.
+The workspace uses TypeScript, Oxlint, and the Effect language service. Editors must use the workspace TypeScript installation. See [`docs/architecture/effect-v4.md`](docs/architecture/effect-v4.md) for the Effect v4 conventions.
 
 Run a command for one package with a filter:
 

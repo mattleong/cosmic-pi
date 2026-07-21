@@ -9,30 +9,50 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import {
   AgentDirectory,
+  freezeSnapshot,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
   nodePlatformLayer,
 } from "pi-cosmic-core";
+import { HostCallbackBoundary, makeHostCallbackBoundary } from "./boundary/host-callback.ts";
 import { CosmicUiConfigRepository } from "./config/repository.ts";
 import { DEFAULT_CONFIG, type ResolvedCosmicUiConfig } from "./config/schema.ts";
 import { createFooterComponent, type FooterTotals } from "./footer/component.ts";
-import { FooterContributionRegistry } from "./footer/registry.ts";
+import {
+  emptyFooterRegistrySnapshot,
+  FooterRegistryService,
+  type FooterRegistryBridge,
+} from "./footer/registry.ts";
 import { CosmicUiService, emptyTotals, makeProjection } from "./host-service.ts";
 import { PiExec } from "./probe/pi-exec.ts";
+import {
+  FooterProtocolHost,
+  makeFooterProtocolBuffer,
+  protocolInvalidate,
+  protocolRemove,
+  protocolUpsert,
+} from "./protocol-host.ts";
 import { RepositoryProbe } from "./probe/repository-probe.ts";
 import {
   COSMIC_UI_FOOTER_INVALIDATE,
   COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_FOOTER_UPSERT,
   COSMIC_UI_HOST_QUERY,
-  isCosmicFooterInvalidateEvent,
-  isCosmicFooterRemoveEvent,
-  isCosmicFooterUpsertEvent,
-  isCosmicUiHostQuery,
+  normalizeCosmicFooterInvalidateEvent,
+  normalizeCosmicFooterRemoveEvent,
+  normalizeCosmicFooterUpsertEvent,
+  normalizeCosmicUiHostQuery,
 } from "./protocol.ts";
 import { registerSettingsCommand } from "./settings/controller.ts";
 
 const terminalUi = (ctx: ExtensionContext) => ctx.mode === "tui";
+const isProjectTrusted = (ctx: ExtensionContext): boolean => {
+  try {
+    return typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
+  } catch {
+    return false;
+  }
+};
 
 function totalsFrom(ctx: ExtensionContext): FooterTotals {
   const totals = emptyTotals();
@@ -47,8 +67,22 @@ function totalsFrom(ctx: ExtensionContext): FooterTotals {
   return totals;
 }
 
+type CosmicUiRuntime = CosmicUiService | FooterRegistryService | FooterProtocolHost;
+
 export default function cosmicUi(pi: ExtensionAPI): void {
-  const registry = new FooterContributionRegistry();
+  const callbacks = makeHostCallbackBoundary();
+  const protocolBuffer = makeFooterProtocolBuffer();
+  const bridge: FooterRegistryBridge = {
+    snapshot: emptyFooterRegistrySnapshot(),
+    requestRenderNow: () => undefined,
+    invalidate: (owner, id) => {
+      protocolBuffer.offer({
+        _tag: "Invalidate",
+        ...(owner === undefined ? {} : { owner }),
+        ...(id === undefined ? {} : { id }),
+      });
+    },
+  };
   const projection = makeProjection();
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
   let installedContext: ExtensionContext | undefined;
@@ -65,26 +99,22 @@ export default function cosmicUi(pi: ExtensionAPI): void {
   const updateContext = (ctx: ExtensionContext) => {
     if (currentContext) MutableRef.set(currentContext, ctx);
   };
-  const requestRender = () => registry.requestRenderNow();
+  const requestRender = () => bridge.requestRenderNow();
   const uninstallFooter = () => {
     const ctx = installedContext;
     installedContext = undefined;
     footerComponent = undefined;
-    registry.setRenderRequest(undefined);
     if (!ctx) return;
-    try {
-      ctx.ui.setFooter(undefined);
-    } catch {
-      // Host/footer cleanup must not prevent runtime disposal.
-    }
+    callbacks.invoke("footer-remove", () => ctx.ui.setFooter(undefined), undefined);
   };
 
   type SessionInput = {
     readonly ctx: ExtensionContext;
     readonly context: MutableRef.MutableRef<ExtensionContext>;
+    readonly projectTrusted: boolean;
   };
-  const slot = makePiSessionRuntimeSlot<SessionInput, CosmicUiService>({
-    makeRuntime: ({ ctx, context }) => {
+  const slot = makePiSessionRuntimeSlot<SessionInput, CosmicUiRuntime>({
+    makeRuntime: ({ ctx, context, projectTrusted }) => {
       const platform = Layer.merge(
         nodePlatformLayer,
         AgentDirectory.layerFromHost(() => getAgentDir()),
@@ -95,11 +125,26 @@ export default function cosmicUi(pi: ExtensionAPI): void {
         context,
         cwd: ctx.cwd,
         projection,
+        projectTrusted,
         onChange: requestRender,
       }).pipe(Layer.provide(Layer.merge(configRepository, probe)));
-      return makePiManagedRuntime(pi, service);
+      const registry = FooterRegistryService.layer({
+        bridge,
+        publish: (snapshot) => {
+          bridge.snapshot = snapshot;
+        },
+      }).pipe(Layer.provide(HostCallbackBoundary.layer(callbacks)));
+      const protocol = FooterProtocolHost.layer({ buffer: protocolBuffer }).pipe(
+        Layer.provideMerge(registry),
+      );
+      return makePiManagedRuntime(pi, Layer.merge(service, protocol));
     },
-    startup: () => CosmicUiService.use(() => Effect.void),
+    startup: () =>
+      Effect.gen(function* () {
+        yield* CosmicUiService;
+        yield* FooterRegistryService;
+        yield* FooterProtocolHost;
+      }),
     onActivated: ({ ctx }) => {
       update(ctx);
       slot.fork(
@@ -112,11 +157,11 @@ export default function cosmicUi(pi: ExtensionAPI): void {
       uninstallFooter();
     },
     onStartFailure: ({ ctx }) => {
-      try {
-        ctx.ui.notify("Cosmic UI failed to start.", "warning");
-      } catch {
-        // Host notification failures do not prevent runtime cleanup.
-      }
+      callbacks.invoke(
+        "notify",
+        () => ctx.ui.notify("Cosmic UI failed to start.", "warning"),
+        undefined,
+      );
     },
   });
 
@@ -138,88 +183,98 @@ export default function cosmicUi(pi: ExtensionAPI): void {
       return;
     }
     installedContext = ctx;
-    ctx.ui.setFooter((tui, theme, footerData) => {
-      registry.setRenderRequest(() => tui.requestRender());
-      const unsubscribeBranch = footerData.onBranchChange(() => {
-        tui.requestRender();
-        slot.fork(
-          CosmicUiService.use((service) =>
-            service.invalidateProbes.pipe(Effect.andThen(service.refreshAll(true))),
-          ),
-          (currentContext ? MutableRef.get(currentContext) : ctx).signal,
-        );
-      });
-      const component = createFooterComponent({
-        pi,
-        ctx: () => (currentContext ? MutableRef.get(currentContext) : ctx),
-        footerData,
-        theme,
-        registry,
-        config,
-        totals: () => MutableRef.get(projection).totals,
-        gitStatus: () => MutableRef.get(projection).gitStatus,
-        pullRequestNumber: () => MutableRef.get(projection).pullRequestNumber,
-        homeDirectory: () => MutableRef.get(projection).homeDirectory,
-      });
-      footerComponent = component;
-      return {
-        ...component,
-        dispose() {
-          try {
-            unsubscribeBranch();
-          } catch {
-            // Host branch subscriptions cannot block footer/runtime cleanup.
-          }
-          registry.setRenderRequest(undefined);
-          installedContext = undefined;
-          footerComponent = undefined;
-        },
-      };
-    });
+    callbacks.invoke(
+      "footer-install",
+      () =>
+        ctx.ui.setFooter((tui, theme, footerData) => {
+          slot.fork(
+            FooterRegistryService.use((registry) =>
+              registry.setRenderRequest(() => tui.requestRender()),
+            ),
+            (currentContext ? MutableRef.get(currentContext) : ctx).signal,
+          );
+          const unsubscribeBranch = footerData.onBranchChange(() => {
+            callbacks.invoke("request-render", () => tui.requestRender(), undefined);
+            slot.fork(
+              CosmicUiService.use((service) =>
+                service.invalidateProbes.pipe(Effect.andThen(service.refreshAll(true))),
+              ),
+              (currentContext ? MutableRef.get(currentContext) : ctx).signal,
+            );
+          });
+          const component = createFooterComponent({
+            pi,
+            ctx: () => (currentContext ? MutableRef.get(currentContext) : ctx),
+            footerData,
+            theme,
+            registry: {
+              snapshot: () => bridge.snapshot,
+              invalidate: () => bridge.invalidate(),
+            },
+            callbacks,
+            config,
+            totals: () => MutableRef.get(projection).totals,
+            gitStatus: () => MutableRef.get(projection).gitStatus,
+            pullRequestNumber: () => MutableRef.get(projection).pullRequestNumber,
+            homeDirectory: () => MutableRef.get(projection).homeDirectory,
+          });
+          footerComponent = component;
+          return {
+            ...component,
+            dispose() {
+              callbacks.invoke("branch-unsubscribe", unsubscribeBranch, undefined);
+              slot.fork(
+                FooterRegistryService.use((registry) => registry.setRenderRequest(undefined)),
+              );
+              installedContext = undefined;
+              footerComponent = undefined;
+            },
+          };
+        }),
+      undefined,
+    );
   }
 
   const ensureSubscriptions = () => {
     if (subscriptions.length > 0) return;
     subscriptions = [
       pi.events.on(COSMIC_UI_HOST_QUERY, (data) => {
-        if (!isCosmicUiHostQuery(data)) return;
-        try {
-          data.respond();
-        } catch {
-          // A hostile query responder cannot break the host event bus.
-        }
+        const query = callbacks.invoke(
+          "host-query",
+          () => normalizeCosmicUiHostQuery(data),
+          undefined,
+        );
+        if (query) callbacks.invoke("host-query", query.respond, undefined);
       }),
       pi.events.on(COSMIC_UI_FOOTER_UPSERT, (data) => {
-        try {
-          if (isCosmicFooterUpsertEvent(data)) registry.upsert(data.owner, data.contribution);
-        } catch {
-          // Protocol payload accessors are isolated from the host event bus.
-        }
+        const event = callbacks.invoke(
+          "protocol-upsert",
+          () => normalizeCosmicFooterUpsertEvent(data),
+          undefined,
+        );
+        if (event) protocolBuffer.offer(protocolUpsert(event));
       }),
       pi.events.on(COSMIC_UI_FOOTER_REMOVE, (data) => {
-        try {
-          if (isCosmicFooterRemoveEvent(data)) registry.remove(data.owner, data.id);
-        } catch {
-          // Protocol payload accessors are isolated from the host event bus.
-        }
+        const event = callbacks.invoke(
+          "protocol-remove",
+          () => normalizeCosmicFooterRemoveEvent(data),
+          undefined,
+        );
+        if (event) protocolBuffer.offer(protocolRemove(event));
       }),
       pi.events.on(COSMIC_UI_FOOTER_INVALIDATE, (data) => {
-        try {
-          if (isCosmicFooterInvalidateEvent(data)) registry.invalidate(data.owner, data.id);
-        } catch {
-          // Protocol payload accessors are isolated from the host event bus.
-        }
+        const event = callbacks.invoke(
+          "protocol-invalidate",
+          () => normalizeCosmicFooterInvalidateEvent(data),
+          undefined,
+        );
+        if (event) protocolBuffer.offer(protocolInvalidate(event));
       }),
     ];
   };
   const disposeSubscriptions = () => {
-    for (const unsubscribe of subscriptions.splice(0)) {
-      try {
-        unsubscribe();
-      } catch {
-        // One hostile bus subscription cannot block remaining cleanup.
-      }
-    }
+    for (const unsubscribe of subscriptions.splice(0))
+      callbacks.invoke("event-unsubscribe", unsubscribe, undefined);
   };
   ensureSubscriptions();
 
@@ -228,18 +283,23 @@ export default function cosmicUi(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     ensureSubscriptions();
     uninstallFooter();
-    MutableRef.set(projection, {
-      config: undefined,
-      totals: totalsFrom(ctx),
-      gitStatus: undefined,
-      pullRequestNumber: undefined,
-      pullRequestCheckedAt: 0,
-      probeRevision: 0,
-      homeDirectory: undefined,
-    });
+    MutableRef.set(
+      projection,
+      freezeSnapshot({
+        config: undefined,
+        totals: totalsFrom(ctx),
+        gitStatus: undefined,
+        pullRequestNumber: undefined,
+        pullRequestCheckedAt: 0,
+        probeRevision: 0,
+        homeDirectory: undefined,
+      }),
+    );
     const context = MutableRef.make(ctx);
     currentContext = context;
-    return slot.start({ ctx, context }, ctx.signal).then(() => undefined);
+    return slot
+      .start({ ctx, context, projectTrusted: isProjectTrusted(ctx) }, ctx.signal)
+      .then(() => undefined);
   });
 
   pi.on("turn_end", (event, ctx) => {
@@ -306,18 +366,21 @@ export default function cosmicUi(pi: ExtensionAPI): void {
   pi.on("session_shutdown", () => {
     disposeSubscriptions();
     uninstallFooter();
-    registry.clear();
     return slot.shutdown().then(() => {
       currentContext = undefined;
-      MutableRef.set(projection, {
-        config: undefined,
-        totals: emptyTotals(),
-        gitStatus: undefined,
-        pullRequestNumber: undefined,
-        pullRequestCheckedAt: 0,
-        probeRevision: 0,
-        homeDirectory: undefined,
-      });
+      protocolBuffer.reset();
+      MutableRef.set(
+        projection,
+        freezeSnapshot({
+          config: undefined,
+          totals: emptyTotals(),
+          gitStatus: undefined,
+          pullRequestNumber: undefined,
+          pullRequestCheckedAt: 0,
+          probeRevision: 0,
+          homeDirectory: undefined,
+        }),
+      );
     });
   });
 }

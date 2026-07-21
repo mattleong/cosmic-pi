@@ -188,27 +188,27 @@ export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWit
           authorization: `Bearer ${credentials.accessToken}`,
           "chatgpt-account-id": credentials.accountId,
         },
+        responseSchema: CodexUsageSchema,
       })
       .pipe(
-        Effect.mapError(
-          () =>
-            new CodexUsageError({ operation: "request", message: "Codex usage request failed." }),
+        Effect.mapError((error) =>
+          error.operation === "decode"
+            ? new CodexUsageError({
+                operation: "decode",
+                message: "Codex usage response was malformed.",
+              })
+            : new CodexUsageError({
+                operation: "request",
+                message: "Codex usage request failed.",
+              }),
         ),
       );
-    if (response.status < 200 || response.status >= 300)
+    if (response._tag === "Rejected")
       return yield* new CodexUsageError({
         operation: "request",
         message: `Codex usage request failed (${response.status})`,
       });
-    const decoded = yield* Schema.decodeUnknownEffect(CodexUsageSchema)(response.body).pipe(
-      Effect.mapError(
-        () =>
-          new CodexUsageError({
-            operation: "decode",
-            message: "Codex usage response was malformed.",
-          }),
-      ),
-    );
+    const decoded = response.body;
     const now = yield* Clock.currentTimeMillis;
     return {
       snapshot: parseUsageSnapshot(decoded, modelId, now),

@@ -103,6 +103,23 @@ describe("config helpers", () => {
     });
   });
 
+  test("ignores untrusted project configuration and selects the global document", async () => {
+    const root = temp();
+    const cwd = join(root, "project");
+    const agent = join(root, "agent");
+    const paths = await run(configPaths(cwd, agent));
+    await run(writeConfig(paths.global, { usage: { enabled: true }, footer: { mode: "status" } }));
+    await run(
+      writeConfig(paths.project, { usage: { enabled: false }, footer: { mode: "replace" } }),
+    );
+
+    const resolved = await run(resolveConfig(cwd, agent, false));
+    expect(resolved.configPath).toBe(paths.global);
+    expect(resolved.projectConfigExists).toBe(false);
+    expect(resolved.usage.enabled).toBe(true);
+    expect(resolved.footer.mode).toBe("status");
+  });
+
   test("invalid siblings fall back independently", async () => {
     const configPath = join(temp(), "config.json");
     await run(

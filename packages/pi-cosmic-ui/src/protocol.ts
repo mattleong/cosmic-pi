@@ -130,34 +130,137 @@ const decodeSafely = <S extends Schema.ConstraintDecoder<unknown>>(
   }
 };
 
+const snapshotFields = (
+  value: unknown,
+  fields: readonly string[],
+): Record<string, unknown> | undefined => {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null)
+    return undefined;
+  const snapshot: Record<string, unknown> = {};
+  for (const field of fields) snapshot[field] = Reflect.get(value, field);
+  return snapshot;
+};
+
+const eventFields = ["version", "owner", "id"] as const;
+const contributionFields = [
+  "kind",
+  "id",
+  "region",
+  "text",
+  "compactText",
+  "align",
+  "tone",
+  "priority",
+  "order",
+  "preferredWidth",
+  "preferredPlacement",
+  "attach",
+  "detach",
+  "render",
+  "invalidate",
+  "dispose",
+] as const;
+
+/**
+ * Reads every hostile query field exactly once and returns a detached plain snapshot.
+ * Callers at the event-bus boundary must invoke this through HostCallbackBoundary.
+ */
+export function normalizeCosmicUiHostQuery(value: unknown): CosmicUiHostQuery | undefined {
+  const snapshot = snapshotFields(value, ["version", "respond"]);
+  const query = snapshot && decodeSafely(HostQueryData, snapshot);
+  if (!query || typeof query.respond !== "function") return undefined;
+  const respond = query.respond;
+  return Object.freeze({ version: query.version, respond: () => respond() });
+}
+
+/** Reads every hostile upsert field exactly once into a detached plain snapshot. */
+export function normalizeCosmicFooterUpsertEvent(
+  value: unknown,
+): CosmicFooterUpsertEvent | undefined {
+  const snapshot = snapshotFields(value, ["version", "owner", "contribution"]);
+  if (!snapshot) return undefined;
+  const contributionSnapshot = snapshotFields(snapshot.contribution, contributionFields);
+  if (!contributionSnapshot) return undefined;
+  snapshot.contribution = contributionSnapshot;
+  const event = decodeSafely(UpsertData, snapshot);
+  if (!event) return undefined;
+  const contribution = event.contribution;
+  if (contribution.kind === "text") {
+    if (
+      (contribution.priority !== undefined && !Number.isFinite(contribution.priority)) ||
+      (contribution.order !== undefined && !Number.isFinite(contribution.order))
+    )
+      return undefined;
+  } else if (
+    !Number.isFinite(contribution.preferredWidth) ||
+    contribution.preferredWidth <= 0 ||
+    typeof contribution.render !== "function" ||
+    !optionalFunction(contribution.attach) ||
+    !optionalFunction(contribution.detach) ||
+    !optionalFunction(contribution.invalidate) ||
+    !optionalFunction(contribution.dispose)
+  )
+    return undefined;
+  return Object.freeze({
+    version: event.version,
+    owner: event.owner,
+    contribution: Object.freeze({ ...contribution }),
+  }) as CosmicFooterUpsertEvent;
+}
+
+/** Reads every hostile remove field exactly once into a detached plain snapshot. */
+export function normalizeCosmicFooterRemoveEvent(
+  value: unknown,
+): CosmicFooterRemoveEvent | undefined {
+  const event = decodeSafely(RemoveData, snapshotFields(value, eventFields));
+  if (!event) return undefined;
+  return Object.freeze({
+    version: event.version,
+    owner: event.owner,
+    ...(event.id === undefined ? {} : { id: event.id }),
+  });
+}
+
+/** Reads every hostile invalidation field exactly once into a detached plain snapshot. */
+export function normalizeCosmicFooterInvalidateEvent(
+  value: unknown,
+): CosmicFooterInvalidateEvent | undefined {
+  const event = decodeSafely(InvalidateData, snapshotFields(value, eventFields));
+  if (!event) return undefined;
+  return Object.freeze({
+    version: event.version,
+    ...(event.owner === undefined ? {} : { owner: event.owner }),
+    ...(event.id === undefined ? {} : { id: event.id }),
+  });
+}
+
 export function isCosmicUiHostQuery(value: unknown): value is CosmicUiHostQuery {
-  const query = decodeSafely(HostQueryData, value);
-  return query !== undefined && typeof query.respond === "function";
+  try {
+    return normalizeCosmicUiHostQuery(value) !== undefined;
+  } catch {
+    return false;
+  }
 }
 export function isCosmicFooterUpsertEvent(value: unknown): value is CosmicFooterUpsertEvent {
-  const event = decodeSafely(UpsertData, value);
-  if (!event) return false;
-  const contribution = event.contribution;
-  if (contribution.kind === "text")
-    return (
-      (contribution.priority === undefined || Number.isFinite(contribution.priority)) &&
-      (contribution.order === undefined || Number.isFinite(contribution.order))
-    );
-  return (
-    Number.isFinite(contribution.preferredWidth) &&
-    contribution.preferredWidth > 0 &&
-    typeof contribution.render === "function" &&
-    optionalFunction(contribution.attach) &&
-    optionalFunction(contribution.detach) &&
-    optionalFunction(contribution.invalidate) &&
-    optionalFunction(contribution.dispose)
-  );
+  try {
+    return normalizeCosmicFooterUpsertEvent(value) !== undefined;
+  } catch {
+    return false;
+  }
 }
 export function isCosmicFooterRemoveEvent(value: unknown): value is CosmicFooterRemoveEvent {
-  return decodeSafely(RemoveData, value) !== undefined;
+  try {
+    return normalizeCosmicFooterRemoveEvent(value) !== undefined;
+  } catch {
+    return false;
+  }
 }
 export function isCosmicFooterInvalidateEvent(
   value: unknown,
 ): value is CosmicFooterInvalidateEvent {
-  return decodeSafely(InvalidateData, value) !== undefined;
+  try {
+    return normalizeCosmicFooterInvalidateEvent(value) !== undefined;
+  } catch {
+    return false;
+  }
 }

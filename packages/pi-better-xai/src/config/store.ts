@@ -1,9 +1,13 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
+import {
+  decodeTolerantFields,
+  JsonDocumentStore,
+  scopedDocumentPaths,
+  selectScopedDocument,
+  type JsonObject,
+} from "pi-cosmic-core";
 import { CONFIG_BASENAME } from "../identity.ts";
 import {
   FooterModeSchema,
@@ -12,7 +16,6 @@ import {
   DEFAULT_USAGE_CONFIG,
   type ResolvedConfig,
 } from "./schema.ts";
-import { isRecord } from "../utils.ts";
 
 export class XaiConfigError extends Schema.TaggedErrorClass<XaiConfigError>()("XaiConfigError", {
   operation: Schema.String,
@@ -33,11 +36,10 @@ export const configPaths = Effect.fn("XaiConfig.configPaths")(function* (
   cwd: string,
   agentDir: string,
 ) {
-  const path = yield* Path.Path;
-  return {
-    project: path.join(cwd, CONFIG_DIR_NAME, "extensions", CONFIG_BASENAME),
-    global: path.join(agentDir, "extensions", CONFIG_BASENAME),
-  } as const;
+  return yield* scopedDocumentPaths(cwd, agentDir, {
+    projectConfigDirectory: CONFIG_DIR_NAME,
+    basename: CONFIG_BASENAME,
+  });
 });
 
 export const readRawConfig = Effect.fn("XaiConfig.readRawConfig")(function* (path: string) {
@@ -48,36 +50,33 @@ export const readRawConfig = Effect.fn("XaiConfig.readRawConfig")(function* (pat
   );
 });
 
+const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
+const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
+
 function decodeConfig(value: unknown) {
-  if (!isRecord(value)) return {};
-  const usageRaw = isRecord(value.usage) ? value.usage : undefined;
-  const footerRaw = isRecord(value.footer) ? value.footer : undefined;
-  const enabled = Option.getOrUndefined(
-    Schema.decodeUnknownOption(Schema.Boolean)(usageRaw?.enabled),
-  );
-  const refreshInterval = Option.getOrUndefined(
-    Schema.decodeUnknownOption(Schema.Number)(usageRaw?.refreshIntervalMs),
-  );
-  const showOnly = Option.getOrUndefined(
-    Schema.decodeUnknownOption(Schema.Boolean)(usageRaw?.showOnlyOnSubscriptionModels),
-  );
-  const showResets = Option.getOrUndefined(
-    Schema.decodeUnknownOption(Schema.Boolean)(usageRaw?.showResetTimes),
-  );
-  const footerMode = Option.getOrUndefined(
-    Schema.decodeUnknownOption(FooterModeSchema)(footerRaw?.mode),
-  );
-  const usage = {
-    ...(enabled !== undefined ? { enabled } : {}),
-    ...(refreshInterval !== undefined && Number.isFinite(refreshInterval)
-      ? { refreshIntervalMs: refreshInterval }
-      : {}),
-    ...(showOnly !== undefined ? { showOnlyOnSubscriptionModels: showOnly } : {}),
-    ...(showResets !== undefined ? { showResetTimes: showResets } : {}),
-  };
+  const root = decodeTolerantFields(
+    value,
+    { usage: UnknownRecordSchema, footer: UnknownRecordSchema },
+    { path: "config" },
+  ).value;
+  const usage = decodeTolerantFields(
+    root.usage,
+    {
+      enabled: Schema.Boolean,
+      refreshIntervalMs: FiniteNumberSchema,
+      showOnlyOnSubscriptionModels: Schema.Boolean,
+      showResetTimes: Schema.Boolean,
+    },
+    { path: "usage" },
+  ).value;
+  const footer = decodeTolerantFields(
+    root.footer,
+    { mode: FooterModeSchema },
+    { path: "footer" },
+  ).value;
   return {
     ...(Object.keys(usage).length > 0 ? { usage } : {}),
-    ...(footerMode !== undefined ? { footer: { mode: footerMode } } : {}),
+    ...(footer.mode !== undefined ? { footer: { mode: footer.mode } } : {}),
   };
 }
 
@@ -105,15 +104,14 @@ const defaultDocument = (): JsonObject => ({
 export const resolveConfig = Effect.fn("XaiConfig.resolveConfig")(function* (
   cwd: string,
   agentDir: string,
+  projectTrusted = true,
 ) {
-  const documents = yield* JsonDocumentStore;
   const paths = yield* configPaths(cwd, agentDir);
-  let projectExists = yield* documents
-    .exists(paths.project)
-    .pipe(Effect.mapError(mapDocumentError("inspect", paths.project)));
-  let globalExists = yield* documents
-    .exists(paths.global)
-    .pipe(Effect.mapError(mapDocumentError("inspect", paths.global)));
+  const selected = yield* selectScopedDocument(paths).pipe(
+    Effect.mapError((error) => mapDocumentError("inspect", error.path)()),
+  );
+  let projectExists = projectTrusted && selected.projectExists;
+  let globalExists = selected.globalExists;
 
   if (!projectExists && !globalExists) {
     yield* writeConfig(paths.global, defaultDocument());

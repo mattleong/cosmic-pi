@@ -1,8 +1,0 @@
-{
-  "extends": "../../../tsconfig.effect.json",
-  "compilerOptions": {
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext"
-  },
-  "include": ["floating-effect.ts"]
-}

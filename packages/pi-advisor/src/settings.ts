@@ -45,7 +45,7 @@ const POLICY_OPTIONS: Array<{ label: string; value: AdvisorReviewPolicy }> = [
 export interface AdvisorConfigState {
   get(): ResolvedAdvisorConfig;
   getMetrics(): Readonly<AdvisorSessionMetrics>;
-  update(config: ResolvedAdvisorConfig): void;
+  update(config: ResolvedAdvisorConfig): void | Promise<void>;
   /** Session-owned persistence adapter; omitted only by standalone compatibility tests. */
   persist?(patch: AdvisorConfigPatch, path: string): Promise<ResolvedAdvisorConfig>;
 }
@@ -519,8 +519,7 @@ function updateConfig(
   const path = state.get().configPath;
   return (state.persist ? state.persist(patch, path) : writeAdvisorConfigPatchAsync(patch, path))
     .then((next) => {
-      state.update(next);
-      return true;
+      return Promise.resolve(state.update(next)).then(() => true);
     })
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);

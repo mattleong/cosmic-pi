@@ -40,6 +40,13 @@ const defaultDependencies: BetterXaiExtensionDependencies = {
 function hasTerminalUI(ctx: ExtensionContext): boolean {
   return ctx.mode === "tui" || (ctx.mode === undefined && ctx.hasUI);
 }
+function isProjectTrusted(ctx: ExtensionContext): boolean {
+  try {
+    return typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
+  } catch {
+    return false;
+  }
+}
 
 function requiredConfig(projection: MutableRef.MutableRef<XaiProjection>): ResolvedConfig {
   const config = MutableRef.get(projection).config;
@@ -80,9 +87,10 @@ export function betterXaiWithDependencies(
     readonly ctx: ExtensionContext;
     readonly context: MutableRef.MutableRef<ExtensionContext>;
     readonly generation: number;
+    readonly projectTrusted: boolean;
   };
   const slot = makePiSessionRuntimeSlot<SessionInput, XaiUsageService>({
-    makeRuntime: ({ ctx, context }) => {
+    makeRuntime: ({ ctx, context, projectTrusted }) => {
       const platform = Layer.merge(
         nodePlatformLayer,
         AgentDirectory.layerFromHost(() => getAgentDir()),
@@ -91,6 +99,7 @@ export function betterXaiWithDependencies(
         context,
         cwd: ctx.cwd,
         projection,
+        projectTrusted,
         onChange: () => updateFooter(MutableRef.get(context)),
       }).pipe(Layer.provide(platform));
       return makePiManagedRuntime(pi, applicationLayer);
@@ -147,7 +156,10 @@ export function betterXaiWithDependencies(
       }
     }
     return slot
-      .start({ ctx, context, generation: ++startGeneration }, ctx.signal)
+      .start(
+        { ctx, context, generation: ++startGeneration, projectTrusted: isProjectTrusted(ctx) },
+        ctx.signal,
+      )
       .then(() => undefined);
   });
 

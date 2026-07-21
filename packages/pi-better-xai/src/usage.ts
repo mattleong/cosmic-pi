@@ -4,14 +4,28 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { formatCompactReset, formatResetCountdown, JsonHttpClient } from "pi-cosmic-core";
+import {
+  formatCompactReset,
+  formatResetCountdown,
+  JsonHttpClient,
+  type JsonHttpResponseSchema,
+} from "pi-cosmic-core";
 import { getXaiCredentials } from "./auth.ts";
+import { ModelRegistryAuth } from "./boundary/model-registry-auth.ts";
 
 export const BILLING_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 export const MONTHLY_BILLING_URL = `${BILLING_BASE_URL}/billing`;
 export const WEEKLY_BILLING_URL = `${BILLING_BASE_URL}/billing?format=credits`;
 
-const MoneySchema = Schema.Struct({ val: Schema.Number });
+const NonNegativeFiniteSchema = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
+const ProtocolPercentSchema = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isBetween({ minimum: 0, maximum: 100 }),
+);
+const MoneySchema = Schema.Struct({ val: NonNegativeFiniteSchema });
 const MonthlyBillingSchema = Schema.Struct({
   config: Schema.Struct({
     monthlyLimit: Schema.optional(MoneySchema),
@@ -27,7 +41,7 @@ const WeeklyBillingSchema = Schema.Struct({
         end: Schema.optional(Schema.String),
       }),
     ),
-    creditUsagePercent: Schema.optional(Schema.Number),
+    creditUsagePercent: Schema.optional(ProtocolPercentSchema),
     onDemandUsed: Schema.optional(MoneySchema),
     billingPeriodEnd: Schema.optional(Schema.String),
   }),
@@ -236,63 +250,74 @@ export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string
   ].join("\n");
 }
 
-const fetchBilling = Effect.fn("XaiUsage.fetchBilling")(function* (
+const fetchBilling = Effect.fn("XaiUsage.fetchBilling")(function* <A, R>(
   url: string,
   accessToken: string,
+  responseSchema: JsonHttpResponseSchema<A, R>,
 ) {
   const http = yield* JsonHttpClient;
-  return yield* http
-    .request({
-      url,
-      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-    })
-    .pipe(
-      Effect.mapError(
-        () =>
-          new XaiUsageError({
-            operation: "request",
-            message: "xAI billing request failed.",
-          }),
-      ),
-    );
+  return yield* http.request({
+    url,
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    responseSchema,
+  });
 });
 
-export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (
-  authPath: string,
-  ctx: Pick<ExtensionContext, "modelRegistry">,
-) {
-  const credentials = yield* getXaiCredentials(authPath, ctx);
+const requestXaiUsageEffect = Effect.fn("XaiUsage.requestXaiUsage")(function* (authPath: string) {
+  const credentials = yield* getXaiCredentials(authPath);
   if (!credentials) return undefined;
   const [monthly, weekly] = yield* Effect.all(
     [
-      fetchBilling(MONTHLY_BILLING_URL, credentials.accessToken),
-      fetchBilling(WEEKLY_BILLING_URL, credentials.accessToken).pipe(
+      fetchBilling(MONTHLY_BILLING_URL, credentials.accessToken, MonthlyBillingSchema).pipe(
+        Effect.mapError((error) =>
+          error.operation === "decode"
+            ? new XaiUsageError({
+                operation: "monthly-decode",
+                message: "xAI monthly billing response was malformed.",
+              })
+            : new XaiUsageError({
+                operation: "request",
+                message: "xAI billing request failed.",
+              }),
+        ),
+      ),
+      fetchBilling(WEEKLY_BILLING_URL, credentials.accessToken, WeeklyBillingSchema).pipe(
         Effect.catch(() => Effect.void),
       ),
     ] as const,
     { concurrency: 2 },
   );
-  if (monthly.status < 200 || monthly.status >= 300) {
+  if (monthly._tag === "Rejected") {
     return yield* new XaiUsageError({
       operation: "monthly",
       message: `xAI monthly billing request failed (HTTP ${monthly.status}).`,
     });
   }
-  const decodedMonthly = yield* Schema.decodeUnknownEffect(MonthlyBillingSchema)(monthly.body).pipe(
-    Effect.mapError(
-      () =>
-        new XaiUsageError({
-          operation: "monthly-decode",
-          message: "xAI monthly billing response was malformed.",
-        }),
-    ),
-  );
-  const decodedWeekly =
-    weekly && weekly.status >= 200 && weekly.status < 300
-      ? yield* Schema.decodeUnknownEffect(WeeklyBillingSchema)(weekly.body).pipe(
-          Effect.catch(() => Effect.void),
-        )
-      : undefined;
+  const decodedMonthly = monthly.body;
+  const decodedWeekly = weekly?._tag === "Accepted" ? weekly.body : undefined;
   const now = yield* Clock.currentTimeMillis;
   return parseUsageSnapshot(decodedMonthly, decodedWeekly, now);
 });
+
+type WithoutModelRegistry<T extends Effect.Effect<unknown, unknown, unknown>> = Effect.Effect<
+  Effect.Success<T>,
+  Effect.Error<T>,
+  Exclude<Effect.Services<T>, ModelRegistryAuth>
+>;
+
+export function requestXaiUsage(authPath: string): ReturnType<typeof requestXaiUsageEffect>;
+export function requestXaiUsage(
+  authPath: string,
+  ctx: Pick<ExtensionContext, "modelRegistry">,
+): WithoutModelRegistry<ReturnType<typeof requestXaiUsageEffect>>;
+export function requestXaiUsage(authPath: string, ctx?: Pick<ExtensionContext, "modelRegistry">) {
+  const effect = requestXaiUsageEffect(authPath);
+  return ctx
+    ? effect.pipe(
+        Effect.provideService(
+          ModelRegistryAuth,
+          ModelRegistryAuth.make(() => ctx.modelRegistry),
+        ),
+      )
+    : effect;
+}

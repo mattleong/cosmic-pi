@@ -58,6 +58,7 @@ function harness(dependencies?: BetterXaiExtensionDependencies) {
       getApiKeyForProvider: () => Promise.resolve(undefined),
     },
     ui: { notify, setStatus, setFooter },
+    isProjectTrusted: vi.fn(() => true),
   } as unknown as ExtensionContext;
 
   if (dependencies) betterXaiWithDependencies(pi, dependencies);
@@ -88,6 +89,7 @@ describe("Better xAI Effect boundary", () => {
     await invoke(h.handlers.get("session_start")?.({}, h.ctx));
     await invoke(h.handlers.get("session_start")?.({}, h.ctx));
 
+    expect(h.ctx.isProjectTrusted).toHaveBeenCalledTimes(2);
     expect(h.notify).not.toHaveBeenCalledWith("Better xAI failed to start.", "warning");
     expect(h.setStatus).not.toHaveBeenCalled();
     expect(h.setFooter).not.toHaveBeenCalled();

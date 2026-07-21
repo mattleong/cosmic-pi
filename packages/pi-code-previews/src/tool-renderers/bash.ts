@@ -8,7 +8,7 @@ import { countLabel } from "../shared/format";
 import { getObjectValue } from "../shared/objects";
 import { escapeControlChars } from "../shared/terminal-text";
 import { getFirstShellCommandName } from "../shell/command";
-import { renderHighlightedText } from "../syntax/shiki";
+import { renderHighlightedText } from "../syntax/render";
 import { getTextContent, isTruncated } from "../tool-data/results";
 import { renderCodePreviewToolTitle } from "../tools/presentation";
 import { shouldHideShellResultByCommand } from "../tools/shell-result-policy";

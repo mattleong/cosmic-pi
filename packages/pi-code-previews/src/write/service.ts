@@ -2,25 +2,31 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
+import { makeFrozenProjection, type ProjectionError } from "pi-cosmic-core";
 import type { CodePreviewBeforeWrite } from "./preview-execution";
+import {
+  clearWriteProjection,
+  publishWriteProjection,
+  type CodePreviewWriteSnapshot,
+} from "./projection";
 
 const MAX_BEFORE_WRITE_CACHE_ENTRIES = 64;
 type PathLock = { readonly semaphore: Semaphore.Semaphore; users: number };
+type WriteState = CodePreviewWriteSnapshot;
 
 export interface CodePreviewWriteServiceShape {
-  readonly takeBeforeWrite: (toolCallId: string) => CodePreviewBeforeWrite;
-  readonly rememberBeforeWrite: (toolCallId: string, before: CodePreviewBeforeWrite) => void;
+  readonly rememberBeforeWrite: (
+    toolCallId: string,
+    before: CodePreviewBeforeWrite,
+  ) => Effect.Effect<void, ProjectionError>;
+  readonly acknowledgeBeforeWrite: (
+    toolCallId: string,
+  ) => Effect.Effect<CodePreviewBeforeWrite, ProjectionError>;
   readonly withPathLock: <A, E, R>(
     path: string,
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>;
-  readonly cacheSize: () => number;
-}
-
-let activeWriteProjection: CodePreviewWriteServiceShape | undefined;
-
-export function writeServiceProjection(): CodePreviewWriteServiceShape | undefined {
-  return activeWriteProjection;
+  readonly cacheSize: Effect.Effect<number>;
 }
 
 export class CodePreviewWriteService extends Context.Service<
@@ -31,9 +37,14 @@ export class CodePreviewWriteService extends Context.Service<
     this,
     Effect.acquireRelease(
       Effect.gen(function* () {
-        const beforeWriteCache = new Map<string, CodePreviewBeforeWrite>();
         const pathLocks = new Map<string, PathLock>();
         const coordination = yield* Semaphore.make(1);
+        const projectionOwner = Symbol("code-preview-write-projection");
+        const projection = yield* makeFrozenProjection<WriteState, CodePreviewWriteSnapshot>(
+          { entries: [] },
+          (state) => state,
+          (snapshot) => publishWriteProjection(projectionOwner, snapshot),
+        );
 
         const acquire = (path: string) =>
           coordination.withPermits(1)(
@@ -56,37 +67,42 @@ export class CodePreviewWriteService extends Context.Service<
             }),
           );
 
+        const rememberBeforeWrite = (toolCallId: string, before: CodePreviewBeforeWrite) =>
+          projection.transition((current) => {
+            const entries = current.entries.filter(([id]) => id !== toolCallId);
+            if (before !== undefined) entries.push([toolCallId, before] as const);
+            return Effect.succeed([
+              undefined,
+              { entries: entries.slice(-MAX_BEFORE_WRITE_CACHE_ENTRIES) },
+            ] as const);
+          });
+
+        const acknowledgeBeforeWrite = (toolCallId: string) =>
+          projection.transition((current) => {
+            const before = current.entries.find(([id]) => id === toolCallId)?.[1];
+            return Effect.succeed([
+              before,
+              { entries: current.entries.filter(([id]) => id !== toolCallId) },
+            ] as const);
+          });
+
         const service = CodePreviewWriteService.of({
-          takeBeforeWrite: (toolCallId) => {
-            const before = beforeWriteCache.get(toolCallId);
-            beforeWriteCache.delete(toolCallId);
-            return before;
-          },
-          rememberBeforeWrite: (toolCallId, before) => {
-            beforeWriteCache.delete(toolCallId);
-            if (before !== undefined) beforeWriteCache.set(toolCallId, before);
-            while (beforeWriteCache.size > MAX_BEFORE_WRITE_CACHE_ENTRIES) {
-              const oldest = beforeWriteCache.keys().next().value;
-              if (oldest === undefined) break;
-              beforeWriteCache.delete(oldest);
-            }
-          },
+          rememberBeforeWrite,
+          acknowledgeBeforeWrite,
           withPathLock: (path, effect) =>
             Effect.acquireUseRelease(
               acquire(path),
               (lock) => lock.semaphore.withPermits(1)(effect),
               (lock) => release(path, lock),
             ),
-          cacheSize: () => beforeWriteCache.size,
+          cacheSize: projection.getState.pipe(Effect.map((state) => state.entries.length)),
         });
-        activeWriteProjection = service;
-        return { service, beforeWriteCache, pathLocks };
+        return { service, pathLocks, projectionOwner };
       }),
-      ({ service, beforeWriteCache, pathLocks }) =>
+      ({ pathLocks, projectionOwner }) =>
         Effect.sync(() => {
-          beforeWriteCache.clear();
           pathLocks.clear();
-          if (activeWriteProjection === service) activeWriteProjection = undefined;
+          clearWriteProjection(projectionOwner);
         }),
     ).pipe(Effect.map(({ service }) => service)),
   );

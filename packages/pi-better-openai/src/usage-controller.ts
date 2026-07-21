@@ -7,12 +7,14 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as Tracer from "effect/Tracer";
 import {
   AgentDirectory,
   JsonDocumentStore,
+  freezeSnapshot,
   JsonHttpClient,
   type JsonObject,
+  makeFrozenProjection,
   makeSubscriptionRefresh,
   type RefreshRequest,
 } from "pi-cosmic-core";
@@ -67,9 +69,9 @@ const initial = (): OpenAIProjection => ({
   authSource: undefined,
   accountId: undefined,
 });
-export const makeProjection = () => MutableRef.make(initial());
+export const makeProjection = () => MutableRef.make(freezeSnapshot(initial()));
 export const resetProjection = (projection: MutableRef.MutableRef<OpenAIProjection>): void => {
-  MutableRef.set(projection, initial());
+  MutableRef.set(projection, freezeSnapshot(initial()));
 };
 
 export function isOpenAISubscriptionModel(
@@ -95,21 +97,24 @@ export function synchronizeProjectionContext(
   const statusText = eligible
     ? "Usage unavailable."
     : "Usage hidden: current model is not an OpenAI subscription model.";
-  MutableRef.set(projection, {
-    ...state,
-    eligible,
-    ...(options.clearUsage || !scopeMatches
-      ? {
-          snapshot: undefined,
-          statusLine: undefined,
-          error: undefined,
-          updatedAt: undefined,
-          statusText,
-        }
-      : !eligible
-        ? { statusLine: undefined, error: undefined, statusText }
-        : {}),
-  });
+  MutableRef.set(
+    projection,
+    freezeSnapshot({
+      ...state,
+      eligible,
+      ...(options.clearUsage || !scopeMatches
+        ? {
+            snapshot: undefined,
+            statusLine: undefined,
+            error: undefined,
+            updatedAt: undefined,
+            statusText,
+          }
+        : !eligible
+          ? { statusLine: undefined, error: undefined, statusText }
+          : {}),
+    }),
+  );
 }
 export function visibleStatusLine(
   ctx: ExtensionContext,
@@ -159,8 +164,6 @@ type RefreshValue =
       readonly fetchedAt: number;
       readonly result: CodexUsageResult;
     };
-const freezeProjection = (state: OpenAIProjection): OpenAIProjection => Object.freeze({ ...state });
-
 export class OpenAIUsageService extends Context.Service<
   OpenAIUsageService,
   OpenAIUsageServiceShape
@@ -172,31 +175,39 @@ export class OpenAIUsageService extends Context.Service<
     readonly onChange: () => void;
     readonly startPolling?: boolean;
     readonly agentDir?: string;
+    readonly projectTrusted?: boolean;
   }) {
     return Layer.effect(
       this,
       Effect.gen(function* () {
         const { context, cwd, projection, onChange } = options;
         const path = yield* Path.Path;
-        const dependencies = yield* Effect.context<
-          Path.Path | JsonDocumentStore | JsonHttpClient
-        >();
         const documents = yield* JsonDocumentStore;
+        const http = yield* JsonHttpClient;
+        const tracer = yield* Tracer.Tracer;
+        const provideDependencies = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          effect.pipe(
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(JsonDocumentStore, documents),
+            Effect.provideService(JsonHttpClient, http),
+            Effect.provideService(Tracer.Tracer, tracer),
+          );
         const agentDir = options.agentDir ?? (yield* AgentDirectory);
         const authPath = path.join(agentDir, "auth.json");
-        const config = yield* resolveConfig(cwd, agentDir);
-        const state = yield* SynchronizedRef.make<OpenAIProjection>({
-          ...initial(),
-          config,
-          authPath,
-        });
-        const publish = (next: OpenAIProjection) =>
-          Effect.sync(() => MutableRef.set(projection, freezeProjection(next)));
+        const projectTrusted = options.projectTrusted ?? true;
+        const config = yield* resolveConfig(cwd, agentDir, projectTrusted);
+        const state = yield* makeFrozenProjection<OpenAIProjection, OpenAIProjection>(
+          { ...initial(), config, authPath },
+          (current) => current,
+          (published) => MutableRef.set(projection, published),
+        );
         const updateState = (f: (current: OpenAIProjection) => OpenAIProjection) =>
-          SynchronizedRef.modifyEffect(state, (current) => {
-            const next = f(current);
-            return publish(next).pipe(Effect.as([next, next] as const));
-          });
+          state
+            .transition((current) => {
+              const next = f(current);
+              return Effect.succeed([next, next] as const);
+            })
+            .pipe(Effect.orDie);
         const notifyChanged = Effect.try({
           try: onChange,
           catch: () =>
@@ -243,7 +254,7 @@ export class OpenAIUsageService extends Context.Service<
         yield* synchronize(true);
         const key = Effect.gen(function* () {
           const ctx = MutableRef.get(context);
-          const current = yield* SynchronizedRef.get(state);
+          const current = yield* state.getState;
           return `${ctx.model?.provider ?? "none"}/${ctx.model?.id ?? "none"}:${usageScopeForModel(ctx.model?.id)}:${current.config?.usage.enabled ?? false}:${current.config?.usage.showOnlyOnSubscriptionModels ?? true}`;
         });
         const refreshEngine = yield* makeSubscriptionRefresh<
@@ -258,13 +269,13 @@ export class OpenAIUsageService extends Context.Service<
             notify: current?.notify === true || next.notify === true,
           }),
           currentKey: key,
-          interval: SynchronizedRef.get(state).pipe(
+          interval: state.getState.pipe(
             Effect.map((current) => current.config?.usage.refreshIntervalMs ?? 60_000),
           ),
           fetch: (request) =>
             Effect.gen(function* () {
               const ctx = MutableRef.get(context);
-              const current = yield* SynchronizedRef.get(state);
+              const current = yield* state.getState;
               const cfg = current.config;
               if (!cfg || !ctx.hasUI) return { _tag: "Skipped" } as const;
               const now = yield* Clock.currentTimeMillis;
@@ -339,6 +350,10 @@ export class OpenAIUsageService extends Context.Service<
           commit: (value) =>
             Effect.gen(function* () {
               if (value._tag === "Skipped") return;
+              if (value._tag === "Failure")
+                yield* Effect.logWarning("Better OpenAI usage recovery: refresh_failed.");
+              if (value._tag === "Missing")
+                yield* Effect.logWarning("Better OpenAI usage recovery: credentials_missing.");
               const latest = yield* updateState((current) => {
                 const cfg = current.config!;
                 if (value._tag === "Disabled")
@@ -408,21 +423,20 @@ export class OpenAIUsageService extends Context.Service<
           spanName: "pi-better-openai.usage.refresh",
         });
         const refresh = (request: RefreshOptions = {}) =>
-          refreshEngine.request(request).pipe(Effect.provideContext(dependencies));
+          provideDependencies(refreshEngine.request(request));
         const contextChanged = (clearUsage = false) =>
           synchronize(clearUsage).pipe(Effect.andThen(refreshEngine.invalidate), Effect.asVoid);
         const reloadConfigWithRequirements = Effect.fn("OpenAIUsage.reloadConfig")(function* () {
-          const next = yield* resolveConfig(cwd, agentDir);
+          const next = yield* resolveConfig(cwd, agentDir, projectTrusted);
           yield* updateState((current) => ({ ...current, config: next }));
           return next;
         });
-        const reloadConfig = () =>
-          reloadConfigWithRequirements().pipe(Effect.provideContext(dependencies));
+        const reloadConfig = () => provideDependencies(reloadConfigWithRequirements());
         const updateSettingWithRequirements = Effect.fn("OpenAIUsage.updateSetting")(function* (
           id: string,
           value: string,
         ) {
-          const current = yield* SynchronizedRef.get(state);
+          const current = yield* state.getState;
           if (!current.config) return;
           const raw = yield* readRawConfig(current.config.configPath).pipe(
             Effect.provideService(JsonDocumentStore, documents),
@@ -437,12 +451,12 @@ export class OpenAIUsageService extends Context.Service<
           yield* refresh({ force: true });
         });
         const updateSetting = (id: string, value: string) =>
-          updateSettingWithRequirements(id, value).pipe(Effect.provideContext(dependencies));
+          provideDependencies(updateSettingWithRequirements(id, value));
         const persistFastWithRequirements = Effect.fn("OpenAIUsage.persistFast")(function* (
           active: boolean,
           desiredActive: boolean,
         ) {
-          const current = yield* SynchronizedRef.get(state);
+          const current = yield* state.getState;
           if (!current.config?.persistState) return;
           yield* updateConfig(current.config.configPath, (raw) => ({
             ...raw,
@@ -452,11 +466,9 @@ export class OpenAIUsageService extends Context.Service<
           yield* reloadConfig();
         });
         const persistFast = (active: boolean, desiredActive: boolean) =>
-          persistFastWithRequirements(active, desiredActive).pipe(
-            Effect.provideContext(dependencies),
-          );
+          provideDependencies(persistFastWithRequirements(active, desiredActive));
         const readConfigDocument = () =>
-          SynchronizedRef.get(state).pipe(
+          state.getState.pipe(
             Effect.flatMap((current) =>
               current.config
                 ? readRawConfig(current.config.configPath).pipe(
@@ -468,7 +480,7 @@ export class OpenAIUsageService extends Context.Service<
         if (options.startPolling !== false) {
           yield* Effect.gen(function* () {
             yield* refresh({ force: true });
-            yield* refreshEngine.startPolling({}).pipe(Effect.provideContext(dependencies));
+            yield* provideDependencies(refreshEngine.startPolling({}));
           }).pipe(Effect.forkScoped);
         }
         return OpenAIUsageService.of({

@@ -7,7 +7,7 @@ import { createCodePreviewToolShell } from "../preview/tool-shell";
 import { codePreviewSettings } from "../settings/index";
 import { escapeControlChars } from "../shared/terminal-text";
 import { resolvePreviewLanguage } from "../syntax/language";
-import { normalizeShikiLanguage } from "../syntax/shiki";
+import { normalizeShikiLanguage } from "../syntax/render";
 import { getPathArg, getReadStartLine } from "../tool-data/args";
 import { getTextContent, isTruncated, splitReadContinuationNotice } from "../tool-data/results";
 import { renderCodePreviewToolTitle } from "../tools/presentation";

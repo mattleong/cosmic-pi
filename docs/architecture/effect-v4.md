@@ -1,5 +1,7 @@
 # Effect v4 architecture
 
+The numbered audit implementation is mapped in [effect-audit-mapping.md](effect-audit-mapping.md).
+
 ## Definition
 
 Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, failures, concurrency, resources, state transitions, clocks, configuration, persistence, HTTP, logging, and tests. Pure deterministic functions remain pure and may use Effect data modules when they improve the model.
@@ -11,7 +13,7 @@ Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, fail
 - Give every live implementation an explicit Layer. Compose the dependency graph before providing it.
 - In beta.99, use `Layer.effect` with `Effect.acquireRelease` for layer-owned scoped resources.
 - Keep implementation-only requirements in Layer construction rather than leaking them through service methods.
-- Use `Schema.decodeUnknownEffect` at unknown boundaries. Do not cast decoded JSON.
+- Use `Schema.decodeUnknownEffect` at unknown boundaries. Do not cast decoded JSON. Core JSON HTTP requests require a provider-local response decoder and return an accepted typed body or a rejected status with preserved response text; no public `body: unknown` path exists.
 - Represent expected failures with schema-backed tagged errors. Reserve defects for violated invariants.
 - Use `Clock`, `Duration`, `Random`, `Config`, `Logger`, queues, deferred values, semaphores, refs, schedules, streams, and scopes instead of corresponding unmanaged globals.
 - Create one `ManagedRuntime` from `session_start` at the Pi host boundary. Internal services never call Effect runners.
@@ -27,7 +29,7 @@ Pinned declarations are the source of truth when older documentation disagrees:
 - Services are `Context.Service`, not `ServiceMap.Service`.
 - Layer-owned resources use `Layer.effect`; beta.99 has no `Layer.scoped` constructor.
 - `ManagedRuntime.make(layer, { memoMap })` uses an options object.
-- HTTP is imported from `effect/unstable/http` and provided separately by a Node HTTP layer.
+- HTTP is imported from `effect/unstable/http` and provided separately by a Node HTTP layer. Streaming JSON bodies are encoded through a caller-supplied Codec; true streaming responses expose explicitly named raw bytes and discard operations.
 - `@effect/vitest` beta.99 provides `it.effect`, `it.live`, and `layer`; it does not provide the older `it.scoped` helpers.
 
 ## Final service graph
@@ -36,7 +38,7 @@ Each extension has one host-owned session runtime. `PiApi` and the package appli
 
 - `pi-cosmic-core` supplies the managed-runtime facade/session slot, typed HTTP and document adapters, `SafeFile`, `AgentDirectory`, subscription refresh coordination, security utilities, and deterministic test Layers.
 - `pi-cosmic-ui` composes config repository, narrow Pi process execution, repository probing, footer host state, and the plain-data footer protocol client.
-- Better OpenAI and Better xAI compose provider-local config/auth/request schemas with the shared refresh engine and Cosmic UI client. OpenAI additionally scopes image streaming, Sharp, safe input reads, and atomic output writes.
+- Better OpenAI and Better xAI compose provider-local config/auth/request schemas with the shared refresh engine and Cosmic UI client. Better xAI isolates Pi's Promise-shaped model-registry credential lookup behind `ModelRegistryAuth`. OpenAI fast-mode state and persistence are owned by `FastModeService`, with a frozen synchronous request projection and bounded diagnostic ingress. OpenAI additionally scopes image streaming, Sharp, safe input reads, and atomic output writes.
 - `pi-code-previews` composes session capability, settings/environment services, scoped Shiki state, and scoped before-write state. Pure diff/layout/rendering remains outside Effect.
 - `pi-advisor` composes the parent controller, review queue, child runtime, read-only filesystem, and Pi command adapter. Immediate ingestion remains a bounded synchronous projection into the controller.
 
@@ -44,7 +46,7 @@ No extension owns a telemetry exporter or process-wide Effect runtime.
 
 ## State and projection contract
 
-`SynchronizedRef` owns effectful state and serializes transitions. A successful atomic transition publishes a newly frozen `MutableRef` snapshot only when Pi needs a synchronous renderer. Renderers never mutate the snapshot, call a runner, build a Layer, or read an Effect Ref. Pure reducers, formatting, parsing of already trusted values, diffing, word matching, and TUI layout stay synchronous.
+The shared projection primitive uses `SynchronizedRef` to serialize authoritative effectful transitions and publishes cloned, deeply frozen plain-data snapshots only after transition and projection success. Better OpenAI, Better xAI, Cosmic UI, and code-preview settings/write state have adopted it while retaining synchronous renderer boundaries and pre-session snapshots. Code-preview syntax state uses one `SynchronizedRef` plus bounded ingress and publishes immutable metadata with only the current Shiki highlighter capability required by synchronous tokenization. Advisor owns immutable application-domain state separately from resources and publishes a cloned, deeply frozen controller/status snapshot before synchronous command rendering; those commands never inspect queue, runtime, or mutable controller closures. The shared bounded ingress adapter gives synchronous Pi callbacks explicit accepted, dropped, coalesced-latest, and closed results plus scoped worker cleanup. Pure reducers, formatting, parsing of already trusted values, diffing, word matching, and TUI layout stay synchronous.
 
 ## Observability contract
 
@@ -63,19 +65,18 @@ Only bounded enums, counts, methods, and status codes may be attributes. URLs, p
 
 Compiler tooling lives at the workspace root. Runtime dependencies are declared directly by every package that imports them, using the synchronized pnpm catalog. `pi-cosmic-core` is a normal publishable package and does not register a Pi extension.
 
-## Enforcement
+## Quality checks
 
-- `tsconfig.base.json` enables core language-service correctness diagnostics for every package.
-- `tsconfig.effect.json` enables Effect-native and anti-pattern diagnostics for every workspace package.
-- `scripts/run-effect-diagnostics.mjs` dynamically enumerates every package TypeScript project.
-- `scripts/check-effect-architecture.mjs` uses exact file/import/call-owner allowlists, verifies direct `catalog:` declarations, and rejects detached runners, unsafe Effect operations, unsafe JSON request bodies, raw platform globals, leaked HTTP Layers, and direct expected-error throws inside `Effect.gen`.
-- `scripts/check-effect-architecture.test.mjs` runs positive and negative AST fixtures for every strengthened rule family.
-- The temporary migration baseline was deleted after the final package cutover.
+- `tsconfig.base.json` enables strict TypeScript and core Effect language-service diagnostics for every package.
+- `tsconfig.effect.json` enables the workspace's Effect-native diagnostics.
+- Each package declares the official `effect-language-service diagnostics` command, and the root `pnpm effect:diagnostics` command runs those package scripts recursively.
+- Oxlint, package tests, packaging smoke tests, and code review cover the remaining correctness and integration concerns.
+- Architecture conventions that TypeScript, Oxlint, or the Effect language service cannot express are documented guidance. The workspace does not maintain a repository-specific static analyzer or suppression ratchet.
 
 ## Upgrade procedure
 
 1. Update all synchronized Effect packages in one commit.
 2. Re-run `effect-language-service patch`.
 3. Review release notes and the pinned declarations.
-4. Run `pnpm effect:lsp:verify` and `pnpm effect:diagnostics`.
+4. Run `pnpm effect:lsp:check` and `pnpm effect:diagnostics`.
 5. Run focused tests, pack checks, benchmarks, and `pnpm validate`.

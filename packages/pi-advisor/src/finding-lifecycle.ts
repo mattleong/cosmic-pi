@@ -9,7 +9,6 @@ import type {
 import { isRecord } from "./utils.ts";
 
 export const MAX_FINDING_LIFECYCLE_RECORDS = 64;
-
 export interface AdvisorFindingRecord {
   id: string;
   key: string;
@@ -20,138 +19,153 @@ export interface AdvisorFindingRecord {
   firstSeenTurn: number;
   lastSeenTurn: number;
 }
+export interface AdvisorFindingLifecycleState {
+  readonly records: readonly AdvisorFindingRecord[];
+}
+export const emptyAdvisorFindingLifecycle = (): AdvisorFindingLifecycleState => ({ records: [] });
 
+export const restoreAdvisorFindingLifecycle = (
+  records: readonly AdvisorFindingRecord[] | undefined,
+): AdvisorFindingLifecycleState => ({
+  records: (records?.slice(-MAX_FINDING_LIFECYCLE_RECORDS) ?? [])
+    .filter(isValidAdvisorFindingRecord)
+    .map((record) => ({ ...record })),
+});
+export const reconcileAdvisorFindings = (
+  state: AdvisorFindingLifecycleState,
+  findings: readonly AdvisorFinding[],
+  options: { scope: string; completedTurn: number; complete: boolean },
+): { readonly state: AdvisorFindingLifecycleState; readonly findings: AdvisorFinding[] } => {
+  const records = new Map(state.records.map((record) => [record.id, { ...record }]));
+  const generations = new Map<string, number>();
+  for (const record of records.values())
+    generations.set(record.key, Math.max(record.generation, generations.get(record.key) ?? 0));
+  const active = new Set<string>();
+  const enriched = findings.map((finding) => {
+    const semantic = canonicalAdvisorFindingFingerprint(
+      finding.fingerprint ?? `${finding.category} ${finding.issue} ${finding.recommendation}`,
+    );
+    const key = createHash("sha256").update(`${options.scope}\0${semantic}`).digest("hex");
+    let generation = generations.get(key) ?? 0;
+    let id = advisorFindingId(key, generation);
+    const previous = records.get(id);
+    if (previous?.status === "resolved" || previous?.status === "superseded") {
+      generation += 1;
+      generations.set(key, generation);
+      id = advisorFindingId(key, generation);
+    }
+    const record = records.get(id) ?? {
+      id,
+      key,
+      generation,
+      category: finding.category,
+      severity: finding.severity,
+      status: "open" as const,
+      firstSeenTurn: options.completedTurn,
+      lastSeenTurn: options.completedTurn,
+    };
+    if (
+      record.status === "acknowledged" &&
+      severityRank(finding.severity) > severityRank(record.severity)
+    )
+      record.status = "open";
+    record.category = finding.category;
+    record.severity = finding.severity;
+    record.lastSeenTurn = options.completedTurn;
+    records.set(id, record);
+    active.add(id);
+    return { ...finding, id, status: record.status };
+  });
+  if (options.complete)
+    for (const record of records.values()) {
+      if (
+        (record.status === "open" || record.status === "acknowledged") &&
+        !active.has(record.id)
+      ) {
+        record.status = "resolved";
+        record.lastSeenTurn = options.completedTurn;
+      }
+    }
+  const retained = trimRecords([...records.values()]);
+  return { state: { records: retained }, findings: enriched };
+};
+export const acknowledgeAdvisorFindings = (
+  state: AdvisorFindingLifecycleState,
+  ids: readonly string[],
+): AdvisorFindingLifecycleState => {
+  const selected = new Set(ids);
+  return {
+    records: state.records.map((record) =>
+      selected.has(record.id) && record.status === "open"
+        ? { ...record, status: "acknowledged" }
+        : record,
+    ),
+  };
+};
+export const supersedeAdvisorFindings = (
+  state: AdvisorFindingLifecycleState,
+  ids: readonly string[],
+): AdvisorFindingLifecycleState => {
+  const selected = new Set(ids);
+  return {
+    records: state.records.map((record) =>
+      selected.has(record.id) && (record.status === "open" || record.status === "acknowledged")
+        ? { ...record, status: "superseded" }
+        : record,
+    ),
+  };
+};
+export const advisorFindingLifecycleCounts = (
+  state: AdvisorFindingLifecycleState,
+): Record<AdvisorFindingStatus, number> => {
+  const counts = { open: 0, acknowledged: 0, resolved: 0, superseded: 0 };
+  for (const record of state.records) counts[record.status] += 1;
+  return counts;
+};
+function trimRecords(records: AdvisorFindingRecord[]): AdvisorFindingRecord[] {
+  if (records.length <= MAX_FINDING_LIFECYCLE_RECORDS) return records;
+  const sorted = [...records].sort(
+    (left, right) =>
+      Number(isTerminal(right)) - Number(isTerminal(left)) ||
+      left.lastSeenTurn - right.lastSeenTurn ||
+      left.firstSeenTurn - right.firstSeenTurn ||
+      left.id.localeCompare(right.id),
+  );
+  const evicted = new Set(
+    sorted.slice(0, records.length - MAX_FINDING_LIFECYCLE_RECORDS).map((record) => record.id),
+  );
+  return records.filter((record) => !evicted.has(record.id));
+}
+/** Compatibility facade for external callers; application state uses reducers above. */
 export class AdvisorFindingLifecycle {
-  readonly #records = new Map<string, AdvisorFindingRecord>();
-  readonly #generations = new Map<string, number>();
-
+  #state = emptyAdvisorFindingLifecycle();
   reconcile(
     findings: readonly AdvisorFinding[],
     options: { scope: string; completedTurn: number; complete: boolean },
   ): AdvisorFinding[] {
-    const active = new Set<string>();
-    const enriched = findings.map((finding) => {
-      const semantic = normalizeSemanticFinding(finding);
-      const key = semanticKey(options.scope, semantic);
-      let generation = this.#generations.get(key) ?? 0;
-      let id = advisorFindingId(key, generation);
-      const previous = this.#records.get(id);
-      if (previous?.status === "resolved" || previous?.status === "superseded") {
-        generation += 1;
-        this.#generations.set(key, generation);
-        id = advisorFindingId(key, generation);
-      }
-      const record = this.#records.get(id) ?? {
-        id,
-        key,
-        generation,
-        category: finding.category,
-        severity: finding.severity,
-        status: "open" as const,
-        firstSeenTurn: options.completedTurn,
-        lastSeenTurn: options.completedTurn,
-      };
-      const previousSeverity = record.severity;
-      if (
-        record.status === "acknowledged" &&
-        severityRank(finding.severity) > severityRank(previousSeverity)
-      ) {
-        record.status = "open";
-      }
-      record.category = finding.category;
-      record.severity = finding.severity;
-      record.lastSeenTurn = options.completedTurn;
-      this.#records.set(id, record);
-      active.add(id);
-      return { ...finding, id, status: record.status };
-    });
-    if (options.complete) {
-      for (const record of this.#records.values()) {
-        if (
-          (record.status === "open" || record.status === "acknowledged") &&
-          !active.has(record.id)
-        ) {
-          record.status = "resolved";
-          record.lastSeenTurn = options.completedTurn;
-        }
-      }
-    }
-    this.#trim();
-    return enriched;
+    const result = reconcileAdvisorFindings(this.#state, findings, options);
+    this.#state = result.state;
+    return result.findings;
   }
-
   acknowledge(ids: readonly string[]): void {
-    for (const id of ids) {
-      const record = this.#records.get(id);
-      if (record?.status === "open") record.status = "acknowledged";
-    }
+    this.#state = acknowledgeAdvisorFindings(this.#state, ids);
   }
-
   supersede(ids: readonly string[]): void {
-    for (const id of ids) {
-      const record = this.#records.get(id);
-      if (record && (record.status === "open" || record.status === "acknowledged")) {
-        record.status = "superseded";
-      }
-    }
+    this.#state = supersedeAdvisorFindings(this.#state, ids);
   }
-
   snapshot(): AdvisorFindingRecord[] {
-    return [...this.#records.values()].map((record) => ({ ...record }));
+    return this.#state.records.map((record) => ({ ...record }));
   }
-
   restore(records: readonly AdvisorFindingRecord[] | undefined): void {
-    this.reset();
-    for (const candidate of records?.slice(-MAX_FINDING_LIFECYCLE_RECORDS) ?? []) {
-      if (!isValidAdvisorFindingRecord(candidate)) continue;
-      const record = { ...candidate };
-      this.#records.set(record.id, record);
-      this.#generations.set(
-        record.key,
-        Math.max(record.generation, this.#generations.get(record.key) ?? 0),
-      );
-    }
+    this.#state = restoreAdvisorFindingLifecycle(records);
   }
-
   counts(): Record<AdvisorFindingStatus, number> {
-    const counts = { open: 0, acknowledged: 0, resolved: 0, superseded: 0 };
-    for (const record of this.#records.values()) counts[record.status] += 1;
-    return counts;
+    return advisorFindingLifecycleCounts(this.#state);
   }
-
   reset(): void {
-    this.#records.clear();
-    this.#generations.clear();
-  }
-
-  #trim(): void {
-    if (this.#records.size <= MAX_FINDING_LIFECYCLE_RECORDS) return;
-    const evictionOrder = [...this.#records.values()].sort((left, right) => {
-      const terminalDifference = Number(isTerminal(right)) - Number(isTerminal(left));
-      if (terminalDifference !== 0) return terminalDifference;
-      return (
-        left.lastSeenTurn - right.lastSeenTurn ||
-        left.firstSeenTurn - right.firstSeenTurn ||
-        left.id.localeCompare(right.id)
-      );
-    });
-    for (const record of evictionOrder) {
-      if (this.#records.size <= MAX_FINDING_LIFECYCLE_RECORDS) break;
-      this.#records.delete(record.id);
-    }
-    const retainedKeys = new Set([...this.#records.values()].map((record) => record.key));
-    for (const key of this.#generations.keys()) {
-      if (!retainedKeys.has(key)) this.#generations.delete(key);
-    }
+    this.#state = emptyAdvisorFindingLifecycle();
   }
 }
-
-function normalizeSemanticFinding(finding: AdvisorFinding): string {
-  return canonicalAdvisorFindingFingerprint(
-    finding.fingerprint ?? `${finding.category} ${finding.issue} ${finding.recommendation}`,
-  );
-}
-
 export function isValidAdvisorFindingRecord(value: unknown): value is AdvisorFindingRecord {
   if (!isRecord(value)) return false;
   return (
@@ -180,19 +194,12 @@ export function isValidAdvisorFindingRecord(value: unknown): value is AdvisorFin
     value.id === advisorFindingId(value.key, value.generation)
   );
 }
-
 function isTerminal(record: AdvisorFindingRecord): boolean {
   return record.status === "resolved" || record.status === "superseded";
 }
-
-function semanticKey(scope: string, semantic: string): string {
-  return createHash("sha256").update(`${scope}\0${semantic}`).digest("hex");
-}
-
 function severityRank(severity: AdvisorSeverity): number {
   return severity === "blocker" ? 2 : severity === "concern" ? 1 : 0;
 }
-
 export function advisorFindingId(key: string, generation: number): string {
   return `af_${createHash("sha256").update(`${key}\0${generation}`).digest("hex").slice(0, 32)}`;
 }

@@ -74,6 +74,7 @@ function harness(dependencies?: BetterOpenAIExtensionDependencies) {
       getSessionName: () => undefined,
     },
     getContextUsage: () => ({ contextWindow: 100, percent: 1 }),
+    isProjectTrusted: vi.fn(() => true),
   } as unknown as ExtensionContext;
   if (dependencies) betterOpenAIWithDependencies(pi, dependencies);
   else betterOpenAI(pi);
@@ -105,6 +106,7 @@ describe("Better OpenAI session boundary", () => {
     const removeListener = vi.spyOn(controller.signal, "removeEventListener");
     await h.emit("session_start");
     await h.emit("session_start");
+    expect(h.ctx.isProjectTrusted).toHaveBeenCalledTimes(2);
     expect(addListener.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(removeListener.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(h.ctx.ui.notify).not.toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");

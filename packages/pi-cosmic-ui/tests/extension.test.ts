@@ -9,6 +9,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
 import cosmicUi from "../index.ts";
 import {
+  COSMIC_UI_FOOTER_INVALIDATE,
+  COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_FOOTER_UPSERT,
   COSMIC_UI_HOST_QUERY,
   COSMIC_UI_PROTOCOL_VERSION,
@@ -70,6 +72,7 @@ function harness(mode: "tui" | "rpc" = "tui") {
       getLeafId: vi.fn(() => "leaf"),
     },
     ui: { setFooter, notify: vi.fn(), custom: vi.fn() },
+    isProjectTrusted: vi.fn(() => true),
   } as unknown as ExtensionContext;
   cosmicUi(pi);
   return { pi, ctx, handlers, setFooter, exec, unsubscribed };
@@ -162,6 +165,7 @@ describe("Cosmic UI extension", () => {
       },
     });
     await emit(h, "session_start");
+    expect(h.ctx.isProjectTrusted).toHaveBeenCalledOnce();
     expect(h.setFooter).toHaveBeenCalledOnce();
     const factory = h.setFooter.mock.calls[0]?.[0];
     const footer = factory(
@@ -211,6 +215,90 @@ describe("Cosmic UI extension", () => {
     await emit(h, "message_update");
     footer.render(100);
     expect(h.ctx.getContextUsage).toHaveBeenCalledTimes(2);
+  });
+
+  test("normalizes hostile protocol getters once and isolates throwing reads", async () => {
+    const h = harness();
+    const respond = vi.fn();
+    const invalidate = vi.fn();
+    const dispose = vi.fn();
+    const stateful = <A>(value: A) => {
+      let reads = 0;
+      return () => {
+        reads++;
+        if (reads > 1) throw new Error("protocol getter reread");
+        return value;
+      };
+    };
+    const queryRespond = stateful(respond);
+    const upsertOwner = stateful("owner");
+    const contribution = stateful({
+      kind: "surface",
+      id: "surface",
+      region: "media",
+      preferredWidth: 8,
+      render: () => [],
+      invalidate,
+      dispose,
+    });
+    const invalidateOwner = stateful("owner");
+    const removeId = stateful("surface");
+
+    expect(() =>
+      h.pi.events.emit(COSMIC_UI_HOST_QUERY, {
+        version: 1,
+        get respond() {
+          return queryRespond();
+        },
+      }),
+    ).not.toThrow();
+    expect(respond).toHaveBeenCalledOnce();
+    expect(() =>
+      h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
+        version: 1,
+        get owner() {
+          return upsertOwner();
+        },
+        get contribution() {
+          return contribution();
+        },
+      }),
+    ).not.toThrow();
+    await emit(h, "session_start");
+    expect(() =>
+      h.pi.events.emit(COSMIC_UI_FOOTER_INVALIDATE, {
+        version: 1,
+        get owner() {
+          return invalidateOwner();
+        },
+        id: "surface",
+      }),
+    ).not.toThrow();
+    await waitUntil(() => invalidate.mock.calls.length === 1);
+    expect(() =>
+      h.pi.events.emit(COSMIC_UI_FOOTER_REMOVE, {
+        version: 1,
+        owner: "owner",
+        get id() {
+          return removeId();
+        },
+      }),
+    ).not.toThrow();
+    await waitUntil(() => dispose.mock.calls.length === 1);
+
+    const throwing = Object.defineProperty({}, "version", {
+      get() {
+        throw new Error("secret hostile getter");
+      },
+    });
+    for (const eventName of [
+      COSMIC_UI_HOST_QUERY,
+      COSMIC_UI_FOOTER_UPSERT,
+      COSMIC_UI_FOOTER_REMOVE,
+      COSMIC_UI_FOOTER_INVALIDATE,
+    ])
+      expect(() => h.pi.events.emit(eventName, throwing)).not.toThrow();
+    await emit(h, "session_shutdown");
   });
 
   test("reinstalls the footer when session_start supplies a new context", async () => {

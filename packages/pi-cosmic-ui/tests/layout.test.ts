@@ -7,7 +7,6 @@ import {
   renderOpenAIUsageLine,
   renderXaiUsageLine,
 } from "../src/footer/layout.ts";
-import { FooterContributionRegistry } from "../src/footer/registry.ts";
 
 const theme = { fg: (_color: string, text: string) => `\x1b[2m${text}\x1b[0m` };
 
@@ -181,57 +180,5 @@ describe("responsive footer layout", () => {
     expect(lines[1]).toContain("\x1b[0m\r\x1b[1A\x1b_Ga=p,i=1\x1b\\\x1b[1B");
     expect(lines[1]).not.toContain("\x1b[1A\x1b[1A");
     expect(lines[1]).not.toContain("\x1b[1B\x1b[1B");
-  });
-});
-
-describe("contribution registry", () => {
-  test("keeps owner and contribution identifiers collision-safe", () => {
-    const registry = new FooterContributionRegistry();
-    registry.upsert("a", {
-      kind: "text",
-      id: "b:c",
-      region: "details",
-      text: "first",
-    });
-    registry.upsert("a:b", {
-      kind: "text",
-      id: "c",
-      region: "details",
-      text: "second",
-    });
-
-    expect(
-      registry.list().map((entry) => (entry.kind === "text" ? entry.text : "surface")),
-    ).toEqual(["first", "second"]);
-    registry.remove("a");
-    expect(registry.list()).toEqual([expect.objectContaining({ id: "c", text: "second" })]);
-  });
-
-  test("attaches, invalidates, and disposes surfaces", () => {
-    const registry = new FooterContributionRegistry();
-    const requestRender = vi.fn();
-    const attach = vi.fn();
-    const detach = vi.fn();
-    const invalidate = vi.fn();
-    const dispose = vi.fn();
-    registry.setRenderRequest(requestRender);
-    registry.upsert("owner", {
-      kind: "surface",
-      id: "media",
-      region: "media",
-      preferredWidth: 8,
-      attach,
-      detach,
-      invalidate,
-      dispose,
-      render: () => [],
-    });
-    expect(attach).toHaveBeenCalledOnce();
-    registry.setRenderRequest(undefined);
-    expect(detach).toHaveBeenCalledOnce();
-    registry.invalidate("owner", "media");
-    expect(invalidate).toHaveBeenCalledOnce();
-    registry.remove("owner");
-    expect(dispose).toHaveBeenCalledOnce();
   });
 });

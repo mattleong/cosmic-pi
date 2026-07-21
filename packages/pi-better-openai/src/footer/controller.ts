@@ -1,10 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedConfig } from "../config.ts";
-import { supportsFast, type FastController } from "../fast-controller.ts";
+import { isFastActive, statusSegment, type FastSnapshot } from "../fast-controller.ts";
 import { abbreviateHomePath } from "../footer-layout.ts";
 import { formatTokens, sanitizeStatusText, truncateToWidth, visibleWidth } from "../format.ts";
 import { STATUS_KEY } from "../identity.ts";
-import type * as MutableRef from "effect/MutableRef";
+import * as MutableRef from "effect/MutableRef";
 import { visibleStatusLine, type OpenAIProjection } from "../usage-controller.ts";
 
 export interface FooterController {
@@ -25,11 +25,11 @@ export interface FooterController {
 export function createFooterController(deps: {
   pi: ExtensionAPI;
   config(ctx: ExtensionContext): ResolvedConfig;
-  fastController: FastController;
+  fastProjection: MutableRef.MutableRef<FastSnapshot>;
   projection: MutableRef.MutableRef<OpenAIProjection>;
   hasTerminalUI(ctx: ExtensionContext): boolean;
 }): FooterController {
-  const { pi, config, fastController, projection, hasTerminalUI } = deps;
+  const { pi, config, fastProjection, projection, hasTerminalUI } = deps;
   let footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   let footerInstalled = false;
   let requestFooterRender: (() => void) | undefined;
@@ -147,7 +147,7 @@ export function createFooterController(deps: {
 
           const modelName = renderContext.model?.id || "no-model";
           const thinkingLevel = pi.getThinkingLevel();
-          const fastActive = fastController.active && supportsFast(renderContext);
+          const fastActive = isFastActive(renderContext, MutableRef.get(fastProjection));
           let rightWithoutProvider = modelName;
           if (renderContext.model?.reasoning) {
             const effort = thinkingLevel === "off" ? "thinking off" : thinkingLevel;
@@ -235,7 +235,7 @@ export function createFooterController(deps: {
         setStatus(ctx, undefined);
         return;
       }
-      const fast = fastController.statusSegment(ctx);
+      const fast = statusSegment(ctx, MutableRef.get(fastProjection));
       const usage = visibleStatusLine(ctx, cfg, projection);
       setStatus(ctx, [fast, usage].filter(Boolean).join(" | ") || undefined);
       return;
@@ -253,7 +253,7 @@ export function createFooterController(deps: {
       return;
     }
 
-    const fast = fastController.statusSegment(ctx);
+    const fast = statusSegment(ctx, MutableRef.get(fastProjection));
     const usage = visibleStatusLine(ctx, cfg, projection);
     setStatus(ctx, [fast, usage].filter(Boolean).join(" | ") || undefined);
   }

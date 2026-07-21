@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { AsyncPreview, shouldRenderAsync } from "../../preview/async";
-import { hasCodePreviewSessionCapability } from "../../session-capability";
+import { DeferredPreview, shouldRenderDeferred } from "../../preview/async";
+import { isCodePreviewSessionActive } from "../../session-projection";
 
 export function cachedPreview(
   state: Record<string, unknown>,
@@ -23,7 +23,7 @@ export function cachedPreview(
   return state[componentName] as Component;
 }
 
-export function cachedAsyncPreview(
+export function cachedDeferredPreview(
   state: Record<string, unknown>,
   keyName: string,
   componentName: string,
@@ -40,9 +40,12 @@ export function cachedAsyncPreview(
     componentName,
     key,
     () =>
-      shouldRenderAsync(source) && hasCodePreviewSessionCapability()
-        ? new AsyncPreview(loadingLabel, theme, render, invalidate)
+      shouldRenderDeferred(source) && isCodePreviewSessionActive()
+        ? new DeferredPreview(loadingLabel, theme, render, invalidate)
         : render(),
     source,
   );
 }
+
+/** Compatibility alias; new internal call sites use deferred terminology. */
+export const cachedAsyncPreview = cachedDeferredPreview;

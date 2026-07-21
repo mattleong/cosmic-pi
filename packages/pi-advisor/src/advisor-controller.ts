@@ -6,8 +6,10 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
-import * as SynchronizedRef from "effect/SynchronizedRef";
+import { makeAdvisorProjection, type AdvisorControllerSnapshot } from "./advisor-projection.ts";
+import { makeAdvisorResourceState } from "./advisor-resource-state.ts";
+import { makeCheckpointOrchestrator } from "./checkpoint-orchestrator.ts";
+import { makeAdvisorStatusService } from "./status-service.ts";
 import {
   advisorPlatformLayer,
   type AdvisorEffectExecutor,
@@ -18,7 +20,7 @@ import {
   makePiSessionRuntimeSlot,
   type PiSessionRuntimeSlot,
 } from "pi-cosmic-core";
-import { advisorDelay, advisorInterval, advisorNow } from "./boundary/clock.ts";
+import { advisorDelay, advisorNow } from "./boundary/clock.ts";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
 import { isRecord } from "./utils.ts";
 import {
@@ -52,27 +54,44 @@ import {
 } from "./checkpoint-ledger.ts";
 import {
   getAdvisorConfigPath,
-  loadAdvisorConfigEffect,
   normalizeAdvisorConfig,
-  writeAdvisorConfigPatchEffect,
   type ResolvedAdvisorConfig,
 } from "./config.ts";
-import { safeAdvisorLabel } from "./advisor-label.ts";
-import { AdvisorFindingDedupe, type AdvisorFindingDedupeRollback } from "./dedupe.ts";
-import { gateAdvisorFindings } from "./finding-gates.ts";
-import { AdvisorFindingLifecycle } from "./finding-lifecycle.ts";
-import { AdvisorPerspectiveBudget } from "./perspective-budget.ts";
 import {
-  AdvisorInterventionBudget,
-  type AdvisorInterventionBudgetSnapshot,
+  ConfigRepository,
+  configRepositoryLayer,
+  configRepositoryTestLayer,
+} from "./config-repository.ts";
+import { safeAdvisorLabel } from "./advisor-label.ts";
+import { filterAdvisorFindingsWithRollback, rollbackAdvisorFindingDedupe } from "./dedupe.ts";
+import { gateAdvisorFindings } from "./finding-gates.ts";
+import {
+  acknowledgeAdvisorFindings,
+  advisorFindingLifecycleCounts,
+  emptyAdvisorFindingLifecycle,
+  reconcileAdvisorFindings,
+  restoreAdvisorFindingLifecycle,
+} from "./finding-lifecycle.ts";
+import { commitAdvisorPerspective, selectAdvisorPerspective } from "./perspective-budget.ts";
+import {
+  canCorrectAdvisorIntervention,
+  canDeliverAdvisorIntervention,
+  commitAdvisorIntervention,
+  emptyAdvisorInterventionBudget,
+  sanitizeInterventionBudgetSnapshot,
 } from "./intervention-budget.ts";
 import {
-  AdvisorEmissionGuard,
+  createAdvisorEmissionGuardState,
+  evaluateAdvisorEmission,
+  exportAdvisorEmissionRecords,
   highestAdvisorSeverity,
+  rollbackAdvisorEmission,
   type AdvisorEmissionRollback,
 } from "./emission-guard.ts";
 import { buildAdvisorContext } from "./context.ts";
-import { logAdvisorFailureEffect, logAdvisorFailureAsync } from "./failure-log.ts";
+import type { AdvisorFailureDetails } from "./failure-log.ts";
+import { FailureLogger, failureLoggerLayer, failureLoggerTestLayer } from "./failure-logger.ts";
+import { HostNotifier, hostNotifierLayer, type HostNotifierShape } from "./host-notifier.ts";
 import { loadAdvisorInstructionsEffect, type LoadedAdvisorInstructions } from "./instructions.ts";
 import { ADVISOR_REVIEW_MESSAGE_TYPE, registerAdvisorReviewRenderer } from "./renderer.ts";
 import {
@@ -87,7 +106,17 @@ import {
   type AdvisorReview,
   type AdvisorReviewFocus,
 } from "./review.ts";
-import { AdvisorRoutingState, routeAdvisorFinding, type AdvisorRoute } from "./routing.ts";
+import {
+  armAdvisorInterruption,
+  clearAdvisorCancellation,
+  completeAdvisorPrimaryTurn,
+  emptyAdvisorRoutingState,
+  isAdvisorImmunityActive,
+  latchAdvisorCancellation,
+  routeAdvisorFinding,
+  sanitizeAdvisorRoutingState,
+  type AdvisorRoute,
+} from "./routing.ts";
 import { PiCommandAdapter } from "./pi-command-adapter.ts";
 import {
   emptyAdvisorOutcomes,
@@ -96,11 +125,26 @@ import {
   registerAdvisorCommands,
 } from "./settings.ts";
 import {
-  AdvisorToolTrajectoryDetector,
-  AdvisorTrajectoryDetector,
+  advisorActiveToolCount,
+  emptyAdvisorToolTrajectoryDetector,
+  emptyAdvisorTrajectoryDetector,
+  endAdvisorToolTrajectory,
+  isMateriallyNovelAdvisorTerminal,
   LONG_TURN_REVIEW_MS,
+  markConcreteAdvisorProgress,
   MAX_TRAJECTORY_EVIDENCE_CHARS,
+  pushAdvisorTrajectory,
+  startAdvisorToolTrajectory,
 } from "./trajectory.ts";
+import {
+  initialAdvisorApplicationState,
+  makeAdvisorApplicationStateStore,
+  recordAdvisorReceipt,
+  resetAdvisorRequestDomain,
+  setAdvisorSpinnerOwner,
+  type AdvisorActiveTrajectoryState,
+  type AdvisorApplicationState,
+} from "./advisor-application-state.ts";
 
 export class AdvisorExtensionError extends Schema.TaggedErrorClass<AdvisorExtensionError>()(
   "AdvisorExtensionError",
@@ -124,16 +168,18 @@ export const awaitAdvisorCatchUpEffect = (
   onTimeout: Effect.Effect<void> = Effect.void,
 ): Effect.Effect<AdvisorCatchUpOutcome> =>
   settlement.pipe(
-    Effect.raceFirst(
-      Effect.sleep(timeoutMs).pipe(Effect.andThen(onTimeout), Effect.as("timeout" as const)),
-    ),
+    Effect.raceFirst(Effect.sleep(timeoutMs).pipe(Effect.as("timeout" as const))),
     Effect.raceFirst(cancellation),
+    Effect.flatMap((outcome) =>
+      outcome === "timeout" ? onTimeout.pipe(Effect.as(outcome)) : Effect.succeed(outcome),
+    ),
     Effect.withSpan("pi-advisor.catch-up"),
   );
 
 interface AdvisorCheckpointHandle {
   invalidate(): void;
   cancel(): void;
+  cancelEffect: Effect.Effect<void>;
   settlement: Effect.Effect<CheckpointSettlement>;
 }
 type ReviewSource =
@@ -153,35 +199,11 @@ export type AdvisorSkipReason =
   | "session-paused"
   | "unconfigured";
 
-interface ActiveTurnObservation {
-  abortAllowed: boolean;
-  ctx: ExtensionContext;
-  detector: AdvisorTrajectoryDetector;
-  toolDetector: AdvisorToolTrajectoryDetector;
-  generation: number;
-  id: number;
-  loopChannel?: "thinking" | "text";
-  loopConfirmed: boolean;
-  loopReason?: string;
-  reviewQueued: boolean;
-  text: string;
-  thinkingChars: number;
-  cancelTimer?: () => void;
-  turnIndex: number;
-}
-
 interface LastCandidate {
   candidate: string;
   generation: number;
   messages: unknown[];
   sessionEpoch: number;
-}
-
-export interface AdvisorControllerSnapshot {
-  readonly config: ResolvedAdvisorConfig;
-  readonly metrics: AdvisorSessionMetrics;
-  readonly paused: boolean;
-  readonly started: boolean;
 }
 
 type AdvisorHostEventHandler = (event: never, ctx: ExtensionContext) => unknown | Promise<unknown>;
@@ -192,8 +214,10 @@ type AdvisorHostCommandHandler = (
 ) => unknown | Promise<unknown>;
 
 export interface AdvisorControllerShape {
-  readonly snapshot: SynchronizedRef.SynchronizedRef<AdvisorControllerSnapshot>;
+  /** Synchronous Pi/TUI boundary; returns a deeply frozen projection only. */
+  readonly getSnapshot: () => AdvisorControllerSnapshot;
   readonly publish: (snapshot: AdvisorControllerSnapshot) => Effect.Effect<void>;
+  readonly refreshProjection: Effect.Effect<void>;
   readonly replaceChild: <A, E, R>(
     acquire: Effect.Effect<A, E, R>,
     release: (child: A) => Effect.Effect<void>,
@@ -234,28 +258,16 @@ export class AdvisorController extends Context.Service<AdvisorController, Adviso
   "pi-advisor/advisor-controller/AdvisorController",
 ) {}
 
-interface AdvisorOwnedChild {
-  readonly value: unknown;
-  readonly release: Effect.Effect<void>;
-}
-
 export const advisorControllerLayer = Layer.effect(
   AdvisorController,
   Effect.gen(function* () {
-    const transitionLock = yield* Semaphore.make(1);
-    const snapshot = yield* SynchronizedRef.make<AdvisorControllerSnapshot>({
+    const resources = yield* makeAdvisorResourceState();
+    const projection = yield* makeAdvisorProjection({
       config: normalizeAdvisorConfig({}, ""),
       metrics: emptySessionMetrics(),
       paused: false,
       started: false,
     });
-    const child = yield* SynchronizedRef.make<AdvisorOwnedChild | undefined>(undefined);
-    const stopChild = transitionLock.withPermits(1)(
-      Effect.gen(function* () {
-        const active = yield* SynchronizedRef.getAndSet(child, undefined);
-        if (active) yield* active.release;
-      }),
-    );
     const unavailable = (operation: string) =>
       Effect.fail(
         new AdvisorExtensionError({
@@ -264,22 +276,11 @@ export const advisorControllerLayer = Layer.effect(
         }),
       );
     const service = AdvisorController.of({
-      snapshot,
-      publish: (next) => SynchronizedRef.set(snapshot, Object.freeze(next)),
-      replaceChild: (acquire, release) =>
-        transitionLock.withPermits(1)(
-          Effect.gen(function* () {
-            const active = yield* SynchronizedRef.getAndSet(child, undefined);
-            if (active) yield* active.release;
-            const next = yield* acquire;
-            yield* SynchronizedRef.set(child, {
-              value: next,
-              release: release(next),
-            });
-            return next;
-          }),
-        ),
-      stopChild: () => stopChild,
+      getSnapshot: projection.getSnapshot,
+      publish: (next) => projection.replace(next).pipe(Effect.orDie),
+      refreshProjection: Effect.void,
+      replaceChild: resources.replaceChild,
+      stopChild: () => resources.stopChild,
       sessionInitialize: () => unavailable("session initialize"),
       sessionShutdown: () => unavailable("session shutdown"),
       event: (name) => unavailable(name),
@@ -288,7 +289,7 @@ export const advisorControllerLayer = Layer.effect(
       cancel: () => unavailable("cancel"),
       command: (name) => unavailable(`command ${name}`),
     });
-    yield* Effect.addFinalizer(() => stopChild);
+    yield* Effect.addFinalizer(() => resources.stopChild);
     return service;
   }),
 );
@@ -297,7 +298,7 @@ export interface AdvisorExtensionDependencies {
   loadConfig?: (path?: string) => ResolvedAdvisorConfig | Promise<ResolvedAdvisorConfig>;
   logFailure?: (
     configPath: string,
-    details: Parameters<typeof logAdvisorFailureAsync>[1],
+    details: AdvisorFailureDetails,
   ) => string | undefined | Promise<string | undefined>;
   createRuntime?: (executor: AdvisorEffectExecutor) => AdvisorRuntimeDriver;
   /** Test seam only. Production always uses the hard exported cap. */
@@ -318,8 +319,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
     AdvisorController,
     Effect.gen(function* () {
       const { pi, dependencies } = options;
-      const loadConfig = dependencies.loadConfig;
-      const logFailure = dependencies.logFailure;
       const createRuntime = dependencies.createRuntime;
       const catchUpTimeoutMs = Math.min(
         ADVISOR_CATCH_UP_TIMEOUT_MS,
@@ -328,38 +327,25 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       const productionRuntimeService = yield* AdvisorRuntimeService;
       const productionQueueService = yield* AdvisorReviewQueueService;
       const commandAdapter = yield* PiCommandAdapter;
+      const configRepository = yield* ConfigRepository;
+      const failureLogger = yield* FailureLogger;
+      const hostNotifier = yield* HostNotifier;
+      const applicationScope = yield* Effect.scope;
       const platformContext = yield* Effect.context<AdvisorPlatform>();
-      const transitionLock = yield* Semaphore.make(1);
-      const snapshot = yield* SynchronizedRef.make<AdvisorControllerSnapshot>({
+      const resources = yield* makeAdvisorResourceState();
+      const checkpointOrchestrator = yield* makeCheckpointOrchestrator(options.executor);
+      const statusService = yield* makeAdvisorStatusService(options.executor);
+      const projection = yield* makeAdvisorProjection({
         config: normalizeAdvisorConfig({}, ""),
         metrics: emptySessionMetrics(),
         paused: false,
         started: false,
       });
-      const child = yield* SynchronizedRef.make<AdvisorOwnedChild | undefined>(undefined);
-      const stopOwnedChild = transitionLock.withPermits(1)(
-        Effect.gen(function* () {
-          const active = yield* SynchronizedRef.getAndSet(child, undefined);
-          if (active) yield* active.release;
-        }),
-      );
       const productionController = {
-        publish: (next: AdvisorControllerSnapshot) =>
-          SynchronizedRef.set(snapshot, Object.freeze(next)),
-        replaceChild: <A, E, R>(
-          acquire: Effect.Effect<A, E, R>,
-          release: (value: A) => Effect.Effect<void>,
-        ) =>
-          transitionLock.withPermits(1)(
-            Effect.gen(function* () {
-              const active = yield* SynchronizedRef.getAndSet(child, undefined);
-              if (active) yield* active.release;
-              const next = yield* acquire;
-              yield* SynchronizedRef.set(child, { value: next, release: release(next) });
-              return next;
-            }),
-          ),
-        stopChild: () => stopOwnedChild,
+        publish: (next: AdvisorControllerSnapshot) => projection.replace(next).pipe(Effect.orDie),
+        publishNow: projection.replaceNow,
+        replaceChild: resources.replaceChild,
+        stopChild: () => resources.stopChild,
       };
       const capturingPi = new Proxy(pi, {
         get(target, property, receiver) {
@@ -377,97 +363,159 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           return Reflect.get(target, property, receiver);
         },
       }) as ExtensionAPI;
-      let config = normalizeAdvisorConfig({}, "");
       const parentExecutor: AdvisorEffectExecutor = options.executor;
       let parentGeneration = 0;
       let removeHostCancellation: (() => void) | undefined;
       let configRevision = 0;
-      let epoch = 0;
-      let parentTurnId = 0;
       let checkpointId = 0;
       let queue: AdvisorReviewQueue | undefined;
       let runtime: AdvisorRuntimeServiceShape | undefined;
       let runtimeCursor: { anchor: string | null; fingerprint: string } | undefined;
       let activeContext: ExtensionContext | undefined;
-      let metrics = emptySessionMetrics();
-      const publishControllerSnapshot = (): void => {
-        const controller = productionController;
-        const executor = parentExecutor;
-        if (!controller || !executor) return;
-        executor.fork(controller.publish({ config, metrics, paused, started }));
-      };
-      const activeCheckpointInvalidators = new Set<() => void>();
-      const activeCheckpointCancellationFinalizers = new Set<() => void>();
+      const applicationStateStore = makeAdvisorApplicationStateStore(
+        initialAdvisorApplicationState(normalizeAdvisorConfig({}, "")),
+      );
       let instructions: LoadedAdvisorInstructions = { paths: [] };
-      let paused = false;
-      let reviewNext = false;
       let pendingExplicitStart: number | undefined;
       let explicitStartSequence = 0;
       let lastCandidate: LastCandidate | undefined;
-      let started = false;
       let childStartedOnce = false;
-      let activeTrajectory: ActiveTurnObservation | undefined;
       let trajectorySequence = 0;
-      let pendingPersistentRecovery:
-        | {
-            review: AdvisorReview;
-            config: ResolvedAdvisorConfig;
-            phase: ReviewPhase;
-            epoch: number;
-            parentTurnId: number;
-            configRevision: number;
-            cancellationEpoch: number;
-            recovering: boolean;
-            findingIds: string[];
-            metrics: AdvisorSessionMetrics;
-            budgetBefore: AdvisorInterventionBudgetSnapshot;
-            dedupeRollback: AdvisorFindingDedupeRollback;
-            emission: { checkpointId: string; hash: string; rollback: AdvisorEmissionRollback };
-          }
+      let activeTrajectoryResource:
+        | { readonly id: number; readonly ctx: ExtensionContext; cancelTimer?: () => void }
         | undefined;
-      let cancellationEpoch = 0;
-      let abortInProgress:
-        | {
-            epoch: number;
-            parentTurnId: number;
-            turnIndex: number;
-            trajectoryId: number;
-            cancellationEpoch: number;
-          }
-        | undefined;
-      const findingDedupe = new AdvisorFindingDedupe();
-      const findingLifecycle = new AdvisorFindingLifecycle();
-      const perspectiveBudget = new AdvisorPerspectiveBudget();
-      const interventionBudget = new AdvisorInterventionBudget();
       let perspectiveCheckpointUsed = false;
-      const routingState = new AdvisorRoutingState();
-      let requestSequence = 0;
-      let pendingInterventionReceipt:
-        | { ids: string[]; count: number; cancellationEpoch: number; requestSequence: number }
-        | undefined;
-      const recordReceipt = (ids: readonly string[]): void => {
-        const prior = pendingInterventionReceipt;
-        pendingInterventionReceipt = {
-          ids:
-            prior?.requestSequence === requestSequence
-              ? [...new Set([...prior.ids, ...ids])].slice(0, 5)
-              : [...ids],
-          count: prior?.requestSequence === requestSequence ? prior.count + 1 : 1,
-          cancellationEpoch,
-          requestSequence,
-        };
+
+      const controllerSnapshot = (state: AdvisorApplicationState): AdvisorControllerSnapshot => ({
+        config: state.config,
+        metrics: {
+          ...state.metrics,
+          ...state.resourceSummary,
+          childResets: state.metrics.childResets ?? 0,
+          guidancePaths: state.guidancePaths,
+          hasLastCandidate: state.hasLastCandidate,
+          findingLifecycle: advisorFindingLifecycleCounts(state.findingLifecycle),
+          interventionBudget: state.interventionBudget,
+          paused: state.paused,
+          reviewNext: state.reviewNext,
+        },
+        paused: state.paused,
+        started: state.started,
+      });
+      const refreshResourceSummary = (): AdvisorApplicationState =>
+        applicationStateStore.transition((state) => ({
+          ...state,
+          resourceSummary: {
+            activeToolNames: queue?.activeToolNames ?? [],
+            backlog: queue?.backlog ?? 0,
+            backgroundState: queue?.hasActiveCheckpoint
+              ? "reviewing"
+              : queue && queue.pendingCheckpoints > 0
+                ? "queued"
+                : "idle",
+            processedSequence: queue?.processedThrough ?? 0,
+            queuedReviews: queue?.pendingCheckpoints ?? 0,
+            sequence: queue?.sequence ?? 0,
+          },
+        }));
+      const publishControllerSnapshotNow = (): void => {
+        const state = refreshResourceSummary();
+        productionController.publishNow(controllerSnapshot(state));
       };
-      const emissionGuard = new AdvisorEmissionGuard();
+      const publishControllerSnapshot = (): Effect.Effect<void> => {
+        const state = refreshResourceSummary();
+        return productionController.publish(controllerSnapshot(state));
+      };
+      const updateApplicationState = (
+        update: (state: AdvisorApplicationState) => AdvisorApplicationState,
+      ): void => {
+        applicationStateStore.transition(update);
+        publishControllerSnapshotNow();
+      };
+      const cloneMetrics = (current: AdvisorSessionMetrics): AdvisorSessionMetrics => ({
+        ...current,
+        outcomes: { ...current.outcomes },
+        ...(current.skippedReviews
+          ? { skippedReviews: { ...current.skippedReviews } }
+          : { skippedReviews: {} }),
+        ...(current.usageByModel
+          ? {
+              usageByModel: Object.fromEntries(
+                Object.entries(current.usageByModel).map(([key, usage]) => [key, { ...usage }]),
+              ),
+            }
+          : { usageByModel: {} }),
+      });
+      const mutateMetrics = (mutate: (next: AdvisorSessionMetrics) => void): void => {
+        updateApplicationState((state) => {
+          const next = cloneMetrics(state.metrics);
+          mutate(next);
+          return { ...state, metrics: next };
+        });
+      };
+      const currentConfig = (): ResolvedAdvisorConfig => applicationStateStore.get().config;
+      const isPaused = (): boolean => applicationStateStore.get().paused;
+      const isStarted = (): boolean => applicationStateStore.get().started;
+      const mutateTrajectory = (
+        id: number,
+        mutate: (next: AdvisorActiveTrajectoryState) => AdvisorActiveTrajectoryState,
+      ): AdvisorActiveTrajectoryState | undefined => {
+        let result: AdvisorActiveTrajectoryState | undefined;
+        updateApplicationState((state) => {
+          if (!state.activeTrajectory || state.activeTrajectory.id !== id) return state;
+          result = mutate({ ...state.activeTrajectory });
+          return { ...state, activeTrajectory: result };
+        });
+        return result;
+      };
+      const setDomainCounter = (
+        key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
+        value: number,
+      ): number => {
+        updateApplicationState((state) => ({ ...state, [key]: value }));
+        return value;
+      };
+      const advanceDomainCounter = (
+        key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
+      ): number => setDomainCounter(key, applicationStateStore.get()[key] + 1);
+      const recordReceipt = (ids: readonly string[]): void => {
+        updateApplicationState((state) =>
+          recordAdvisorReceipt(
+            {
+              ...state,
+              cancellationEpoch: applicationStateStore.get().cancellationEpoch,
+              requestSequence: applicationStateStore.get().requestSequence,
+            },
+            ids,
+          ),
+        );
+      };
+      const clearPendingReceipt = (): void => {
+        updateApplicationState((state) => ({ ...state, pendingReceipt: undefined }));
+      };
+      const latchCancellation = (): void => {
+        updateApplicationState((state) => ({
+          ...state,
+          routing: latchAdvisorCancellation(state.routing),
+        }));
+      };
+      const resetRequestDomain = (resetLifecycle = false): void => {
+        updateApplicationState((state) => {
+          const reset = resetAdvisorRequestDomain(state);
+          return {
+            ...reset,
+            cancellationEpoch: state.cancellationEpoch,
+            requestSequence: state.requestSequence,
+            findingLifecycle: resetLifecycle
+              ? emptyAdvisorFindingLifecycle()
+              : state.findingLifecycle,
+          };
+        });
+        perspectiveCheckpointUsed = false;
+      };
       const activeToolCalls = new Map<string, { toolName: string; args: unknown }>();
       let latestStateSummary = "";
       let latestDurableSummary: AdvisorDurableReviewSummary = summarizeAdvisorReview();
-      const reportedFailures = new Set<string>();
-      const reportedDiagnostics = new Set<string>();
-      let statusSpinnerContext: ExtensionContext | undefined;
-      let statusSpinnerDelay: (() => void) | undefined;
-      let statusSpinnerFrame = 0;
-      let statusSpinnerOwner: string | undefined;
-      let statusSpinnerTimer: (() => void) | undefined;
 
       const executorForSession = (): AdvisorEffectExecutor | undefined => parentExecutor;
       const runSessionEffect = <A, E>(
@@ -484,30 +532,11 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             );
       };
 
-      const notifyBestEffort = (
-        ctx: Pick<ExtensionContext, "ui">,
-        message: string,
-        level: "info" | "warning" | "error",
-      ): void => {
-        try {
-          ctx.ui.notify(message, level);
-        } catch {
-          // Host UI cannot own lifecycle cleanup.
-        }
-      };
+      const notifyBestEffort = hostNotifier.notify;
 
       const stopStatusSpinner = (): void => {
-        try {
-          statusSpinnerDelay?.();
-          statusSpinnerTimer?.();
-        } catch {
-          // Fiber interruption is best-effort at the synchronous host boundary.
-        }
-        statusSpinnerContext = undefined;
-        statusSpinnerDelay = undefined;
-        statusSpinnerFrame = 0;
-        statusSpinnerOwner = undefined;
-        statusSpinnerTimer = undefined;
+        statusService.clear();
+        updateApplicationState((state) => setAdvisorSpinnerOwner(state));
       };
 
       const setAdvisorStatus = (ctx: ExtensionContext, text?: string): void => {
@@ -519,20 +548,22 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         }
       };
 
-      const renderReviewStatus = (): void => {
-        if (!statusSpinnerContext) return;
-        const frame = STATUS_SPINNER_FRAMES[statusSpinnerFrame] ?? STATUS_SPINNER_FRAMES[0];
+      const renderReviewStatus = (ctx: ExtensionContext, frameIndex: number): void => {
+        const renderConfig = currentConfig();
+        const frame =
+          STATUS_SPINNER_FRAMES[frameIndex % STATUS_SPINNER_FRAMES.length] ??
+          STATUS_SPINNER_FRAMES[0];
         const model =
-          config.provider && config.model
-            ? statusSpinnerContext.modelRegistry.find(config.provider, config.model)
+          renderConfig.provider && renderConfig.model
+            ? ctx.modelRegistry.find(renderConfig.provider, renderConfig.model)
             : undefined;
         const effort = model
-          ? clampThinkingLevel(model, config.thinkingLevel)
-          : config.thinkingLevel;
+          ? clampThinkingLevel(model, renderConfig.thinkingLevel)
+          : renderConfig.thinkingLevel;
         try {
-          statusSpinnerContext.ui.setStatus(
+          ctx.ui.setStatus(
             STATUS_KEY,
-            `${frame} ${redactSensitiveText(config.model ?? "advisor").slice(0, 256)}:${effort} advising…`,
+            `${frame} ${redactSensitiveText(renderConfig.model ?? "advisor").slice(0, 256)}:${effort} advising…`,
           );
         } catch {
           stopStatusSpinner();
@@ -540,89 +571,105 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       };
 
       const startStatusSpinner = (ctx: ExtensionContext, owner: string): void => {
-        stopStatusSpinner();
-        const executor = executorForSession();
-        if (!executor) return;
-        statusSpinnerContext = ctx;
-        statusSpinnerOwner = owner;
-        statusSpinnerDelay = advisorDelay(executor, STATUS_SPINNER_DELAY_MS, () => {
-          statusSpinnerDelay = undefined;
-          renderReviewStatus();
-          if (ctx.mode !== "tui") return;
-          statusSpinnerTimer = advisorInterval(executor, STATUS_SPINNER_INTERVAL_MS, () => {
-            statusSpinnerFrame = (statusSpinnerFrame + 1) % STATUS_SPINNER_FRAMES.length;
-            renderReviewStatus();
-          });
+        updateApplicationState((state) => setAdvisorSpinnerOwner(state, owner));
+        statusService.start({
+          owner,
+          delayMs: STATUS_SPINNER_DELAY_MS,
+          intervalMs: STATUS_SPINNER_INTERVAL_MS,
+          animated: ctx.mode === "tui",
+          frameCount: STATUS_SPINNER_FRAMES.length,
+          render: (frame) => {
+            updateApplicationState((state) => ({
+              ...state,
+              spinner: { ...state.spinner, frame },
+            }));
+            renderReviewStatus(ctx, frame);
+          },
         });
       };
 
       const settleStatusSpinner = (ctx: ExtensionContext, owner: string): void => {
-        if (statusSpinnerOwner !== owner) return;
-        setAdvisorStatus(ctx, paused ? "advisor: paused" : undefined);
+        if (!statusService.settle(owner)) return;
+        updateApplicationState((state) => setAdvisorSpinnerOwner(state));
+        try {
+          ctx.ui.setStatus(STATUS_KEY, isPaused() ? "advisor: paused" : undefined);
+        } catch {
+          // Status rendering cannot prevent resource cleanup.
+        }
       };
 
       const recordSkip = (reason: AdvisorSkipReason): void => {
-        const skipped = metrics.skippedReviews ?? {};
-        skipped[reason] = incrementBounded(skipped[reason]);
-        metrics.skippedReviews = skipped;
+        mutateMetrics((next) => {
+          const skipped = next.skippedReviews ?? {};
+          next.skippedReviews = { ...skipped, [reason]: incrementBounded(skipped[reason]) };
+        });
       };
 
       const recordUsage = (
         target: AdvisorSessionMetrics,
         usage: AdvisorUsageTelemetry,
         runtimeConfig: ResolvedAdvisorConfig,
-      ): void => {
-        target.cacheReadTokens = (target.cacheReadTokens ?? 0) + usage.cacheReadTokens;
-        target.cacheWriteTokens = (target.cacheWriteTokens ?? 0) + usage.cacheWriteTokens;
-        target.cost = (target.cost ?? 0) + usage.cost;
-        target.inputTokens = (target.inputTokens ?? 0) + usage.inputTokens;
-        target.modelResponses = incrementBounded(target.modelResponses);
-        target.outputTokens = (target.outputTokens ?? 0) + usage.outputTokens;
-        target.totalTokens = (target.totalTokens ?? 0) + usage.totalTokens;
+      ): AdvisorSessionMetrics => {
+        const next = cloneMetrics(target);
+        next.cacheReadTokens = (next.cacheReadTokens ?? 0) + usage.cacheReadTokens;
+        next.cacheWriteTokens = (next.cacheWriteTokens ?? 0) + usage.cacheWriteTokens;
+        next.cost = (next.cost ?? 0) + usage.cost;
+        next.inputTokens = (next.inputTokens ?? 0) + usage.inputTokens;
+        next.modelResponses = incrementBounded(next.modelResponses);
+        next.outputTokens = (next.outputTokens ?? 0) + usage.outputTokens;
+        next.totalTokens = (next.totalTokens ?? 0) + usage.totalTokens;
 
         const provider = runtimeConfig.provider ?? "unknown";
         const model = runtimeConfig.model ?? "unknown";
         const key = stringifyJson([provider, model]);
-        const previous = target.usageByModel?.[key];
-        target.usageByModel ??= {};
-        target.usageByModel[key] = {
-          provider,
-          model,
-          responses: incrementBounded(previous?.responses),
-          cacheReadTokens: (previous?.cacheReadTokens ?? 0) + usage.cacheReadTokens,
-          cacheWriteTokens: (previous?.cacheWriteTokens ?? 0) + usage.cacheWriteTokens,
-          cost: (previous?.cost ?? 0) + usage.cost,
-          inputTokens: (previous?.inputTokens ?? 0) + usage.inputTokens,
-          outputTokens: (previous?.outputTokens ?? 0) + usage.outputTokens,
-          totalTokens: (previous?.totalTokens ?? 0) + usage.totalTokens,
+        const previous = next.usageByModel?.[key];
+        next.usageByModel = {
+          ...next.usageByModel,
+          [key]: {
+            provider,
+            model,
+            responses: incrementBounded(previous?.responses),
+            cacheReadTokens: (previous?.cacheReadTokens ?? 0) + usage.cacheReadTokens,
+            cacheWriteTokens: (previous?.cacheWriteTokens ?? 0) + usage.cacheWriteTokens,
+            cost: (previous?.cost ?? 0) + usage.cost,
+            inputTokens: (previous?.inputTokens ?? 0) + usage.inputTokens,
+            outputTokens: (previous?.outputTokens ?? 0) + usage.outputTokens,
+            totalTokens: (previous?.totalTokens ?? 0) + usage.totalTokens,
+          },
         };
+        return next;
       };
 
-      const recordReviewDuration = (target: AdvisorSessionMetrics, startedAt: number): void => {
+      const recordReviewDuration = (
+        target: AdvisorSessionMetrics,
+        startedAt: number,
+      ): AdvisorSessionMetrics => {
+        const next = cloneMetrics(target);
         const duration = Math.max(
           0,
           (parentExecutor ? advisorNow(parentExecutor) : startedAt) - startedAt,
         );
-        target.latestDurationMs = duration;
-        target.settledReviews = incrementBounded(target.settledReviews);
-        target.totalDurationMs = (target.totalDurationMs ?? 0) + duration;
+        next.latestDurationMs = duration;
+        next.settledReviews = incrementBounded(next.settledReviews);
+        next.totalDurationMs = (next.totalDurationMs ?? 0) + duration;
+        return next;
       };
 
       const activeSeed = (ctx: ExtensionContext): string =>
         buildAdvisorContext({
           messages: activeContextMessages(ctx),
           candidate: lastCandidate?.candidate ?? "[No completed candidate at this cursor.]",
-          maxChars: config.maxContextChars,
+          maxChars: currentConfig().maxContextChars,
         }).transcript;
 
       const fingerprint = (ctx: ExtensionContext): string =>
         createLedgerFingerprint({
-          provider: config.provider ?? "",
-          model: config.model ?? "",
+          provider: currentConfig().provider ?? "",
+          model: currentConfig().model ?? "",
           cwd: ctx.cwd,
           guidance: instructions.content ?? "",
-          fastMode: config.fastMode,
-          thinkingLevel: config.thinkingLevel,
+          fastMode: currentConfig().fastMode,
+          thinkingLevel: currentConfig().thinkingLevel,
         });
 
       const parentAnchor = (ctx: ExtensionContext): string | null => {
@@ -658,20 +705,43 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       };
 
       const clearPersistentTrajectory = (): void => {
-        activeTrajectory?.cancelTimer?.();
-        activeTrajectory = undefined;
+        activeTrajectoryResource?.cancelTimer?.();
+        activeTrajectoryResource = undefined;
         activeToolCalls.clear();
+        updateApplicationState((state) => ({ ...state, activeTrajectory: undefined }));
       };
 
       const clearPendingRecovery = (): void => {
-        const pending = pendingPersistentRecovery;
-        pendingPersistentRecovery = undefined;
-        abortInProgress = undefined;
+        const pending = applicationStateStore.get().pendingPersistentRecovery;
         if (pending) {
-          emissionGuard.rollback(pending.emission.rollback);
-          findingDedupe.rollback(pending.dedupeRollback);
-          pending.metrics.outcomes.suppressed += 1;
-          interventionBudget.restore({ ...pending.budgetBefore, correctionUsed: true });
+          updateApplicationState((state) => {
+            const nextMetrics = cloneMetrics(state.metrics);
+            nextMetrics.outcomes.suppressed += 1;
+            return {
+              ...state,
+              metrics: nextMetrics,
+              pendingPersistentRecovery: undefined,
+              abortInProgress: undefined,
+              emissionGuard: rollbackAdvisorEmission(
+                state.emissionGuard,
+                pending.emission.rollback,
+              ),
+              findingDedupe: rollbackAdvisorFindingDedupe(
+                state.findingDedupe,
+                pending.dedupeRollback,
+              ),
+              interventionBudget: sanitizeInterventionBudgetSnapshot({
+                ...pending.budgetBefore,
+                correctionUsed: true,
+              }),
+            };
+          });
+        } else {
+          updateApplicationState((state) => ({
+            ...state,
+            pendingPersistentRecovery: undefined,
+            abortInProgress: undefined,
+          }));
         }
       };
 
@@ -682,11 +752,11 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           clearPendingRecovery();
           const oldQueue = queue;
           const oldRuntime = runtime;
-          const statusContext = statusSpinnerContext;
+          const statusContext = activeContext;
           queue = undefined;
           runtime = undefined;
           runtimeCursor = undefined;
-          started = false;
+          updateApplicationState((state) => ({ ...state, started: false }));
           stopStatusSpinner();
           const disposal = oldQueue
             ? oldQueue.disposeEffect()
@@ -699,17 +769,18 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                 if (statusContext) setAdvisorStatus(statusContext);
               }),
             ),
-            Effect.andThen(productionController.publish({ config, metrics, paused, started })),
+            Effect.andThen(publishControllerSnapshot()),
           );
         });
-      const cancelActiveChildStart = (): void => {
-        activeChildStart?.cancel();
-        activeChildStart = undefined;
-        const current = runtime;
-        if (current) parentExecutor?.fork(current.abort());
-      };
+      const cancelActiveChildStartEffect = (): Effect.Effect<void> =>
+        Effect.sync(() => {
+          // The start token wins the race and its acquisition finalizer disposes only that child.
+          // Do not abort the reusable runtime service: a delayed abort could hit its replacement.
+          activeChildStart?.cancel();
+          activeChildStart = undefined;
+        });
       const stopRuntimeEffect = (): Effect.Effect<void> =>
-        Effect.sync(cancelActiveChildStart).pipe(Effect.andThen(productionController.stopChild()));
+        cancelActiveChildStartEffect().pipe(Effect.andThen(productionController.stopChild()));
       const stopRuntime = (): Promise<void> => runSessionEffect(stopRuntimeEffect());
 
       const startRuntimeEffect = (
@@ -718,17 +789,15 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         allowDisabled = false,
       ): Effect.Effect<number | undefined> =>
         Effect.suspend(() => {
-          const startEpoch = ++epoch;
-          cancelActiveChildStart();
+          const startEpoch = advanceDomainCounter("epoch");
           let nextRuntime: AdvisorRuntimeServiceShape | undefined;
-          const runtimeMetrics = metrics;
           const acquire = Effect.gen(function* () {
             yield* stopRuntimeUnlockedEffect();
             if (
-              startEpoch !== epoch ||
-              paused ||
-              (!config.enabled && !allowDisabled) ||
-              !config.configured
+              startEpoch !== applicationStateStore.get().epoch ||
+              isPaused() ||
+              (!currentConfig().enabled && !allowDisabled) ||
+              !currentConfig().configured
             )
               return undefined;
             const executor = executorForSession();
@@ -746,26 +815,31 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                 ? restoreCheckpointLedger(branch, fingerprint(ctx))
                 : undefined;
             if (restoration === "restore-branch") {
-              routingState.reset();
-              interventionBudget.reset();
-              findingLifecycle.reset();
-              emissionGuard.reset();
+              updateApplicationState((state) => ({
+                ...state,
+                routing: ledger
+                  ? sanitizeAdvisorRoutingState({
+                      cancellationLatched: ledger.routing.cancellationLatched,
+                      completedPrimaryTurns: ledger.routing.completedPrimaryTurns,
+                      immunityUntilCompletedTurn: ledger.routing.immunityUntilCompletedTurn,
+                    })
+                  : emptyAdvisorRoutingState(),
+                interventionBudget: ledger
+                  ? sanitizeInterventionBudgetSnapshot(ledger.routing.interventionBudget)
+                  : emptyAdvisorInterventionBudget(),
+                findingLifecycle: ledger
+                  ? restoreAdvisorFindingLifecycle(ledger.findingLifecycle)
+                  : emptyAdvisorFindingLifecycle(),
+                emissionGuard: createAdvisorEmissionGuardState(ledger?.emissionHashes),
+              }));
               latestStateSummary = "";
               latestDurableSummary = summarizeAdvisorReview();
               if (ledger) {
-                routingState.restore({
-                  cancellationLatched: ledger.routing.cancellationLatched,
-                  completedPrimaryTurns: ledger.routing.completedPrimaryTurns,
-                  immunityUntilCompletedTurn: ledger.routing.immunityUntilCompletedTurn,
-                });
-                interventionBudget.restore(ledger.routing.interventionBudget);
-                findingLifecycle.restore(ledger.findingLifecycle);
-                emissionGuard.reset(ledger.emissionHashes);
                 latestDurableSummary = ledger.reviewSummary;
                 latestStateSummary = renderDurableReviewSummary(ledger.reviewSummary);
               }
             }
-            const runtimeConfig = { ...config };
+            const runtimeConfig = { ...currentConfig() };
             const startCancellation = makeCancellationLatch();
             activeChildStart = startCancellation;
             const startOptions = {
@@ -777,11 +851,19 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                   ? renderDurableReviewSummary(ledger.reviewSummary)
                   : latestStateSummary,
               ...(instructions.content ? { instructions: instructions.content } : {}),
-              onUsage: (usage: AdvisorUsageTelemetry) =>
-                recordUsage(runtimeMetrics, usage, runtimeConfig),
+              onUsage: (usage: AdvisorUsageTelemetry) => {
+                if (startEpoch !== applicationStateStore.get().epoch) return;
+                updateApplicationState((state) => ({
+                  ...state,
+                  metrics: recordUsage(state.metrics, usage, runtimeConfig),
+                }));
+              },
               onDiagnostic: (message: string) => {
-                if (reportedDiagnostics.has(message)) return;
-                reportedDiagnostics.add(message);
+                if (applicationStateStore.get().reportedDiagnostics.includes(message)) return;
+                updateApplicationState((state) => ({
+                  ...state,
+                  reportedDiagnostics: [...state.reportedDiagnostics, message],
+                }));
                 notifyBestEffort(ctx, message, "warning");
               },
             };
@@ -804,29 +886,40 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
               ),
             );
             if (activeChildStart === startCancellation) activeChildStart = undefined;
-            if (startEpoch !== epoch || executor !== parentExecutor) {
+            if (startEpoch !== applicationStateStore.get().epoch || executor !== parentExecutor) {
               yield* nextRuntime.dispose();
               return undefined;
             }
             const nextQueue = yield* productionQueueService.make(nextRuntime, {
-              onCheckpointStart: (request) => startStatusSpinner(ctx, request.checkpointId),
-              onCheckpointSettled: (request) => settleStatusSpinner(ctx, request.checkpointId),
+              onCheckpointStart: (request) => {
+                startStatusSpinner(ctx, request.checkpointId);
+                publishControllerSnapshotNow();
+              },
+              onCheckpointSettled: (request) => {
+                settleStatusSpinner(ctx, request.checkpointId);
+                publishControllerSnapshotNow();
+              },
               onRuntimeReset: () => {
-                runtimeMetrics.childResets = incrementBounded(runtimeMetrics.childResets);
+                if (startEpoch !== applicationStateStore.get().epoch) return;
+                mutateMetrics((next) => {
+                  next.childResets = incrementBounded(next.childResets);
+                });
               },
               getReprimeState: () => ({ seed: activeSeed(ctx), stateSummary: latestStateSummary }),
             });
-            if (startEpoch !== epoch || executor !== parentExecutor) {
+            if (startEpoch !== applicationStateStore.get().epoch || executor !== parentExecutor) {
               yield* nextQueue.disposeEffect();
               return undefined;
             }
             if (childStartedOnce)
-              runtimeMetrics.childResets = incrementBounded(runtimeMetrics.childResets);
+              mutateMetrics((next) => {
+                next.childResets = incrementBounded(next.childResets);
+              });
             childStartedOnce = true;
             runtimeCursor = { anchor: parentAnchor(ctx), fingerprint: fingerprint(ctx) };
             queue = nextQueue;
-            started = true;
-            publishControllerSnapshot();
+            updateApplicationState((state) => ({ ...state, started: true }));
+            yield* publishControllerSnapshot();
             return startEpoch;
           }).pipe(
             Effect.catch((error) =>
@@ -834,14 +927,19 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                 activeChildStart = undefined;
                 if (nextRuntime) yield* nextRuntime.dispose();
                 if (runtime === nextRuntime) runtime = undefined;
-                if (startEpoch === epoch) {
-                  runtimeMetrics.failure += 1;
-                  runtimeMetrics.outcomes.failures += 1;
-                  runtimeMetrics.lastAction = "failure";
+                if (startEpoch === applicationStateStore.get().epoch) {
                   const kind = classifyFailure(error);
-                  runtimeMetrics.lastFailureKind = kind;
-                  if (!reportedFailures.has(kind)) {
-                    reportedFailures.add(kind);
+                  mutateMetrics((next) => {
+                    next.failure += 1;
+                    next.outcomes.failures += 1;
+                    next.lastAction = "failure";
+                    next.lastFailureKind = kind;
+                  });
+                  if (!applicationStateStore.get().reportedFailures.includes(kind)) {
+                    updateApplicationState((state) => ({
+                      ...state,
+                      reportedFailures: [...state.reportedFailures, kind],
+                    }));
                     notifyBestEffort(
                       ctx,
                       `Advisor ${kind} failure; primary work remains unaffected.`,
@@ -853,21 +951,25 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
               }),
             ),
           );
-          return productionController.replaceChild(
-            acquire.pipe(
-              Effect.onInterrupt(() =>
-                nextRuntime
-                  ? nextRuntime.dispose().pipe(
-                      Effect.andThen(
-                        Effect.sync(() => {
-                          if (runtime === nextRuntime) runtime = undefined;
-                        }),
-                      ),
-                    )
-                  : Effect.void,
+          return cancelActiveChildStartEffect().pipe(
+            Effect.andThen(
+              productionController.replaceChild(
+                acquire.pipe(
+                  Effect.onInterrupt(() =>
+                    nextRuntime
+                      ? nextRuntime.dispose().pipe(
+                          Effect.andThen(
+                            Effect.sync(() => {
+                              if (runtime === nextRuntime) runtime = undefined;
+                            }),
+                          ),
+                        )
+                      : Effect.void,
+                  ),
+                ),
+                () => stopRuntimeUnlockedEffect(),
               ),
             ),
-            () => stopRuntimeUnlockedEffect(),
           );
         });
       const startRuntime = (
@@ -883,19 +985,19 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       ): Effect.Effect<T | undefined> =>
         Effect.suspend(() => {
           const owner = ++explicitStartSequence;
-          const sessionMetrics = metrics;
-          const expectedCancellationEpoch = cancellationEpoch;
+          const expectedCancellationEpoch = applicationStateStore.get().cancellationEpoch;
           pendingExplicitStart = owner;
           return (
-            started ? Effect.succeed(epoch) : startRuntimeEffect(ctx, "preserve-live", true)
+            isStarted()
+              ? Effect.succeed(applicationStateStore.get().epoch)
+              : startRuntimeEffect(ctx, "preserve-live", true)
           ).pipe(
             Effect.map((runtimeEpoch) => {
               if (
                 pendingExplicitStart !== owner ||
                 runtimeEpoch === undefined ||
-                runtimeEpoch !== epoch ||
-                metrics !== sessionMetrics ||
-                cancellationEpoch !== expectedCancellationEpoch
+                runtimeEpoch !== applicationStateStore.get().epoch ||
+                applicationStateStore.get().cancellationEpoch !== expectedCancellationEpoch
               ) {
                 if (pendingExplicitStart === owner) pendingExplicitStart = undefined;
                 return undefined;
@@ -907,7 +1009,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         });
       const persistLedger = (anchor: string | null, ctx: ExtensionContext): void => {
         if (!anchor || typeof pi.appendEntry !== "function") return;
-        const route = routingState.snapshot;
+        const route = applicationStateStore.get().routing;
         try {
           pi.appendEntry(
             ADVISOR_CHECKPOINT_ENTRY_TYPE,
@@ -918,17 +1020,22 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
               cancellationLatched: route.cancellationLatched,
               completedPrimaryTurns: route.completedPrimaryTurns,
               immunityUntilCompletedTurn: route.immunityUntilCompletedTurn,
-              interventionBudget: pendingPersistentRecovery
-                ? { ...pendingPersistentRecovery.budgetBefore, correctionUsed: true }
-                : interventionBudget.snapshot,
-              findingLifecycle: findingLifecycle.snapshot(),
-              emissionHashes: emissionGuard
-                .exportRecords()
-                .filter(
-                  (record) =>
-                    !pendingPersistentRecovery ||
-                    !record.endsWith(`:${pendingPersistentRecovery.emission.hash}`),
-                ),
+              interventionBudget: applicationStateStore.get().pendingPersistentRecovery
+                ? {
+                    ...applicationStateStore.get().pendingPersistentRecovery!.budgetBefore,
+                    correctionUsed: true,
+                  }
+                : applicationStateStore.get().interventionBudget,
+              findingLifecycle: applicationStateStore.get().findingLifecycle.records,
+              emissionHashes: exportAdvisorEmissionRecords(
+                applicationStateStore.get().emissionGuard,
+              ).filter(
+                (record) =>
+                  !applicationStateStore.get().pendingPersistentRecovery ||
+                  !record.endsWith(
+                    `:${applicationStateStore.get().pendingPersistentRecovery!.emission.hash}`,
+                  ),
+              ),
             }),
           );
         } catch {
@@ -950,12 +1057,17 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         trajectoryId?: number,
       ): AdvisorRoute => {
         const discardAtDeliveryBoundary = (): AdvisorRoute => {
-          metrics.discarded += 1;
-          if (source !== "automatic-catch-up") metrics.outcomes.discarded += 1;
-          metrics.lastAction = "discarded";
+          mutateMetrics((next) => {
+            next.discarded += 1;
+            if (source !== "automatic-catch-up") next.outcomes.discarded += 1;
+            next.lastAction = "discarded";
+          });
           return "silent";
         };
-        if (ctx.signal?.aborted || expectedCancellationEpoch !== cancellationEpoch) {
+        if (
+          ctx.signal?.aborted ||
+          expectedCancellationEpoch !== applicationStateStore.get().cancellationEpoch
+        ) {
           return discardAtDeliveryBoundary();
         }
         const review: AdvisorReview = {
@@ -965,12 +1077,16 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           findings: checkpoint.findings,
         };
         const suppress = (lastAction: "suppressed" | "pass" = "suppressed"): "silent" => {
-          metrics.outcomes.suppressed += 1;
-          metrics.lastAction = lastAction;
+          mutateMetrics((next) => {
+            next.outcomes.suppressed += 1;
+            next.lastAction = lastAction;
+          });
           return "silent";
         };
         if (review.verdict === "suggest") {
-          metrics.suggest = incrementBounded(metrics.suggest);
+          mutateMetrics((next) => {
+            next.suggest = incrementBounded(next.suggest);
+          });
           if (
             phase !== "progress" ||
             source === "automatic-catch-up" ||
@@ -979,9 +1095,15 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           ) {
             return suppress();
           }
-          const suggestion = perspectiveBudget.select(review.suggestions ?? []);
+          const suggestion = selectAdvisorPerspective(
+            applicationStateStore.get().perspectiveBudget,
+            review.suggestions ?? [],
+          );
           if (!suggestion) return suppress();
-          if (ctx.signal?.aborted || expectedCancellationEpoch !== cancellationEpoch) {
+          if (
+            ctx.signal?.aborted ||
+            expectedCancellationEpoch !== applicationStateStore.get().cancellationEpoch
+          ) {
             return discardAtDeliveryBoundary();
           }
           const perspectiveReview: AdvisorReview = {
@@ -990,88 +1112,134 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             suggestions: [suggestion],
             findings: [],
           };
-          perspectiveBudget.commit(suggestion);
-          sendAdvisorPerspective(pi, config, perspectiveReview);
-          metrics.outcomes.perspective += 1;
-          metrics.perspectivesDelivered = incrementBounded(metrics.perspectivesDelivered);
-          metrics.lastAction = "perspective";
+          updateApplicationState((state) => ({
+            ...state,
+            perspectiveBudget: commitAdvisorPerspective(state.perspectiveBudget, suggestion),
+          }));
+          sendAdvisorPerspective(pi, currentConfig(), perspectiveReview);
+          mutateMetrics((next) => {
+            next.outcomes.perspective += 1;
+            next.perspectivesDelivered = incrementBounded(next.perspectivesDelivered);
+            next.lastAction = "perspective";
+          });
           ingest({
             type: "advisor_intervention",
             findingIds: [],
             action: "perspective",
-            requestSequence,
+            requestSequence: applicationStateStore.get().requestSequence,
           });
           return "push-direct";
         }
         if (review.verdict === "pass") {
           if (phase === "final") {
-            findingLifecycle.reconcile([], {
-              scope,
-              completedTurn: routingState.snapshot.completedPrimaryTurns,
-              complete: true,
-            });
+            updateApplicationState((state) => ({
+              ...state,
+              findingLifecycle: reconcileAdvisorFindings(state.findingLifecycle, [], {
+                scope,
+                completedTurn: state.routing.completedPrimaryTurns,
+                complete: true,
+              }).state,
+            }));
           }
-          metrics.pass += 1;
-          if (source !== "automatic-catch-up") metrics.outcomes.pass += 1;
-          metrics.lastAction = "pass";
+          mutateMetrics((next) => {
+            next.pass += 1;
+            if (source !== "automatic-catch-up") next.outcomes.pass += 1;
+            next.lastAction = "pass";
+          });
           return "silent";
         }
         // Tool-calling turn boundaries keep the persistent Advisor caught up, but
         // they are not completed responses and must never emit "unfinished work"
         // critiques. Explicit trajectory checkpoints remain independently routable.
         if (source === "automatic-catch-up") {
-          metrics.suppressedFindings = (metrics.suppressedFindings ?? 0) + review.findings.length;
-          metrics.lastAction = "suppressed";
+          mutateMetrics((next) => {
+            next.suppressedFindings = (next.suppressedFindings ?? 0) + review.findings.length;
+            next.lastAction = "suppressed";
+          });
           return "silent";
         }
-        metrics.outcomes.findings += 1;
-        const gated = gateAdvisorFindings(review.findings);
-        metrics.suppressedFindings = (metrics.suppressedFindings ?? 0) + gated.suppressed;
-        const lifecycleFindings = findingLifecycle.reconcile(gated.actionable, {
-          scope,
-          completedTurn: routingState.snapshot.completedPrimaryTurns,
-          complete: phase === "final",
+        mutateMetrics((next) => {
+          next.outcomes.findings += 1;
         });
-        const filtered = findingDedupe.filterWithRollback(
-          lifecycleFindings.filter((finding) => finding.status === "open"),
+        const gated = gateAdvisorFindings(review.findings);
+        mutateMetrics((next) => {
+          next.suppressedFindings = (next.suppressedFindings ?? 0) + gated.suppressed;
+        });
+        const lifecycle = reconcileAdvisorFindings(
+          applicationStateStore.get().findingLifecycle,
+          gated.actionable,
+          {
+            scope,
+            completedTurn: applicationStateStore.get().routing.completedPrimaryTurns,
+            complete: phase === "final",
+          },
+        );
+        const filtered = filterAdvisorFindingsWithRollback(
+          applicationStateStore.get().findingDedupe,
+          lifecycle.findings.filter((finding) => finding.status === "open"),
           scope,
         );
-        metrics.suppressedFindings = (metrics.suppressedFindings ?? 0) + filtered.suppressed;
+        updateApplicationState((state) => ({
+          ...state,
+          findingLifecycle: lifecycle.state,
+          findingDedupe: filtered.state,
+        }));
+        mutateMetrics((next) => {
+          next.suppressedFindings = (next.suppressedFindings ?? 0) + filtered.suppressed;
+        });
         if (filtered.findings.length === 0) return suppress();
         const filteredReview = { ...review, findings: filtered.findings };
         const rollbackUndelivered = (emission?: { rollback: AdvisorEmissionRollback }): void => {
-          findingDedupe.rollback(filtered.rollback);
-          if (emission) emissionGuard.rollback(emission.rollback);
+          updateApplicationState((state) => ({
+            ...state,
+            findingDedupe: rollbackAdvisorFindingDedupe(state.findingDedupe, filtered.rollback),
+            emissionGuard: emission
+              ? rollbackAdvisorEmission(state.emissionGuard, emission.rollback)
+              : state.emissionGuard,
+          }));
         };
-        const emission = emissionGuard.evaluate(checkpoint.checkpointId, filteredReview);
+        const emissionResult = evaluateAdvisorEmission(
+          applicationStateStore.get().emissionGuard,
+          checkpoint.checkpointId,
+          filteredReview,
+        );
+        updateApplicationState((state) => ({ ...state, emissionGuard: emissionResult.state }));
+        const emission = emissionResult.decision;
         if (!emission.accepted) {
           rollbackUndelivered();
           return suppress(emission.reason === "pass" ? "pass" : "suppressed");
         }
-        metrics.revise += 1;
+        mutateMetrics((next) => {
+          next.revise += 1;
+        });
         const severity = highestAdvisorSeverity(filteredReview);
         if (!severity) {
           rollbackUndelivered(emission);
           return "silent";
         }
+        const currentState = applicationStateStore.get();
         const trajectory =
-          trajectoryId !== undefined && activeTrajectory?.id === trajectoryId
-            ? activeTrajectory
+          trajectoryId !== undefined && currentState.activeTrajectory?.id === trajectoryId
+            ? currentState.activeTrajectory
             : undefined;
         const aborting = Boolean(
-          (abortInProgress &&
-            abortInProgress.epoch === epoch &&
-            abortInProgress.parentTurnId === parentTurnId &&
-            abortInProgress.cancellationEpoch === cancellationEpoch) ||
-          (pendingPersistentRecovery &&
-            pendingPersistentRecovery.epoch === epoch &&
-            pendingPersistentRecovery.parentTurnId === parentTurnId &&
-            pendingPersistentRecovery.cancellationEpoch === cancellationEpoch),
+          (currentState.abortInProgress &&
+            currentState.abortInProgress.epoch === currentState.epoch &&
+            currentState.abortInProgress.parentTurnId === currentState.parentTurnId &&
+            currentState.abortInProgress.cancellationEpoch === currentState.cancellationEpoch) ||
+          (currentState.pendingPersistentRecovery &&
+            currentState.pendingPersistentRecovery.epoch === currentState.epoch &&
+            currentState.pendingPersistentRecovery.parentTurnId === currentState.parentTurnId &&
+            currentState.pendingPersistentRecovery.cancellationEpoch ===
+              currentState.cancellationEpoch),
         );
         const historicalManual = source === "last" || source === "verify";
         const explicitManual = historicalManual || source === "next";
         const budgeted = !explicitManual;
-        if (budgeted && !interventionBudget.canDeliver(severity)) {
+        if (
+          budgeted &&
+          !canDeliverAdvisorIntervention(applicationStateStore.get().interventionBudget, severity)
+        ) {
           rollbackUndelivered(emission);
           return suppress();
         }
@@ -1081,7 +1249,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             : "push-direct"
           : routeAdvisorFinding({
               severity,
-              policy: config.reviewPolicy,
+              policy: currentConfig().reviewPolicy,
               parentState: aborting
                 ? "aborting"
                 : ctx.isIdle()
@@ -1089,23 +1257,34 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                     ? "final"
                     : "idle"
                   : "active",
-              immunityActive: routingState.immunityActive,
-              cancellationLatched: routingState.cancellationLatched,
+              immunityActive: isAdvisorImmunityActive(applicationStateStore.get().routing),
+              cancellationLatched: applicationStateStore.get().routing.cancellationLatched,
               sameTurnStrongSignal:
                 severity === "blocker" &&
-                Boolean(trajectory?.loopConfirmed && trajectory.generation === parentTurnId),
+                Boolean(
+                  trajectory?.loopConfirmed &&
+                  trajectory.generation === applicationStateStore.get().parentTurnId,
+                ),
               abortSafe: Boolean(
-                trajectory?.abortAllowed && trajectory.toolDetector.activeToolCount === 0,
+                trajectory?.abortAllowed && advisorActiveToolCount(trajectory.toolDetector) === 0,
               ),
             });
         const correctionRoute =
           route === "steer-live" || route === "trigger-correction" || route === "abort-recover";
-        if (budgeted && correctionRoute && !interventionBudget.canCorrect()) route = "push-direct";
+        if (
+          budgeted &&
+          correctionRoute &&
+          !canCorrectAdvisorIntervention(applicationStateStore.get().interventionBudget)
+        )
+          route = "push-direct";
         if (budgeted && route === "push-direct" && ctx.isIdle()) route = "silent";
 
         // Cancellation is synchronous and wins over a provider completion queued in
         // the same tick. Recheck at the exact delivery boundary before every send path.
-        if (ctx.signal?.aborted || expectedCancellationEpoch !== cancellationEpoch) {
+        if (
+          ctx.signal?.aborted ||
+          expectedCancellationEpoch !== applicationStateStore.get().cancellationEpoch
+        ) {
           rollbackUndelivered(emission);
           return discardAtDeliveryBoundary();
         }
@@ -1116,75 +1295,103 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           correction: boolean,
           outcome: "advice" | "guidance" | "revision",
         ): AdvisorReview => {
-          findingLifecycle.acknowledge(findingIds);
-          if (budgeted) interventionBudget.commit(severity, correction);
+          updateApplicationState((state) => ({
+            ...state,
+            findingLifecycle: acknowledgeAdvisorFindings(state.findingLifecycle, findingIds),
+            interventionBudget: budgeted
+              ? commitAdvisorIntervention(state.interventionBudget, severity, correction)
+              : state.interventionBudget,
+          }));
           recordReceipt(findingIds);
           ingest({
             type: "advisor_intervention",
             findingIds,
             action: outcome,
-            requestSequence,
+            requestSequence: applicationStateStore.get().requestSequence,
           });
-          metrics.outcomes[outcome] += 1;
-          metrics.interventionsDelivered = (metrics.interventionsDelivered ?? 0) + 1;
+          mutateMetrics((next) => {
+            next.outcomes[outcome] += 1;
+            next.interventionsDelivered = (next.interventionsDelivered ?? 0) + 1;
+          });
           return reviewWithAcknowledgedFindings(filteredReview, findingIds);
         };
         const pushAdvice = (): void => {
-          sendAdvisorAdvice(pi, config, recordDelivery(false, "advice"));
+          sendAdvisorAdvice(pi, currentConfig(), recordDelivery(false, "advice"));
         };
         if (route === "silent") {
           rollbackUndelivered(emission);
           suppress();
         } else if (route === "push-direct") {
           pushAdvice();
-          metrics.lastAction = "advice";
+          mutateMetrics((next) => {
+            next.lastAction = "advice";
+          });
         } else if (route === "steer-live" || route === "trigger-correction") {
           const outcome = phase === "progress" ? "guidance" : "revision";
           sendCorrection(
             pi,
-            config,
+            currentConfig(),
             recordDelivery(true, outcome),
             phase,
             route === "trigger-correction",
             false,
           );
-          routingState.armInterruption();
-          metrics.lastAction = outcome;
+          updateApplicationState((state) => ({
+            ...state,
+            routing: armAdvisorInterruption(state.routing),
+          }));
+          mutateMetrics((next) => {
+            next.lastAction = outcome;
+          });
         } else {
           if (!trajectory || trajectoryId === undefined) {
             pushAdvice();
-            metrics.lastAction = "advice";
+            mutateMetrics((next) => {
+              next.lastAction = "advice";
+            });
             return "push-direct";
           }
-          const budgetBefore = interventionBudget.snapshot;
-          if (budgeted) interventionBudget.commit(severity, true);
-          pendingPersistentRecovery = {
-            review: filteredReview,
-            config: { ...config },
-            phase,
-            epoch,
-            parentTurnId,
-            configRevision,
-            cancellationEpoch,
-            recovering: true,
-            findingIds,
-            metrics,
-            budgetBefore,
-            dedupeRollback: filtered.rollback,
-            emission: {
-              checkpointId: checkpoint.checkpointId,
-              hash: emission.hash,
-              rollback: emission.rollback,
+          const budgetBefore = applicationStateStore.get().interventionBudget;
+          if (budgeted)
+            updateApplicationState((state) => ({
+              ...state,
+              interventionBudget: commitAdvisorIntervention(
+                state.interventionBudget,
+                severity,
+                true,
+              ),
+            }));
+          updateApplicationState((state) => ({
+            ...state,
+            pendingPersistentRecovery: {
+              review: filteredReview,
+              config: { ...currentConfig() },
+              phase,
+              epoch: state.epoch,
+              parentTurnId: state.parentTurnId,
+              configRevision,
+              cancellationEpoch: state.cancellationEpoch,
+              recovering: true,
+              findingIds,
+              budgetBefore,
+              dedupeRollback: filtered.rollback,
+              emission: {
+                checkpointId: checkpoint.checkpointId,
+                hash: emission.hash,
+                rollback: emission.rollback,
+              },
             },
-          };
-          abortInProgress = {
-            epoch,
-            parentTurnId,
-            turnIndex: trajectory.turnIndex,
-            trajectoryId,
-            cancellationEpoch,
-          };
-          metrics.lastAction = "recovery";
+            abortInProgress: {
+              epoch: state.epoch,
+              parentTurnId: state.parentTurnId,
+              turnIndex: trajectory.turnIndex,
+              trajectoryId,
+              cancellationEpoch: state.cancellationEpoch,
+            },
+          }));
+          mutateMetrics((next) => {
+            next.lastAction = "recovery";
+          });
           ctx.abort();
         }
         return route;
@@ -1199,28 +1406,36 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         trajectoryId?: number;
         abortOnBlocker?: boolean;
       }): AdvisorCheckpointHandle | undefined => {
-        if ((!queue || !started) && (!config.enabled || !config.configured || paused)) {
+        if (
+          (!queue || !isStarted()) &&
+          (!currentConfig().enabled || !currentConfig().configured || isPaused())
+        ) {
           return undefined;
         }
         let validForDelivery = true;
-        let requestEpoch = epoch;
-        let requestCancellationEpoch = cancellationEpoch;
+        let requestEpoch = applicationStateStore.get().epoch;
+        let requestCancellationEpoch = applicationStateStore.get().cancellationEpoch;
         let activeQueue: AdvisorReviewQueue | undefined;
         let activeCheckpointId: string | undefined;
-        const requestMetrics = metrics;
+        const ledgerScope = lifecycleScope(options.ctx);
         const startedAt = parentExecutor ? advisorNow(parentExecutor) : 0;
         let durationRecorded = false;
         let outcomeRecorded = false;
         const finishReviewDuration = () => {
           if (durationRecorded) return;
           durationRecorded = true;
-          recordReviewDuration(requestMetrics, startedAt);
+          updateApplicationState((state) => ({
+            ...state,
+            metrics: recordReviewDuration(state.metrics, startedAt),
+          }));
         };
         const discardRequest = (): CheckpointSettlement => {
           if (!outcomeRecorded) {
             outcomeRecorded = true;
-            requestMetrics.discarded += 1;
-            if (options.source !== "automatic-catch-up") requestMetrics.outcomes.discarded += 1;
+            mutateMetrics((next) => {
+              next.discarded += 1;
+              if (options.source !== "automatic-catch-up") next.outcomes.discarded += 1;
+            });
           }
           return "discarded";
         };
@@ -1237,29 +1452,27 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
               "restore-branch",
               !options.requiresEnabled,
             );
-            if (restartEpoch === undefined || restartEpoch !== epoch) return "discarded";
+            if (restartEpoch === undefined || restartEpoch !== applicationStateStore.get().epoch)
+              return "discarded";
           }
+          if (!validForDelivery || !queue || !isStarted() || !runtimeCursor) return "discarded";
           if (
-            !validForDelivery ||
-            metrics !== requestMetrics ||
-            !queue ||
-            !started ||
-            !runtimeCursor
+            options.trajectoryId !== undefined &&
+            applicationStateStore.get().activeTrajectory?.id !== options.trajectoryId
           )
-            return "discarded";
-          if (options.trajectoryId !== undefined && activeTrajectory?.id !== options.trajectoryId)
             return "discarded";
 
           activeQueue = queue;
-          requestEpoch = epoch;
-          requestCancellationEpoch = cancellationEpoch;
-          const requestParentTurnId = parentTurnId;
+          requestEpoch = applicationStateStore.get().epoch;
+          requestCancellationEpoch = applicationStateStore.get().cancellationEpoch;
+          const requestParentTurnId = applicationStateStore.get().parentTurnId;
           const requestConfigRevision = configRevision;
           const anchor = parentAnchor(options.ctx);
           const id = `advisor-${requestEpoch}-${++checkpointId}`;
           activeCheckpointId = id;
-          const scope = lifecycleScope(options.ctx);
-          requestMetrics.attempted += 1;
+          mutateMetrics((next) => {
+            next.attempted += 1;
+          });
           let checkpoint = yield* activeQueue
             .checkpointEffect({
               checkpointId: id,
@@ -1269,25 +1482,28 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             .pipe(Effect.mapError(extensionError("checkpoint")));
           const requestIsCurrent = () =>
             validForDelivery &&
-            requestEpoch === epoch &&
-            requestCancellationEpoch === cancellationEpoch &&
-            requestParentTurnId === parentTurnId &&
+            requestEpoch === applicationStateStore.get().epoch &&
+            requestCancellationEpoch === applicationStateStore.get().cancellationEpoch &&
+            requestParentTurnId === applicationStateStore.get().parentTurnId &&
             requestConfigRevision === configRevision &&
             !options.ctx.signal?.aborted &&
-            (!options.requiresEnabled || (config.enabled && !paused && config.configured)) &&
+            (!options.requiresEnabled ||
+              (currentConfig().enabled && !isPaused() && currentConfig().configured)) &&
             !options.ctx.hasPendingMessages() &&
             branchContains(options.ctx, anchor) &&
-            (options.trajectoryId === undefined || activeTrajectory?.id === options.trajectoryId);
+            (options.trajectoryId === undefined ||
+              applicationStateStore.get().activeTrajectory?.id === options.trajectoryId);
           if (!requestIsCurrent()) return discardRequest();
           const verifyBlocker =
             options.source !== "automatic-catch-up" &&
             options.source !== "last" &&
             options.source !== "verify" &&
-            config.reviewPolicy !== "advisory" &&
+            currentConfig().reviewPolicy !== "advisory" &&
             checkpoint.findings.some(isVerificationCandidate);
           if (verifyBlocker) {
-            requestMetrics.blockerVerificationAttempts =
-              (requestMetrics.blockerVerificationAttempts ?? 0) + 1;
+            mutateMetrics((next) => {
+              next.blockerVerificationAttempts = (next.blockerVerificationAttempts ?? 0) + 1;
+            });
             const verificationId = `advisor-${requestEpoch}-${++checkpointId}`;
             activeCheckpointId = verificationId;
             const verification = yield* activeQueue
@@ -1302,29 +1518,38 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             const proposedBlockers = verificationFingerprints(checkpoint.findings);
             checkpoint = applyBlockerVerification(checkpoint, verification);
             const retainedBlockers = verificationFingerprints(checkpoint.findings);
-            requestMetrics.blockersVerified =
-              (requestMetrics.blockersVerified ?? 0) + retainedBlockers.size;
-            requestMetrics.blockersRejected =
-              (requestMetrics.blockersRejected ?? 0) +
-              Math.max(0, proposedBlockers.size - retainedBlockers.size);
+            mutateMetrics((next) => {
+              next.blockersVerified = (next.blockersVerified ?? 0) + retainedBlockers.size;
+              next.blockersRejected =
+                (next.blockersRejected ?? 0) +
+                Math.max(0, proposedBlockers.size - retainedBlockers.size);
+            });
           }
           finishReviewDuration();
           if (
             !validForDelivery ||
-            requestEpoch !== epoch ||
-            requestCancellationEpoch !== cancellationEpoch ||
-            requestParentTurnId !== parentTurnId ||
+            requestEpoch !== applicationStateStore.get().epoch ||
+            requestCancellationEpoch !== applicationStateStore.get().cancellationEpoch ||
+            requestParentTurnId !== applicationStateStore.get().parentTurnId ||
             requestConfigRevision !== configRevision ||
             options.ctx.signal?.aborted ||
-            (options.requiresEnabled && (!config.enabled || paused || !config.configured)) ||
+            (options.requiresEnabled &&
+              (!currentConfig().enabled || isPaused() || !currentConfig().configured)) ||
             options.ctx.hasPendingMessages() ||
             !branchContains(options.ctx, anchor)
           ) {
-            requestMetrics.lastAction = "discarded";
+            mutateMetrics((next) => {
+              next.lastAction = "discarded";
+            });
             return discardRequest();
           }
-          if (options.trajectoryId !== undefined && activeTrajectory?.id !== options.trajectoryId) {
-            requestMetrics.lastAction = "discarded";
+          if (
+            options.trajectoryId !== undefined &&
+            applicationStateStore.get().activeTrajectory?.id !== options.trajectoryId
+          ) {
+            mutateMetrics((next) => {
+              next.lastAction = "discarded";
+            });
             return discardRequest();
           }
 
@@ -1337,7 +1562,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             options.phase,
             options.source,
             options.ctx,
-            scope,
+            ledgerScope,
             requestCancellationEpoch,
             options.abortOnBlocker ? options.trajectoryId : undefined,
           );
@@ -1347,27 +1572,35 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           return "completed" as const;
         }).pipe(
           Effect.catch((error) =>
-            Effect.sync((): CheckpointSettlement => {
+            Effect.gen(function* () {
               finishReviewDuration();
-              if (requestEpoch !== epoch || !validForDelivery) return discardRequest();
+              if (requestEpoch !== applicationStateStore.get().epoch || !validForDelivery)
+                return discardRequest();
               outcomeRecorded = true;
-              requestMetrics.failure += 1;
-              if (options.source !== "automatic-catch-up") requestMetrics.outcomes.failures += 1;
-              requestMetrics.lastAction = "failure";
               const kind = classifyFailure(error);
-              requestMetrics.lastFailureKind = kind;
+              mutateMetrics((next) => {
+                next.failure += 1;
+                if (options.source !== "automatic-catch-up") next.outcomes.failures += 1;
+                next.lastAction = "failure";
+                next.lastFailureKind = kind;
+              });
               const failureDetails = {
                 contextChars: activeQueue?.backlog ?? 0,
-                durationMs: requestMetrics.latestDurationMs ?? 0,
+                durationMs: applicationStateStore.get().metrics.latestDurationMs ?? 0,
                 error,
-                ...(config.model ? { model: config.model } : {}),
-                ...(config.provider ? { provider: config.provider } : {}),
-                timeoutMs: config.timeoutMs,
+                ...(currentConfig().model ? { model: currentConfig().model } : {}),
+                ...(currentConfig().provider ? { provider: currentConfig().provider } : {}),
+                timeoutMs: currentConfig().timeoutMs,
               };
-              if (logFailure) void Promise.resolve(logFailure(config.configPath, failureDetails));
-              else parentExecutor?.fork(logAdvisorFailureEffect(config.configPath, failureDetails));
-              if (!reportedFailures.has(kind)) {
-                reportedFailures.add(kind);
+              yield* Effect.forkIn(
+                failureLogger.log(currentConfig().configPath, failureDetails),
+                applicationScope,
+              );
+              if (!applicationStateStore.get().reportedFailures.includes(kind)) {
+                updateApplicationState((state) => ({
+                  ...state,
+                  reportedFailures: [...state.reportedFailures, kind],
+                }));
                 notifyBestEffort(
                   options.ctx,
                   `Advisor ${kind} failure; keeping the primary response. See /advisor status --verbose.`,
@@ -1375,7 +1608,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                 );
               }
               if (kind === "authentication") void stopRuntime();
-              return "failed";
+              return "failed" as const;
             }),
           ),
           Effect.withSpan("pi-advisor.parent.checkpoint"),
@@ -1383,48 +1616,35 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         const invalidate = () => {
           validForDelivery = false;
         };
-        let cancellationStarted = false;
-        const cancel = () => {
-          validForDelivery = false;
-          if (cancellationStarted) return;
-          cancellationStarted = true;
+        const cancel = Effect.suspend(() => {
           const targetQueue = activeQueue;
           const targetId = activeCheckpointId;
-          const executor = executorForSession();
-          if (targetQueue && targetId && executor) {
-            try {
-              executor.fork(targetQueue.cancelCheckpointEffect(targetId));
-            } catch {
-              // Session disposal already owns any checkpoint left at this boundary.
-            }
-          }
-        };
+          return targetQueue && targetId
+            ? targetQueue.cancelCheckpointEffect(targetId)
+            : Effect.void;
+        });
         const finalizeCancellation = () => {
           finishReviewDuration();
           discardRequest();
         };
-        activeCheckpointInvalidators.add(invalidate);
-        activeCheckpointCancellationFinalizers.add(finalizeCancellation);
-        const settlement = Fiber.await(
-          parentExecutor.fork(
-            checkpointSettlement.pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  activeCheckpointInvalidators.delete(invalidate);
-                  activeCheckpointCancellationFinalizers.delete(finalizeCancellation);
-                }),
-              ),
+        const orchestrated = checkpointOrchestrator.start(checkpointSettlement, {
+          invalidate,
+          finalizeCancellation,
+          cancelActive: cancel,
+        });
+        return {
+          invalidate: orchestrated.invalidate,
+          cancel: orchestrated.cancel,
+          cancelEffect: orchestrated.cancelEffect,
+          settlement: orchestrated.settlement.pipe(
+            Effect.map(
+              Exit.match({
+                onFailure: () => "failed" as const,
+                onSuccess: (value) => value,
+              }),
             ),
           ),
-        ).pipe(
-          Effect.map(
-            Exit.match({
-              onFailure: () => "failed" as const,
-              onSuccess: (value) => value,
-            }),
-          ),
-        );
-        return { invalidate, cancel, settlement };
+        };
       };
 
       const awaitCatchUpEffectOwned = (
@@ -1432,15 +1652,18 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         ctx: ExtensionContext,
       ): Effect.Effect<void> =>
         Effect.suspend(() => {
-          const catchUpMetrics = metrics;
-          catchUpMetrics.catchUpWaits = incrementBounded(catchUpMetrics.catchUpWaits);
-          catchUpMetrics.activeCatchUpWaits = incrementBounded(catchUpMetrics.activeCatchUpWaits);
+          mutateMetrics((next) => {
+            next.catchUpWaits = incrementBounded(next.catchUpWaits);
+            next.activeCatchUpWaits = incrementBounded(next.activeCatchUpWaits);
+          });
           const signal = ctx.signal;
           let timeoutRecorded = false;
           const recordTimeout = () => {
             if (timeoutRecorded) return;
             timeoutRecorded = true;
-            catchUpMetrics.catchUpTimeouts = incrementBounded(catchUpMetrics.catchUpTimeouts);
+            mutateMetrics((next) => {
+              next.catchUpTimeouts = incrementBounded(next.catchUpTimeouts);
+            });
           };
           const cancellation = signal
             ? Effect.callback<"cancelled">((resume) => {
@@ -1449,15 +1672,15 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                   if (recorded) return;
                   recorded = true;
                   handle.invalidate();
-                  cancellationEpoch += 1;
-                  routingState.latchCancellation();
+                  advanceDomainCounter("cancellationEpoch");
+                  latchCancellation();
                   clearPendingRecovery();
-                  pendingInterventionReceipt = undefined;
+                  clearPendingReceipt();
                   persistCurrentLedger(ctx);
-                  catchUpMetrics.catchUpCancellations = incrementBounded(
-                    catchUpMetrics.catchUpCancellations,
-                  );
-                  resume(Effect.sync(() => handle.cancel()).pipe(Effect.as("cancelled" as const)));
+                  mutateMetrics((next) => {
+                    next.catchUpCancellations = incrementBounded(next.catchUpCancellations);
+                  });
+                  resume(handle.cancelEffect.pipe(Effect.as("cancelled" as const)));
                 };
                 if (signal.aborted) onAbort();
                 else signal.addEventListener("abort", onAbort, { once: true });
@@ -1468,26 +1691,24 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             handle.settlement,
             catchUpTimeoutMs,
             cancellation,
-            Effect.sync(() => {
-              recordTimeout();
-              handle.cancel();
-            }),
+            Effect.sync(recordTimeout).pipe(Effect.andThen(handle.cancelEffect)),
           ).pipe(
             Effect.tap((outcome) =>
               Effect.sync(() => {
                 if (outcome === "timeout") {
                   recordTimeout();
                 } else if (outcome === "failed" && !timeoutRecorded) {
-                  catchUpMetrics.catchUpFailures = incrementBounded(catchUpMetrics.catchUpFailures);
+                  mutateMetrics((next) => {
+                    next.catchUpFailures = incrementBounded(next.catchUpFailures);
+                  });
                 }
               }),
             ),
             Effect.ensuring(
               Effect.sync(() => {
-                catchUpMetrics.activeCatchUpWaits = Math.max(
-                  0,
-                  (catchUpMetrics.activeCatchUpWaits ?? 1) - 1,
-                );
+                mutateMetrics((next) => {
+                  next.activeCatchUpWaits = Math.max(0, (next.activeCatchUpWaits ?? 1) - 1);
+                });
               }),
             ),
             Effect.asVoid,
@@ -1500,7 +1721,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
 
       const ingest = (input: Parameters<AdvisorReviewQueue["ingest"]>[1]): void => {
         try {
-          queue?.ingest(parentTurnId, input);
+          queue?.ingest(applicationStateStore.get().parentTurnId, input);
         } catch {
           // Parent streaming and tool events always remain fail-open.
         }
@@ -1510,18 +1731,16 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         ctx: Parameters<AdvisorCommandActions["cancel"]>[0],
       ): Effect.Effect<boolean> =>
         Effect.suspend(() => {
-          const hadRequestedReview = reviewNext;
+          const hadRequestedReview = applicationStateStore.get().reviewNext;
           const hadExplicitStart = pendingExplicitStart !== undefined;
-          const hadRecovery = Boolean(pendingPersistentRecovery);
-          reviewNext = false;
+          const hadRecovery = Boolean(applicationStateStore.get().pendingPersistentRecovery);
+          updateApplicationState((state) => ({ ...state, reviewNext: false }));
           pendingExplicitStart = undefined;
           clearPendingRecovery();
-          pendingInterventionReceipt = undefined;
-          routingState.latchCancellation();
-          cancellationEpoch += 1;
+          clearPendingReceipt();
+          latchCancellation();
+          advanceDomainCounter("cancellationEpoch");
           persistCurrentLedger(ctx);
-          for (const invalidate of activeCheckpointInvalidators) invalidate();
-          for (const finalize of activeCheckpointCancellationFinalizers) finalize();
           const hadWork =
             hadRequestedReview ||
             hadExplicitStart ||
@@ -1532,26 +1751,31 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                 queue.backlog > 0 ||
                 queue.processedThrough < queue.sequence),
             );
-          return startRuntimeEffect(ctx).pipe(Effect.as(hadWork));
+          return checkpointOrchestrator
+            .cancelAll()
+            .pipe(Effect.andThen(startRuntimeEffect(ctx)), Effect.as(hadWork));
         });
 
       const commandActions: AdvisorCommandActions = {
         cancel: (ctx) => runSessionEffect(cancelEffect(ctx)),
         pause: (ctx) => {
-          paused = true;
-          reviewNext = false;
+          updateApplicationState((state) => ({ ...state, paused: true, reviewNext: false }));
           pendingExplicitStart = undefined;
           clearPendingRecovery();
-          pendingInterventionReceipt = undefined;
-          routingState.latchCancellation();
-          cancellationEpoch += 1;
+          clearPendingReceipt();
+          latchCancellation();
+          advanceDomainCounter("cancellationEpoch");
           persistCurrentLedger(ctx);
-          ++epoch;
-          void stopRuntime();
+          advanceDomainCounter("epoch");
+          void runSessionEffect(
+            checkpointOrchestrator.cancelAll().pipe(Effect.andThen(stopRuntimeEffect())),
+          );
           setAdvisorStatus(ctx, "advisor: paused");
+          publishControllerSnapshotNow();
         },
         resume: (ctx) => {
-          paused = false;
+          updateApplicationState((state) => ({ ...state, paused: false }));
+          publishControllerSnapshotNow();
           void startRuntime(ctx);
         },
         reviewLast: (ctx, focus) => {
@@ -1573,38 +1797,19 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           );
         },
         reviewNext: () => {
-          reviewNext = true;
+          updateApplicationState((state) => ({ ...state, reviewNext: true }));
         },
       };
 
       registerAdvisorCommands(
         capturingPi,
         {
-          get: () => config,
-          getMetrics: () => ({
-            ...metrics,
-            activeToolNames: queue?.activeToolNames ?? [],
-            backlog: queue?.backlog ?? 0,
-            backgroundState: queue?.hasActiveCheckpoint
-              ? "reviewing"
-              : queue && queue.pendingCheckpoints > 0
-                ? "queued"
-                : "idle",
-            childResets: metrics.childResets ?? 0,
-            guidancePaths: instructions.paths,
-            hasLastCandidate: Boolean(lastCandidate),
-            findingLifecycle: findingLifecycle.counts(),
-            interventionBudget: interventionBudget.snapshot,
-            paused,
-            processedSequence: queue?.processedThrough ?? 0,
-            queuedReviews: queue?.pendingCheckpoints ?? 0,
-            reviewNext,
-            sequence: queue?.sequence ?? 0,
-          }),
+          get: () => projection.getSnapshot().config,
+          getMetrics: () => projection.getSnapshot().metrics,
           persist: (patch, path) => {
             const executor = executorForSession();
             return executor
-              ? executor.run(writeAdvisorConfigPatchEffect(patch, path))
+              ? executor.run(configRepository.patch(patch, path))
               : Promise.reject(
                   new AdvisorExtensionError({
                     operation: "config persistence",
@@ -1612,29 +1817,29 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
                   }),
                 );
           },
-          update: (next) => {
-            const enabledChanged = config.enabled !== next.enabled;
-            const disabling = config.enabled && !next.enabled;
-            config = next;
-            configRevision += 1;
-            publishControllerSnapshot();
-            if (enabledChanged) paused = false;
-            clearPendingRecovery();
-            findingDedupe.reset();
-            findingLifecycle.reset();
-            perspectiveBudget.reset();
-            perspectiveCheckpointUsed = false;
-            interventionBudget.reset();
-            latestStateSummary = "";
-            latestDurableSummary = summarizeAdvisorReview();
-            pendingInterventionReceipt = undefined;
-            emissionGuard.reset();
-            pendingExplicitStart = undefined;
-            if (disabling) routingState.latchCancellation();
-            cancellationEpoch += 1;
-            if (activeContext) persistCurrentLedger(activeContext);
-            if (activeContext) void startRuntime(activeContext);
-          },
+          update: (next) =>
+            runSessionEffect(
+              Effect.gen(function* () {
+                const enabledChanged = currentConfig().enabled !== next.enabled;
+                const disabling = currentConfig().enabled && !next.enabled;
+                updateApplicationState((state) => ({
+                  ...state,
+                  config: next,
+                  paused: enabledChanged ? false : state.paused,
+                }));
+                configRevision += 1;
+                clearPendingRecovery();
+                resetRequestDomain(true);
+                latestStateSummary = "";
+                latestDurableSummary = summarizeAdvisorReview();
+                pendingExplicitStart = undefined;
+                if (disabling) latchCancellation();
+                advanceDomainCounter("cancellationEpoch");
+                if (activeContext) persistCurrentLedger(activeContext);
+                yield* publishControllerSnapshot();
+                if (activeContext) void startRuntime(activeContext);
+              }),
+            ),
         },
         commandActions,
         (effect) => runSessionEffect(effect),
@@ -1643,18 +1848,17 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       const sessionInitializeEffect = (ctx: ExtensionContext) =>
         Effect.gen(function* () {
           ++parentGeneration;
-          ++epoch;
-          cancellationEpoch += 1;
+          advanceDomainCounter("epoch");
+          advanceDomainCounter("cancellationEpoch");
           pendingExplicitStart = undefined;
-          for (const invalidate of activeCheckpointInvalidators) invalidate();
-          for (const finalize of activeCheckpointCancellationFinalizers) finalize();
+          yield* checkpointOrchestrator.cancelAll();
           removeHostCancellation?.();
           removeHostCancellation = undefined;
           const latchHostCancellation = () => {
-            routingState.latchCancellation();
+            latchCancellation();
             clearPendingRecovery();
-            pendingInterventionReceipt = undefined;
-            cancellationEpoch += 1;
+            clearPendingReceipt();
+            advanceDomainCounter("cancellationEpoch");
             persistCurrentLedger(ctx);
           };
           ctx.signal?.addEventListener("abort", latchHostCancellation, { once: true });
@@ -1662,59 +1866,62 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             ctx.signal?.removeEventListener("abort", latchHostCancellation);
           if (ctx.signal?.aborted) latchHostCancellation();
           activeContext = ctx;
-          const configPath = config.configPath || getAdvisorConfigPath();
-          const configEffect = loadConfig
-            ? commandAdapter
-                .fromPromise(() => Promise.resolve(loadConfig(configPath)))
-                .pipe(Effect.mapError(extensionError("config load")))
-            : loadAdvisorConfigEffect(configPath).pipe(
-                Effect.mapError(extensionError("config load")),
-              );
+          const configPath = currentConfig().configPath || getAdvisorConfigPath();
+          const configEffect = configRepository
+            .load(configPath)
+            .pipe(Effect.mapError(extensionError("config load")));
           yield* stopRuntimeUnlockedEffect();
-          config = yield* configEffect;
+          const loadedConfig = yield* configEffect;
           configRevision += 1;
-          metrics = emptySessionMetrics();
+          updateApplicationState(() => initialAdvisorApplicationState(loadedConfig));
           childStartedOnce = false;
           instructions = yield* loadAdvisorInstructionsEffect(
-            config.configPath,
+            currentConfig().configPath,
             ctx.cwd,
             ctx.isProjectTrusted(),
           ).pipe(Effect.mapError(extensionError("instruction load")));
-          paused = false;
-          reviewNext = false;
+          updateApplicationState((state) => ({
+            ...state,
+            paused: false,
+            reviewNext: false,
+            guidancePaths: [...instructions.paths],
+            hasLastCandidate: false,
+          }));
           pendingExplicitStart = undefined;
           lastCandidate = undefined;
-          parentTurnId = 0;
+          setDomainCounter("parentTurnId", 0);
           checkpointId = 0;
-          cancellationEpoch += 1;
-          findingDedupe.reset();
-          findingLifecycle.reset();
-          perspectiveBudget.reset();
-          perspectiveCheckpointUsed = false;
-          interventionBudget.reset();
-          pendingInterventionReceipt = undefined;
-          requestSequence = 0;
-          emissionGuard.reset();
-          routingState.reset();
+          advanceDomainCounter("cancellationEpoch");
+          resetRequestDomain(true);
+          setDomainCounter("requestSequence", 0);
+          updateApplicationState((state) => ({
+            ...state,
+            routing: emptyAdvisorRoutingState(),
+          }));
           latestStateSummary = "";
           latestDurableSummary = summarizeAdvisorReview();
-          reportedFailures.clear();
-          reportedDiagnostics.clear();
-          publishControllerSnapshot();
-          if (!config.configured) warnIfSetupRequired(ctx, config, () => undefined);
+          updateApplicationState((state) => ({
+            ...state,
+            reportedFailures: [],
+            reportedDiagnostics: [],
+          }));
+          yield* publishControllerSnapshot();
+          if (!currentConfig().configured)
+            warnIfSetupRequired(ctx, currentConfig(), () => undefined, notifyBestEffort);
           yield* startRuntimeEffect(ctx, "restore-branch");
         });
       const sessionShutdownEffect = () =>
         Effect.sync(() => {
           ++parentGeneration;
-          ++epoch;
+          advanceDomainCounter("epoch");
           pendingExplicitStart = undefined;
           activeContext = undefined;
           removeHostCancellation?.();
           removeHostCancellation = undefined;
-          for (const invalidate of activeCheckpointInvalidators) invalidate();
-          for (const finalize of activeCheckpointCancellationFinalizers) finalize();
-        }).pipe(Effect.andThen(stopRuntimeEffect()));
+        }).pipe(
+          Effect.andThen(checkpointOrchestrator.cancelAll()),
+          Effect.andThen(stopRuntimeEffect()),
+        );
       const compactEffect = (ctx: ExtensionContext) =>
         Effect.sync(() => {
           ingest({ type: "compaction", marker: "Parent context was compacted." });
@@ -1725,12 +1932,8 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           ingest({ type: "tree", marker: "Parent active branch changed." });
           pendingExplicitStart = undefined;
           lastCandidate = undefined;
-          findingDedupe.reset();
-          findingLifecycle.reset();
-          perspectiveBudget.reset();
-          perspectiveCheckpointUsed = false;
-          interventionBudget.reset();
-          pendingInterventionReceipt = undefined;
+          updateApplicationState((state) => ({ ...state, hasLastCandidate: false }));
+          resetRequestDomain(true);
         }).pipe(Effect.andThen(startRuntimeEffect(ctx, "restore-branch")), Effect.asVoid);
 
       capturingPi.on("session_start", (_event, ctx) =>
@@ -1744,15 +1947,14 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         if (!isGenuineUserMessage(event.message)) return;
         clearPersistentTrajectory();
         clearPendingRecovery();
-        pendingInterventionReceipt = undefined;
-        requestSequence += 1;
-        interventionBudget.reset();
-        perspectiveBudget.reset();
-        perspectiveCheckpointUsed = false;
-        findingDedupe.reset();
-        emissionGuard.reset();
-        cancellationEpoch += 1;
-        routingState.clearCancellationForGenuineUserPrompt();
+        clearPendingReceipt();
+        advanceDomainCounter("requestSequence");
+        resetRequestDomain(false);
+        advanceDomainCounter("cancellationEpoch");
+        updateApplicationState((state) => ({
+          ...state,
+          routing: clearAdvisorCancellation(state.routing),
+        }));
         persistCurrentLedger(ctx);
         const text = contentText(event.message);
         ingest({ type: "user", text: text || "[user content unavailable]" });
@@ -1762,29 +1964,29 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       capturingPi.on("turn_start", (event, ctx) => {
         clearPersistentTrajectory();
         clearPendingRecovery();
-        const receipt = pendingInterventionReceipt;
+        const receipt = applicationStateStore.get().pendingReceipt;
         if (
           receipt &&
-          receipt.cancellationEpoch === cancellationEpoch &&
-          receipt.requestSequence === requestSequence
+          receipt.cancellationEpoch === applicationStateStore.get().cancellationEpoch &&
+          receipt.requestSequence === applicationStateStore.get().requestSequence
         ) {
           ingest({
             type: "advisor_intervention_receipt",
             findingIds: receipt.ids,
-            requestSequence,
+            requestSequence: applicationStateStore.get().requestSequence,
           });
-          metrics.interventionsAcknowledged =
-            (metrics.interventionsAcknowledged ?? 0) + receipt.count;
+          mutateMetrics((next) => {
+            next.interventionsAcknowledged = (next.interventionsAcknowledged ?? 0) + receipt.count;
+          });
         }
-        pendingInterventionReceipt = undefined;
-        parentTurnId += 1;
-        if (!config.enabled || paused || !config.configured) return;
-        const observation: ActiveTurnObservation = {
+        clearPendingReceipt();
+        advanceDomainCounter("parentTurnId");
+        if (!currentConfig().enabled || isPaused() || !currentConfig().configured) return;
+        const observation: AdvisorActiveTrajectoryState = {
           abortAllowed: false,
-          ctx,
-          detector: new AdvisorTrajectoryDetector(),
-          toolDetector: new AdvisorToolTrajectoryDetector(),
-          generation: parentTurnId,
+          detector: emptyAdvisorTrajectoryDetector(),
+          toolDetector: emptyAdvisorToolTrajectoryDetector(),
+          generation: applicationStateStore.get().parentTurnId,
           id: ++trajectorySequence,
           loopConfirmed: false,
           reviewQueued: false,
@@ -1792,12 +1994,14 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           thinkingChars: 0,
           turnIndex: event.turnIndex,
         };
-        activeTrajectory = observation;
+        updateApplicationState((state) => ({ ...state, activeTrajectory: observation }));
+        activeTrajectoryResource = { id: observation.id, ctx };
         const executor = executorForSession();
         if (!executor) return;
-        observation.cancelTimer = advisorDelay(executor, LONG_TURN_REVIEW_MS, () => {
-          if (activeTrajectory !== observation || observation.reviewQueued) return;
-          observation.reviewQueued = true;
+        activeTrajectoryResource.cancelTimer = advisorDelay(executor, LONG_TURN_REVIEW_MS, () => {
+          const current = applicationStateStore.get().activeTrajectory;
+          if (!current || current.id !== observation.id || current.reviewQueued) return;
+          mutateTrajectory(observation.id, (next) => ({ ...next, reviewQueued: true }));
           requestCheckpoint({
             ctx,
             focus: "trajectory",
@@ -1817,47 +2021,67 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         } else if (update.type === "thinking_delta") {
           ingest({ type: "assistant_thinking_delta", text: update.delta });
         }
-        const observation = activeTrajectory;
+        const observation = applicationStateStore.get().activeTrajectory;
         if (!observation || observation.reviewQueued) return;
         if (update.type !== "text_delta" && update.type !== "thinking_delta") return;
         const channel = update.type === "thinking_delta" ? "thinking" : "text";
-        if (channel === "thinking") observation.thinkingChars += update.delta.length;
-        else
-          observation.text = `${observation.text}${update.delta}`.slice(
-            -MAX_TRAJECTORY_EVIDENCE_CHARS,
-          );
-        if (observation.loopChannel === "thinking" && channel === "text")
-          observation.abortAllowed = false;
-        const signal = observation.detector.push(channel, update.delta);
-        if (!signal) return;
-        observation.abortAllowed = observation.toolDetector.activeToolCount === 0;
-        observation.loopChannel = signal.channel;
-        observation.loopConfirmed = true;
-        observation.loopReason = `${signal.channel} stream ${signal.reason}`;
-        const queueReview = () => {
-          if (activeTrajectory !== observation || observation.reviewQueued) return;
-          observation.reviewQueued = true;
-          observation.cancelTimer?.();
-          requestCheckpoint({
-            ctx: observation.ctx,
-            focus: "trajectory",
-            phase: "progress",
-            source: "automatic-progress",
-            requiresEnabled: true,
-            trajectoryId: observation.id,
-            abortOnBlocker: observation.abortAllowed,
-          });
-        };
-        queueReview();
+        const trajectoryResult = pushAdvisorTrajectory(observation.detector, channel, update.delta);
+        const signal = trajectoryResult.signal;
+        const next = mutateTrajectory(observation.id, (current) => ({
+          ...current,
+          detector: trajectoryResult.state,
+          thinkingChars:
+            channel === "thinking"
+              ? current.thinkingChars + update.delta.length
+              : current.thinkingChars,
+          text:
+            channel === "text"
+              ? `${current.text}${update.delta}`.slice(-MAX_TRAJECTORY_EVIDENCE_CHARS)
+              : current.text,
+          abortAllowed:
+            signal !== undefined
+              ? advisorActiveToolCount(current.toolDetector) === 0
+              : current.loopChannel === "thinking" && channel === "text"
+                ? false
+                : current.abortAllowed,
+          ...(signal
+            ? {
+                loopChannel: signal.channel,
+                loopConfirmed: true,
+                loopReason: `${signal.channel} stream ${signal.reason}`,
+              }
+            : {}),
+        }));
+        if (!signal || !next) return;
+        const currentResource = activeTrajectoryResource;
+        if (!currentResource || currentResource.id !== observation.id || next.reviewQueued) return;
+        mutateTrajectory(observation.id, (current) => ({ ...current, reviewQueued: true }));
+        currentResource.cancelTimer?.();
+        delete currentResource.cancelTimer;
+        requestCheckpoint({
+          ctx: currentResource.ctx,
+          focus: "trajectory",
+          phase: "progress",
+          source: "automatic-progress",
+          requiresEnabled: true,
+          trajectoryId: observation.id,
+          abortOnBlocker: next.abortAllowed,
+        });
       });
 
       capturingPi.on("tool_execution_start", (event, _ctx) => {
         activeToolCalls.set(event.toolCallId, { toolName: event.toolName, args: event.args });
-        if (activeTrajectory) {
-          activeTrajectory.abortAllowed = false;
-          activeTrajectory.toolDetector.start(event.toolCallId);
-          activeTrajectory.cancelTimer?.();
-          delete activeTrajectory.cancelTimer;
+        const trajectory = applicationStateStore.get().activeTrajectory;
+        if (trajectory) {
+          mutateTrajectory(trajectory.id, (current) => ({
+            ...current,
+            abortAllowed: false,
+            toolDetector: startAdvisorToolTrajectory(current.toolDetector, event.toolCallId),
+          }));
+          if (activeTrajectoryResource?.id === trajectory.id) {
+            activeTrajectoryResource.cancelTimer?.();
+            delete activeTrajectoryResource.cancelTimer;
+          }
         }
         ingest({
           type: "tool_start",
@@ -1884,33 +2108,40 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           result: safeObservationJson(event.result),
           isError: event.isError,
         });
-        const observation = activeTrajectory;
+        const observation = applicationStateStore.get().activeTrajectory;
         if (!observation) return;
         const terminal = {
-          parentTurnId,
+          parentTurnId: applicationStateStore.get().parentTurnId,
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           args: call?.args ?? "[call arguments unavailable]",
           result: event.result,
           isError: event.isError,
         };
-        const concreteProgress = observation.toolDetector.isMateriallyNovelTerminal(
+        const concreteProgress = isMateriallyNovelAdvisorTerminal(
+          observation.toolDetector,
           terminal,
           observation.loopConfirmed,
         );
-        const signal = observation.toolDetector.end(terminal);
-        observation.abortAllowed = observation.toolDetector.activeToolCount === 0;
-        if (concreteProgress) {
-          observation.toolDetector.markConcreteProgress();
-          observation.loopConfirmed = false;
-          delete observation.loopReason;
-          observation.abortAllowed = false;
-          return;
-        }
-        if (!signal || observation.reviewQueued) return;
-        observation.loopConfirmed = true;
-        observation.loopReason = signal.reason;
-        observation.abortAllowed = signal.abortSafe;
+        const toolResult = endAdvisorToolTrajectory(observation.toolDetector, terminal);
+        const signal = toolResult.signal;
+        const next = mutateTrajectory(observation.id, (current) => {
+          const { loopReason: _loopReason, ...withoutLoopReason } = current;
+          return {
+            ...(concreteProgress ? withoutLoopReason : current),
+            toolDetector: concreteProgress
+              ? markConcreteAdvisorProgress(toolResult.state)
+              : toolResult.state,
+            loopConfirmed: concreteProgress ? false : signal ? true : current.loopConfirmed,
+            ...(signal && !concreteProgress ? { loopReason: signal.reason } : {}),
+            abortAllowed: concreteProgress
+              ? false
+              : signal
+                ? signal.abortSafe
+                : advisorActiveToolCount(toolResult.state) === 0,
+          };
+        });
+        if (concreteProgress || !signal || !next || next.reviewQueued) return;
         ingest({
           type: "trajectory_signal",
           kind: signal.kind,
@@ -1919,9 +2150,11 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           evidence: signal.evidence,
           abortSafe: signal.abortSafe,
         });
-        observation.reviewQueued = true;
+        mutateTrajectory(observation.id, (current) => ({ ...current, reviewQueued: true }));
+        const currentResource = activeTrajectoryResource;
+        if (!currentResource || currentResource.id !== observation.id) return;
         requestCheckpoint({
-          ctx: observation.ctx,
+          ctx: currentResource.ctx,
           focus: "trajectory",
           phase: "progress",
           source: "automatic-progress",
@@ -1932,16 +2165,16 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       });
 
       capturingPi.on("agent_settled", (_event, ctx) => {
-        const recovery = pendingPersistentRecovery;
+        const recovery = applicationStateStore.get().pendingPersistentRecovery;
         if (
           !recovery ||
-          recovery.epoch !== epoch ||
-          recovery.parentTurnId !== parentTurnId ||
+          recovery.epoch !== applicationStateStore.get().epoch ||
+          recovery.parentTurnId !== applicationStateStore.get().parentTurnId ||
           recovery.configRevision !== configRevision ||
-          recovery.cancellationEpoch !== cancellationEpoch ||
-          !config.enabled ||
-          paused ||
-          !config.configured ||
+          recovery.cancellationEpoch !== applicationStateStore.get().cancellationEpoch ||
+          !currentConfig().enabled ||
+          isPaused() ||
+          !currentConfig().configured ||
           ctx.signal?.aborted ||
           !ctx.isIdle() ||
           ctx.hasPendingMessages()
@@ -1949,9 +2182,12 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           clearPendingRecovery();
           return;
         }
-        pendingPersistentRecovery = undefined;
-        abortInProgress = undefined;
-        findingLifecycle.acknowledge(recovery.findingIds);
+        updateApplicationState((state) => ({
+          ...state,
+          pendingPersistentRecovery: undefined,
+          abortInProgress: undefined,
+          findingLifecycle: acknowledgeAdvisorFindings(state.findingLifecycle, recovery.findingIds),
+        }));
         sendTriggeredCorrection(
           pi,
           recovery.config,
@@ -1959,22 +2195,26 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           recovery.phase,
           recovery.recovering,
         );
-        recovery.metrics.outcomes.recovery += 1;
-        recovery.metrics.interventionsDelivered =
-          (recovery.metrics.interventionsDelivered ?? 0) + 1;
+        mutateMetrics((next) => {
+          next.outcomes.recovery += 1;
+          next.interventionsDelivered = (next.interventionsDelivered ?? 0) + 1;
+        });
         recordReceipt(recovery.findingIds);
         ingest({
           type: "advisor_intervention",
           findingIds: recovery.findingIds,
           action: "recovery",
-          requestSequence,
+          requestSequence: applicationStateStore.get().requestSequence,
         });
-        routingState.armInterruption();
+        updateApplicationState((state) => ({
+          ...state,
+          routing: armAdvisorInterruption(state.routing),
+        }));
         persistLedger(parentAnchor(ctx), ctx);
       });
 
       capturingPi.on("turn_end", (event, ctx) => {
-        const trajectory = activeTrajectory;
+        const trajectory = applicationStateStore.get().activeTrajectory;
         clearPersistentTrajectory();
         const classification = classifyReviewCheckpoint(event);
         const stopReason = assistantStopReason(event.message);
@@ -1986,26 +2226,31 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           });
         }
         ingest({ type: "turn_complete", status: stopReason });
-        if (stopReason === "stop") routingState.completePrimaryTurn();
+        if (stopReason === "stop")
+          updateApplicationState((state) => ({
+            ...state,
+            routing: completeAdvisorPrimaryTurn(state.routing),
+          }));
         if (!classification.eligible) {
           recordSkip(classification.reason === "empty" ? "empty" : "incomplete");
-          if (stopReason !== "stop" && trajectory) trajectory.abortAllowed = false;
+          if (stopReason !== "stop" && trajectory)
+            mutateTrajectory(trajectory.id, (current) => ({ ...current, abortAllowed: false }));
           if (stopReason === "aborted") {
-            const provenance = abortInProgress;
+            const provenance = applicationStateStore.get().abortInProgress;
             const matchingAdvisorAbort = Boolean(
               provenance &&
-              provenance.epoch === epoch &&
-              provenance.parentTurnId === parentTurnId &&
-              provenance.cancellationEpoch === cancellationEpoch &&
+              provenance.epoch === applicationStateStore.get().epoch &&
+              provenance.parentTurnId === applicationStateStore.get().parentTurnId &&
+              provenance.cancellationEpoch === applicationStateStore.get().cancellationEpoch &&
               provenance.turnIndex === event.turnIndex &&
               trajectory?.id === provenance.trajectoryId,
             );
             if (matchingAdvisorAbort) {
-              abortInProgress = undefined;
+              updateApplicationState((state) => ({ ...state, abortInProgress: undefined }));
             } else {
               clearPendingRecovery();
-              routingState.latchCancellation();
-              cancellationEpoch += 1;
+              latchCancellation();
+              advanceDomainCounter("cancellationEpoch");
               persistCurrentLedger(ctx);
             }
           }
@@ -2015,14 +2260,16 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         if (classification.phase === "final") {
           lastCandidate = {
             candidate: classification.candidate,
-            generation: parentTurnId,
+            generation: applicationStateStore.get().parentTurnId,
             messages,
-            sessionEpoch: epoch,
+            sessionEpoch: applicationStateStore.get().epoch,
           };
+          updateApplicationState((state) => ({ ...state, hasLastCandidate: true }));
         }
-        const explicitlyRequested = classification.phase === "final" && reviewNext;
+        const explicitlyRequested =
+          classification.phase === "final" && applicationStateStore.get().reviewNext;
         if (explicitlyRequested) {
-          reviewNext = false;
+          updateApplicationState((state) => ({ ...state, reviewNext: false }));
           return runSessionEffect(
             runWithExplicitRuntimeEffect(ctx, () =>
               requestCheckpoint({
@@ -2039,15 +2286,15 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
             ),
           );
         }
-        if (!explicitlyRequested && !config.enabled) {
+        if (!explicitlyRequested && !currentConfig().enabled) {
           recordSkip("disabled");
           return;
         }
-        if (!explicitlyRequested && paused) {
+        if (!explicitlyRequested && isPaused()) {
           recordSkip("session-paused");
           return;
         }
-        if (!config.configured) {
+        if (!currentConfig().configured) {
           recordSkip("unconfigured");
           return;
         }
@@ -2085,7 +2332,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           return Effect.tryPromise({
             try: () => Promise.resolve(handler(event, ctx)),
             catch: extensionError(name),
-          });
+          }).pipe(Effect.ensuring(publishControllerSnapshot()));
         });
       const invokeCommand = (
         name: string,
@@ -2095,13 +2342,16 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         Effect.suspend(() => {
           const handler = options.commandHandlers.get(name);
           if (!handler) return Effect.void;
-          return commandAdapter
-            .fromPromise(() => Promise.resolve(handler(args, ctx)))
-            .pipe(Effect.mapError(extensionError(`command ${name}`)));
+          return publishControllerSnapshot().pipe(
+            Effect.andThen(commandAdapter.fromPromise(() => Promise.resolve(handler(args, ctx)))),
+            Effect.mapError(extensionError(`command ${name}`)),
+            Effect.ensuring(publishControllerSnapshot()),
+          );
         });
       const service = AdvisorController.of({
-        snapshot,
+        getSnapshot: projection.getSnapshot,
         publish: productionController.publish,
+        refreshProjection: Effect.suspend(publishControllerSnapshot),
         replaceChild: productionController.replaceChild,
         stopChild: productionController.stopChild,
         sessionInitialize: (_event, ctx) =>
@@ -2114,7 +2364,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         command: invokeCommand,
       });
       yield* Effect.addFinalizer(() =>
-        stopRuntimeUnlockedEffect().pipe(Effect.andThen(stopOwnedChild)),
+        stopRuntimeUnlockedEffect().pipe(Effect.andThen(resources.stopChild)),
       );
       return service;
     }),
@@ -2132,6 +2382,9 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       | AdvisorRuntimeService
       | AdvisorReviewQueueService
       | AdvisorController
+      | ConfigRepository
+      | FailureLogger
+      | HostNotifier
       | PiCommandAdapter
     >;
     const sessionExecutor: AdvisorEffectExecutor = {
@@ -2147,10 +2400,19 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       },
       now: () => performance.now(),
     };
+    const repositoryLayer = dependencies.loadConfig
+      ? configRepositoryTestLayer(dependencies.loadConfig)
+      : configRepositoryLayer;
+    const loggerLayer = dependencies.logFailure
+      ? failureLoggerTestLayer(dependencies.logFailure)
+      : failureLoggerLayer;
     const dependenciesLayer = Layer.mergeAll(
       advisorRuntimeServiceLayer(sessionExecutor),
       advisorReviewQueueServiceLayer,
       PiCommandAdapter.layer,
+      repositoryLayer,
+      loggerLayer,
+      hostNotifierLayer,
     ).pipe(Layer.provideMerge(advisorPlatformLayer));
     const applicationLayer = advisorControllerApplicationLayer({
       pi,
@@ -2185,7 +2447,13 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         handler: (args, ctx) => {
           const projected = commandHandlers.get(name);
           if ((name === "advisor-status" || name === "advisor-usage") && projected) {
-            return Promise.resolve(projected(args, ctx)).then(() => undefined);
+            return runController((controller) => controller.refreshProjection)
+              .catch(() => undefined)
+              .then(() => projected(args, ctx))
+              .then(
+                () => undefined,
+                () => undefined,
+              );
           }
           return runController((controller) => controller.command(name, args, ctx)).then(
             () => undefined,
@@ -2534,10 +2802,12 @@ function warnIfSetupRequired(
   ctx: ExtensionContext,
   config: ResolvedAdvisorConfig,
   markShown: () => void,
+  notify: HostNotifierShape["notify"],
 ): void {
   if (!config.enabled || config.configured) return;
   markShown();
-  ctx.ui.notify(
+  notify(
+    ctx,
     "Advisor review is enabled but no dedicated model is configured. Use /advisor-settings.",
     "warning",
   );

@@ -14,13 +14,17 @@ import {
   AgentDirectory,
   JsonDocumentError,
   JsonDocumentStore,
-  JsonHttpClient,
   JsonHttpError,
   type JsonDocumentStoreShape,
-  type JsonHttpClientShape,
   type JsonObject,
 } from "pi-cosmic-core";
-import { makeCapturedTracer } from "pi-cosmic-core/testing";
+import {
+  capturedTelemetrySnapshot,
+  jsonHttpTestLayer,
+  makeCapturedLogger,
+  makeCapturedTracer,
+  type JsonHttpTestRequest,
+} from "pi-cosmic-core/testing";
 import {
   extractAccountIdFromJwt,
   getCodexCredentials,
@@ -34,7 +38,7 @@ import {
   readConfig,
   resolveConfig,
 } from "../src/config.ts";
-import { FastController } from "../src/fast-controller.ts";
+import { injectProviderPayload, type FastSnapshot } from "../src/fast-controller.ts";
 import { openAIUsageUiState } from "../src/ui/primitives.ts";
 import {
   OpenAIUsageService,
@@ -244,16 +248,11 @@ describe("usage payloads, visibility, and fast mode", () => {
 
   it.effect("uses credential headers and rejects malformed provider payloads", () => {
     const store = documents();
-    let request: Parameters<JsonHttpClientShape["request"]>[0] | undefined;
-    const http = Layer.succeed(
-      JsonHttpClient,
-      JsonHttpClient.of({
-        request: (input) => {
-          request = input;
-          return Effect.succeed({ status: 200, body: payload });
-        },
-      }),
-    );
+    let request: JsonHttpTestRequest | undefined;
+    const http = jsonHttpTestLayer((input) => {
+      request = input;
+      return Effect.succeed({ status: 200, body: payload });
+    });
     return Effect.gen(function* () {
       const snapshot = yield* requestCodexUsage(
         "/auth.json",
@@ -279,15 +278,11 @@ describe("usage payloads, visibility, and fast mode", () => {
       },
     });
     let calls = 0;
-    const http = Layer.succeed(
-      JsonHttpClient,
-      JsonHttpClient.of({
-        request: () =>
-          Effect.gen(function* () {
-            calls++;
-            yield* Effect.yieldNow;
-            return { status: 200, body: payload };
-          }),
+    const http = jsonHttpTestLayer(() =>
+      Effect.gen(function* () {
+        calls++;
+        yield* Effect.yieldNow;
+        return { status: 200, body: payload };
       }),
     );
     const ctx = context(JSON.stringify({ access: "token", accountId: "acct" }));
@@ -344,15 +339,10 @@ describe("usage payloads, visibility, and fast mode", () => {
       lookupStarted = true;
       return new globalThis.Promise<string | undefined>(() => undefined);
     };
-    const http = Layer.succeed(
-      JsonHttpClient,
-      JsonHttpClient.of({
-        request: () => {
-          requests++;
-          return Effect.succeed({ status: 200, body: payload });
-        },
-      }),
-    );
+    const http = jsonHttpTestLayer(() => {
+      requests++;
+      return Effect.succeed({ status: 200, body: payload });
+    });
     const projection = makeProjection();
     const layer = OpenAIUsageService.layer({
       context: MutableRef.make(ctx),
@@ -390,14 +380,10 @@ describe("usage payloads, visibility, and fast mode", () => {
       },
     });
     let calls = 0;
-    const http = Layer.succeed(
-      JsonHttpClient,
-      JsonHttpClient.of({
-        request: () =>
-          Effect.sync(() => ({ status: 200, body: payload })).pipe(
-            Effect.tap(() => Effect.sync(() => calls++)),
-          ),
-      }),
+    const http = jsonHttpTestLayer(() =>
+      Effect.sync(() => ({ status: 200, body: payload })).pipe(
+        Effect.tap(() => Effect.sync(() => calls++)),
+      ),
     );
     const contextRef = MutableRef.make(
       context(JSON.stringify({ access: "token", accountId: "acct" })),
@@ -438,14 +424,10 @@ describe("usage payloads, visibility, and fast mode", () => {
       });
       let started = false;
       let released = 0;
-      const http = Layer.succeed(
-        JsonHttpClient,
-        JsonHttpClient.of({
-          request: () =>
-            Effect.sync(() => {
-              started = true;
-            }).pipe(Effect.andThen(Effect.never), Effect.ensuring(Effect.sync(() => released++))),
-        }),
+      const http = jsonHttpTestLayer(() =>
+        Effect.sync(() => {
+          started = true;
+        }).pipe(Effect.andThen(Effect.never), Effect.ensuring(Effect.sync(() => released++))),
       );
       const contextRef = MutableRef.make(
         context(JSON.stringify({ access: "registry-secret", accountId: "acct_registry" })),
@@ -482,6 +464,7 @@ describe("usage payloads, visibility, and fast mode", () => {
   );
 
   it.effect("transitions polling failures while retaining safe registry diagnostics", () => {
+    const captured = makeCapturedLogger();
     const store = documents({
       "/project/.pi/extensions/pi-better-openai.json": {
         usage: { enabled: true, refreshIntervalMs: 60_000 },
@@ -490,17 +473,12 @@ describe("usage payloads, visibility, and fast mode", () => {
       },
     });
     let calls = 0;
-    const http = Layer.succeed(
-      JsonHttpClient,
-      JsonHttpClient.of({
-        request: () => {
-          calls++;
-          return Effect.fail(
-            new JsonHttpError({ operation: "request", message: "provider unavailable" }),
-          );
-        },
-      }),
-    );
+    const http = jsonHttpTestLayer(() => {
+      calls++;
+      return Effect.fail(
+        new JsonHttpError({ operation: "request", message: "provider unavailable" }),
+      );
+    });
     const projection = makeProjection();
     const layer = OpenAIUsageService.layer({
       context: MutableRef.make(
@@ -522,7 +500,11 @@ describe("usage payloads, visibility, and fast mode", () => {
       expect(state.authSource).toBe("modelRegistry");
       expect(state.accountId).toBe("acct_registry");
       expect(state.statusText).not.toContain("registry-secret");
-    }).pipe(Effect.provide(layer));
+      const telemetry = capturedTelemetrySnapshot(captured);
+      expect(telemetry).toContain("refresh_failed");
+      expect(telemetry).not.toContain("registry-secret");
+      expect(telemetry).not.toContain("acct_registry");
+    }).pipe(Effect.provide(layer.pipe(Layer.provideMerge(captured.layer))));
   });
 
   it.effect("suppresses stale usage and notification commits after model selection", () => {
@@ -533,16 +515,12 @@ describe("usage payloads, visibility, and fast mode", () => {
         image: { enabled: false },
       },
     });
-    const response = Deferred.makeUnsafe<{ status: number; body: unknown }>();
+    const response = Deferred.makeUnsafe<{ status: number; body: typeof payload }>();
     let started = false;
-    const http = Layer.succeed(
-      JsonHttpClient,
-      JsonHttpClient.of({
-        request: () =>
-          Effect.sync(() => {
-            started = true;
-          }).pipe(Effect.andThen(Deferred.await(response))),
-      }),
+    const http = jsonHttpTestLayer(() =>
+      Effect.sync(() => {
+        started = true;
+      }).pipe(Effect.andThen(Deferred.await(response))),
     );
     const ctx = context(JSON.stringify({ access: "token", accountId: "acct" }));
     let notifications = 0;
@@ -604,14 +582,23 @@ describe("usage payloads, visibility, and fast mode", () => {
       MutableRef.set(projection, { ...MutableRef.get(projection), config: cfg });
       synchronizeProjectionContext(projection, ctx, { clearUsage: true });
       expect(openAIUsageUiState(ctx, cfg, projection).visible).toBe(false);
-      const fast = new FastController("priority");
-      fast.initializeForSession(ctx, { ...cfg, active: true, desiredActive: true }, false);
-      expect(fast.injectProviderPayload({ payload: { model: "gpt-5.5" } }, ctx)).toMatchObject({
-        service_tier: "priority",
-      });
+      expect(Object.isFrozen(MutableRef.get(projection))).toBe(true);
+      expect(Object.isFrozen(MutableRef.get(projection).config?.usage)).toBe(true);
+      expect(MutableRef.get(projection).config).not.toBe(cfg);
+      const fast: FastSnapshot = { desiredActive: true, active: true };
+      expect(
+        injectProviderPayload(
+          { payload: { model: "gpt-5.5" } },
+          ctx,
+          fast,
+          "priority",
+          () => undefined,
+        ),
+      ).toMatchObject({ service_tier: "priority" });
       ctx.model = { provider: "openai", id: "gpt-4.1" } as ExtensionContext["model"];
-      fast.applyDesiredState(ctx);
-      expect(fast.injectProviderPayload({ payload: {} }, ctx)).toBeUndefined();
+      expect(
+        injectProviderPayload({ payload: {} }, ctx, fast, "priority", () => undefined),
+      ).toBeUndefined();
     }),
   );
 });

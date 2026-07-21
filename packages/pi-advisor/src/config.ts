@@ -2,10 +2,10 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
+import * as SchemaGetter from "effect/SchemaGetter";
+import { decodeTolerantFields, JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
 import { parseJson, stringifyJson } from "./boundary/json.ts";
 import {
   nodeJoin,
@@ -116,37 +116,61 @@ export function isAdvisorConfigured(
 ): boolean {
   return Boolean(config.provider && config.model);
 }
+const AdvisorRawFieldSchemas = {
+  enabled: Schema.Boolean,
+  provider: Schema.String,
+  model: Schema.String,
+  fastMode: Schema.Boolean,
+  thinkingLevel: AdvisorThinkingLevelSchema,
+  reviewPolicy: AdvisorReviewPolicySchema,
+  timeoutMs: Schema.Number,
+  maxContextChars: Schema.Number,
+} as const;
+
+const normalizeAdvisorConfigData = (raw: unknown, configPath: string): ResolvedAdvisorConfig => {
+  const record = migrateLegacyReviewPolicy(safeDataRecord(raw));
+  const decoded = decodeTolerantFields(record, AdvisorRawFieldSchemas, {
+    path: "advisor",
+    maxDiagnostics: Object.keys(AdvisorRawFieldSchemas).length,
+  }).value;
+  const provider = nonEmptyString(decoded.provider);
+  const model = nonEmptyString(decoded.model);
+  return {
+    configPath,
+    enabled: decoded.enabled ?? DEFAULT_ADVISOR_CONFIG.enabled,
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    fastMode: decoded.fastMode ?? DEFAULT_ADVISOR_CONFIG.fastMode,
+    thinkingLevel: normalizeThinkingLevel(decoded.thinkingLevel),
+    reviewPolicy: normalizeReviewPolicy(decoded.reviewPolicy),
+    timeoutMs: clampTimeoutMs(decoded.timeoutMs),
+    maxContextChars: clampContextChars(decoded.maxContextChars),
+    configured: Boolean(provider && model),
+  };
+};
+
+/** Schema transform/default pipeline retaining tolerant sibling recovery and legacy migration. */
+export const AdvisorConfigSchema = (configPath = getAdvisorConfigPath()) =>
+  Schema.Unknown.pipe(
+    Schema.decodeTo(ResolvedAdvisorConfigSchema, {
+      decode: SchemaGetter.transform((raw) => normalizeAdvisorConfigData(raw, configPath)),
+      encode: SchemaGetter.transform((resolved) => resolved),
+    }),
+  );
+
 export function normalizeAdvisorConfig(
   raw: unknown,
   configPath = getAdvisorConfigPath(),
 ): ResolvedAdvisorConfig {
-  const record = migrateLegacyReviewPolicy(safeDataRecord(raw));
-  const provider = nonEmptyString(decodeField(record, "provider", Schema.String));
-  const model = nonEmptyString(decodeField(record, "model", Schema.String));
-  const normalized: ResolvedAdvisorConfig = {
-    configPath,
-    enabled: decodeField(record, "enabled", Schema.Boolean) ?? DEFAULT_ADVISOR_CONFIG.enabled,
-    ...(provider ? { provider } : {}),
-    ...(model ? { model } : {}),
-    fastMode: decodeField(record, "fastMode", Schema.Boolean) ?? DEFAULT_ADVISOR_CONFIG.fastMode,
-    thinkingLevel: normalizeThinkingLevel(
-      decodeField(record, "thinkingLevel", AdvisorThinkingLevelSchema),
-    ),
-    reviewPolicy: normalizeReviewPolicy(
-      decodeField(record, "reviewPolicy", AdvisorReviewPolicySchema),
-    ),
-    timeoutMs: clampTimeoutMs(decodeField(record, "timeoutMs", Schema.Number)),
-    maxContextChars: clampContextChars(decodeField(record, "maxContextChars", Schema.Number)),
-    configured: Boolean(provider && model),
-  };
-  if (Option.isNone(Schema.decodeUnknownOption(ResolvedAdvisorConfigSchema)(normalized))) {
+  try {
+    return Schema.decodeUnknownSync(AdvisorConfigSchema(configPath))(raw);
+  } catch {
     throw new AdvisorConfigError({
       operation: "normalize",
       path: configPath,
       message: "Unable to normalize Advisor configuration.",
     });
   }
-  return normalized;
 }
 
 const mapError = (operation: string, path: string) => () =>
@@ -303,10 +327,6 @@ export function writeAdvisorConfigPatchAsync(
 
 function safeDataRecord(value: unknown): JsonObject {
   return snapshotDataRecord(value) ?? {};
-}
-function decodeField<A>(record: JsonObject, key: string, schema: Schema.Decoder<A>): A | undefined {
-  const decoded = Schema.decodeUnknownOption(schema)(record[key]);
-  return Option.isSome(decoded) ? decoded.value : undefined;
 }
 function setOptionalBoolean(target: JsonObject, key: string, value: boolean | undefined) {
   if (typeof value === "boolean") target[key] = value;

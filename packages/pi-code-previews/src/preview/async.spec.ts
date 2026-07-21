@@ -14,7 +14,7 @@ import {
   type CodePreviewSessionCapability,
 } from "../session-capability";
 import { testTheme } from "../testing/render";
-import { cachedAsyncPreview } from "../tool-renderers/shared/cache";
+import { cachedDeferredPreview } from "../tool-renderers/shared/cache";
 
 afterEach(() => clearCodePreviewSessionCapability());
 
@@ -35,7 +35,7 @@ const component = (text: string, theme: Theme = testTheme()) =>
 test("large previews remain synchronous before session acquisition", () => {
   const state = {};
   let computes = 0;
-  const rendered = cachedAsyncPreview(
+  const rendered = cachedDeferredPreview(
     state,
     "key",
     "component",
@@ -53,13 +53,13 @@ test("large previews remain synchronous before session acquisition", () => {
   assert.match(rendered.render(80).join("\n"), /ready/);
 });
 
-test("cache replacement cancels obsolete async publication and compares exact source", async () => {
+test("cache replacement cancels obsolete deferred publication and compares exact source", async () => {
   installTestCapability();
   const state = {};
   let firstComputes = 0;
   let secondComputes = 0;
   let invalidations = 0;
-  cachedAsyncPreview(
+  cachedDeferredPreview(
     state,
     "key",
     "component",
@@ -73,7 +73,7 @@ test("cache replacement cancels obsolete async publication and compares exact so
     },
     () => invalidations++,
   );
-  const current = cachedAsyncPreview(
+  const current = cachedDeferredPreview(
     state,
     "key",
     "component",

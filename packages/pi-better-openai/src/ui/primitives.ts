@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedConfig } from "../config.ts";
-import { supportsFast, type FastController } from "../fast-controller.ts";
+import { isFastActive, supportsFast, type FastSnapshot } from "../fast-controller.ts";
 import type * as MutableRef from "effect/MutableRef";
 import { visibleStatusLine, type OpenAIProjection } from "../usage-controller.ts";
 import type { CosmicFooterTextContribution as FooterTextPrimitive } from "pi-cosmic-ui/protocol";
@@ -18,13 +18,10 @@ export interface OpenAIUsageUiState {
   updatedAt?: number;
 }
 
-export function fastModeUiState(
-  ctx: ExtensionContext,
-  controller: FastController,
-): FastModeUiState {
+export function fastModeUiState(ctx: ExtensionContext, snapshot: FastSnapshot): FastModeUiState {
   return {
-    desired: controller.desiredActive,
-    active: controller.active,
+    desired: snapshot.desiredActive,
+    active: isFastActive(ctx, snapshot),
     supported: supportsFast(ctx),
     ...(ctx.model?.id ? { modelId: ctx.model.id } : {}),
   };

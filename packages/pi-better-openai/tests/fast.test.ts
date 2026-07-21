@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterOpenAI from "../index.ts";
+import { initialFastSnapshot } from "../src/fast-controller.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 type CommandHandler = (args: string, ctx: ExtensionContext) => unknown | Promise<unknown>;
@@ -125,6 +126,11 @@ afterEach(() => {
 });
 
 describe("fast mode provider injection", () => {
+  test("uses a deeply frozen reset snapshot", () => {
+    const snapshot = initialFastSnapshot();
+    expect(Object.isFrozen(snapshot)).toBe(true);
+  });
+
   test("injects priority service tier when persisted fast mode is active for a supported model", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, { active: true, desiredActive: true });
@@ -192,6 +198,19 @@ describe("fast mode provider injection", () => {
     await expect(beforeProviderRequest(harness, { model: "gpt-5.5" })).resolves.toMatchObject({
       service_tier: "priority",
     });
+  });
+
+  test("session shutdown clears the frozen fast snapshot before later provider callbacks", async () => {
+    const cwd = createTempProject();
+    writeProjectConfig(cwd, { active: true, desiredActive: true });
+    const harness = createHarness(cwd);
+
+    await emit(harness, "session_start");
+    await expect(beforeProviderRequest(harness, { model: "gpt-5.5" })).resolves.toMatchObject({
+      service_tier: "priority",
+    });
+    await emit(harness, "session_shutdown");
+    await expect(beforeProviderRequest(harness, { model: "gpt-5.5" })).resolves.toBeUndefined();
   });
 
   test("model selection deactivates injection for unsupported models and reactivates for supported models", async () => {

@@ -4,22 +4,25 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
-import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as TestClock from "effect/testing/TestClock";
 import { advisorDelayEffect, advisorIntervalEffect } from "../src/boundary/clock.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
 import { ADVISOR_CATCH_UP_TIMEOUT_MS, awaitAdvisorCatchUpEffect } from "../src/extension.ts";
 import { LONG_TURN_REVIEW_MS } from "../src/trajectory.ts";
-import { AdvisorReviewQueue, type AdvisorReviewQueueOptions } from "../src/review-queue.ts";
 import {
-  AdvisorRuntime,
-  MAX_ADVISOR_ABORT_MS,
-  type AdvisorRuntimeServiceShape,
-} from "../src/advisor-runtime.ts";
+  AdvisorReviewQueue,
+  MAX_PENDING_CHECKPOINTS,
+  type AdvisorReviewQueueOptions,
+  type QueuedCheckpoint,
+} from "../src/review-queue.ts";
+import { initialReviewQueueState } from "../src/review-queue-state.ts";
+import { AdvisorRuntime, type AdvisorRuntimeServiceShape } from "../src/advisor-runtime.ts";
 
 const assertExactDelay = (milliseconds: number) =>
   Effect.gen(function* () {
@@ -96,9 +99,8 @@ describe("advisor Effect clock boundaries", () => {
         effects,
         {} satisfies AdvisorReviewQueueOptions,
         scope,
-        yield* Semaphore.make(1),
-        yield* Semaphore.make(1),
-        yield* Ref.make(0),
+        yield* SynchronizedRef.make(initialReviewQueueState()),
+        yield* Queue.dropping<QueuedCheckpoint>(MAX_PENDING_CHECKPOINTS + 1),
       );
       yield* queue.initializeEffect();
       queue.ingest(1, { type: "user", text: "first" });
@@ -128,10 +130,13 @@ describe("advisor Effect clock boundaries", () => {
     }),
   );
 
-  it.effect("bounds a hung AgentSession abort and still disposes exactly once", () =>
+  it.effect("awaits AgentSession abort settlement and still disposes exactly once", () =>
     Effect.gen(function* () {
       const scope = yield* Effect.scope;
-      const never = new Promise<void>(() => undefined);
+      let releaseAbort!: () => void;
+      const abortGate = new Promise<void>((resolve) => {
+        releaseAbort = resolve;
+      });
       const session = {
         sessionFile: undefined,
         messages: [],
@@ -142,7 +147,7 @@ describe("advisor Effect clock boundaries", () => {
         prompt: () => Promise.resolve(),
         steer: () => Promise.resolve(),
         followUp: () => Promise.resolve(),
-        abort: vi.fn(() => never),
+        abort: vi.fn(() => abortGate),
         dispose: vi.fn(),
       } as unknown as AgentSession;
       const runtime = new AdvisorRuntime(
@@ -158,7 +163,9 @@ describe("advisor Effect clock boundaries", () => {
         },
         standaloneAdvisorExecutor,
         scope,
-        yield* Queue.unbounded<void>(),
+        { offer: () => "accepted", shutdown: Effect.void, awaitShutdown: Effect.void },
+        (yield* SynchronizedRef.make(undefined)) as never,
+        yield* Semaphore.make(1),
       );
       yield* runtime
         .startEffect({
@@ -187,9 +194,9 @@ describe("advisor Effect clock boundaries", () => {
         ),
         Effect.forkChild({ startImmediately: true }),
       );
-      yield* TestClock.adjust(MAX_ADVISOR_ABORT_MS - 1);
+      yield* Effect.yieldNow;
       expect(completed).toBe(false);
-      yield* TestClock.adjust(1);
+      yield* Effect.sync(releaseAbort);
       yield* Fiber.join(abort);
       expect(completed).toBe(true);
       yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
@@ -198,9 +205,10 @@ describe("advisor Effect clock boundaries", () => {
     }),
   );
 
-  it.effect("lets queue disposal and the shutdown path advance after a hung abort bound", () =>
+  it.effect("keeps queue disposal blocked until the owned abort settles", () =>
     Effect.gen(function* () {
       const scope = yield* Effect.scope;
+      const abortGate = yield* Deferred.make<void>();
       let disposed = 0;
       const effects: AdvisorRuntimeServiceShape = {
         activeToolNames: () => [],
@@ -208,11 +216,7 @@ describe("advisor Effect clock boundaries", () => {
         checkpoint: () => Effect.never,
         steer: () => Effect.succeed(false),
         reprime: () => Effect.void,
-        abort: () =>
-          Effect.never.pipe(
-            Effect.timeout(MAX_ADVISOR_ABORT_MS),
-            Effect.catch(() => Effect.void),
-          ),
+        abort: () => Deferred.await(abortGate),
         dispose: () =>
           Effect.sync(() => {
             disposed += 1;
@@ -222,9 +226,8 @@ describe("advisor Effect clock boundaries", () => {
         effects,
         {},
         scope,
-        yield* Semaphore.make(1),
-        yield* Semaphore.make(1),
-        yield* Ref.make(0),
+        yield* SynchronizedRef.make(initialReviewQueueState()),
+        yield* Queue.dropping<QueuedCheckpoint>(MAX_PENDING_CHECKPOINTS + 1),
       );
       yield* queue.initializeEffect();
       queue.ingest(1, { type: "user", text: "pending" });
@@ -235,9 +238,9 @@ describe("advisor Effect clock boundaries", () => {
       const shutdown = yield* queue
         .disposeEffect()
         .pipe(Effect.forkChild({ startImmediately: true }));
-      yield* TestClock.adjust(MAX_ADVISOR_ABORT_MS - 1);
+      yield* Effect.yieldNow;
       expect(disposed).toBe(0);
-      yield* TestClock.adjust(1);
+      yield* Deferred.succeed(abortGate, undefined);
       yield* Fiber.join(shutdown);
       expect(disposed).toBe(1);
       expect((yield* Fiber.join(checkpoint))._tag).toBe("Failure");

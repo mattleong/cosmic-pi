@@ -17,7 +17,7 @@
 - New or migrated packages must extend `tsconfig.effect.json`; all packages must inherit the Effect language-service plugin.
 - Keep Effect runners at named Pi host boundaries, scope every resource and background fiber, use Effect Schema at unknown boundaries, and model expected failures with typed tagged errors.
 - Do not add Zod. TypeBox or literal JSON Schema is allowed only where Pi requires tool parameter schemas.
-- Run `pnpm effect:lsp:verify` and `pnpm architecture:check` as part of architecture changes.
+- Run the relevant package checks and `pnpm validate` after architecture changes; rely on TypeScript, Oxlint, the Effect language service, and tests for enforcement.
 
 ## Verification
 

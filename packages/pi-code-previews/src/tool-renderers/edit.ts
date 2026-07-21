@@ -18,7 +18,7 @@ import { resolvePreviewLanguage } from "../syntax/language";
 import { getEditPreviewOperations, getPathArg } from "../tool-data/args";
 import { getEditDiff, getTextContent } from "../tool-data/results";
 import { renderCodePreviewToolTitle } from "../tools/presentation";
-import { cachedAsyncPreview } from "./shared/cache";
+import { cachedDeferredPreview } from "./shared/cache";
 import { diffPreviewCacheKey, previewArgsKey } from "./shared/preview-cache-key";
 import {
   appendDiffPreviewFooters,
@@ -95,7 +95,7 @@ export function registerEdit(pi: ExtensionAPI, cwd: string) {
         const preview = new Container();
         preview.addChild(text);
         preview.addChild(
-          cachedAsyncPreview(
+          cachedDeferredPreview(
             renderContext.state,
             "editCallPreviewKey",
             "editCallPreviewComponent",
@@ -167,7 +167,7 @@ export function registerEdit(pi: ExtensionAPI, cwd: string) {
           theme,
           codePreviewSettings.editCollapsedLines,
         );
-        return cachedAsyncPreview(
+        return cachedDeferredPreview(
           renderContext.state,
           "editResultPreviewKey",
           "editResultPreviewComponent",

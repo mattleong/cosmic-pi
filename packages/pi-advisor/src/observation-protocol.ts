@@ -173,8 +173,8 @@ export class AdvisorObservationBuffer {
   private records: AdvisorObservation[] = [];
   private nextSequence = 0;
   private omission: { sequence: number; parentTurnId: number } | undefined;
-  /** Sequence boundaries captured by checkpoint() before the asynchronous pump runs. */
-  private readonly coalescingBarriers = new Set<number>();
+  /** Reference-counted sequence boundaries captured before the asynchronous consumer runs. */
+  private readonly coalescingBarriers = new Map<number, number>();
   private protectedThrough = 0;
 
   private epoch: number;
@@ -202,7 +202,7 @@ export class AdvisorObservationBuffer {
   /** Freeze an exact checkpoint target so later synchronous ingestion cannot coalesce or evict it. */
   freezeThrough(sequence = this.nextSequence): number {
     if (sequence > 0) {
-      this.coalescingBarriers.add(sequence);
+      this.coalescingBarriers.set(sequence, (this.coalescingBarriers.get(sequence) ?? 0) + 1);
       this.protectedThrough = Math.max(this.protectedThrough, sequence);
     }
     return sequence;
@@ -322,18 +322,24 @@ export class AdvisorObservationBuffer {
 
   /** Release a cancelled checkpoint's coalescing barrier without consuming evidence. */
   releaseBarrier(sequence: number): void {
-    this.coalescingBarriers.delete(sequence);
-    this.protectedThrough = Math.max(0, ...this.coalescingBarriers);
+    const references = this.coalescingBarriers.get(sequence) ?? 0;
+    if (references <= 1) this.coalescingBarriers.delete(sequence);
+    else this.coalescingBarriers.set(sequence, references - 1);
+    this.updateProtectedThrough();
   }
 
   /** Remove only observations acknowledged by a correlated successful checkpoint. */
   commitThrough(sequence: number): void {
     this.records = this.records.filter((record) => record.sequence > sequence);
     if (this.omission && this.omission.sequence <= sequence) this.omission = undefined;
-    for (const barrier of this.coalescingBarriers) {
+    for (const barrier of this.coalescingBarriers.keys()) {
       if (barrier <= sequence) this.coalescingBarriers.delete(barrier);
     }
-    this.protectedThrough = Math.max(0, ...this.coalescingBarriers);
+    this.updateProtectedThrough();
+  }
+
+  private updateProtectedThrough(): void {
+    this.protectedThrough = Math.max(0, ...this.coalescingBarriers.keys());
   }
 
   /** Compatibility convenience for tests and callers that intentionally consume immediately. */

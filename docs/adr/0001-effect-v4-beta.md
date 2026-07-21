@@ -38,7 +38,7 @@ Effect ecosystem beta versions are synchronized in the pnpm catalog. No caret, t
 - Existing public APIs and persisted formats may change.
 - Pi callbacks, synchronous TUI rendering, tool parameter schemas, and third-party Promise APIs remain explicit integration boundaries.
 - Unstable Effect modules are allowed but localized behind workspace-owned adapters.
-- The Effect language service and an architecture ratchet enforce the direction during migration.
+- TypeScript, Oxlint, the Effect language service, tests, and code review support the architecture without a repository-specific static-analysis layer.
 - Separately loaded extensions never exchange Effect services, fibers, scopes, or runtime values; cross-extension protocols remain plain runtime values.
 
 ## Primary references
