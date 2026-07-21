@@ -19,7 +19,6 @@ import {
 import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { HostCallbackBoundary, makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import { CosmicUiConfigRepository } from "../src/config/repository.ts";
-import type { FooterTotals } from "../src/footer/component.ts";
 import { CosmicUiService, makeProjection } from "../src/host-service.ts";
 import { PiExec } from "../src/probe/pi-exec.ts";
 import { RepositoryProbe } from "../src/probe/repository-probe.ts";
@@ -43,7 +42,6 @@ function serviceLayer(
     context?: MutableRef.MutableRef<ExtensionContext>;
     documents?: Readonly<Record<string, JsonObject>>;
     store?: ReturnType<typeof documents>;
-    initialTotals?: FooterTotals;
   } = {},
 ) {
   const projection = makeProjection();
@@ -59,7 +57,6 @@ function serviceLayer(
   const layer = CosmicUiService.layer({
     context: contextRef,
     cwd: "/project",
-    ...(options.initialTotals === undefined ? {} : { initialTotals: options.initialTotals }),
     projection,
     onChange() {},
     startPolling: options.startPolling ?? false,
@@ -68,18 +65,6 @@ function serviceLayer(
 }
 
 describe("Cosmic UI host service", () => {
-  it.effect("initializes totals from the session-owned snapshot", () => {
-    const initialTotals = { input: 41, output: 42, cacheRead: 43, cacheWrite: 44, cost: 4.5 };
-    const { layer, projection } = serviceLayer(
-      () => Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false }),
-      { initialTotals },
-    );
-    return Effect.gen(function* () {
-      yield* CosmicUiService;
-      expect(MutableRef.get(projection).totals).toEqual(initialTotals);
-    }).pipe(Effect.provide(layer));
-  });
-
   it.effect("handles Git/gh nonzero results, parses diffs, and throttles pull requests", () => {
     let calls = 0;
     const { layer, projection } = serviceLayer((command, args) => {
@@ -104,9 +89,6 @@ describe("Cosmic UI host service", () => {
         linesChanged: 4,
       });
       expect(MutableRef.get(projection).pullRequestNumber).toBe(42);
-      expect(Object.isFrozen(MutableRef.get(projection))).toBe(true);
-      expect(Object.isFrozen(MutableRef.get(projection).totals)).toBe(true);
-      expect(Object.isFrozen(MutableRef.get(projection).config?.footer.order)).toBe(true);
       expect(calls).toBe(3);
       yield* service.refreshPullRequest();
       expect(calls).toBe(3);

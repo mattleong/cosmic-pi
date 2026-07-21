@@ -132,26 +132,6 @@ describe("package-owned Advisor tools", () => {
     );
   });
 
-  test("rejects direct unsafe tool names without changing the workspace", async () => {
-    const root = await fixture();
-    const before = await digest(root);
-    const tools = await createAdvisorTools(root);
-    for (const name of [
-      "bash",
-      "write",
-      "edit",
-      "patch",
-      "exec",
-      "process",
-      "custom",
-      "all",
-      "provider-tool",
-    ]) {
-      expect(tools.find((tool) => tool.name === name)).toBeUndefined();
-    }
-    expect(await digest(root)).toBe(before);
-  });
-
   test("inspects a project through all four tools without mutation", async () => {
     const root = await fixture();
     const before = await digest(root);

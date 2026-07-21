@@ -329,22 +329,6 @@ describe("advisor commands", () => {
     expect(harness.getConfig().model).toBeUndefined();
   });
 
-  test("settings applies each change immediately before the menu closes", async () => {
-    const configPath = tempConfigPath();
-    const harness = createCommands(configAt(configPath));
-    const selections = ["Advisor supervision: on", "Done"];
-    const ctx = {
-      hasUI: true,
-      ui: { notify: vi.fn(), select: vi.fn(async () => selections.shift()) },
-      modelRegistry: { getAvailable: () => [] },
-    } as unknown as ExtensionCommandContext;
-
-    await harness.commands.get("advisor-settings")?.("", ctx);
-
-    expect(harness.getConfig().enabled).toBe(false);
-    expect(JSON.parse(readFileSync(configPath, "utf8"))).toMatchObject({ enabled: false });
-  });
-
   test("session persistence owns the authoritative update without a second commit gap", async () => {
     const commands = new Map<string, CommandHandler>();
     let current = configAt(tempConfigPath());

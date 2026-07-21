@@ -29,7 +29,7 @@ const originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalHome = process.env.HOME;
 const originalSettings = { ...codePreviewSettings, tools: [...codePreviewSettings.tools] };
 
-test("root public API exposes only stable package-author helpers", () => {
+test("root public API exposes stable package-author helpers", () => {
   const mode: ToolCallBackgroundMode = "border";
   const settings: CodePreviewSettings = { ...defaultCodePreviewSettings, toolCallBackground: mode };
   assert.equal(settings.toolCallBackground, "border");

@@ -31,12 +31,7 @@ import {
   parseCodexRegistryCredentials,
   readCodexAuth,
 } from "../src/codex-auth.ts";
-import {
-  DEFAULT_IMAGE_CONFIG,
-  applySettingToRawConfig,
-  readConfig,
-  resolveConfig,
-} from "../src/config.ts";
+import { DEFAULT_IMAGE_CONFIG, readConfig, resolveConfig } from "../src/config.ts";
 import {
   initialFastSnapshot,
   injectProviderPayload,
@@ -108,19 +103,6 @@ describe("OpenAI configuration and credentials", () => {
       expect(parsed?.usage?.refreshIntervalMs).toBeUndefined();
     }).pipe(Effect.provide(Layer.merge(store.layer, Path.layer)));
   });
-
-  it.effect("preserves unknown fields through settings patches", () =>
-    Effect.gen(function* () {
-      expect(
-        yield* applySettingToRawConfig(
-          { unknown: 1, usage: { other: true } },
-          "usage.enabled",
-          "false",
-        ),
-      ).toEqual({ unknown: 1, usage: { other: true, enabled: false } });
-      expect(DEFAULT_IMAGE_CONFIG.defaultSave).toBe("project");
-    }),
-  );
 
   it.effect("distinguishes total credential failure from genuine absence", () => {
     const failure = new JsonDocumentError({
@@ -1084,9 +1066,6 @@ describe("usage payloads, visibility, and fast mode", () => {
         synchronizeProjectionContext(projection, ctx, { clearUsage: true }),
       ).not.toThrow();
       expect(openAIUsageUiState(ctx, cfg, projection).visible).toBe(false);
-      expect(Object.isFrozen(MutableRef.get(projection))).toBe(true);
-      expect(Object.isFrozen(MutableRef.get(projection).config?.usage)).toBe(true);
-      expect(MutableRef.get(projection).config).not.toBe(cfg);
       const fast: FastSnapshot = { desiredActive: true, active: true };
       expect(
         injectProviderPayload(

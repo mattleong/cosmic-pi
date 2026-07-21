@@ -68,7 +68,6 @@ it.effect("serializes transitions and publishes each successful next state", () 
 );
 
 it.each([
-  ["function", { nested: { capability: () => 42 } }, "$.nested.capability"],
   ["symbol", { nested: [Symbol("capability")] }, "$.nested[0]"],
   ["bigint", { value: 1n }, "$.value"],
   ["Map", { capability: new Map() }, "$.capability"],

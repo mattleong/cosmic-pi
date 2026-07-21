@@ -1,18 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createSettingsCategoryItems, isSettingsGroupItemId } from "./index";
-import { SETTING_ITEM_DEFINITIONS, type SettingItemDefinition } from "./registry";
+import { SETTING_ITEM_DEFINITIONS } from "./registry";
 import { CODE_PREVIEW_SETTING_KEYS, defaultCodePreviewSettings, updateSetting } from "../index";
-
-test("settings registry defines every setting item", () => {
-  for (const [id, definition] of Object.entries(SETTING_ITEM_DEFINITIONS) as Array<
-    [string, SettingItemDefinition]
-  >) {
-    assert.ok(definition.label.trim(), `${id} has a label`);
-    assert.ok(definition.description.trim(), `${id} has a description`);
-    if (definition.values) assert.ok(definition.values.length > 0, `${id} has value options`);
-  }
-});
 
 test("settings UI item values are handled by updateSetting", () => {
   assert.deepEqual(

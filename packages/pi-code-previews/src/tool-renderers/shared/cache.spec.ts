@@ -6,8 +6,10 @@ import {
   writeCallPreviewCacheKey,
 } from "./preview-cache-key";
 import { codePreviewSettings, setCodePreviewSettings } from "../../settings/index";
+import { clearSyntaxProjection, publishSyntaxProjection } from "../../syntax/projection";
 import { cloneCodePreviewSettingsForTest, testTheme } from "../../testing/render";
 
+const syntaxOwner = Symbol("preview-cache-key-test");
 let previousCodePreviewSettings = cloneCodePreviewSettingsForTest();
 
 beforeEach(() => {
@@ -15,6 +17,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearSyntaxProjection(syntaxOwner);
   setCodePreviewSettings(previousCodePreviewSettings);
 });
 
@@ -28,8 +31,8 @@ test("preview cache keys include word emphasis settings", () => {
   assert.notEqual(allKey, offKey);
 });
 
-test("diff preview cache keys include syntax highlighter status", () => {
-  const diffKey = diffPreviewCacheKey(
+test("diff preview cache keys change with syntax highlighter status", () => {
+  const loadingKey = diffPreviewCacheKey(
     "edit-result",
     "-1 old\n+1 new",
     "src/a.ts",
@@ -38,7 +41,28 @@ test("diff preview cache keys include syntax highlighter status", () => {
     codePreviewSettings.editCollapsedLines,
   );
 
-  assert.match(diffKey, /shiki-(ready|loading)/);
+  publishSyntaxProjection(syntaxOwner, {
+    generation: 1,
+    theme: codePreviewSettings.shikiTheme,
+    highlighter: undefined,
+    loadedLanguages: ["typescript"],
+    status: {
+      initialized: true,
+      loadedLanguages: 1,
+      pendingLanguages: 0,
+      statusVersion: 1,
+    },
+  });
+  const readyKey = diffPreviewCacheKey(
+    "edit-result",
+    "-1 old\n+1 new",
+    "src/a.ts",
+    false,
+    testTheme(),
+    codePreviewSettings.editCollapsedLines,
+  );
+
+  assert.notEqual(loadingKey, readyKey);
 });
 
 test("write call cache keys include write-specific preview settings", () => {

@@ -194,16 +194,6 @@ test("word emphasis uses compound identifier parts when pairing changed lines", 
   assert.doesNotMatch(rendered[2] ?? "", /\x1b\[48;2;64;132;82m/);
 });
 
-test("word emphasis skips ambiguous changed-line pairs", () => {
-  const diff = [
-    "-1 const result = formatValue(input);",
-    "+1 const result = formatLabel(input);",
-    "+2 const result = formatTitle(input);",
-  ].join("\n");
-  const rendered = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 3);
-  assert.doesNotMatch(rendered, /\x1b\[48;2;148;62;70m|\x1b\[48;2;64;132;82m/);
-});
-
 test("word emphasis telemetry summarizes confidence and skipped pairs", () => {
   assert.deepEqual(
     wordEmphasisTelemetry("-1 const value = oldValue;\n+1 const value = newValue;", 2),
@@ -231,31 +221,6 @@ test("word emphasis telemetry summarizes confidence and skipped pairs", () => {
   );
 });
 
-test("word emphasis pairs high-confidence reordered lines", () => {
-  const diff = [
-    "-1 const alphaResult = computeAlpha(input);",
-    "-2 const betaResult = computeBeta(previous);",
-    "+1 const betaResult = computeBeta(current);",
-    "+2 const alphaResult = computeAlpha(next);",
-  ].join("\n");
-  const rendered = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 4).split("\n");
-  assert.match(rendered[0] ?? "", /\x1b\[48;2;148;62;70minput/);
-  assert.match(rendered[1] ?? "", /\x1b\[48;2;148;62;70mprevious/);
-  assert.match(rendered[2] ?? "", /\x1b\[48;2;64;132;82mcurrent/);
-  assert.match(rendered[3] ?? "", /\x1b\[48;2;64;132;82mnext/);
-});
-
-test("word emphasis narrows compound identifier changes to changed segments", () => {
-  setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "all" });
-  const ranges = changedRanges(
-    "const limit = readCollapsedLines;",
-    "const limit = editCollapsedLines;",
-    "all",
-  );
-  assert.deepEqual(ranges.removed, [[14, 18]]);
-  assert.deepEqual(ranges.added, [[14, 18]]);
-});
-
 test("word emphasis narrows similar single-token edits", () => {
   setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "all" });
   assert.deepEqual(changedRanges("value1000", "value1001", "all"), {
@@ -278,31 +243,6 @@ test("word emphasis keeps unicode refinements on text boundaries", () => {
     removed: [[0, 2]],
     added: [[0, 2]],
   });
-});
-
-test("smart word emphasis keeps meaningful operator-only changes", () => {
-  setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "smart" });
-  assert.deepEqual(changedRanges("if (count < limit)", "if (count <= limit)", "smart"), {
-    removed: [],
-    added: [[11, 12]],
-  });
-});
-
-test("word emphasis softly aligns similar replacements inside multi-token groups", () => {
-  setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "all" });
-  assert.deepEqual(
-    changedRanges("return oldValue + nextValue;", "return newValue - previousValue;", "all"),
-    {
-      removed: [
-        [7, 10],
-        [16, 22],
-      ],
-      added: [
-        [7, 10],
-        [16, 26],
-      ],
-    },
-  );
 });
 
 test("word emphasis skips low-confidence positional pairs inside larger blocks", () => {

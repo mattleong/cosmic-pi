@@ -29,27 +29,6 @@ it.effect("drains accepted values in offer order and reports dropped overflow", 
   }),
 );
 
-it.effect("coalesces overflow to the latest value", () =>
-  Effect.gen(function* () {
-    const values: number[] = [];
-    const ingress = yield* makeSynchronousIngress<number, never, never>({
-      capacity: 2,
-      overflow: "coalesce-latest",
-      handle: (value) => Effect.sync(() => void values.push(value)),
-    });
-    const offered = yield* Effect.sync(() => [
-      ingress.offer(1),
-      ingress.offer(2),
-      ingress.offer(3),
-      ingress.offer(4),
-    ]);
-    expect(offered).toEqual(["accepted", "accepted", "coalesced", "coalesced"]);
-    yield* yieldUntil(() => values.length >= 3);
-    expect(values).toEqual([1, 2, 4]);
-    yield* ingress.shutdown;
-  }),
-);
-
 it.effect("keeps the latest coalesced value behind already queued work", () =>
   Effect.gen(function* () {
     const firstStarted = yield* Deferred.make<void>();

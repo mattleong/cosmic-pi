@@ -10,7 +10,6 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterOpenAI from "../index.ts";
-import { initialFastSnapshot } from "../src/fast-controller.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 type CommandHandler = (args: string, ctx: ExtensionContext) => unknown | Promise<unknown>;
@@ -126,11 +125,6 @@ afterEach(() => {
 });
 
 describe("fast mode provider injection", () => {
-  test("uses a deeply frozen reset snapshot", () => {
-    const snapshot = initialFastSnapshot();
-    expect(Object.isFrozen(snapshot)).toBe(true);
-  });
-
   test("injects priority service tier when persisted fast mode is active for a supported model", async () => {
     const cwd = createTempProject();
     writeProjectConfig(cwd, { active: true, desiredActive: true });

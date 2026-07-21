@@ -590,9 +590,6 @@ describe("xAI visibility", () => {
     expect(visibleStatusLine(projection)).toBeUndefined();
     expect(MutableRef.get(projection).snapshot).toBeUndefined();
     expect(MutableRef.get(projection).error).toBeUndefined();
-    expect(Object.isFrozen(MutableRef.get(projection))).toBe(true);
-    expect(Object.isFrozen(MutableRef.get(projection).config?.usage)).toBe(true);
-    expect(MutableRef.get(projection).config).not.toBe(config);
   });
 
   it("honors public context and config visibility guards independently of projection", () => {

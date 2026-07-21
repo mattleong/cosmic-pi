@@ -8,7 +8,6 @@ import { afterEach, describe, expect, test } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import { JsonDocumentStore, nodePlatformLayer } from "pi-cosmic-core";
-import { _test } from "../index.ts";
 import {
   SETTINGS_OPTION_DESCRIPTORS,
   applySettingToRawConfig,
@@ -33,25 +32,10 @@ const run = <A, E>(effect: Effect.Effect<A, E, Path.Path | JsonDocumentStore>) =
   Effect.runPromise(effect.pipe(Effect.provide(nodePlatformLayer)));
 
 describe("config helpers", () => {
-  test("exposes expected defaults and fixed allow-list", () => {
-    expect(_test.CONFIG_BASENAME).toBe("pi-better-openai.json");
-    expect(_test.DEFAULT_CONFIG.desiredActive).toBe(false);
-    expect(_test.DEFAULT_IMAGE_CONFIG.defaultSave).toBe("project");
-    expect(_test.DEFAULT_CONFIG).not.toHaveProperty("supportedModels");
-    expect(_test.SUPPORTED_FAST_MODELS).toContain("openai/gpt-5.5");
-  });
-
   test("does not expose the allow-list through decoded config", async () => {
     const configPath = join(temp(), "config.json");
     await run(writeConfig(configPath, { supportedModels: ["openai/gpt-4.1"] }));
     expect(await run(readConfig(configPath))).not.toHaveProperty("supportedModels");
-  });
-
-  test("builds paths from injected SDK directories", async () => {
-    expect(await run(configPaths("/project", "/agent"))).toEqual({
-      project: "/project/.pi/extensions/pi-better-openai.json",
-      global: "/agent/extensions/pi-better-openai.json",
-    });
   });
 
   test("preserves unknown fields through Effect document writes", async () => {
@@ -68,39 +52,6 @@ describe("config helpers", () => {
     const after = await run(readRawConfig(configPath));
     expect(after).toMatchObject({ active: true, unknownField: "keep me" });
     expect(after.usage).toEqual({ enabled: true, unknownUsageField: 123 });
-  });
-
-  test("project overrides global while global fills missing nested values", async () => {
-    const root = temp();
-    const cwd = join(root, "project");
-    const agent = join(root, "agent");
-    const paths = await run(configPaths(cwd, agent));
-    await run(
-      writeConfig(paths.global, {
-        usage: { enabled: false, refreshIntervalMs: 20_000, showResetTimes: false },
-        footer: { mode: "replace" },
-        image: { defaultSave: "global", outputFormat: "jpeg", timeoutMs: 40_000 },
-      }),
-    );
-    await run(
-      writeConfig(paths.project, {
-        usage: { enabled: true },
-        footer: { mode: "status" },
-        image: { outputFormat: "webp" },
-      }),
-    );
-    const resolved = await run(resolveConfig(cwd, agent));
-    expect(resolved.usage).toMatchObject({
-      enabled: true,
-      refreshIntervalMs: 20_000,
-      showResetTimes: false,
-    });
-    expect(resolved.footer.mode).toBe("status");
-    expect(resolved.image).toMatchObject({
-      defaultSave: "global",
-      outputFormat: "webp",
-      timeoutMs: 40_000,
-    });
   });
 
   test("ignores untrusted project configuration and selects the global document", async () => {

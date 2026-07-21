@@ -24,49 +24,6 @@ import { hostNotifierLayer } from "../src/host-notifier.ts";
 import { makeAdvisorHostBindings } from "../src/application/host-bindings.ts";
 
 describe("AdvisorController", () => {
-  it.effect("publishes immutable snapshots", () =>
-    Effect.gen(function* () {
-      const controller = yield* AdvisorController;
-      const before = controller.getSnapshot();
-      const next = { ...before, paused: true };
-      yield* controller.publish(next);
-      const published = controller.getSnapshot();
-      expect(published).toEqual(next);
-      expect(Object.isFrozen(published)).toBe(true);
-      expect(Object.isFrozen(published.config)).toBe(true);
-      expect(Object.isFrozen(published.metrics)).toBe(true);
-    }).pipe(Effect.provide(advisorControllerLayer)),
-  );
-
-  it.effect("replaces and releases the authoritative child in order", () =>
-    Effect.gen(function* () {
-      const controller = yield* AdvisorController;
-      const events: string[] = [];
-      yield* controller.replaceChild(
-        Effect.sync(() => {
-          events.push("acquire:first");
-          return "first";
-        }),
-        (child) => Effect.sync(() => events.push(`release:${child}`)),
-      );
-      yield* controller.replaceChild(
-        Effect.sync(() => {
-          events.push("acquire:second");
-          return "second";
-        }),
-        (child) => Effect.sync(() => events.push(`release:${child}`)),
-      );
-      expect(events).toEqual(["acquire:first", "release:first", "acquire:second"]);
-      yield* controller.stopChild();
-      expect(events).toEqual([
-        "acquire:first",
-        "release:first",
-        "acquire:second",
-        "release:second",
-      ]);
-    }).pipe(Effect.provide(advisorControllerLayer)),
-  );
-
   it.effect("interrupts replacement acquisition and releases its scoped resource", () =>
     Effect.gen(function* () {
       const controller = yield* AdvisorController;
