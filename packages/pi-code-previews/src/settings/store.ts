@@ -2,7 +2,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   hasCodePreviewSessionCapability,
   runCodePreviewSessionEffect,
-} from "../session-capability";
+} from "../application/session-capability";
 import { defaultCodePreviewSettings } from "./defaults";
 import { runOneShotSettingsEffect } from "../boundary/settings-one-shot";
 import { CodePreviewSettingsService, settingsSaveContextProjection } from "./service";

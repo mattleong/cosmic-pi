@@ -1,15 +1,14 @@
-/** Pi registration boundary. All session behavior is owned by AdvisorController. */
+/** Thin public entrypoint for the Advisor application. */
+export { advisorExtension, createAdvisorExtension } from "./application/register.ts";
 export {
   ADVISOR_CATCH_UP_TIMEOUT_MS,
   AdvisorController,
   AdvisorExtensionError,
   advisorControllerApplicationLayer,
   advisorControllerLayer,
-  advisorExtension,
   awaitAdvisorCatchUpEffect,
-  createAdvisorExtension,
   type AdvisorCatchUpOutcome,
   type AdvisorControllerApplicationOptions,
   type AdvisorExtensionDependencies,
   type AdvisorSkipReason,
-} from "./advisor-controller.ts";
+} from "./application/controller.ts";

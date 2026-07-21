@@ -21,6 +21,7 @@ import { PiCommandAdapter } from "../src/pi-command-adapter.ts";
 import { configRepositoryTestLayer } from "../src/config-repository.ts";
 import { failureLoggerLayer } from "../src/failure-logger.ts";
 import { hostNotifierLayer } from "../src/host-notifier.ts";
+import { makeAdvisorHostBindings } from "../src/application/host-bindings.ts";
 
 describe("AdvisorController", () => {
   it.effect("publishes immutable snapshots", () =>
@@ -208,9 +209,7 @@ describe("AdvisorController", () => {
         }),
         createRuntime: () => driver,
       },
-      eventHandlers: new Map(),
-      commandHandlers: new Map(),
-      commandDefinitions: new Map(),
+      hostBindings: makeAdvisorHostBindings(),
     };
     const dependencies = Layer.mergeAll(
       advisorRuntimeServiceLayer(standaloneAdvisorExecutor),

@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import { freezeSnapshot, ProjectionError } from "pi-cosmic-core";
 import type { ResolvedAdvisorConfig } from "./config.ts";
-import type { AdvisorSessionMetrics } from "./settings.ts";
+import type { AdvisorSessionMetrics } from "./domain/metrics.ts";
 
 export interface AdvisorControllerSnapshot {
   readonly config: ResolvedAdvisorConfig;

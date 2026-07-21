@@ -2,8 +2,9 @@
 
 ## Project layout
 
-- `index.ts` registers the pi extension commands, events, settings UI, footer/status rendering, and usage polling.
-- `src/` contains focused helpers for config, formatting, Codex auth/usage, and image generation.
+- `index.ts` exposes the extension; `src/extension.ts` is a thin public entrypoint.
+- `src/application.ts` registers commands/events and coordinates the session; `src/layer.ts` composes Effect services. See `ARCHITECTURE.md`.
+- Feature, domain, boundary, and UI modules contain config, formatting, Codex auth/usage, image generation, and rendering behavior.
 - `tests/` contains Vitest coverage. Prefer adding targeted tests near the changed behavior.
 - `.pi/` is local runtime/config/generated output and is ignored by git.
 
@@ -22,7 +23,7 @@ pnpm validate
 ## Coding conventions
 
 - Use TypeScript ESM imports with `.ts` extensions, matching the existing files.
-- Keep runtime behavior in `index.ts` small where possible; put pure helpers in `src/` and test them directly.
+- Keep the public extension entrypoint thin, Layer composition in `src/layer.ts`, and pure helpers outside application orchestration; test them directly.
 - Preserve unknown JSON config fields when writing settings.
 - Do not commit `node_modules/`, generated `.pi/` images/config, auth files, or other local machine state.
 

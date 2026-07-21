@@ -11,7 +11,7 @@ import {
   deferCodePreview,
   previewScheduleEffect,
   scheduleCodePreview,
-} from "../session-capability";
+} from "../application/session-capability";
 import { scheduleProjectedCodePreview } from "../session-projection";
 
 test("no background work starts before acquisition or after shutdown", () => {

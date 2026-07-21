@@ -2,7 +2,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { ShikiAdapter } from "./boundary/shiki";
-import { CodePreviewSession } from "./session-service";
+import { CodePreviewSession } from "./application/session-service";
 import { CodePreviewEnvironmentService } from "./settings/environment-service";
 import { CodePreviewSettingsService } from "./settings/service";
 import { CodePreviewSyntaxService } from "./syntax/service";

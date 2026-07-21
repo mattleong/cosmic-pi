@@ -4,17 +4,17 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import type * as Layer from "effect/Layer";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import type { CodePreviewRuntimeError } from "./application-layer";
+import type { CodePreviewRuntimeError } from "../layer";
 import type { CodePreviewSession } from "./session-service";
-import type { CodePreviewSettingsService } from "./settings/service";
-import type { CodePreviewSyntaxService } from "./syntax/service";
-import type { CodePreviewWriteService } from "./write/service";
+import type { CodePreviewSettingsService } from "../settings/service";
+import type { CodePreviewSyntaxService } from "../syntax/service";
+import type { CodePreviewWriteService } from "../write/service";
 import {
   deferProjectedCodePreview,
   publishCodePreviewDefer,
   publishCodePreviewSchedule,
   publishCodePreviewSessionActive,
-} from "./session-projection";
+} from "../session-projection";
 
 type SessionRequirements =
   | CodePreviewSession

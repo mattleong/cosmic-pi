@@ -1,10 +1,12 @@
+// The Context key intentionally retains its pre-move public identity.
+// @effect-diagnostics effect/deterministicKeys:off
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { ProjectionError } from "pi-cosmic-core";
-import { CodePreviewSettingsService } from "./settings/service";
-import type { CodePreviewSettings } from "./settings/types";
-import { CodePreviewSyntaxService } from "./syntax/service";
+import { CodePreviewSettingsService } from "../settings/service";
+import type { CodePreviewSettings } from "../settings/types";
+import { CodePreviewSyntaxService } from "../syntax/service";
 
 export interface CodePreviewSessionShape {
   readonly loadSettings: (

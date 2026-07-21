@@ -12,7 +12,7 @@ import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
   type CodePreviewSessionCapability,
-} from "../session-capability";
+} from "../application/session-capability";
 import { testTheme } from "../testing/render";
 import { cachedDeferredPreview } from "../tool-renderers/shared/cache";
 

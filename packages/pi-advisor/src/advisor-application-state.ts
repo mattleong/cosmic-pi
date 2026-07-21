@@ -1,4 +1,4 @@
-import { emptyAdvisorOutcomes, type AdvisorSessionMetrics } from "./settings.ts";
+import { emptyAdvisorOutcomes, type AdvisorSessionMetrics } from "./domain/metrics.ts";
 import { emptyAdvisorFindingDedupe, type AdvisorFindingDedupeState } from "./dedupe.ts";
 import {
   createAdvisorEmissionGuardState,

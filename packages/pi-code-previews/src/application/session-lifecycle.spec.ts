@@ -8,13 +8,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { makePiManagedRuntime } from "pi-cosmic-core";
 import { afterEach, test } from "vitest";
-import { CodePreviewSession } from "../session-service";
+import { CodePreviewSession } from "../application/session-service";
 import { defaultCodePreviewSettings, setCodePreviewSettings } from "../settings";
 import {
   codePreviewExtensionTesting,
   codePreviewsWithDependencies,
   type CodePreviewExtensionDependencies,
-} from "./index";
+} from "../extension";
 
 type Context = {
   cwd: string;

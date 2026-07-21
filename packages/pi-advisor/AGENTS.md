@@ -2,8 +2,9 @@
 
 ## Project layout
 
-- `index.ts` registers the advisor lifecycle, commands, settings UI, status, and review renderer.
-- `src/` contains focused helpers for global configuration, bounded review context, advisor output parsing, and review execution.
+- `index.ts` exposes the extension; `src/extension.ts` is a thin public entrypoint.
+- `src/application/register.ts` registers Pi lifecycle, commands, and events; `src/application/controller.ts` owns application orchestration.
+- `src/layer.ts` composes the session application, while `src/domain/`, `src/boundary/`, and UI modules keep their dependency roles explicit. See `ARCHITECTURE.md`.
 - `tests/` contains Vitest coverage. Prefer targeted tests near the changed behavior.
 - `.pi/` is local runtime state and is ignored by git.
 
@@ -23,7 +24,7 @@ pnpm validate
 ## Coding conventions
 
 - Use TypeScript ESM imports with `.ts` extensions, matching the workspace's source-distributed extensions.
-- Keep event and UI wiring in `index.ts` small; put pure config, context, and parsing logic in `src/` and test it directly.
+- Keep Pi registration in `src/application/register.ts` and the public extension entrypoint thin; put pure domain logic in `src/domain/` and test it directly.
 - Preserve unknown root JSON fields whenever settings update the global config.
 - The advisor must fail open: model, auth, timeout, abort, parsing, and provider failures cannot block or discard the candidate response.
 - Enforce at most one advisor-triggered revision for each genuine user request; advisor messages must never reset or recursively trigger the cycle.

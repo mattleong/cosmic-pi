@@ -59,6 +59,22 @@ Pinned declarations are the source of truth when older documentation disagrees:
 - HTTP is imported from `effect/unstable/http` and provided separately by a Node HTTP layer. Streaming JSON bodies are encoded through a caller-supplied Codec; true streaming responses expose explicitly named raw bytes and discard operations.
 - `@effect/vitest` beta.99 provides `it.effect`, `it.live`, and `layer`; it does not provide the older `it.scoped` helpers.
 
+## Package navigation
+
+Each extension exposes the same readable spine, applied proportionally to its size:
+
+- `src/extension.ts` is the thin Pi entrypoint or registration adapter;
+- `src/application.ts` or `src/application/` coordinates session/use-case flow;
+- `src/layer.ts` is the application composition root;
+- feature directories own vertical capabilities, domain modules hold deterministic policy/contracts,
+  `boundary/` wraps host/third-party APIs, and `ui/` or feature render modules consume synchronous
+  projections.
+
+Each package's `ARCHITECTURE.md` maps its commands/events, state, resources, and concrete source
+layout. Compatibility re-exports may retain older internal paths, but stateful implementations have
+one owner. `pi-cosmic-core` remains infrastructure-only and documents its public runtime/platform
+layout separately.
+
 ## Final service graph
 
 Each extension has one host-owned session runtime. `PiApi` and the package application Layer are composed once at startup; implementation Layers hide their dependencies before entering the runtime.

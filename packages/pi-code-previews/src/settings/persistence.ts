@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import {
   hasCodePreviewSessionCapability,
   runCodePreviewSessionEffect,
-} from "../session-capability";
+} from "../application/session-capability";
 import { cloneCodePreviewSettings, type CodePreviewSettings } from "./index";
 import { runOneShotSettingsEffect } from "../boundary/settings-one-shot";
 import { CodePreviewSettingsService } from "./service";

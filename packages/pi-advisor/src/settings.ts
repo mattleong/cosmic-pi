@@ -4,10 +4,7 @@ import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/
 import { type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { supportsFastModel } from "pi-better-openai/fast-models";
 import { safeAdvisorLabel } from "./advisor-label.ts";
-import {
-  MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST,
-  type AdvisorInterventionBudgetSnapshot,
-} from "./intervention-budget.ts";
+import { MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST } from "./intervention-budget.ts";
 import { CLEAR_MODEL_OPTION, selectAdvisorModel } from "./model-picker.ts";
 import { getAdvisorFailureLogPath } from "./failure-log.ts";
 import {
@@ -20,6 +17,14 @@ import {
 import type { AdvisorReviewFocus } from "./review.ts";
 import { PiCommandAdapter, type PiCommandError } from "./pi-command-adapter.ts";
 import { isOneOf } from "./utils.ts";
+import type { AdvisorSessionMetrics } from "./domain/metrics.ts";
+
+export {
+  emptyAdvisorOutcomes,
+  type AdvisorModelUsage,
+  type AdvisorOutcomeMetrics,
+  type AdvisorSessionMetrics,
+} from "./domain/metrics.ts";
 
 const SETTINGS_COMMAND = "advisor-settings";
 const STATUS_COMMAND = "advisor-status";
@@ -57,106 +62,12 @@ export interface AdvisorCommandActions {
   reviewNext(ctx: ExtensionCommandContext): void;
 }
 
-export interface AdvisorModelUsage {
-  provider: string;
-  model: string;
-  responses: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  cost: number;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-}
-
-export interface AdvisorOutcomeMetrics {
-  pass: number;
-  findings: number;
-  perspective: number;
-  advice: number;
-  guidance: number;
-  revision: number;
-  recovery: number;
-  suppressed: number;
-  discarded: number;
-  failures: number;
-}
-
-export function emptyAdvisorOutcomes(): AdvisorOutcomeMetrics {
-  return {
-    pass: 0,
-    findings: 0,
-    perspective: 0,
-    advice: 0,
-    guidance: 0,
-    revision: 0,
-    recovery: 0,
-    suppressed: 0,
-    discarded: 0,
-    failures: 0,
-  };
-}
-
-export interface AdvisorSessionMetrics {
-  attempted: number;
-  pass: number;
-  suggest?: number;
-  revise: number;
-  failure: number;
-  discarded: number;
-  skippedReviews?: Record<string, number>;
-  backgroundState?: "idle" | "queued" | "reviewing" | "revision-pending";
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  activeCatchUpWaits?: number;
-  activeToolNames?: readonly string[];
-  backlog?: number;
-  catchUpCancellations?: number;
-  catchUpFailures?: number;
-  catchUpTimeouts?: number;
-  catchUpWaits?: number;
-  childResets?: number;
-  cost?: number;
-  guidancePaths?: readonly string[];
-  hasLastCandidate?: boolean;
-  inputTokens?: number;
-  lastAction?:
-    | "advice"
-    | "discarded"
-    | "failure"
-    | "guidance"
-    | "pass"
-    | "perspective"
-    | "recovery"
-    | "revision"
-    | "suppressed";
-  lastFailureKind?: string;
-  latestDurationMs?: number;
-  modelResponses?: number;
-  outputTokens?: number;
-  outcomes: AdvisorOutcomeMetrics;
-  blockerVerificationAttempts?: number;
-  blockersVerified?: number;
-  blockersRejected?: number;
-  interventionsDelivered?: number;
-  interventionsAcknowledged?: number;
-  perspectivesDelivered?: number;
-  findingLifecycle?: Record<"open" | "acknowledged" | "resolved" | "superseded", number>;
-  interventionBudget?: AdvisorInterventionBudgetSnapshot;
-  paused?: boolean;
-  processedSequence?: number;
-  queuedReviews?: number;
-  reviewNext?: boolean;
-  sequence?: number;
-  suppressedFindings?: number;
-  settledReviews?: number;
-  totalDurationMs?: number;
-  totalTokens?: number;
-  usageByModel?: Record<string, AdvisorModelUsage>;
+export interface AdvisorCommandRegistrar {
+  readonly registerCommand: ExtensionAPI["registerCommand"];
 }
 
 export function registerAdvisorCommands(
-  pi: ExtensionAPI,
+  pi: AdvisorCommandRegistrar,
   state: AdvisorConfigState,
   actions: AdvisorCommandActions = NOOP_COMMAND_ACTIONS,
   runCommand?: <A>(effect: Effect.Effect<A, PiCommandError, PiCommandAdapter>) => Promise<A>,

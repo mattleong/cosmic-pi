@@ -12,14 +12,14 @@ import {
   makeCodePreviewApplicationLayer,
   type CodePreviewApplication,
   type CodePreviewRuntimeError,
-} from "../application-layer";
+} from "../layer";
 import { registerHealthCommand } from "../commands/health";
 import { registerSettingsCommand } from "../commands/settings";
 import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
-} from "../session-capability";
-import { CodePreviewSession } from "../session-service";
+} from "./session-capability";
+import { CodePreviewSession } from "./session-service";
 import { codePreviewSettings } from "../settings";
 import type { CodePreviewToolName } from "../tools/names";
 import { registerToolRenderers } from "../tool-renderers/registration";
@@ -94,7 +94,7 @@ const defaultDependencies: CodePreviewExtensionDependencies = {
   registerRenderers: registerToolRenderers,
 };
 
-export function codePreviews(pi: ExtensionAPI): Promise<void> {
+export function registerCodePreviewApplication(pi: ExtensionAPI): Promise<void> {
   return codePreviewsWithDependencies(pi, defaultDependencies);
 }
 
