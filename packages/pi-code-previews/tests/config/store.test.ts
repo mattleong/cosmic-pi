@@ -17,7 +17,6 @@ import {
   setCodePreviewSettings,
 } from "../../src/settings/index";
 import { loadCodePreviewSettings } from "../../src/settings/bootstrap";
-import { queueSettingsSave } from "../../src/config/persistence";
 import {
   cleanupTestTempDirectories,
   createTestTempDirectory,
@@ -27,6 +26,7 @@ import {
   getSettingsPath,
   getSettingsSaveContext,
   loadSettingsFromDisk,
+  queueSettingsSave,
   saveSettingsToDisk,
 } from "../../src/config/store";
 

@@ -3,8 +3,8 @@
 ## Project layout
 
 - `index.ts` exposes the extension; `src/extension.ts` is a thin public entrypoint.
-- `src/application/register.ts` registers Pi lifecycle, commands, and events; `src/application/lifecycle.ts` owns session lifecycle flow; `src/application/controller.ts` is the controller surface.
-- `src/layer.ts` composes the session application. `src/domain/` holds plain contracts (including safe-data and runtime-error classification); `src/boundary/` is foreign APIs only. See root `AGENTS.md` and `ARCHITECTURE.md`.
+- `src/application/register.ts` registers Pi lifecycle, commands, and events; `src/application/lifecycle/` owns session lifecycle (see `ARCHITECTURE.md`); `src/application/controller.ts` is the unconfigured controller stub only (types live in `controller-types.ts`).
+- `src/layer.ts` composes the session application. `src/domain/` holds plain contracts; `src/boundary/` is foreign APIs and all `host-*` adapters; `src/status/` owns Effect status resources. See root `AGENTS.md` and `ARCHITECTURE.md`.
 - `tests/**/*.test.ts` contains Vitest coverage. Prefer targeted tests near the changed behavior.
 - `.pi/` is local runtime state and is ignored by git.
 

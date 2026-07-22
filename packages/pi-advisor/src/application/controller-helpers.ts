@@ -10,7 +10,7 @@ import {
   type AdvisorRuntimeDriver,
   type AdvisorRuntimeServiceShape,
 } from "../runtime/runtime.ts";
-import type { ResolvedAdvisorConfig } from "../config/resolve.ts";
+import type { ResolvedAdvisorConfig } from "../config/options.ts";
 import { safeAdvisorLabel } from "../domain/label.ts";
 import {
   AdvisorReviewParseError,
@@ -25,7 +25,7 @@ import {
 } from "../review/index.ts";
 import { ADVISOR_REVIEW_MESSAGE_TYPE } from "../ui/renderer.ts";
 import { readAdvisorContextEntriesAtHostBoundary } from "../boundary/host-context.ts";
-import type { HostNotifierShape } from "./host-notifier.ts";
+import type { HostNotifierShape } from "../boundary/host-notifier.ts";
 import type { ReviewPhase } from "./controller-types.ts";
 
 export const advisorRuntimeEffectsFromDriver = (

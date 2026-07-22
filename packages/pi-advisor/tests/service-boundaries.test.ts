@@ -7,9 +7,9 @@ import * as Layer from "effect/Layer";
 import { ConfigStore, configStoreTestLayer } from "../src/config/store.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
 import { FailureLogger, failureLoggerTestLayer } from "../src/logging/logger.ts";
-import { HostNotifier, hostNotifierLayer } from "../src/application/host-notifier.ts";
-import { normalizeAdvisorConfig } from "../src/config/resolve.ts";
-import { PiCommandAdapter } from "../src/application/pi-command-adapter.ts";
+import { PiCommandAdapter } from "../src/boundary/host-commands.ts";
+import { HostNotifier, hostNotifierLayer } from "../src/boundary/host-notifier.ts";
+import { normalizeAdvisorConfig } from "../src/config/options.ts";
 
 it.effect("converts the Promise config seam into a typed ConfigStore test Layer", () => {
   const paths: string[] = [];

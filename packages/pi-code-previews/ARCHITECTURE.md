@@ -18,7 +18,7 @@ Provides syntax-highlighted previews, structured diffs, safer write/edit present
 - `src/application/service.ts` is the canonical session application service; its Context key follows the `application/service` path.
 - `src/application/projection.ts` owns deferred/scheduled projection helpers for synchronous renderers.
 - `src/layer.ts` is the sole application Layer composition root.
-- `src/config/` owns settings schema, defaults, state, store/service, document persistence, definitions, values, env, and environment service.
+- `src/config/store.ts` is the settings persistence **door** (Effect `CodePreviewSettingsService` plus promise/compat helpers). Rooms: `schema`, `defaults`, `definitions`, `values`, `state`, `env`, `environment-service`, `document-store`, and internal `service.ts` (Context key retained).
 - `src/settings/` owns host commands (`controller.ts`), pre-session bootstrap, the compatibility barrel (`index.ts`), and settings menus under `settings/ui/`.
 - `src/syntax/` and `src/write/` are the other primary stateful features.
 - `src/diff/`, `src/paths/`, `src/tools/` (including grep/path-list/shell helpers), and `src/warnings/` contain deterministic preview policy and transformation logic.

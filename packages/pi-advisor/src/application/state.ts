@@ -17,7 +17,7 @@ import {
   type AdvisorPerspectiveBudgetState,
 } from "../review/perspective-budget.ts";
 import { emptyAdvisorRoutingState, type AdvisorRoutingStateSnapshot } from "../review/routing.ts";
-import { normalizeAdvisorConfig, type ResolvedAdvisorConfig } from "../config/resolve.ts";
+import { normalizeAdvisorConfig, type ResolvedAdvisorConfig } from "../config/options.ts";
 import type { AdvisorFindingDedupeRollback } from "../review/dedupe.ts";
 import type { AdvisorEmissionRollback } from "../review/emission-guard.ts";
 import type { AdvisorReview } from "../review/index.ts";

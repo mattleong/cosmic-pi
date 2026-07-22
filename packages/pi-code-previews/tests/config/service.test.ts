@@ -19,10 +19,7 @@ import {
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
 import { CodePreviewEnvironmentService } from "../../src/config/environment-service";
 import { codePreviewSettings } from "../../src/config/state";
-import {
-  CodePreviewSettingsService,
-  settingsSaveContextProjection,
-} from "../../src/config/service";
+import { CodePreviewSettingsService, settingsSaveContextProjection } from "../../src/config/store";
 
 function commitModification<A, E, R, AfterCommitR>(
   modify: (document: JsonObject) => Effect.Effect<JsonDocumentModification<A, AfterCommitR>, E, R>,

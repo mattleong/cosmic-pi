@@ -1,4 +1,4 @@
-import type { AdvisorReviewPolicy } from "../config/resolve.ts";
+import type { AdvisorReviewPolicy } from "../config/options.ts";
 import type { AdvisorSeverity } from "./schema.ts";
 
 export const ADVISOR_IMMUNITY_COMPLETED_TURNS = 3;

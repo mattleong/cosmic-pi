@@ -7,7 +7,7 @@ import * as Deferred from "effect/Deferred";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import type { SynchronousIngress } from "pi-cosmic-core";
-import type { ResolvedAdvisorConfig } from "../config/resolve.ts";
+import type { ResolvedAdvisorConfig } from "../config/options.ts";
 import {
   AdvisorModelError,
   createAdvisorChildModel,

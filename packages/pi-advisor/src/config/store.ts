@@ -9,7 +9,7 @@ import {
   writeAdvisorConfigPatchEffect,
   type AdvisorConfigPatch,
   type ResolvedAdvisorConfig,
-} from "./resolve.ts";
+} from "./options.ts";
 
 export class AdvisorConfigStoreError extends Schema.TaggedErrorClass<AdvisorConfigStoreError>()(
   "AdvisorConfigStoreError",

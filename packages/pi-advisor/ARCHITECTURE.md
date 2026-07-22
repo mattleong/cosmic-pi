@@ -14,24 +14,45 @@ Runs bounded second-model review of Pi responses, optionally delivers advice/rev
 
 - `src/extension.ts` is the thin public entrypoint.
 - `src/application/register.ts` owns Pi command/event registration and session forwarding.
-- `src/application/host-bindings.ts` explicitly bridges controller-owned handlers to the Pi adapter; no synthetic `ExtensionAPI` proxy is used.
-- `src/application/controller.ts` is the public controller surface (types re-export, stub layer, application layer entry).
+- `src/application/controller.ts` is the unconfigured `AdvisorController` stub Layer only (not a re-export hub).
 - `src/application/controller-types.ts` holds controller errors, catch-up helpers, and the Context service (historical key retained).
 - `src/application/controller-helpers.ts` holds pure delivery/verification/messaging helpers used by the application layer.
-- `src/application/lifecycle.ts` owns application lifecycle and the transactional checkpoint/delivery flow.
+- `src/application/lifecycle.ts` re-exports the lifecycle Layer entry.
+- `src/application/lifecycle/` owns session lifecycle split by role:
+  - `layer.ts` — composition entry (session wiring, status, commands, controller surface)
+  - `session-refs.ts` — shared mutable session handles (`createSessionRefs`)
+  - `runtime.ts` — child runtime start/stop/replace (`makeRuntimeControls`)
+  - `events.ts` — host event registration + session init/shutdown/compact/tree
+  - `delivery.ts` — review delivery transaction (`makeDeliver`)
+  - `checkpoint.ts` — checkpoint request + catch-up wait (`makeCheckpointControls`)
+  - `host-reads.ts` — pure parent session reads
+  - `metrics.ts` — pure metrics helpers
 - `src/application/state.ts` owns immutable application state.
 - `src/layer.ts` is the sole outer composition root for controller, child runtime, queue, persistence, logging, notification, command, and platform Layers.
-- `src/runtime/` owns the child advisor session runtime (`runtime.ts` class + service), wire types, checkpoint parse, prompts, session lifecycle helpers, client, tools, and resource state.
-- `src/queue/` owns `service.ts`, pure `state.ts` transitions, and `errors.ts`.
+- `src/runtime/` owns the child advisor session runtime:
+  - `runtime.ts` — service Layer + public re-exports
+  - `session-runtime.ts` — `AdvisorRuntime` class
+  - `resource-loader.ts` — no-discovery resource loader
+  - plus wire types, checkpoint parse, prompts, session helpers, client, tools, resource-state
+- `src/queue/` owns:
+  - `service.ts` — Effect queue service Layer
+  - `review-queue.ts` — `AdvisorReviewQueue` class + helpers
+  - pure `state.ts` transitions and `errors.ts`
+- `src/settings/` owns:
+  - `controller.ts` — command registration door
+  - `panels.ts` — dashboard/settings/status/usage UI flows
+  - `types.ts` — command/config state contracts
+  - `format.ts` — pure formatting
 - `src/checkpoint/` owns checkpoint ledger and orchestrator resources.
 - `src/review/` contains review domain logic: `schema`/`parse`/`format` (via `review/index.ts` barrel), findings, routing, budgets, trajectory, observation protocol, context.
-- `src/config/` owns `schema.ts` (shape/defaults/normalize), `resolve.ts` (path + load/write), `store.ts` (persistence service), and model picking.
+- `src/config/` owns `schema.ts` (shape/defaults), `options.ts` (path + load/write/normalize), `store.ts` (persistence door), and model picking.
 - `src/logging/` owns `log.ts` persistence and `logger.ts` service.
-- `src/ui/` forms the synchronous UI boundary (projection, renderer, status).
+- `src/ui/` is pure projection/renderer presentation only.
+- `src/status/service.ts` owns the Effect status spinner resource (not under `ui/`).
 - `src/settings/` owns settings/status/usage command registration (`controller.ts`) and formatting helpers (`format.ts`).
 - `src/domain/` contains shared plain contracts (candidate classification, metrics, labels, safe-data snapshots, runtime-error classification).
 - `src/shared/utils.ts` holds tiny shared type guards.
-- `src/boundary/` isolates foreign APIs only: Pi, clock, JSON, filesystem, executor, and host-context.
+- `src/boundary/` isolates foreign APIs only: Pi, clock, JSON, filesystem, executor, plus host adapters (`host-context`, `host-bindings`, `host-notifier`, `host-commands`).
 
 ## State and resources
 

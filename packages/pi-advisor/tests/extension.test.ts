@@ -19,7 +19,7 @@ import type {
   AdvisorRuntimeDriver,
   AdvisorRuntimeStartOptions,
 } from "../src/runtime/runtime.ts";
-import type { ResolvedAdvisorConfig } from "../src/config/resolve.ts";
+import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
 
 function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisorConfig {

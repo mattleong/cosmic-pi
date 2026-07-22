@@ -6,22 +6,22 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { advisorControllerLayer } from "../src/application/controller.ts";
+import { _advisorControllerTest } from "../src/application/controller-helpers.ts";
 import {
-  _advisorControllerTest,
   AdvisorController,
-  advisorControllerApplicationLayer,
-  advisorControllerLayer,
   type AdvisorControllerApplicationOptions,
-} from "../src/application/controller.ts";
-import { advisorRuntimeServiceLayer, type AdvisorRuntimeDriver } from "../src/runtime/runtime.ts";
-import { advisorReviewQueueServiceLayer } from "../src/queue/service.ts";
+} from "../src/application/controller-types.ts";
+import { advisorControllerApplicationLayer } from "../src/application/lifecycle.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
+import { makeAdvisorHostBindings } from "../src/boundary/host-bindings.ts";
 import { captureAdvisorSessionInputEffect } from "../src/boundary/host-context.ts";
-import { PiCommandAdapter } from "../src/application/pi-command-adapter.ts";
+import { PiCommandAdapter } from "../src/boundary/host-commands.ts";
+import { hostNotifierLayer } from "../src/boundary/host-notifier.ts";
 import { configStoreTestLayer } from "../src/config/store.ts";
 import { failureLoggerLayer } from "../src/logging/logger.ts";
-import { hostNotifierLayer } from "../src/application/host-notifier.ts";
-import { makeAdvisorHostBindings } from "../src/application/host-bindings.ts";
+import { advisorReviewQueueServiceLayer } from "../src/queue/service.ts";
+import { advisorRuntimeServiceLayer, type AdvisorRuntimeDriver } from "../src/runtime/runtime.ts";
 
 describe("AdvisorController", () => {
   it.effect("interrupts replacement acquisition and releases its scoped resource", () =>

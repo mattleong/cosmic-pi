@@ -4,7 +4,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { ProjectionError } from "pi-cosmic-core";
-import { CodePreviewSettingsService } from "../config/service";
+import { CodePreviewSettingsService } from "../config/store";
 import type { CodePreviewSettings } from "../config/schema";
 import { CodePreviewSyntaxService } from "../syntax/service";
 

@@ -27,7 +27,7 @@ import {
   readAdvisorSessionLeafIdAtHostBoundary,
   type AdvisorHostReadResult,
 } from "../src/boundary/host-context.ts";
-import type { ResolvedAdvisorConfig } from "../src/config/resolve.ts";
+import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
 
 const resolvedConfig = (): ResolvedAdvisorConfig => ({

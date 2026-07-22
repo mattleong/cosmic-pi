@@ -64,15 +64,29 @@ ARCHITECTURE.md
 
 1. **Entry / composition:** `extension.ts` (Pi registration) and `layer.ts` (Effect composition root).
 2. **Application orchestration:**
-   - Small packages: a single `application.ts`.
+   - Small packages: a single `application.ts` (split early if it gets heavy).
    - Larger packages: an `application/` folder with explicit roles (`register.ts`, `lifecycle.ts`, `state.ts`).
-3. **Config:** `config/schema.ts` (shape/defaults), optional `config/resolve.ts` or `config/options.ts`, and `config/store.ts` or `config/service.ts` for persistence. Use **store/service** only — never `repository` for config persistence. Public barrel: `config/index.ts` when needed.
-4. **Settings UI/commands:** live under `settings/` with `controller.ts` for command registration (not under `ui/`). Pure presentation stays in `ui/` (projection, renderer, layout) or a documented feature-local presentation folder.
-5. **Boundaries:** package-local `boundary/` adapters for I/O and third-party APIs only. No pure classifiers or helpers. Pi host adapters use the `host-*` prefix (`host-context`, `host-ui`, `host-callback`).
-6. **Extension `src/` root allowlist:** `extension.ts`, `layer.ts`, `application.ts`, and an optional package `protocol.ts` re-export. Nest everything else (`auth/`, features, etc.).
-7. **Provider feature modules:** nest multi-file features (`usage/`, `footer/`, `image/`, `auth/`) rather than scattering `*-controller.ts` at `src/` root.
-8. **Tests:** package-root `tests/` (not colocated under `src/`). File suffix is always `*.test.ts` (never `*.spec.ts`). Flat or mirrored layout is fine.
-9. **Docs:** every package keeps `ARCHITECTURE.md` with a source map. Package-level `AGENTS.md` is optional and must not contradict this file.
+   - `controller.ts` only when there is a real Context/service API — not a re-export hub.
+3. **Config doors:** one public persistence entry — prefer `config/store.ts`.
+   - `schema.ts` = shape + defaults (+ enums/codecs).
+   - `options.ts` = normalize/resolve/descriptors (legacy name `resolve.ts` is allowed until renamed).
+   - `store.ts` = the persistence **door** (Effect service and any promise/compat helpers).
+   - Extra config files are internal **rooms** (document IO, env, state). Do not add a second peer API (`persistence.ts`, façade `store` + separate `service`) for the same job.
+   - Use **store/service** naming only — never `repository` for config persistence.
+4. **Settings UI/commands:** live under `settings/` with `controller.ts` for command registration (not under `ui/`).
+5. **UI policy:**
+   - Top-level `ui/` = pure projection/render/primitives only (no Effect resources/services).
+   - Settings chrome under `settings/ui/` when needed.
+   - Feature-local presentation (`preview/`, `tools/renderers/`, footer components) is fine; document it in `ARCHITECTURE.md`.
+   - Effect status/resources stay in feature modules, not under `ui/`.
+6. **Boundaries:** package-local `boundary/` adapters for I/O and third-party APIs only. No pure classifiers or helpers.
+   - **All** Pi host adapters live under `boundary/` with the `host-*` prefix (`host-context`, `host-ui`, `host-callback`, `host-bindings`, `host-notifier`, `host-commands`). Never under `application/`.
+7. **Doors vs rooms:** prefer one public entrypoint per role; keep implementation in small files. Collapse duplicate APIs, not file count. Nest peer-soup directories instead of merging into giant files. Soft guide: split before ~400–500 LOC of hard logic accumulates in one file.
+8. **Extension `src/` root allowlist:** `extension.ts`, `layer.ts`, `application.ts`, and an optional package `protocol.ts` re-export. Nest everything else (`auth/`, features, etc.).
+9. **Provider feature modules:** nest multi-file features (`usage/`, `footer/`, `image/`, `auth/`) rather than scattering `*-controller.ts` at `src/` root.
+10. **Tests:** package-root `tests/` (not colocated under `src/`). File suffix is always `*.test.ts` (never `*.spec.ts`). Large packages should mirror `src/`; smaller packages may use flat names without package-name prefixes.
+11. **Docs:** every package keeps `ARCHITECTURE.md` with a source map. Package-level `AGENTS.md` is optional and must not contradict this file.
+12. **Compat:** temporary legacy call shapes go under an explicit `compat/` file or folder, not a second architectural door.
 
 Shared Effect platform code belongs in `pi-cosmic-core`; do not invent parallel runtime helpers in feature packages.
 
@@ -96,8 +110,12 @@ src/
 
 - [ ] New files match the canonical tree for the package size
 - [ ] No new extension `src/*.ts` outside the root allowlist
+- [ ] Config has one persistence door (`store`); no peer `persistence`/façade APIs
 - [ ] Config persistence named store/service (not repository)
 - [ ] New `boundary/` files are real I/O or third-party adapters
+- [ ] All `host-*` adapters live under `boundary/`
+- [ ] `ui/` stays pure; Effect services stay in features
+- [ ] No new re-export hub files; no giant-file merges to “simplify”
 - [ ] Tests are `tests/**/*.test.ts`
 - [ ] `ARCHITECTURE.md` source map updated when layout changed
 

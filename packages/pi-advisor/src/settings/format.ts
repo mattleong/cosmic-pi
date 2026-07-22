@@ -1,5 +1,5 @@
 import { supportsFastModel } from "pi-better-openai/fast-models";
-import type { AdvisorReviewPolicy, ResolvedAdvisorConfig } from "../config/resolve.ts";
+import type { AdvisorReviewPolicy, ResolvedAdvisorConfig } from "../config/options.ts";
 import { safeAdvisorLabel } from "../domain/label.ts";
 import type { AdvisorSessionMetrics } from "../domain/metrics.ts";
 

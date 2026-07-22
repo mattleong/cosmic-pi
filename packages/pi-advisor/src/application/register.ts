@@ -7,23 +7,23 @@ import {
   makePiSessionRuntimeSlot,
   type PiSessionRuntimeSlot,
 } from "pi-cosmic-core";
+import type { AdvisorEffectExecutor, AdvisorPlatform } from "../boundary/executor.ts";
+import { makeAdvisorHostBindings } from "../boundary/host-bindings.ts";
+import {
+  captureAdvisorSessionInputAtHostBoundary,
+  type AdvisorSessionInput,
+} from "../boundary/host-context.ts";
+import { PiCommandAdapter } from "../boundary/host-commands.ts";
+import { HostNotifier } from "../boundary/host-notifier.ts";
+import { ConfigStore } from "../config/store.ts";
+import { makeAdvisorApplicationLayer } from "../layer.ts";
+import { FailureLogger } from "../logging/logger.ts";
 import {
   AdvisorController,
   AdvisorExtensionError,
   type AdvisorControllerShape,
   type AdvisorExtensionDependencies,
-} from "./controller.ts";
-import { makeAdvisorHostBindings } from "./host-bindings.ts";
-import type { AdvisorEffectExecutor, AdvisorPlatform } from "../boundary/executor.ts";
-import {
-  captureAdvisorSessionInputAtHostBoundary,
-  type AdvisorSessionInput,
-} from "../boundary/host-context.ts";
-import { ConfigStore } from "../config/store.ts";
-import { FailureLogger } from "../logging/logger.ts";
-import { HostNotifier } from "./host-notifier.ts";
-import { makeAdvisorApplicationLayer } from "../layer.ts";
-import { PiCommandAdapter } from "./pi-command-adapter.ts";
+} from "./controller-types.ts";
 import { registerAdvisorReviewRenderer } from "../ui/renderer.ts";
 import { AdvisorReviewQueueService } from "../queue/service.ts";
 import { AdvisorRuntimeService } from "../runtime/runtime.ts";
@@ -139,15 +139,15 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
 
 export const advisorExtension = createAdvisorExtension();
 
+export { advisorControllerLayer } from "./controller.ts";
 export {
   ADVISOR_CATCH_UP_TIMEOUT_MS,
   AdvisorController,
   AdvisorExtensionError,
-  advisorControllerApplicationLayer,
-  advisorControllerLayer,
   awaitAdvisorCatchUpEffect,
   type AdvisorCatchUpOutcome,
   type AdvisorControllerApplicationOptions,
   type AdvisorExtensionDependencies,
   type AdvisorSkipReason,
-} from "./controller.ts";
+} from "./controller-types.ts";
+export { advisorControllerApplicationLayer } from "./lifecycle.ts";

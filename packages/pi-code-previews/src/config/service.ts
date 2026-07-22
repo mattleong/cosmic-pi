@@ -1,3 +1,4 @@
+/** Internal Effect settings service room. Public persistence door: `store.ts`. */
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";

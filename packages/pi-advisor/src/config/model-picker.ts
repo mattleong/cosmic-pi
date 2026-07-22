@@ -4,7 +4,7 @@ import { DynamicBorder, type ExtensionCommandContext } from "@earendil-works/pi-
 import { fuzzyFilter, Input, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { supportsFastModel } from "pi-better-openai/fast-models";
 import { safeAdvisorLabel } from "../domain/label.ts";
-import type { ResolvedAdvisorConfig } from "./resolve.ts";
+import type { ResolvedAdvisorConfig } from "./options.ts";
 
 export const CLEAR_MODEL_OPTION = "Clear advisor model";
 

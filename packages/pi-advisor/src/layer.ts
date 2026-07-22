@@ -1,15 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
-import {
-  advisorControllerApplicationLayer,
-  type AdvisorExtensionDependencies,
-} from "./application/controller.ts";
-import type { AdvisorHostBindings } from "./application/host-bindings.ts";
+import type { AdvisorExtensionDependencies } from "./application/controller-types.ts";
+import { advisorControllerApplicationLayer } from "./application/lifecycle.ts";
 import { advisorPlatformLayer, type AdvisorEffectExecutor } from "./boundary/executor.ts";
+import type { AdvisorHostBindings } from "./boundary/host-bindings.ts";
+import { PiCommandAdapter } from "./boundary/host-commands.ts";
+import { HostNotifier, hostNotifierLayer } from "./boundary/host-notifier.ts";
 import { ConfigStore, configStoreLayer, configStoreTestLayer } from "./config/store.ts";
 import { FailureLogger, failureLoggerLayer, failureLoggerTestLayer } from "./logging/logger.ts";
-import { HostNotifier, hostNotifierLayer } from "./application/host-notifier.ts";
-import { PiCommandAdapter } from "./application/pi-command-adapter.ts";
 import { AdvisorReviewQueueService, advisorReviewQueueServiceLayer } from "./queue/service.ts";
 import { AdvisorRuntimeService, advisorRuntimeServiceLayer } from "./runtime/runtime.ts";
 

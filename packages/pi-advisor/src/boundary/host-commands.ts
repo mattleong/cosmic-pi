@@ -14,7 +14,7 @@ export interface PiCommandAdapterShape {
 
 /** The sole adapter for Pi's Promise-returning command UI. */
 export class PiCommandAdapter extends Context.Service<PiCommandAdapter, PiCommandAdapterShape>()(
-  "pi-advisor/application/pi-command-adapter/PiCommandAdapter",
+  "pi-advisor/boundary/host-commands/PiCommandAdapter",
 ) {
   static readonly layer = Layer.succeed(
     PiCommandAdapter,

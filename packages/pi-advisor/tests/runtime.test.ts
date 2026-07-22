@@ -34,7 +34,7 @@ import { ADVISOR_TOOL_NAMES, createAdvisorTools } from "../src/runtime/tools.ts"
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
 import { AdvisorModelError, type AdvisorUsageTelemetry } from "../src/runtime/client.ts";
 import { makeCapturedTracer } from "pi-cosmic-core/testing";
-import type { ResolvedAdvisorConfig } from "../src/config/resolve.ts";
+import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
 
 type TestRuntime = AdvisorRuntime & AdvisorRuntimeDriver;
 const makeTestRuntime = (dependencies: ConstructorParameters<typeof AdvisorRuntime>[0]) => {

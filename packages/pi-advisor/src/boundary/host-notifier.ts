@@ -13,7 +13,7 @@ export interface HostNotifierShape {
 }
 
 export class HostNotifier extends Context.Service<HostNotifier, HostNotifierShape>()(
-  "pi-advisor/application/host-notifier/HostNotifier",
+  "pi-advisor/boundary/host-notifier/HostNotifier",
 ) {}
 
 export const hostNotifierLayer = Layer.succeed(

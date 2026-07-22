@@ -6,11 +6,11 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { AdvisorEffectExecutor } from "../boundary/executor.ts";
 import type { AdvisorAbortInput, AdvisorSessionInput } from "../boundary/host-context.ts";
-import type { ResolvedAdvisorConfig } from "../config/resolve.ts";
+import type { ResolvedAdvisorConfig } from "../config/options.ts";
 import type { AdvisorFailureDetails } from "../logging/log.ts";
 import type { AdvisorRuntimeDriver } from "../runtime/runtime.ts";
 import type { AdvisorControllerSnapshot } from "../ui/projection.ts";
-import type { AdvisorHostBindings } from "./host-bindings.ts";
+import type { AdvisorHostBindings } from "../boundary/host-bindings.ts";
 
 export class AdvisorExtensionError extends Schema.TaggedErrorClass<AdvisorExtensionError>()(
   "AdvisorExtensionError",
@@ -75,7 +75,7 @@ export type {
   AdvisorHostCommandDefinition,
   AdvisorHostCommandHandler,
   AdvisorHostEventHandler,
-} from "./host-bindings.ts";
+} from "../boundary/host-bindings.ts";
 
 export interface AdvisorControllerShape {
   /** Synchronous Pi/TUI boundary; returns a deeply frozen projection only. */
