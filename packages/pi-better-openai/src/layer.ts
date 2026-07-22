@@ -3,11 +3,11 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import { AgentDirectory, SafeFile, nodePlatformLayer } from "pi-cosmic-core";
 import { SharpAdapter } from "./boundary/sharp.ts";
-import { FastModeService } from "./fast-service.ts";
-import { FAST_SERVICE_TIER } from "./fast-models.ts";
-import { OpenAIImageService } from "./image.ts";
-import { OpenAIUsageService, type OpenAIProjection } from "./usage-controller.ts";
-import type { FastSnapshot } from "./fast-controller.ts";
+import { FastModeService } from "./fast/service.ts";
+import { FAST_SERVICE_TIER } from "./fast/models.ts";
+import { OpenAIImageService } from "./image/index.ts";
+import { OpenAIUsageService, type OpenAIProjection } from "./usage/index.ts";
+import type { FastSnapshot } from "./fast/controller.ts";
 
 /** Plain session values captured by the Pi adapter before runtime construction. */
 export interface OpenAISessionInput {

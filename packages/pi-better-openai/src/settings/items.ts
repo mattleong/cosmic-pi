@@ -1,4 +1,4 @@
-import type { ResolvedConfig, SettingsOptionDescriptor } from "../config.ts";
+import type { ResolvedConfig, SettingsOptionDescriptor } from "../config/index.ts";
 
 export type SettingsPickerItem = {
   id: string;

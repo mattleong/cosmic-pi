@@ -3,7 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
-import { makeAdvisorResourceState } from "../src/advisor-resource-state.ts";
+import { makeAdvisorResourceState } from "../src/runtime/resource-state.ts";
 
 class AcquireFailure extends Schema.TaggedErrorClass<AcquireFailure>()("AcquireFailure", {
   message: Schema.String,

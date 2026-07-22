@@ -11,10 +11,10 @@ import {
   getSettingsPathFrom,
   type LoadSettingsOptions,
   type SettingsSaveContext,
-} from "./store-core";
-import type { CodePreviewSettings } from "./types";
+} from "./document-store";
+import type { CodePreviewSettings } from "./schema";
 
-export * from "./store-core";
+export * from "./document-store";
 
 let lastCompatibilityLoadOptions: LoadSettingsOptions = {};
 

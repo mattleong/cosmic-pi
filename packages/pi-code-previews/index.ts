@@ -10,7 +10,7 @@ export { codePreviews as default } from "./src/extension";
 export { loadCodePreviewSettings } from "./src/settings/bootstrap";
 
 /** Decorate a package-owned tool, capturing the current visual shell mode at wrapping time. */
-export { withCodePreviewShell, type CodePreviewShellOptions } from "./src/api/cooperative-tools";
+export { withCodePreviewShell, type CodePreviewShellOptions } from "./src/tools/cooperative-tools";
 
 /** Public settings types used by package authors integrating with pi-code-previews. */
-export type { CodePreviewSettings, ToolCallBackgroundMode } from "./src/settings";
+export type { CodePreviewSettings, ToolCallBackgroundMode } from "./src/settings/index";

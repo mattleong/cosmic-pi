@@ -31,26 +31,26 @@ import {
   parseCodexRegistryCredentials,
   readCodexAuth,
 } from "../src/codex-auth.ts";
-import { DEFAULT_IMAGE_CONFIG, readConfig, resolveConfig } from "../src/config.ts";
+import { DEFAULT_IMAGE_CONFIG, readConfig, resolveConfig } from "../src/config/index.ts";
 import {
   initialFastSnapshot,
   injectProviderPayload,
   type FastSnapshot,
-} from "../src/fast-controller.ts";
-import { FastModeService } from "../src/fast-service.ts";
+} from "../src/fast/controller.ts";
+import { FastModeService } from "../src/fast/service.ts";
 import { openAIUsageUiState } from "../src/ui/primitives.ts";
 import {
   OpenAIUsageService,
   isOpenAISubscriptionModel,
   makeProjection,
   synchronizeProjectionContext,
-} from "../src/usage-controller.ts";
+} from "../src/usage/index.ts";
 import {
   USAGE_URL,
   formatUsageSnapshot,
   parseUsageSnapshot,
   requestCodexUsage,
-} from "../src/usage.ts";
+} from "../src/usage/index.ts";
 
 const NOW = 1_752_883_200_000;
 const documents = makeInMemoryDocuments;

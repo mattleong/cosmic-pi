@@ -6,8 +6,26 @@
 - `packages/pi-better-openai/` contains the Better OpenAI pi extension.
 - `packages/pi-better-xai/` contains the Better xAI subscription usage extension.
 - `packages/pi-code-previews/` contains the code-preview pi extension.
+- `packages/pi-cosmic-core/` contains shared Effect-first runtime foundations for the extension packages.
 - `packages/pi-cosmic-ui/` contains composable shared UI elements, including the responsive footer.
 - The repository is a pnpm workspace. Keep shared workspace configuration at the root and package-specific source, tests, and build configuration inside each package.
+
+
+## Package layout conventions
+
+Keep these names aligned across extension packages so the same role is discoverable everywhere:
+
+- **Entry / composition:** `extension.ts` (Pi registration) and `layer.ts` (Effect composition root).
+- **Application orchestration:**
+  - Small packages: a single `application.ts`.
+  - Larger packages: an `application/` folder with explicit roles (`register.ts`, lifecycle/orchestration, state).
+- **Config:** `config/schema.ts` (shape/defaults), optional `config/resolve.ts` or `config/options.ts`, and `config/store.ts` or `config/service.ts` for persistence. Prefer **store/service**, not mixed `repository` wording for the same job. Public barrel: `config/index.ts` when needed.
+- **Settings UI/commands:** live under `settings/` with `controller.ts` for command registration (not under `ui/`). Pure presentation stays in `ui/` (projection, renderer, layout).
+- **Boundaries:** package-local `boundary/` adapters. Pi host adapters use the `host-*` prefix (`host-context`, `host-ui`, `host-callback`).
+- **Provider feature modules:** nest multi-file features (`usage/`, `footer/`, `image/`) rather than scattering `*-controller.ts` at `src/` root.
+- **Tests:** package-root `tests/` (not colocated `*.spec.ts`), except temporary legacy paths during migration.
+
+Shared Effect platform code belongs in `pi-cosmic-core`; do not invent parallel runtime helpers in feature packages.
 
 ## Effect architecture
 

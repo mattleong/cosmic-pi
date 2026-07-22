@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { ProjectionError } from "pi-cosmic-core";
 import { CodePreviewSettingsService } from "../settings/service";
-import type { CodePreviewSettings } from "../settings/types";
+import type { CodePreviewSettings } from "../settings/schema";
 import { CodePreviewSyntaxService } from "../syntax/service";
 
 export interface CodePreviewSessionShape {

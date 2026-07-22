@@ -1,10 +1,10 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
-import { runPlatformEffect } from "../boundary/platform";
+import { runPlatformEffect } from "../boundary/node-platform";
 import { codePreviewPerformanceConfig } from "../config/env";
 import { resolvePreviewPath } from "../paths/resolve";
-import { formatBytes } from "../shared/format";
+import { formatBytes } from "../shared/helpers";
 
 export type ExistingFilePreview =
   | { kind: "content"; content: string }

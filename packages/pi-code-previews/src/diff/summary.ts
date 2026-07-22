@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { countLabel } from "../shared/format";
+import { countLabel } from "../shared/helpers";
 import { forEachRawTextLine } from "../shared/text-lines";
 
 export type DiffSummary = {

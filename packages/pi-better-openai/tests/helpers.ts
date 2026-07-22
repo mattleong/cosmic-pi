@@ -3,7 +3,7 @@ import {
   DEFAULT_IMAGE_CONFIG,
   DEFAULT_USAGE_CONFIG,
   type ResolvedConfig,
-} from "../src/config.ts";
+} from "../src/config/index.ts";
 
 export function makeResolvedConfig(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
   return {

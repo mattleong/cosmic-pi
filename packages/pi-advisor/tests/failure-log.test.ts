@@ -19,7 +19,7 @@ import {
   getAdvisorFailureLogPath,
   logAdvisorFailureEffect,
   type AdvisorFailureDetails,
-} from "../src/failure-log.ts";
+} from "../src/logging/log.ts";
 
 const tempDirectories: string[] = [];
 const logAdvisorFailure = (configPath: string, details: AdvisorFailureDetails) =>

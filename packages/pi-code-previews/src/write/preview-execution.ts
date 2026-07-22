@@ -8,7 +8,7 @@ import {
   runCodePreviewSessionEffect,
 } from "../application/session-capability";
 import { resolvePreviewPath } from "../paths/resolve";
-import { getObjectValue } from "../shared/objects";
+import { getObjectValue } from "../shared/helpers";
 import { readExistingFileForPreviewEffect, type ExistingFilePreview } from "./diff";
 import { lookupBeforeWrite } from "./projection";
 import { CodePreviewWriteService } from "./service";

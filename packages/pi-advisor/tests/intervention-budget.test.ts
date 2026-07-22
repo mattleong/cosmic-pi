@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { AdvisorInterventionBudget } from "../src/intervention-budget.ts";
+import { AdvisorInterventionBudget } from "../src/review/intervention-budget.ts";
 
 describe("advisor intervention budget", () => {
   test("allows only strict escalation and one correction per request", () => {

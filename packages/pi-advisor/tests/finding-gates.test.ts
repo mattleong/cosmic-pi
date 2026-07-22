@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { gateAdvisorFinding } from "../src/finding-gates.ts";
-import type { AdvisorFinding } from "../src/review.ts";
+import { gateAdvisorFinding } from "../src/review/finding-gates.ts";
+import type { AdvisorFinding } from "../src/review/index.ts";
 
 function finding(overrides: Partial<AdvisorFinding> = {}): AdvisorFinding {
   return {

@@ -23,7 +23,6 @@
     "dist",
     "index.ts",
     "src/**/*.ts",
-    "!src/**/*.spec.ts",
     "!src/**/fixtures/**",
     "!src/**/testing.ts",
     "!src/testing/**",

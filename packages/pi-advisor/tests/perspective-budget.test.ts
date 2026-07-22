@@ -2,8 +2,8 @@ import { describe, expect, test } from "vitest";
 import {
   AdvisorPerspectiveBudget,
   MAX_AUTOMATIC_PERSPECTIVES_PER_REQUEST,
-} from "../src/perspective-budget.ts";
-import type { AdvisorSuggestion } from "../src/review.ts";
+} from "../src/review/perspective-budget.ts";
+import type { AdvisorSuggestion } from "../src/review/index.ts";
 
 function suggestion(fingerprint: string): AdvisorSuggestion {
   return {

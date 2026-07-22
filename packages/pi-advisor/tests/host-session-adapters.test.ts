@@ -13,7 +13,7 @@ import type {
   AdvisorCheckpoint,
   AdvisorCheckpointRequest,
   AdvisorRuntimeDriver,
-} from "../src/advisor-runtime.ts";
+} from "../src/runtime/runtime.ts";
 import {
   abortAdvisorParentAtHostBoundary,
   AdvisorHostContextError,
@@ -27,7 +27,7 @@ import {
   readAdvisorSessionLeafIdAtHostBoundary,
   type AdvisorHostReadResult,
 } from "../src/boundary/host-context.ts";
-import type { ResolvedAdvisorConfig } from "../src/config.ts";
+import type { ResolvedAdvisorConfig } from "../src/config/resolve.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
 
 const resolvedConfig = (): ResolvedAdvisorConfig => ({

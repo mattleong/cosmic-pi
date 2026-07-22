@@ -6,7 +6,7 @@ Provides syntax-highlighted previews, structured diffs, safer write/edit present
 
 ## Host surface
 
-- Commands: preview health and settings.
+- Commands: preview health and settings (`settings/controller.ts`, `commands/health.ts`).
 - Events: `session_start` and `session_shutdown`.
 - Tool surface: renderer registration for supported built-in tools and the public cooperative shell wrapper.
 
@@ -18,9 +18,11 @@ Provides syntax-highlighted previews, structured diffs, safer write/edit present
 - `src/application/session-service.ts` is the canonical session application service; its Context key intentionally retains the historical identity.
 - `src/layer.ts` is the sole application Layer composition root.
 - `src/settings/`, `src/syntax/`, and `src/write/` are the primary stateful features.
-- `src/diff/`, `src/paths/`, `src/tools/`, and `src/warnings/` contain deterministic preview policy and transformation logic.
-- `src/boundary/` wraps Pi/Node/Shiki/environment/JSON boundaries.
-- `src/tool-renderers/`, `src/preview/`, and feature render modules are synchronous UI.
+- `src/diff/`, `src/paths/`, `src/tools/` (including grep/path-list/shell helpers), and `src/warnings/` contain deterministic preview policy and transformation logic.
+- `src/tools/` owns tool names/policy, cooperative shell API (`cooperative-tools.ts`), tool argument/result helpers (`data/`), and synchronous tool renderers (`renderers/`).
+- `src/boundary/` wraps Pi/Node/Shiki/environment/JSON boundaries (`node-platform.ts` for Node file platform runs).
+- `src/preview/` and feature render modules are synchronous UI.
+- Package tests live under `tests/`, mirroring `src/` paths.
 
 ## State and resources
 

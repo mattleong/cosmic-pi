@@ -1,5 +1,5 @@
 import { codePreviewSettings } from "../../settings/index";
-import type { DiffWordEmphasis } from "../../settings/types";
+import type { DiffWordEmphasis } from "../../settings/schema";
 import { injectVisibleRanges } from "../../shared/terminal-text";
 import { isLightShikiTheme } from "../../syntax/render";
 import type { ParsedDiffLine } from "../parse";

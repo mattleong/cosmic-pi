@@ -9,3 +9,7 @@ yarn.lock
 *.tgz
 *.log
 .DS_Store
+
+# Editor / tool swap leftovers (e.g. empty `.file.ts.XXXXXX/` dirs)
+**/.*.ts.*/
+*~

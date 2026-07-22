@@ -2,7 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import { advisorStatusFramesEffect } from "../src/status-service.ts";
+import { advisorStatusFramesEffect } from "../src/ui/status-service.ts";
 
 it.effect("delays status, advances frames, and stops without a surviving timer fiber", () =>
   Effect.gen(function* () {

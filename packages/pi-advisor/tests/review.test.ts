@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { _advisorRuntimeTest } from "../src/advisor-runtime.ts";
+import { _advisorRuntimeTest } from "../src/runtime/runtime.ts";
 import {
   ADVISOR_SYSTEM_PROMPT,
   MAX_ADVISOR_EVIDENCE_CHARS,
@@ -17,7 +17,7 @@ import {
   sanitizeAdvisorReview,
   type AdvisorReview,
   type AdvisorReviewFocus,
-} from "../src/review.ts";
+} from "../src/review/index.ts";
 
 function checkpointPrompt(focus: AdvisorReviewFocus, observations = "observations"): string {
   return _advisorRuntimeTest.buildCheckpointPrompt({

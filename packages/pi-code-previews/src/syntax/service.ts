@@ -7,7 +7,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import { makeSynchronousIngress, type SynchronousIngress } from "pi-cosmic-core";
 import { disposeShikiHighlighter, ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
 import { codePreviewPerformanceConfig } from "../config/env";
-import { codePreviewSettings } from "../settings";
+import { codePreviewSettings } from "../settings/index";
 import {
   clearSyntaxProjection,
   installSyntaxRequests,

@@ -32,7 +32,7 @@ import {
   readRawConfig,
   resolveConfig,
   writeConfig,
-} from "../src/config.ts";
+} from "../src/config/index.ts";
 import {
   XaiUsageService,
   formatDebug,
@@ -40,8 +40,8 @@ import {
   makeProjection,
   synchronizeProjectionContext,
   visibleStatusLine,
-} from "../src/usage-controller.ts";
-import type { ResolvedConfig } from "../src/config.ts";
+} from "../src/usage/index.ts";
+import type { ResolvedConfig } from "../src/config/index.ts";
 import { xaiUsageUiState } from "../src/ui/primitives.ts";
 import {
   formatUsageSnapshot,
@@ -49,7 +49,7 @@ import {
   parseUsageSnapshot,
   parseWeeklyBilling,
   requestXaiUsage,
-} from "../src/usage.ts";
+} from "../src/usage/index.ts";
 
 const NOW = 1_752_883_200_000;
 const monthlyFixture = {

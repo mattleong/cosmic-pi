@@ -12,7 +12,7 @@ import {
   configPaths,
   type OpenAIConfigError,
   type ResolvedConfig,
-} from "./config.ts";
+} from "./config/index.ts";
 import {
   fastDebugLines,
   fastStateText,
@@ -22,9 +22,9 @@ import {
   isFastActive,
   supportsFast,
   unsupportedRequestMessage,
-} from "./fast-controller.ts";
-import { FastModeService } from "./fast-service.ts";
-import { FAST_SERVICE_TIER, SUPPORTED_FAST_MODELS } from "./fast-models.ts";
+} from "./fast/controller.ts";
+import { FastModeService } from "./fast/service.ts";
+import { FAST_SERVICE_TIER, SUPPORTED_FAST_MODELS } from "./fast/models.ts";
 import {
   makeOpenAIApplicationLayer,
   type OpenAIApplication,
@@ -32,7 +32,7 @@ import {
   type OpenAISessionInput,
 } from "./layer.ts";
 import { abbreviateHomePath, createFooterController } from "./footer/controller.ts";
-import { registerOpenAIImage, _imageTest } from "./image.ts";
+import { registerOpenAIImage, _imageTest } from "./image/index.ts";
 import { registerSettingsController } from "./settings/controller.ts";
 import {
   fastModeFooterPrimitive,
@@ -48,8 +48,8 @@ import {
   resetProjection,
   synchronizeProjectionContext,
   type OpenAIProjection,
-} from "./usage-controller.ts";
-import { formatPercent, formatUsageSnapshot, parseUsageSnapshot } from "./usage.ts";
+} from "./usage/index.ts";
+import { formatPercent, formatUsageSnapshot, parseUsageSnapshot } from "./usage/index.ts";
 
 const FAST_ID = "fast";
 

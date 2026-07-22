@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { SETTINGS_OPTION_DESCRIPTORS, type ResolvedConfig } from "../config.ts";
-import { XaiBoundaryError, XaiUsageService } from "../usage-controller.ts";
+import { SETTINGS_OPTION_DESCRIPTORS, type ResolvedConfig } from "../config/index.ts";
+import { XaiBoundaryError, XaiUsageService } from "../usage/index.ts";
 
 export function registerSettingsController(
   pi: ExtensionAPI,

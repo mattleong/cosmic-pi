@@ -3,8 +3,8 @@ import {
   AdvisorEmissionGuard,
   isContentFreeAdvisorReview,
   normalizeEmissionContent,
-} from "../src/emission-guard.ts";
-import type { AdvisorReview, AdvisorSeverity } from "../src/review.ts";
+} from "../src/review/emission-guard.ts";
+import type { AdvisorReview, AdvisorSeverity } from "../src/review/index.ts";
 
 function review(severity: AdvisorSeverity, issue = "Missing timeout handling!"): AdvisorReview {
   return {

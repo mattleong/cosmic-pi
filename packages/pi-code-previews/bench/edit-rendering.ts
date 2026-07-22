@@ -21,7 +21,7 @@ process.env.CODE_PREVIEW_TOOLS = "edit";
 process.env.CODE_PREVIEW_ASYNC_RENDER_CHARS ??= "100000000";
 
 const { codePreviewSettings, setCodePreviewSettings } = await import("../src/settings/index");
-const { registerToolRenderers } = await import("../src/tool-renderers/registration");
+const { registerToolRenderers } = await import("../src/tools/renderers/registration");
 const { startBenchmarkShikiSession } = await import("./shiki-session");
 
 const WIDTH = 120;

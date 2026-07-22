@@ -15,10 +15,10 @@ import {
 import * as MutableRef from "effect/MutableRef";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterOpenAI, { _test } from "../index.ts";
-import { initialFastSnapshot } from "../src/fast-controller.ts";
+import { initialFastSnapshot } from "../src/fast/controller.ts";
 import { createFooterController } from "../src/footer/controller.ts";
 import { textPanel } from "../src/settings/picker.ts";
-import { makeProjection } from "../src/usage-controller.ts";
+import { makeProjection } from "../src/usage/index.ts";
 import { makeResolvedConfig } from "./helpers.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => void | Promise<void>;

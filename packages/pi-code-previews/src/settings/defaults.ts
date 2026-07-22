@@ -2,13 +2,13 @@ import { bundledThemes } from "shiki";
 import type { CodePreviewEnvironment } from "../config/env";
 import { parseBoolean, parsePositiveInteger } from "../config/env";
 import { ALL_CODE_PREVIEW_TOOLS } from "../tools/names";
-import { parseToolCallBackgroundMode } from "./tool-call-background";
-import type { CodePreviewSettings } from "./types";
 import {
   DIFF_BACKGROUND_INTENSITIES,
   DIFF_WORD_EMPHASES,
   PATH_ICON_MODES,
-} from "./schema-constants";
+  parseToolCallBackgroundMode,
+  type CodePreviewSettings,
+} from "./schema";
 
 export const defaultCodePreviewSettings: CodePreviewSettings = Object.freeze({
   shikiTheme: "dark-plus",

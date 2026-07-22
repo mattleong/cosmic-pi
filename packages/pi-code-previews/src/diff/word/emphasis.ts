@@ -1,4 +1,4 @@
-import type { DiffWordEmphasis } from "../../settings/types";
+import type { DiffWordEmphasis } from "../../settings/schema";
 import { refinedRangesForChangedTokens } from "./range-refinement";
 import { filterLowSignalWordEmphasis } from "./smart-filter";
 import { collectChangedTokenGaps, type ChangedTokenGap } from "./token-alignment";

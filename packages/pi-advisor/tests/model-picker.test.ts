@@ -5,7 +5,7 @@ import {
   CLEAR_MODEL_OPTION,
   createAdvisorModelChoices,
   selectAdvisorModel,
-} from "../src/model-picker.ts";
+} from "../src/config/model-picker.ts";
 
 const secretProvider = "provider-api_key=sk-abcdefghijklmnop";
 const secretModel = `model-token=secret-value-${"x".repeat(400)}`;

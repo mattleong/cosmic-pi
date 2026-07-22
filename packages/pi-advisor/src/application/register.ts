@@ -19,14 +19,14 @@ import {
   captureAdvisorSessionInputAtHostBoundary,
   type AdvisorSessionInput,
 } from "../boundary/host-context.ts";
-import { ConfigRepository } from "../config-repository.ts";
-import { FailureLogger } from "../failure-logger.ts";
-import { HostNotifier } from "../host-notifier.ts";
+import { ConfigStore } from "../config/store.ts";
+import { FailureLogger } from "../logging/logger.ts";
+import { HostNotifier } from "./host-notifier.ts";
 import { makeAdvisorApplicationLayer } from "../layer.ts";
-import { PiCommandAdapter } from "../pi-command-adapter.ts";
-import { registerAdvisorReviewRenderer } from "../renderer.ts";
-import { AdvisorReviewQueueService } from "../review-queue.ts";
-import { AdvisorRuntimeService } from "../advisor-runtime.ts";
+import { PiCommandAdapter } from "./pi-command-adapter.ts";
+import { registerAdvisorReviewRenderer } from "../ui/renderer.ts";
+import { AdvisorReviewQueueService } from "../queue/service.ts";
+import { AdvisorRuntimeService } from "../runtime/runtime.ts";
 
 export function createAdvisorExtension(dependencies: AdvisorExtensionDependencies = {}) {
   return function registerPersistentAdvisorExtension(pi: ExtensionAPI): void {
@@ -38,7 +38,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       | AdvisorRuntimeService
       | AdvisorReviewQueueService
       | AdvisorController
-      | ConfigRepository
+      | ConfigStore
       | FailureLogger
       | HostNotifier
       | PiCommandAdapter,

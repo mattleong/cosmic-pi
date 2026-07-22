@@ -4,7 +4,7 @@ import {
   buildAdvisorContext,
   buildAdvisorTranscript,
   DEFAULT_MAX_CONTEXT_CHARS,
-} from "../src/context.ts";
+} from "../src/review/context.ts";
 
 function text(value: string): { type: "text"; text: string } {
   return { type: "text", text: value };

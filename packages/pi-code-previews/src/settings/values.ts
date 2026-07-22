@@ -14,9 +14,20 @@ import {
   type CodePreviewSettingDescriptor,
 } from "./definitions";
 import { defaultCodePreviewSettings } from "./defaults";
-import { formatOnOff } from "./on-off";
 import { cloneCodePreviewSettings, codePreviewSettings } from "./state";
-import type { CodePreviewEditableSettingId, CodePreviewSettings } from "./types";
+import type { CodePreviewEditableSettingId, CodePreviewSettings } from "./schema";
+
+export const ON_OFF_VALUES = ["on", "off"] as const;
+export type OnOffValue = (typeof ON_OFF_VALUES)[number];
+
+export function formatOnOff(value: boolean): OnOffValue {
+  return value ? "on" : "off";
+}
+
+export {
+  isToolCallBackgroundMode,
+  parseToolCallBackgroundMode,
+} from "./schema";
 
 export function formatSettingValue(
   settings: CodePreviewSettings,

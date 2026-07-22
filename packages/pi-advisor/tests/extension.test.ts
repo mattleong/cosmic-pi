@@ -18,8 +18,8 @@ import type {
   AdvisorCheckpointRequest,
   AdvisorRuntimeDriver,
   AdvisorRuntimeStartOptions,
-} from "../src/advisor-runtime.ts";
-import type { ResolvedAdvisorConfig } from "../src/config.ts";
+} from "../src/runtime/runtime.ts";
+import type { ResolvedAdvisorConfig } from "../src/config/resolve.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
 
 function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisorConfig {

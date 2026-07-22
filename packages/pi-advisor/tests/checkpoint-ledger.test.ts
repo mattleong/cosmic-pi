@@ -2,7 +2,7 @@
 // @effect-diagnostics effect/globalDate:off
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
-import { advisorFindingId } from "../src/finding-lifecycle.ts";
+import { advisorFindingId } from "../src/review/finding-lifecycle.ts";
 import {
   ADVISOR_CHECKPOINT_ENTRY_TYPE,
   ADVISOR_CHECKPOINT_PROTOCOL_VERSION,
@@ -13,7 +13,7 @@ import {
   renderDurableReviewSummary,
   restoreCheckpointLedger,
   summarizeAdvisorReview,
-} from "../src/checkpoint-ledger.ts";
+} from "../src/checkpoint/ledger.ts";
 
 function entry(id: string, parentId: string | null, data?: unknown): SessionEntry {
   return data

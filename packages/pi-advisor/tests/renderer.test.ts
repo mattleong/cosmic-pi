@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   registerAdvisorReviewRenderer,
   type AdvisorReviewMessageDetails,
-} from "../src/renderer.ts";
+} from "../src/ui/renderer.ts";
 
 describe("advisor review renderer", () => {
   function captureRenderer() {

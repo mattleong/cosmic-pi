@@ -7,24 +7,22 @@ import {
   type CodePreviewToolName,
 } from "../tools/names";
 import {
+  CodePreviewToolsSchema,
   DIFF_BACKGROUND_INTENSITIES,
   DIFF_WORD_EMPHASES,
+  DiffBackgroundIntensitySchema,
+  DiffWordEmphasisSchema,
+  EditCollapsedLinesSchema,
   PATH_ICON_MODES,
+  PathIconModeSchema,
+  PositiveIntegerSchema,
+  ToolCallBackgroundModeSchema,
+  isToolCallBackgroundMode,
   type CodePreviewSettings,
   type DiffBackgroundIntensity,
   type DiffWordEmphasis,
   type PathIconMode,
-} from "./types";
-import {
-  CodePreviewToolsSchema,
-  DiffBackgroundIntensitySchema,
-  DiffWordEmphasisSchema,
-  EditCollapsedLinesSchema,
-  PathIconModeSchema,
-  PositiveIntegerSchema,
-  ToolCallBackgroundModeSchema,
 } from "./schema";
-import { isToolCallBackgroundMode } from "./tool-call-background";
 
 export type CodePreviewSettingDescriptor<K extends keyof CodePreviewSettings> = {
   readonly schema: Schema.Decoder<unknown>;

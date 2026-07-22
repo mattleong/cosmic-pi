@@ -14,15 +14,15 @@ import {
   type CodePreviewRuntimeError,
 } from "../layer";
 import { registerHealthCommand } from "../commands/health";
-import { registerSettingsCommand } from "../commands/settings";
+import { registerSettingsCommand } from "../settings/controller";
 import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
 } from "./session-capability";
 import { CodePreviewSession } from "./session-service";
-import { codePreviewSettings } from "../settings";
+import { codePreviewSettings } from "../settings/index";
 import type { CodePreviewToolName } from "../tools/names";
-import { registerToolRenderers } from "../tool-renderers/registration";
+import { registerToolRenderers } from "../tools/renderers/registration";
 export type CodePreviewRuntime = PiManagedRuntime<CodePreviewApplication, CodePreviewRuntimeError>;
 
 type SessionInput = {

@@ -1,4 +1,4 @@
-import { normalizeShellCommandWhitespace } from "../shell/command";
+import { normalizeShellCommandWhitespace } from "../tools/shell-command";
 
 interface BashWarning {
   label: string;

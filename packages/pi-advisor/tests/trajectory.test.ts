@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { AdvisorToolTrajectoryDetector, AdvisorTrajectoryDetector } from "../src/trajectory.ts";
+import { AdvisorToolTrajectoryDetector, AdvisorTrajectoryDetector } from "../src/review/trajectory.ts";
 
 const repeatedParagraph =
   "I am reconsidering the same implementation approach while checking the identical constraints and reaching the same conclusion without taking a concrete action.";

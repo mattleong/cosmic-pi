@@ -1,4 +1,4 @@
-import { AdvisorRuntimeResetRequiredError } from "../advisor-runtime.ts";
+import { AdvisorRuntimeResetRequiredError } from "../runtime/runtime.ts";
 
 /**
  * Third-party/runtime compatibility classifier. Message inspection is confined to this adapter;

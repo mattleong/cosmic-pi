@@ -13,7 +13,7 @@ import {
   AdvisorToolSafetyError,
   createAdvisorTools,
   isPackageAdvisorTool,
-} from "../src/advisor-tools.ts";
+} from "../src/runtime/tools.ts";
 import { _readOnlyFileSystemTest } from "../src/boundary/read-only-fs.ts";
 
 const directories: string[] = [];
@@ -290,7 +290,7 @@ describe("package-owned Advisor tools", () => {
   });
 
   test("contains no process or mutation implementation path", async () => {
-    const source = await readFile(new URL("../src/advisor-tools.ts", import.meta.url), "utf8");
+    const source = await readFile(new URL("../src/runtime/tools.ts", import.meta.url), "utf8");
     expect(source).not.toMatch(
       /node:child_process|\bspawn\s*\(|\bexec(File)?\s*\(|pi\.exec|writeFile|rename|unlink/,
     );

@@ -8,7 +8,7 @@ import {
   standaloneAdvisorExecutor,
   type AdvisorEffectExecutor,
 } from "../src/boundary/executor.ts";
-import { makeCheckpointOrchestrator } from "../src/checkpoint-orchestrator.ts";
+import { makeCheckpointOrchestrator } from "../src/checkpoint/orchestrator.ts";
 
 const makeTestCheckpointOrchestrator = (
   executor: AdvisorEffectExecutor = standaloneAdvisorExecutor,

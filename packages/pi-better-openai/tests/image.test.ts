@@ -40,14 +40,14 @@ import {
 } from "pi-cosmic-core/testing";
 import sharp from "sharp";
 import { SharpAdapter } from "../src/boundary/sharp.ts";
-import { DEFAULT_IMAGE_CONFIG } from "../src/config.ts";
+import { DEFAULT_IMAGE_CONFIG } from "../src/config/index.ts";
 import {
   OpenAIImageService,
   _imageTest,
   registerOpenAIImage,
   type CodexImageResult,
-} from "../src/image.ts";
-import { makeProjection, type OpenAIProjection } from "../src/usage-controller.ts";
+} from "../src/image/index.ts";
+import { makeProjection, type OpenAIProjection } from "../src/usage/index.ts";
 
 const directories: string[] = [];
 afterEach(() => {

@@ -1,9 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import { describe, expect, test, vi } from "vitest";
-import type { FooterMode, ResolvedConfig } from "../src/config.ts";
+import type { FooterMode, ResolvedConfig } from "../src/config/index.ts";
 import { createFooterController } from "../src/footer/controller.ts";
-import { makeProjection } from "../src/usage-controller.ts";
+import { makeProjection } from "../src/usage/index.ts";
 
 const resolvedConfig = (mode: FooterMode): ResolvedConfig => ({
   configPath: "/agent/extensions/pi-better-xai.json",

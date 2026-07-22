@@ -1,10 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ResolvedConfig } from "../config.ts";
+import type { ResolvedConfig } from "../config/index.ts";
 import { isModelUsingOAuth } from "../boundary/model-registry.ts";
-import { isFastActive, statusSegment, type FastSnapshot } from "../fast-controller.ts";
+import { isFastActive, statusSegment, type FastSnapshot } from "../fast/controller.ts";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import * as MutableRef from "effect/MutableRef";
-import { visibleStatusLine, type OpenAIProjection } from "../usage-controller.ts";
+import { visibleStatusLine, type OpenAIProjection } from "../usage/index.ts";
 
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString();

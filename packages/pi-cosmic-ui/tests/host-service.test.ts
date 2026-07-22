@@ -18,8 +18,8 @@ import {
 } from "pi-cosmic-core";
 import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { HostCallbackBoundary, makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
-import { CosmicUiConfigRepository } from "../src/config/repository.ts";
-import { CosmicUiService, makeProjection } from "../src/host-service.ts";
+import { CosmicUiConfigStore } from "../src/config/service.ts";
+import { CosmicUiService, makeProjection } from "../src/host/service.ts";
 import { PiExec } from "../src/probe/pi-exec.ts";
 import { RepositoryProbe } from "../src/probe/repository-probe.ts";
 
@@ -49,7 +49,7 @@ function serviceLayer(
   const callbacks = makeHostCallbackBoundary();
   const store = options.store ?? documents(options.documents);
   const platform = Layer.mergeAll(store.layer, Path.layer, AgentDirectory.layer("/agent"));
-  const repository = CosmicUiConfigRepository.layer.pipe(Layer.provide(platform));
+  const repository = CosmicUiConfigStore.layer.pipe(Layer.provide(platform));
   const probe = RepositoryProbe.layer.pipe(
     Layer.provide(PiExec.layer),
     Layer.provide(PiApi.layer({ exec } as unknown as ExtensionAPI)),

@@ -6,7 +6,7 @@ import {
   COSMIC_UI_HOST_QUERY,
   COSMIC_UI_PROTOCOL_VERSION,
   type CosmicFooterContribution,
-} from "../protocol.ts";
+} from "../host/protocol.ts";
 
 export interface CosmicFooterClient {
   readonly active: boolean;

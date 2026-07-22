@@ -32,7 +32,7 @@
   "type": "module",
   "exports": {
     ".": "./index.ts",
-    "./fast-models": "./src/fast-models.ts",
+    "./fast-models": "./src/fast/models.ts",
     "./ui": "./src/ui/index.ts"
   },
   "publishConfig": {

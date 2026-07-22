@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { AdvisorFindingDedupe, normalizeAdvisorFinding } from "../src/dedupe.ts";
-import type { AdvisorFinding } from "../src/review.ts";
+import { AdvisorFindingDedupe, normalizeAdvisorFinding } from "../src/review/dedupe.ts";
+import type { AdvisorFinding } from "../src/review/index.ts";
 
 function finding(issue: string, recommendation = "Fix it."): AdvisorFinding {
   return {

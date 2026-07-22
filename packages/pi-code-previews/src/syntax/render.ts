@@ -1,9 +1,9 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { bundledThemesInfo } from "shiki";
-import { hashString } from "../cache/hash";
+import { hashString } from "../shared/helpers";
 import { codePreviewPerformanceConfig } from "../config/env";
-import { codePreviewSettings } from "../settings";
-import { expandPreviewTabs } from "../shared/preview-tabs";
+import { codePreviewSettings } from "../settings/index";
+import { expandPreviewTabs } from "../shared/helpers";
 import { escapeControlChars } from "../shared/terminal-text";
 import { normalizePreviewLanguageAlias } from "./language";
 import {

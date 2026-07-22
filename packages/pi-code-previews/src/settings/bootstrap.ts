@@ -5,7 +5,7 @@ import {
 } from "../application/session-capability";
 import { runOneShotSettingsEffect } from "../boundary/settings-one-shot";
 import { CodePreviewSettingsService } from "./service";
-import type { CodePreviewSettings } from "./types";
+import type { CodePreviewSettings } from "./schema";
 
 export const loadCodePreviewSettingsEffect = Effect.fn("CodePreviewSettings.bootstrap")(function* (
   projectCwd?: string,

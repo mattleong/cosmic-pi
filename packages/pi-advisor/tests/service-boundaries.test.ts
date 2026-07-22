@@ -4,23 +4,23 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import { ConfigRepository, configRepositoryTestLayer } from "../src/config-repository.ts";
+import { ConfigStore, configStoreTestLayer } from "../src/config/store.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
-import { FailureLogger, failureLoggerTestLayer } from "../src/failure-logger.ts";
-import { HostNotifier, hostNotifierLayer } from "../src/host-notifier.ts";
-import { normalizeAdvisorConfig } from "../src/config.ts";
-import { PiCommandAdapter } from "../src/pi-command-adapter.ts";
+import { FailureLogger, failureLoggerTestLayer } from "../src/logging/logger.ts";
+import { HostNotifier, hostNotifierLayer } from "../src/application/host-notifier.ts";
+import { normalizeAdvisorConfig } from "../src/config/resolve.ts";
+import { PiCommandAdapter } from "../src/application/pi-command-adapter.ts";
 
 it.effect("converts the Promise config seam into a typed repository test Layer", () => {
   const paths: string[] = [];
-  const layer = configRepositoryTestLayer((path) => {
+  const layer = configStoreTestLayer((path) => {
     paths.push(path ?? "");
     return normalizeAdvisorConfig({ provider: "p", model: "m" }, path);
   }).pipe(Layer.provideMerge(advisorPlatformLayer));
   return Effect.scoped(
     Effect.gen(function* () {
       const context = yield* Layer.build(layer);
-      const repository = Context.get(context, ConfigRepository);
+      const repository = Context.get(context, ConfigStore);
       const loaded = yield* repository.load("/tmp/advisor.json");
       expect(paths).toEqual(["/tmp/advisor.json"]);
       expect(loaded).toMatchObject({ provider: "p", model: "m", configured: true });

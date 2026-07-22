@@ -7,8 +7,8 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import type {
   AdvisorCheckpointRequest,
   AdvisorRuntimeServiceShape,
-} from "../src/advisor-runtime.ts";
-import { AdvisorReviewQueueService, advisorReviewQueueServiceLayer } from "../src/review-queue.ts";
+} from "../src/runtime/runtime.ts";
+import { AdvisorReviewQueueService, advisorReviewQueueServiceLayer } from "../src/queue/service.ts";
 
 const runtime: AdvisorRuntimeServiceShape = {
   activeToolNames: () => [],

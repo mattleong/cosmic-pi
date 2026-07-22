@@ -15,14 +15,22 @@ Runs bounded second-model review of Pi responses, optionally delivers advice/rev
 - `src/extension.ts` is the thin public entrypoint.
 - `src/application/register.ts` owns Pi command/event registration and session forwarding.
 - `src/application/host-bindings.ts` explicitly bridges controller-owned handlers to the Pi adapter; no synthetic `ExtensionAPI` proxy is used.
-- `src/application/controller.ts` canonically owns application orchestration and the transactional checkpoint/delivery flow. Its Context key intentionally retains the historical identity.
-- `src/advisor-controller.ts` is an internal compatibility re-export for existing direct-source tests and callers.
+- `src/application/controller.ts` is the public controller surface (types re-export, stub layer, application layer entry).
+- `src/application/controller-types.ts` holds controller errors, catch-up helpers, and the Context service (historical key retained).
+- `src/application/controller-helpers.ts` holds pure delivery/verification/messaging helpers used by the application layer.
+- `src/application/orchestration.ts` owns application orchestration and the transactional checkpoint/delivery flow.
 - `src/layer.ts` is the sole outer composition root for controller, child runtime, queue, persistence, logging, notification, command, and platform Layers.
-- `src/advisor-runtime.ts`, `src/review-queue.ts`, and `src/checkpoint-orchestrator.ts` own child, queue, and checkpoint resources.
-- `src/domain/candidate.ts` contains candidate/message classification; `src/domain/metrics.ts` contains plain metrics contracts.
-- Other pure review/routing/dedupe/budget/trajectory modules remain package-local domain logic.
+- `src/runtime/` owns the child advisor session runtime (`runtime.ts` class + service), wire types, checkpoint parse, prompts, session lifecycle helpers, client, tools, and resource state.
+- `src/queue/` owns `service.ts`, pure `state.ts` transitions, and `errors.ts`.
+- `src/checkpoint/` owns checkpoint ledger and orchestrator resources.
+- `src/review/` contains review domain logic: `schema`/`parse`/`format` (via `review/index.ts` barrel), findings, routing, budgets, trajectory, observation protocol, context.
+- `src/config/` owns `resolve.ts`, `store.ts` (config persistence service), and model picking.
+- `src/logging/` owns `log.ts` persistence and `logger.ts` service.
+- `src/ui/` forms the synchronous UI boundary (projection, renderer, status).
+- `src/settings/` owns settings/status/usage command registration (`controller.ts`) and formatting helpers (`format.ts`).
+- `src/domain/` contains shared plain contracts (candidate classification, metrics, labels).
+- `src/shared/utils.ts` holds tiny shared type guards.
 - `src/boundary/` isolates Pi, clock, JSON, filesystem, executor, and host-context APIs.
-- `src/advisor-projection.ts`, `src/status-service.ts`, `src/renderer.ts`, and command rendering in `src/settings.ts` form the synchronous UI boundary.
 
 ## State and resources
 

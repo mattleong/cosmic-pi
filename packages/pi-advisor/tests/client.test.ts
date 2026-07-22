@@ -2,8 +2,8 @@
 // @effect-diagnostics effect/asyncFunction:off
 import { ModelRuntime, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { _clientTest, AdvisorModelError, createAdvisorChildModel } from "../src/client.ts";
-import type { ResolvedAdvisorConfig } from "../src/config.ts";
+import { _clientTest, AdvisorModelError, createAdvisorChildModel } from "../src/runtime/client.ts";
+import type { ResolvedAdvisorConfig } from "../src/config/resolve.ts";
 
 function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisorConfig {
   return {

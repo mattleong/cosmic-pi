@@ -2,8 +2,8 @@ import { describe, expect, test } from "vitest";
 import {
   AdvisorFindingLifecycle,
   MAX_FINDING_LIFECYCLE_RECORDS,
-} from "../src/finding-lifecycle.ts";
-import type { AdvisorFinding } from "../src/review.ts";
+} from "../src/review/finding-lifecycle.ts";
+import type { AdvisorFinding } from "../src/review/index.ts";
 
 const finding: AdvisorFinding = {
   fingerprint: "missing-validation",

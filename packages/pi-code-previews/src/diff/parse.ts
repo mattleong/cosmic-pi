@@ -1,3 +1,7 @@
+/** Private markers used to carry add/remove kind through full-width diff text. */
+export const DIFF_ADD_MARKER = "\u0000PI_DIFF_ADD\u0000";
+export const DIFF_REMOVE_MARKER = "\u0000PI_DIFF_REMOVE\u0000";
+
 export type ParsedDiffLine = { kind: "+" | "-" | " "; lineNumber: string; content: string };
 export type AddedDiffLine = ParsedDiffLine & { kind: "+" };
 export type RemovedDiffLine = ParsedDiffLine & { kind: "-" };

@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
 import { createCosmicFooterClient } from "pi-cosmic-ui/client";
-import type { ResolvedConfig } from "./config.ts";
+import type { ResolvedConfig } from "./config/index.ts";
 import { createFooterController } from "./footer/controller.ts";
 import { registerSettingsController } from "./settings/controller.ts";
 import {
@@ -22,7 +22,7 @@ import {
   resetProjection,
   synchronizeProjectionContext,
   type XaiProjection,
-} from "./usage-controller.ts";
+} from "./usage/index.ts";
 
 const XAI_STATUS_COMMAND = "xai-usage";
 

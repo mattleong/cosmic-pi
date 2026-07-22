@@ -4,9 +4,9 @@ import {
   AdvisorRoutingState,
   routeAdvisorFinding,
   type AdvisorParentState,
-} from "../src/routing.ts";
-import type { AdvisorReviewPolicy } from "../src/config.ts";
-import type { AdvisorSeverity } from "../src/review.ts";
+} from "../src/review/routing.ts";
+import type { AdvisorReviewPolicy } from "../src/config/resolve.ts";
+import type { AdvisorSeverity } from "../src/review/index.ts";
 
 const states: AdvisorParentState[] = ["active", "idle", "final", "aborting"];
 const policies: AdvisorReviewPolicy[] = ["corrective", "guardrail", "advisory"];

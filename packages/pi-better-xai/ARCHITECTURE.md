@@ -14,8 +14,8 @@ Adds xAI subscription-usage refresh, settings, status commands, and footer outpu
 - `src/extension.ts` is the thin Pi package entrypoint.
 - `src/application.ts` registers commands/events and coordinates one session runtime.
 - `src/layer.ts` composes the xAI application Layer.
-- `src/usage-controller.ts`, `src/settings/`, and `src/footer/` are the usage, settings, and fallback-footer features.
-- `src/config/`, `src/usage.ts`, and `src/identity.ts` contain schemas and deterministic subscription logic.
+- `src/usage/index.ts`, `src/settings/`, and `src/footer/` are the usage, settings, and fallback-footer features.
+- `src/config/`, `src/usage/format.ts`, and `src/identity.ts` contain schemas and deterministic subscription logic.
 - `src/boundary/` contains model-registry/host adapters.
 - `src/ui/` reads frozen usage projections and emits plain Cosmic UI contributions.
 

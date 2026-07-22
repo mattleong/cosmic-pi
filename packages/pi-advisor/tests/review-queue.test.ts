@@ -16,7 +16,7 @@ import type {
   AdvisorCheckpointRequest,
   AdvisorRuntimeDriver,
   AdvisorRuntimeServiceShape,
-} from "../src/advisor-runtime.ts";
+} from "../src/runtime/runtime.ts";
 import {
   AdvisorReviewQueue,
   AdvisorQueueBacklogExceededError,
@@ -32,9 +32,9 @@ import {
   advisorReviewQueueServiceLayer,
   type AdvisorReviewQueueOptions,
   type QueuedCheckpoint,
-} from "../src/review-queue.ts";
-import { initialReviewQueueState } from "../src/review-queue-state.ts";
-import { AdvisorModelError } from "../src/client.ts";
+} from "../src/queue/service.ts";
+import { initialReviewQueueState } from "../src/queue/state.ts";
+import { AdvisorModelError } from "../src/runtime/client.ts";
 
 type TestQueue = AdvisorReviewQueue & {
   checkpoint: (

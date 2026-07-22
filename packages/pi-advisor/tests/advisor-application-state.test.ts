@@ -3,7 +3,7 @@ import {
   initialAdvisorApplicationState,
   recordAdvisorReceipt,
   setAdvisorSpinnerOwner,
-} from "../src/advisor-application-state.ts";
+} from "../src/application/state.ts";
 
 describe("AdvisorApplicationState reducers", () => {
   it("coalesces receipts by request and keeps spinner ownership metadata plain", () => {

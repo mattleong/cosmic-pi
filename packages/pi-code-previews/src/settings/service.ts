@@ -20,8 +20,8 @@ import {
   saveSettingsStateEffect,
   type LoadSettingsOptions,
   type SettingsSaveContext,
-} from "./store-core";
-import type { CodePreviewSettings } from "./types";
+} from "./document-store";
+import type { CodePreviewSettings } from "./schema";
 
 export interface CodePreviewSettingsState {
   readonly settings: CodePreviewSettings;

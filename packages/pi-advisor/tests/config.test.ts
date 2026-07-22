@@ -29,7 +29,7 @@ import {
   writeAdvisorConfigPatch,
   writeAdvisorConfigPatchAsync,
   writeRawAdvisorConfig,
-} from "../src/config.ts";
+} from "../src/config/resolve.ts";
 
 function withTempDir<T>(run: (tempDir: string) => T): T {
   const tempDir = mkdtempSync(join(tmpdir(), "pi-advisor-config-"));

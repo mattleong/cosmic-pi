@@ -7,15 +7,15 @@ import {
 import type { AdvisorHostBindings } from "./application/host-bindings.ts";
 import { advisorPlatformLayer, type AdvisorEffectExecutor } from "./boundary/executor.ts";
 import {
-  ConfigRepository,
-  configRepositoryLayer,
-  configRepositoryTestLayer,
-} from "./config-repository.ts";
-import { FailureLogger, failureLoggerLayer, failureLoggerTestLayer } from "./failure-logger.ts";
-import { HostNotifier, hostNotifierLayer } from "./host-notifier.ts";
-import { PiCommandAdapter } from "./pi-command-adapter.ts";
-import { AdvisorReviewQueueService, advisorReviewQueueServiceLayer } from "./review-queue.ts";
-import { AdvisorRuntimeService, advisorRuntimeServiceLayer } from "./advisor-runtime.ts";
+  ConfigStore,
+  configStoreLayer,
+  configStoreTestLayer,
+} from "./config/store.ts";
+import { FailureLogger, failureLoggerLayer, failureLoggerTestLayer } from "./logging/logger.ts";
+import { HostNotifier, hostNotifierLayer } from "./application/host-notifier.ts";
+import { PiCommandAdapter } from "./application/pi-command-adapter.ts";
+import { AdvisorReviewQueueService, advisorReviewQueueServiceLayer } from "./queue/service.ts";
+import { AdvisorRuntimeService, advisorRuntimeServiceLayer } from "./runtime/runtime.ts";
 
 export interface AdvisorApplicationLayerOptions {
   readonly pi: ExtensionAPI;
@@ -27,8 +27,8 @@ export interface AdvisorApplicationLayerOptions {
 /** Sole composition root for one Advisor session application. */
 export const makeAdvisorApplicationLayer = (options: AdvisorApplicationLayerOptions) => {
   const repositoryLayer = options.dependencies.loadConfig
-    ? configRepositoryTestLayer(options.dependencies.loadConfig)
-    : configRepositoryLayer;
+    ? configStoreTestLayer(options.dependencies.loadConfig)
+    : configStoreLayer;
   const loggerLayer = options.dependencies.logFailure
     ? failureLoggerTestLayer(options.dependencies.logFailure)
     : failureLoggerLayer;
@@ -49,7 +49,7 @@ export type AdvisorApplication = Layer.Success<AdvisorApplicationLayer>;
 export type AdvisorApplicationRequirements =
   | AdvisorRuntimeService
   | AdvisorReviewQueueService
-  | ConfigRepository
+  | ConfigStore
   | FailureLogger
   | HostNotifier
   | PiCommandAdapter;

@@ -15,7 +15,10 @@ import {
   provideModelRegistryAuth,
   type WithoutModelRegistry,
 } from "./boundary/model-registry-auth.ts";
-import { isRecord } from "./utils.ts";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 export const XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token";

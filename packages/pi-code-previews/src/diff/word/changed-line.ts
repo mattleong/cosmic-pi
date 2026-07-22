@@ -1,5 +1,5 @@
 import type { AddedDiffLine, RemovedDiffLine } from "../parse";
-import { expandPreviewTabs } from "../../shared/preview-tabs";
+import { expandPreviewTabs } from "../../shared/helpers";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { wordEmphasisTokens, type WordEmphasisToken } from "./tokens";
 

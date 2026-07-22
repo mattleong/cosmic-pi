@@ -7,12 +7,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { type ResolvedAdvisorConfig, writeRawAdvisorConfig } from "../src/config.ts";
+import { type ResolvedAdvisorConfig, writeRawAdvisorConfig } from "../src/config/resolve.ts";
 import {
   emptyAdvisorOutcomes,
   type AdvisorSessionMetrics,
   registerAdvisorCommands,
-} from "../src/settings.ts";
+} from "../src/settings/controller.ts";
 
 type CommandHandler = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 const tempDirectories: string[] = [];

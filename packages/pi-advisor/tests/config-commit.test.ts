@@ -13,7 +13,7 @@ import {
   readRawAdvisorConfig,
   type ResolvedAdvisorConfig,
   writeAdvisorConfigPatchEffect,
-} from "../src/config.ts";
+} from "../src/config/resolve.ts";
 
 it.effect("publishes committed config before interruption can observe the renamed document", () =>
   Effect.scoped(

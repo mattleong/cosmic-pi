@@ -15,11 +15,11 @@ Hosts the composable Pi footer, repository information, settings, and the plain-
 - `src/extension.ts` is the thin Pi package entrypoint.
 - `src/application.ts` owns Pi registration, protocol subscriptions, and session orchestration.
 - `src/layer.ts` composes config, repository probe, footer registry, protocol host, and host-callback Layers.
-- `src/features/footer/installation.ts` owns the synchronous footer installation generation and disposal state machine.
+- `src/footer/installation.ts` owns the synchronous footer installation generation and disposal state machine.
 - `src/footer/` contains registry/client behavior and synchronous footer components/layout.
 - `src/probe/`, `src/config/`, and `src/settings/` are vertical application features.
 - `src/boundary/` isolates hostile synchronous host callbacks.
-- `src/protocol.ts` is the plain public protocol; `src/protocol-host.ts` is its scoped ingress host.
+- `src/host/protocol.ts` is the plain public protocol; `src/host/protocol-host.ts` is its scoped ingress host; `src/host/service.ts` is the session host service.
 
 ## State and resources
 

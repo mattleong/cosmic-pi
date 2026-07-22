@@ -10,7 +10,7 @@ import {
   type CodePreviewPerformanceConfig,
 } from "../config/env";
 import { defaultsFromEnvironment } from "./defaults";
-import type { CodePreviewSettings } from "./types";
+import type { CodePreviewSettings } from "./schema";
 
 export interface CodePreviewEnvironmentShape {
   readonly values: CodePreviewEnvironment;

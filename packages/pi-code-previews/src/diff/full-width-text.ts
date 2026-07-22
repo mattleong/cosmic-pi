@@ -3,7 +3,7 @@ import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { codePreviewPerformanceConfig } from "../config/env";
 import { wrapAnsiToWidth } from "../shared/terminal-text";
 import { createDiffBackgroundResolver, diffLineBg } from "./background";
-import { DIFF_ADD_MARKER, DIFF_REMOVE_MARKER } from "./markers";
+import { DIFF_ADD_MARKER, DIFF_REMOVE_MARKER } from "./parse";
 
 type MarkedDiffLine = { kind?: "add" | "remove"; line: string };
 

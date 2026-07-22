@@ -1,4 +1,4 @@
-import type { DiffWordEmphasis } from "../settings/types";
+import type { DiffWordEmphasis } from "../settings/schema";
 import { splitLinesLimited } from "../shared/text-lines";
 import { collectChangedDiffBlock } from "../diff/changed-blocks";
 import { isChangedDiffLine, parseDiffLine, type ParsedDiffLine } from "../diff/parse";

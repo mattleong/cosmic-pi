@@ -2,7 +2,7 @@ import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-ag
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import { AgentDirectory, nodePlatformLayer } from "pi-cosmic-core";
-import { XaiUsageService, type XaiProjection } from "./usage-controller.ts";
+import { XaiUsageService, type XaiProjection } from "./usage/index.ts";
 
 /** Plain session values captured by the Pi adapter before runtime construction. */
 export interface XaiSessionInput {

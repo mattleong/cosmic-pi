@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { codePreviewSettings } from "../settings/index";
-import { formatOnOff } from "../settings/on-off";
+import { formatOnOff } from "../settings/values";
 import { getSettingsPath } from "../settings/store";
 import { getShikiStatus } from "../syntax/render";
 import { formatEnabledCodePreviewTools } from "../tools/selection";

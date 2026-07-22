@@ -1,11 +1,10 @@
 import * as Schema from "effect/Schema";
 import { ALL_CODE_PREVIEW_TOOLS } from "../tools/names";
-import {
-  DIFF_BACKGROUND_INTENSITIES,
-  DIFF_WORD_EMPHASES,
-  PATH_ICON_MODES,
-  TOOL_CALL_BACKGROUND_MODES,
-} from "./schema-constants";
+
+export const DIFF_BACKGROUND_INTENSITIES = ["off", "subtle", "medium"] as const;
+export const DIFF_WORD_EMPHASES = ["all", "smart", "off"] as const;
+export const TOOL_CALL_BACKGROUND_MODES = ["on", "border", "off"] as const;
+export const PATH_ICON_MODES = ["unicode", "nerd", "off"] as const;
 
 export const DiffBackgroundIntensitySchema = Schema.Literals(DIFF_BACKGROUND_INTENSITIES);
 export const DiffWordEmphasisSchema = Schema.Literals(DIFF_WORD_EMPHASES);
@@ -61,3 +60,21 @@ export type DiffBackgroundIntensity = typeof DiffBackgroundIntensitySchema.Type;
 export type DiffWordEmphasis = typeof DiffWordEmphasisSchema.Type;
 export type ToolCallBackgroundMode = typeof ToolCallBackgroundModeSchema.Type;
 export type PathIconMode = typeof PathIconModeSchema.Type;
+export type CodePreviewEditableSettingId = keyof CodePreviewSettings | "resetToDefaults";
+
+export function parseToolCallBackgroundMode(value: unknown): ToolCallBackgroundMode | undefined {
+  if (typeof value === "boolean") return value ? "on" : "off";
+  if (typeof value !== "string") return undefined;
+
+  const normalized = value.toLowerCase();
+  if (isToolCallBackgroundMode(normalized)) return normalized;
+  if (normalized === "1" || normalized === "true" || normalized === "yes") return "on";
+  if (normalized === "0" || normalized === "false" || normalized === "no") return "off";
+  return undefined;
+}
+
+export function isToolCallBackgroundMode(value: unknown): value is ToolCallBackgroundMode {
+  return (
+    typeof value === "string" && (TOOL_CALL_BACKGROUND_MODES as readonly string[]).includes(value)
+  );
+}

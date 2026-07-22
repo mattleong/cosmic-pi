@@ -14,7 +14,7 @@ import {
   publishCodePreviewDefer,
   publishCodePreviewSchedule,
   publishCodePreviewSessionActive,
-} from "../session-projection";
+} from "./session-projection";
 
 type SessionRequirements =
   | CodePreviewSession

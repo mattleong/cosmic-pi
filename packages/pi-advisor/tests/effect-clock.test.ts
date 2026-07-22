@@ -15,19 +15,19 @@ import * as TestClock from "effect/testing/TestClock";
 import { advisorDelayEffect, advisorIntervalEffect } from "../src/boundary/clock.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
 import { ADVISOR_CATCH_UP_TIMEOUT_MS, awaitAdvisorCatchUpEffect } from "../src/extension.ts";
-import { LONG_TURN_REVIEW_MS } from "../src/trajectory.ts";
+import { LONG_TURN_REVIEW_MS } from "../src/review/trajectory.ts";
 import {
   AdvisorReviewQueue,
   MAX_PENDING_CHECKPOINTS,
   type AdvisorReviewQueueOptions,
   type QueuedCheckpoint,
-} from "../src/review-queue.ts";
-import { initialReviewQueueState } from "../src/review-queue-state.ts";
+} from "../src/queue/service.ts";
+import { initialReviewQueueState } from "../src/queue/state.ts";
 import {
   AdvisorRuntime,
   AdvisorRuntimeResetRequiredError,
   type AdvisorRuntimeServiceShape,
-} from "../src/advisor-runtime.ts";
+} from "../src/runtime/runtime.ts";
 
 const assertExactDelay = (milliseconds: number) =>
   Effect.gen(function* () {

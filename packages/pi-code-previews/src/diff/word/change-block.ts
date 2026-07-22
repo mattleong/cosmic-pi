@@ -5,7 +5,7 @@ import {
   type IndexedChangedLine,
 } from "./changed-line";
 import { matchChangedLines, type ChangedLinePair } from "./line-matching";
-import type { DiffWordEmphasis } from "../../settings/types";
+import type { DiffWordEmphasis } from "../../settings/schema";
 import {
   isAddedDiffLine,
   isRemovedDiffLine,

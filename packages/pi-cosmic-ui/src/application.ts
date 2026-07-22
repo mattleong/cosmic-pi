@@ -17,14 +17,14 @@ import {
   type CosmicUiRuntimeError,
   type CosmicUiSessionInput,
 } from "./layer.ts";
-import { CosmicUiService, emptyTotals, makeProjection, resetProjection } from "./host-service.ts";
+import { CosmicUiService, emptyTotals, makeProjection, resetProjection } from "./host/service.ts";
 import {
   FooterProtocolHost,
   makeFooterProtocolBuffer,
   protocolInvalidate,
   protocolRemove,
   protocolUpsert,
-} from "./protocol-host.ts";
+} from "./host/protocol-host.ts";
 import {
   COSMIC_UI_FOOTER_INVALIDATE,
   COSMIC_UI_FOOTER_REMOVE,
@@ -34,9 +34,9 @@ import {
   normalizeCosmicFooterRemoveEvent,
   normalizeCosmicFooterUpsertEvent,
   normalizeCosmicUiHostQuery,
-} from "./protocol.ts";
+} from "./host/protocol.ts";
 import { registerSettingsCommand } from "./settings/controller.ts";
-import { createFooterInstallation } from "./features/footer/installation.ts";
+import { createFooterInstallation } from "./footer/installation.ts";
 
 const isProjectTrusted = (ctx: ExtensionContext): boolean => {
   try {

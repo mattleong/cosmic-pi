@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { bundledThemes } from "shiki";
 import { SETTINGS_GROUP_ID_PREFIX } from "./registry";
-import { ON_OFF_VALUES, formatOnOff } from "../on-off";
+import { ON_OFF_VALUES, formatOnOff } from "../values";
 import {
   ALL_CODE_PREVIEW_TOOLS,
   parseCodePreviewTools,

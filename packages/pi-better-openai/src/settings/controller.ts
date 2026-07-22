@@ -16,10 +16,10 @@ import {
   SETTINGS_OPTION_DESCRIPTORS,
   USAGE_SETTING_DESCRIPTORS,
   type ResolvedConfig,
-} from "../config.ts";
-import { modelList, settingsSummary, type FastSnapshot } from "../fast-controller.ts";
-import { FastModeService } from "../fast-service.ts";
-import { OpenAIUsageService } from "../usage-controller.ts";
+} from "../config/index.ts";
+import { modelList, settingsSummary, type FastSnapshot } from "../fast/controller.ts";
+import { FastModeService } from "../fast/service.ts";
+import { OpenAIUsageService } from "../usage/index.ts";
 import { settingsItemsFromDescriptors, type SettingsPickerItem } from "./items.ts";
 import { createSettingsSubmenu, textPanel } from "./picker.ts";
 

@@ -1,8 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ResolvedConfig } from "../config.ts";
-import { isFastActive, supportsFast, type FastSnapshot } from "../fast-controller.ts";
+import type { ResolvedConfig } from "../config/index.ts";
+import { isFastActive, supportsFast, type FastSnapshot } from "../fast/controller.ts";
 import type * as MutableRef from "effect/MutableRef";
-import { visibleStatusLine, type OpenAIProjection } from "../usage-controller.ts";
+import { visibleStatusLine, type OpenAIProjection } from "../usage/index.ts";
 import type { CosmicFooterTextContribution as FooterTextPrimitive } from "pi-cosmic-ui/protocol";
 
 export interface FastModeUiState {

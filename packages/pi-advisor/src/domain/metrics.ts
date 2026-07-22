@@ -1,4 +1,4 @@
-import type { AdvisorInterventionBudgetSnapshot } from "../intervention-budget.ts";
+import type { AdvisorInterventionBudgetSnapshot } from "../review/intervention-budget.ts";
 
 /** Provider usage accumulated by the Advisor application domain. */
 export interface AdvisorModelUsage {

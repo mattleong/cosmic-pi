@@ -10,7 +10,7 @@ import {
   loadAdvisorInstructions,
   loadAdvisorInstructionsAsync,
   MAX_INSTRUCTION_BYTES,
-} from "../src/instructions.ts";
+} from "../src/review/instructions.ts";
 
 function withTempDir<T>(run: (directory: string) => T): T {
   const directory = mkdtempSync(join(tmpdir(), "pi-advisor-instructions-"));

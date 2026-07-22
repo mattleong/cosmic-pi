@@ -12,15 +12,15 @@ import {
   advisorControllerApplicationLayer,
   advisorControllerLayer,
   type AdvisorControllerApplicationOptions,
-} from "../src/advisor-controller.ts";
-import { advisorRuntimeServiceLayer, type AdvisorRuntimeDriver } from "../src/advisor-runtime.ts";
-import { advisorReviewQueueServiceLayer } from "../src/review-queue.ts";
+} from "../src/application/controller.ts";
+import { advisorRuntimeServiceLayer, type AdvisorRuntimeDriver } from "../src/runtime/runtime.ts";
+import { advisorReviewQueueServiceLayer } from "../src/queue/service.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
 import { captureAdvisorSessionInputEffect } from "../src/boundary/host-context.ts";
-import { PiCommandAdapter } from "../src/pi-command-adapter.ts";
-import { configRepositoryTestLayer } from "../src/config-repository.ts";
-import { failureLoggerLayer } from "../src/failure-logger.ts";
-import { hostNotifierLayer } from "../src/host-notifier.ts";
+import { PiCommandAdapter } from "../src/application/pi-command-adapter.ts";
+import { configStoreTestLayer } from "../src/config/store.ts";
+import { failureLoggerLayer } from "../src/logging/logger.ts";
+import { hostNotifierLayer } from "../src/application/host-notifier.ts";
 import { makeAdvisorHostBindings } from "../src/application/host-bindings.ts";
 
 describe("AdvisorController", () => {
@@ -172,7 +172,7 @@ describe("AdvisorController", () => {
       advisorRuntimeServiceLayer(standaloneAdvisorExecutor),
       advisorReviewQueueServiceLayer,
       PiCommandAdapter.layer,
-      configRepositoryTestLayer(options.dependencies.loadConfig!),
+      configStoreTestLayer(options.dependencies.loadConfig!),
       failureLoggerLayer,
       hostNotifierLayer,
     ).pipe(Layer.provideMerge(advisorPlatformLayer));

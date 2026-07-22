@@ -1,0 +1,160 @@
+// Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
+// @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+// @effect-diagnostics effect/processEnv:off
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/globalTimers:off
+// @effect-diagnostics effect/globalConsole:off
+// @effect-diagnostics effect/globalDate:off
+import assert from "node:assert/strict";
+import { test } from "vitest";
+import { defaultCodePreviewSettings, setCodePreviewSettings } from "../../../src/settings/index";
+import {
+  cloneCodePreviewSettingsForTest,
+  renderComponent,
+  stripAnsi,
+  testTheme,
+} from "../../../src/testing/render";
+import { findRenderer, preserveCodePreviewToolsEnv, registerRenderers } from "../../../src/tools/renderers/testing";
+
+preserveCodePreviewToolsEnv();
+
+test("registered read renderer hides successful text content until expanded", () => {
+  process.env.CODE_PREVIEW_TOOLS = "read";
+  const previousSettings = cloneCodePreviewSettingsForTest();
+  setCodePreviewSettings({ ...defaultCodePreviewSettings, readContentPreview: false });
+  try {
+    const read = findRenderer(registerRenderers(), "read");
+    assert.ok(read.renderCall);
+    assert.ok(read.renderResult);
+
+    const call = stripAnsi(
+      renderComponent(read.renderCall({ path: "src/a.ts" }, testTheme(), {} as never)),
+    );
+    assert.match(call, /read src\/a\.ts/);
+
+    const collapsed = stripAnsi(
+      renderComponent(
+        read.renderResult(
+          { content: [{ type: "text", text: "const secret = 1;" }] },
+          { expanded: false, isPartial: false },
+          testTheme(),
+          { args: { path: "src/a.ts" }, isError: false, invalidate: () => undefined, state: {} },
+        ),
+      ),
+    );
+    assert.match(collapsed, /expand/);
+
+    const expanded = stripAnsi(
+      renderComponent(
+        read.renderResult(
+          { content: [{ type: "text", text: "const secret = 1;" }] },
+          { expanded: true, isPartial: false },
+          testTheme(),
+          { args: { path: "src/a.ts" }, isError: false, invalidate: () => undefined, state: {} },
+        ),
+      ),
+    );
+    assert.match(expanded, /const secret = 1/);
+  } finally {
+    setCodePreviewSettings(previousSettings);
+  }
+});
+
+test("registered read renderer distinguishes blank-only files from empty files", () => {
+  process.env.CODE_PREVIEW_TOOLS = "read";
+  const read = findRenderer(registerRenderers(), "read");
+  assert.ok(read.renderResult);
+
+  const rendered = stripAnsi(
+    renderComponent(
+      read.renderResult(
+        { content: [{ type: "text", text: "\n\n" }] },
+        { expanded: true, isPartial: false },
+        testTheme(),
+        { args: { path: "blank.txt" }, isError: false, invalidate: () => undefined, state: {} },
+      ),
+    ),
+  );
+
+  assert.doesNotMatch(rendered, /Empty file/);
+  assert.match(rendered, /1 │ /);
+});
+
+test("registered read renderer leaves image rendering to pi", () => {
+  process.env.CODE_PREVIEW_TOOLS = "read";
+  const read = findRenderer(registerRenderers(), "read");
+  assert.ok(read.renderResult);
+  const rendered = renderComponent(
+    read.renderResult(
+      {
+        content: [
+          { type: "text", text: "Read image file [image/png]" },
+          { type: "image", data: Buffer.from("png").toString("base64"), mimeType: "image/png" },
+        ],
+      },
+      { expanded: true, isPartial: false },
+      testTheme(),
+      { args: { path: "asset.png" }, isError: false, invalidate: () => undefined, state: {} },
+    ),
+  );
+  assert.equal(stripAnsi(rendered).trimEnd(), "image [image/png]");
+  assert.doesNotMatch(rendered, /\x1b\]1337;File=|\x1b_G/);
+});
+
+test("registered read renderer does not classify successful Error-prefixed content as failures", () => {
+  process.env.CODE_PREVIEW_TOOLS = "read";
+  const read = findRenderer(registerRenderers(), "read");
+  assert.ok(read.renderResult);
+
+  const rendered = stripAnsi(
+    renderComponent(
+      read.renderResult(
+        { content: [{ type: "text", text: "ErrorBoundary\nok" }] },
+        { expanded: true, isPartial: false },
+        testTheme(),
+        {
+          args: { path: "src/ErrorBoundary.tsx" },
+          isError: false,
+          invalidate: () => undefined,
+          state: {},
+        },
+      ),
+    ),
+  );
+  assert.match(rendered, /ErrorBoundary/);
+  assert.match(rendered, /ok/);
+});
+
+test("registered read renderer separates continuation notices from file content", () => {
+  process.env.CODE_PREVIEW_TOOLS = "read";
+  const read = findRenderer(registerRenderers(), "read");
+  assert.ok(read.renderResult);
+
+  const rendered = stripAnsi(
+    renderComponent(
+      read.renderResult(
+        {
+          content: [
+            {
+              type: "text",
+              text: "const value = 1;\n\n[3 more lines in file. Use offset=2 to continue.]",
+            },
+          ],
+        },
+        { expanded: true, isPartial: false },
+        testTheme(),
+        {
+          args: { path: "src/a.ts", limit: 1 },
+          isError: false,
+          invalidate: () => undefined,
+          state: {},
+        },
+      ),
+    ),
+  );
+
+  assert.match(rendered, /1 │ const value = 1;/);
+  assert.match(rendered, /╰─ 3 more lines in file\. Use offset=2 to continue\./);
+  assert.doesNotMatch(rendered, /│ \[3 more lines/);
+});

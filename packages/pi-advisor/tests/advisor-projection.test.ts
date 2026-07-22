@@ -1,8 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { makeAdvisorProjection } from "../src/advisor-projection.ts";
-import { normalizeAdvisorConfig } from "../src/config.ts";
-import { emptyAdvisorOutcomes } from "../src/settings.ts";
+import { makeAdvisorProjection } from "../src/ui/projection.ts";
+import { normalizeAdvisorConfig } from "../src/config/resolve.ts";
+import { emptyAdvisorOutcomes } from "../src/settings/controller.ts";
 
 const initial = {
   config: normalizeAdvisorConfig({}, ""),

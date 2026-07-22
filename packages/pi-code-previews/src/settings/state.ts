@@ -1,6 +1,23 @@
 import { defaultCodePreviewSettings } from "./defaults";
-import { initializeSettingsProjection, publishSettingsProjection } from "./projection";
-import type { CodePreviewSettings } from "./types";
+import type { CodePreviewSettings } from "./schema";
+
+function freezeSettings(settings: CodePreviewSettings): CodePreviewSettings {
+  return Object.freeze({
+    ...settings,
+    tools: Object.freeze([...settings.tools]),
+  }) as CodePreviewSettings;
+}
+
+let projected: CodePreviewSettings | undefined;
+
+function publishSettingsProjection(settings: CodePreviewSettings): CodePreviewSettings {
+  projected = freezeSettings(settings);
+  return projected;
+}
+
+function initializeSettingsProjection(settings: CodePreviewSettings): void {
+  projected ??= freezeSettings(settings);
+}
 
 initializeSettingsProjection(defaultCodePreviewSettings);
 

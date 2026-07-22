@@ -5,7 +5,7 @@ import {
   MAX_OBSERVATION_RECORDS,
   OBSERVATION_OMISSION_MARKER,
   stringifyRedactedObservation,
-} from "../src/observation-protocol.ts";
+} from "../src/review/observation-protocol.ts";
 
 describe("observation protocol", () => {
   test("does not invoke accessors or Proxy traps while snapshotting observations", () => {

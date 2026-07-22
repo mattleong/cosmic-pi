@@ -16,7 +16,7 @@ import {
   readRawConfig,
   resolveConfig,
   writeConfig,
-} from "../src/config.ts";
+} from "../src/config/index.ts";
 
 const directories: string[] = [];
 const temp = () => {

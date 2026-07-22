@@ -29,12 +29,12 @@ import {
   type AdvisorCheckpointRequest,
   type AdvisorRuntimeDriver,
   type AdvisorRuntimeStartOptions,
-} from "../src/advisor-runtime.ts";
-import { ADVISOR_TOOL_NAMES, createAdvisorTools } from "../src/advisor-tools.ts";
+} from "../src/runtime/runtime.ts";
+import { ADVISOR_TOOL_NAMES, createAdvisorTools } from "../src/runtime/tools.ts";
 import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
-import { AdvisorModelError, type AdvisorUsageTelemetry } from "../src/client.ts";
+import { AdvisorModelError, type AdvisorUsageTelemetry } from "../src/runtime/client.ts";
 import { makeCapturedTracer } from "pi-cosmic-core/testing";
-import type { ResolvedAdvisorConfig } from "../src/config.ts";
+import type { ResolvedAdvisorConfig } from "../src/config/resolve.ts";
 
 type TestRuntime = AdvisorRuntime & AdvisorRuntimeDriver;
 const makeTestRuntime = (dependencies: ConstructorParameters<typeof AdvisorRuntime>[0]) => {
@@ -1202,7 +1202,7 @@ describe("AdvisorRuntime", () => {
 
   test("uses no private agent.state mutation for seed or idle observation delivery", async () => {
     const source = await import("node:fs/promises").then((fs) =>
-      fs.readFile(new URL("../src/advisor-runtime.ts", import.meta.url), "utf8"),
+      fs.readFile(new URL("../src/runtime/runtime.ts", import.meta.url), "utf8"),
     );
     expect(source).not.toContain("agent.state.messages =");
   });
