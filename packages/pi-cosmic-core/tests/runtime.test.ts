@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { PiApi } from "../src/runtime/pi-api.ts";
@@ -47,6 +48,37 @@ it.effect("provides the pi host API through one managed runtime", () =>
     );
 
     expect(marker).toBe("pi-api");
+  }),
+);
+
+it.effect("keeps Effect log output off the TTY console", () =>
+  Effect.gen(function* () {
+    const runtime = makePiManagedRuntime({} as ExtensionAPI, Layer.empty);
+    const originalLog = console.log;
+    const originalError = console.error;
+    const consoleCalls: string[] = [];
+    console.log = (...args: unknown[]) => {
+      consoleCalls.push(args.map(String).join(" "));
+    };
+    console.error = (...args: unknown[]) => {
+      consoleCalls.push(args.map(String).join(" "));
+    };
+    try {
+      yield* Effect.promise(() =>
+        runtime.run(
+          Effect.gen(function* () {
+            yield* Effect.logWarning("Better xAI usage recovery: refresh_failed.");
+            const loggers = yield* Logger.CurrentLoggers;
+            expect([...loggers]).toEqual([Logger.tracerLogger]);
+          }),
+        ),
+      );
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+      yield* Effect.promise(() => runtime.dispose());
+    }
+    expect(consoleCalls).toEqual([]);
   }),
 );
 

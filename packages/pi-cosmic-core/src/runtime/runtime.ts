@@ -2,9 +2,17 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import type * as Types from "effect/Types";
 import { PiApi } from "./pi-api.ts";
+
+/**
+ * Pi owns the TTY. Effect's default console logger writes with `console.log` and
+ * corrupts the TUI editor/input region. Keep only the span-event logger so
+ * Effect.log* still contributes to traces without touching stdout/stderr.
+ */
+const piHostLoggerLayer = Logger.layer([Logger.tracerLogger]);
 
 declare const PiManagedRuntimeRuntimeError: unique symbol;
 
@@ -53,9 +61,9 @@ export function makePiRuntime<R, E>(
   applicationLayer: Layer.Layer<R, E, PiApi>,
 ): ManagedRuntime.ManagedRuntime<PiApi | R, E>;
 export function makePiRuntime<R, E>(pi: ExtensionAPI, applicationLayer?: Layer.Layer<R, E, PiApi>) {
-  const piLayer = PiApi.layer(pi);
+  const hostLayer = Layer.merge(PiApi.layer(pi), piHostLoggerLayer);
   return ManagedRuntime.make(
-    applicationLayer ? applicationLayer.pipe(Layer.provideMerge(piLayer)) : piLayer,
+    applicationLayer ? applicationLayer.pipe(Layer.provideMerge(hostLayer)) : hostLayer,
   );
 }
 
