@@ -17,9 +17,7 @@ export class AdvisorConfigStoreError extends Schema.TaggedErrorClass<AdvisorConf
 ) {}
 
 export interface ConfigStoreShape {
-  readonly load: (
-    path?: string,
-  ) => Effect.Effect<ResolvedAdvisorConfig, AdvisorConfigStoreError>;
+  readonly load: (path?: string) => Effect.Effect<ResolvedAdvisorConfig, AdvisorConfigStoreError>;
   readonly patch: (
     patch: AdvisorConfigPatch,
     path?: string,

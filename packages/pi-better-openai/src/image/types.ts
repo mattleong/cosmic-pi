@@ -65,7 +65,11 @@ export const ToolParamsSchema = Schema.Struct({
 });
 export const TOOL_PARAM_KEYS = new Set(Object.keys(TOOL_PARAMS.properties));
 export type ToolParams = typeof ToolParamsSchema.Type;
-export type ImageInput = { readonly path: string; readonly data: string; readonly mimeType: string };
+export type ImageInput = {
+  readonly path: string;
+  readonly data: string;
+  readonly mimeType: string;
+};
 export type CodexImageResult = {
   id: string;
   status: string;
@@ -105,4 +109,5 @@ export class OpenAIImageError extends Schema.TaggedErrorClass<OpenAIImageError>(
     message: Schema.String,
   },
 ) {}
-export const fail = (operation: string, message: string) => new OpenAIImageError({ operation, message });
+export const fail = (operation: string, message: string) =>
+  new OpenAIImageError({ operation, message });

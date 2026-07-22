@@ -30,7 +30,7 @@
   "exports": {
     ".": "./index.ts",
     "./client": "./src/footer/client.ts",
-    "./protocol": "./src/host/protocol.ts"
+    "./protocol": "./src/protocol/protocol.ts"
   },
   "publishConfig": {
     "access": "public"

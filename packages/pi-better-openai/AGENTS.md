@@ -4,8 +4,8 @@
 
 - `index.ts` exposes the extension; `src/extension.ts` is a thin public entrypoint.
 - `src/application.ts` registers commands/events and coordinates the session; `src/layer.ts` composes Effect services. See `ARCHITECTURE.md`.
-- Feature, domain, boundary, and UI modules contain config, formatting, Codex auth/usage, image generation, and rendering behavior.
-- `tests/` contains Vitest coverage. Prefer adding targeted tests near the changed behavior.
+- Follow the root `AGENTS.md` canonical small-extension tree: `config/`, `settings/`, `boundary/`, `auth/`, feature folders (`usage/`, `fast/`, `image/`, `footer/`), and `ui/`.
+- `tests/**/*.test.ts` contains Vitest coverage. Prefer adding targeted tests near the changed behavior.
 - `.pi/` is local runtime/config/generated output and is ignored by git.
 
 ## Verification

@@ -1,7 +1,7 @@
 import { stringifyJson } from "../boundary/json.ts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { snapshotData, snapshotDataRecord } from "../boundary/safe-data.ts";
+import { snapshotData, snapshotDataRecord } from "../domain/safe-data.ts";
 import { isRecord } from "../shared/utils.ts";
 
 export const OBSERVATION_PROTOCOL_VERSION = 1;

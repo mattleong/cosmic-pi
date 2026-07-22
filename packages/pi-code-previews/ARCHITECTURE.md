@@ -13,16 +13,19 @@ Provides syntax-highlighted previews, structured diffs, safer write/edit present
 ## Source map
 
 - `src/extension.ts` is the thin Pi package entrypoint.
-- `src/application/session-lifecycle.ts` coordinates runtime replacement, settings startup, syntax initialization, and renderer activation.
-- `src/application/session-capability.ts` is the canonical named bridge used by synchronous callers.
-- `src/application/session-service.ts` is the canonical session application service; its Context key intentionally retains the historical identity.
+- `src/application/lifecycle.ts` coordinates runtime replacement, settings startup, syntax initialization, and renderer activation.
+- `src/application/capability.ts` is the canonical named bridge used by synchronous callers.
+- `src/application/service.ts` is the canonical session application service; its Context key follows the `application/service` path.
+- `src/application/projection.ts` owns deferred/scheduled projection helpers for synchronous renderers.
 - `src/layer.ts` is the sole application Layer composition root.
-- `src/settings/`, `src/syntax/`, and `src/write/` are the primary stateful features.
+- `src/config/` owns settings schema, defaults, state, store/service, document persistence, definitions, values, env, and environment service.
+- `src/settings/` owns host commands (`controller.ts`), pre-session bootstrap, the compatibility barrel (`index.ts`), and settings menus under `settings/ui/`.
+- `src/syntax/` and `src/write/` are the other primary stateful features.
 - `src/diff/`, `src/paths/`, `src/tools/` (including grep/path-list/shell helpers), and `src/warnings/` contain deterministic preview policy and transformation logic.
 - `src/tools/` owns tool names/policy, cooperative shell API (`cooperative-tools.ts`), tool argument/result helpers (`data/`), and synchronous tool renderers (`renderers/`).
 - `src/boundary/` wraps Pi/Node/Shiki/environment/JSON boundaries (`node-platform.ts` for Node file platform runs).
-- `src/preview/` and feature render modules are synchronous UI.
-- Package tests live under `tests/`, mirroring `src/` paths.
+- `src/preview/` and feature render modules are synchronous UI (no top-level `ui/` folder).
+- Package tests live under `tests/`, mirroring `src/` paths, with `*.test.ts` suffix.
 
 ## State and resources
 

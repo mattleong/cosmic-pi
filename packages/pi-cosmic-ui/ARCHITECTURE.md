@@ -18,8 +18,10 @@ Hosts the composable Pi footer, repository information, settings, and the plain-
 - `src/footer/installation.ts` owns the synchronous footer installation generation and disposal state machine.
 - `src/footer/` contains registry/client behavior and synchronous footer components/layout.
 - `src/probe/`, `src/config/`, and `src/settings/` are vertical application features.
-- `src/boundary/` isolates hostile synchronous host callbacks.
-- `src/host/protocol.ts` is the plain public protocol; `src/host/protocol-host.ts` is its scoped ingress host; `src/host/service.ts` is the session host service.
+- `src/boundary/` isolates hostile synchronous host callbacks (`host-callback.ts`).
+- `src/protocol/protocol.ts` is the plain public protocol (package export `pi-cosmic-ui/protocol`).
+- `src/protocol/host.ts` is the scoped protocol ingress host.
+- `src/protocol/service.ts` is the session host service (`CosmicUiService`; Context keys follow file paths under `protocol/`).
 
 ## State and resources
 

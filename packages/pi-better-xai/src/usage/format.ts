@@ -10,7 +10,7 @@ import {
   JsonHttpClient,
   type JsonHttpResponseSchema,
 } from "pi-cosmic-core";
-import { getXaiCredentials } from "../auth.ts";
+import { getXaiCredentials } from "../auth/auth.ts";
 import {
   provideModelRegistryAuth,
   type WithoutModelRegistry,

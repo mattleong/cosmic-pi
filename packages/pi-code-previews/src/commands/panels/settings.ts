@@ -5,7 +5,7 @@ import {
   flushSettingsSaveQueue,
   formatSettingsSaveError,
   queueSettingsSave,
-} from "../../settings/persistence";
+} from "../../config/persistence";
 import { createSettingsCategoryItems, isSettingsGroupItemId } from "../../settings/ui/index";
 import { initializeShiki } from "../../syntax/shiki";
 

@@ -17,14 +17,19 @@ import {
   type CosmicUiRuntimeError,
   type CosmicUiSessionInput,
 } from "./layer.ts";
-import { CosmicUiService, emptyTotals, makeProjection, resetProjection } from "./host/service.ts";
+import {
+  CosmicUiService,
+  emptyTotals,
+  makeProjection,
+  resetProjection,
+} from "./protocol/service.ts";
 import {
   FooterProtocolHost,
   makeFooterProtocolBuffer,
   protocolInvalidate,
   protocolRemove,
   protocolUpsert,
-} from "./host/protocol-host.ts";
+} from "./protocol/host.ts";
 import {
   COSMIC_UI_FOOTER_INVALIDATE,
   COSMIC_UI_FOOTER_REMOVE,
@@ -34,7 +39,7 @@ import {
   normalizeCosmicFooterRemoveEvent,
   normalizeCosmicFooterUpsertEvent,
   normalizeCosmicUiHostQuery,
-} from "./host/protocol.ts";
+} from "./protocol/protocol.ts";
 import { registerSettingsCommand } from "./settings/controller.ts";
 import { createFooterInstallation } from "./footer/installation.ts";
 

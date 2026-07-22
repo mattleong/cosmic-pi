@@ -4,8 +4,8 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { PiApi } from "../src/pi-api.ts";
-import { makePiManagedRuntime, makePiRuntime } from "../src/runtime.ts";
+import { PiApi } from "../src/runtime/pi-api.ts";
+import { makePiManagedRuntime, makePiRuntime } from "../src/runtime/runtime.ts";
 import { makeLifecycleProbe } from "../testing.ts";
 
 const makeHostileSignal = (operation: "aborted" | "addEventListener") => {

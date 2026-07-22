@@ -10,7 +10,10 @@ import {
 } from "../../diff/index";
 import { renderDisplayPath } from "../../paths/display";
 import { showingFooter } from "../../preview/format";
-import { createCodePreviewToolShell, renderHiddenPreviewExpandHint } from "../../preview/tool-shell";
+import {
+  createCodePreviewToolShell,
+  renderHiddenPreviewExpandHint,
+} from "../../preview/tool-shell";
 import { codePreviewSettings } from "../../settings/index";
 import { countLabel } from "../../shared/helpers";
 import { escapeControlChars } from "../../shared/terminal-text";

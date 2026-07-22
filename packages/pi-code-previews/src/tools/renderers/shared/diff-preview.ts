@@ -1,7 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { FullWidthDiffText, renderPlainDiff, renderSyntaxHighlightedDiff } from "../../../diff/index";
+import {
+  FullWidthDiffText,
+  renderPlainDiff,
+  renderSyntaxHighlightedDiff,
+} from "../../../diff/index";
 import { previewFooter, showingFooter } from "../../../preview/format";
-import type { CodePreviewSettings } from "../../../settings/schema";
+import type { CodePreviewSettings } from "../../../config/schema";
 import { shouldSkipHighlight } from "../../../syntax/render";
 
 export function createDiffPreviewText(

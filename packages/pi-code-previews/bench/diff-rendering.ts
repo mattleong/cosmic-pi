@@ -6,7 +6,7 @@
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/globalConsole:off
 // @effect-diagnostics effect/globalDate:off
-import type { DiffWordEmphasis } from "../src/settings/schema";
+import type { DiffWordEmphasis } from "../src/config/schema";
 import {
   benchTheme,
   formatDuration,

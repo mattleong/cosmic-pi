@@ -3,7 +3,7 @@ import type {
   CosmicFooterPlacement,
   CosmicFooterTextContribution,
   CosmicFooterTheme,
-} from "../host/protocol.ts";
+} from "../protocol/protocol.ts";
 
 export function formatTokens(count: number): string {
   if (count < 1_000) return `${count}`;

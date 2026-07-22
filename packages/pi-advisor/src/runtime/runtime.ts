@@ -27,13 +27,10 @@ import {
   type SynchronousIngressOfferResult,
 } from "pi-cosmic-core";
 import type { AdvisorPlatform } from "../boundary/executor.ts";
-import { snapshotData } from "../boundary/safe-data.ts";
+import { snapshotData } from "../domain/safe-data.ts";
 import { isRecord } from "../shared/utils.ts";
 import { AdvisorTrajectoryDetector } from "../review/trajectory.ts";
-import {
-  createAdvisorChildModelEffect,
-  AdvisorModelError,
-} from "./client.ts";
+import { createAdvisorChildModelEffect, AdvisorModelError } from "./client.ts";
 import {
   ADVISOR_TOOL_NAMES,
   createAdvisorToolsEffect,
@@ -92,10 +89,7 @@ export {
   type AdvisorRuntimeDriver,
   type AdvisorRuntimeDependencies,
 } from "./types.ts";
-export {
-  parseAdvisorCheckpoint,
-  parseAdvisorCheckpointEffect,
-} from "./checkpoint-parse.ts";
+export { parseAdvisorCheckpoint, parseAdvisorCheckpointEffect } from "./checkpoint-parse.ts";
 
 export class AdvisorRuntime {
   private activeChildProjection: ActiveAdvisorChild | undefined;
@@ -891,7 +885,6 @@ export class NoDiscoveryAdvisorResourceLoader implements ResourceLoader {
     return Promise.resolve();
   }
 }
-
 
 export const _advisorRuntimeTest = {
   buildCheckpointPrompt,

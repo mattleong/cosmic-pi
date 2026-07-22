@@ -1,5 +1,5 @@
-import type { CodePreviewSettings } from "../schema";
-import { formatOnOff } from "../values";
+import type { CodePreviewSettings } from "../../config/schema";
+import { formatOnOff } from "../../config/values";
 import { ALL_CODE_PREVIEW_TOOLS } from "../../tools/names";
 
 export function summarizeAppearance(settings: CodePreviewSettings): string {

@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import {
   hasCodePreviewSessionCapability,
   runCodePreviewSessionEffect,
-} from "../application/session-capability";
+} from "../application/capability";
 import { CodePreviewSyntaxService } from "./service";
 
 export const initializeShikiEffect = Effect.fn("CodePreviewShiki.initializeFacade")(function* (

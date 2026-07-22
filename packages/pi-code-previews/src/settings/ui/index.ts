@@ -1,5 +1,5 @@
 import { type SettingItem } from "@earendil-works/pi-tui";
-import { getSettingsPath } from "../store";
+import { getSettingsPath } from "../../config/store";
 import { formatSettingValue, type CodePreviewSettings } from "../index";
 import { SettingsGroupSubmenu, ThemeSelectSubmenu, ToolPreviewSettingsSubmenu } from "./submenus";
 import {

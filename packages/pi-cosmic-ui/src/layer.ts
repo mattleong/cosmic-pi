@@ -6,10 +6,10 @@ import { HostCallbackBoundary, type HostCallbackBoundaryShape } from "./boundary
 import { CosmicUiConfigStore } from "./config/service.ts";
 import type { FooterTotals } from "./footer/component.ts";
 import { FooterRegistryService, type FooterRegistryBridge } from "./footer/registry.ts";
-import { CosmicUiService, type CosmicUiProjection } from "./host/service.ts";
+import { CosmicUiService, type CosmicUiProjection } from "./protocol/service.ts";
 import { PiExec } from "./probe/pi-exec.ts";
 import { RepositoryProbe } from "./probe/repository-probe.ts";
-import { FooterProtocolHost, type FooterProtocolBuffer } from "./host/protocol-host.ts";
+import { FooterProtocolHost, type FooterProtocolBuffer } from "./protocol/host.ts";
 
 /** Plain session values captured by the Pi adapter before runtime construction. */
 export interface CosmicUiSessionInput {

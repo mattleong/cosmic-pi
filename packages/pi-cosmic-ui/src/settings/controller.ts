@@ -19,7 +19,7 @@ import {
   snapshotHostAbortSignal,
   type HostCallbackBoundaryShape,
 } from "../boundary/host-callback.ts";
-import { CosmicUiService } from "../host/service.ts";
+import { CosmicUiService } from "../protocol/service.ts";
 
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
 const VisibilityIdSchema = Schema.Literals(DEFAULT_FOOTER_ORDER);

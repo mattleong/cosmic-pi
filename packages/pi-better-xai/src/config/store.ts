@@ -9,7 +9,7 @@ import {
   type JsonDocumentModification,
   type JsonObject,
 } from "pi-cosmic-core";
-import { CONFIG_BASENAME } from "../identity.ts";
+import { CONFIG_BASENAME } from "../auth/identity.ts";
 import {
   DEFAULT_FOOTER_CONFIG,
   DEFAULT_USAGE_CONFIG,

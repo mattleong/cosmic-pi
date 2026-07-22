@@ -9,7 +9,7 @@ import {
   scopedDocumentPaths,
   selectScopedDocument,
   updateScopedSection,
-} from "../src/config/scoped-repository.ts";
+} from "../src/config/scoped-store.ts";
 
 it("decodes valid siblings, retains unknown keys, and bounds redacted diagnostics", () => {
   const decoded = decodeTolerantFields(

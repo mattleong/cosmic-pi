@@ -129,4 +129,3 @@ export interface AdvisorForcedDetach {
   readonly active: ActiveAdvisorChild | undefined;
   readonly publishDiagnostic: boolean;
 }
-

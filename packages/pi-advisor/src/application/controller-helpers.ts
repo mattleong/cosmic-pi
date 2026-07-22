@@ -1,4 +1,8 @@
-import { sessionEntryToContextMessages, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  sessionEntryToContextMessages,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { AdvisorModelError } from "../runtime/client.ts";
 import {
@@ -242,4 +246,3 @@ export function warnIfSetupRequired(
 export const _advisorControllerTest = {
   runtimeEffectsFromDriver: advisorRuntimeEffectsFromDriver,
 };
-

@@ -41,7 +41,8 @@ export function imageMimeType(path: string, outputFormat?: string): string {
   if (lower.endsWith(".gif")) return "image/gif";
   return "image/png";
 }
-export const extensionForFormat = (format: ImageOutputFormat) => (format === "jpeg" ? "jpg" : format);
+export const extensionForFormat = (format: ImageOutputFormat) =>
+  format === "jpeg" ? "jpg" : format;
 export const isInside = (path: Path.Path, root: string, child: string) => {
   const normalizedRoot = path.resolve(root);
   const normalizedChild = path.resolve(child);
@@ -49,7 +50,10 @@ export const isInside = (path: Path.Path, root: string, child: string) => {
     normalizedChild !== normalizedRoot && normalizedChild.startsWith(`${normalizedRoot}${path.sep}`)
   );
 };
-export function dataUrlParts(value: string, expectedMimeType: string): { data: string; mimeType: string } {
+export function dataUrlParts(
+  value: string,
+  expectedMimeType: string,
+): { data: string; mimeType: string } {
   const match = /^data:[^;,]+;base64,(.*)$/s.exec(value);
   return { data: (match?.[1] ?? value).trim(), mimeType: expectedMimeType };
 }

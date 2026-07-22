@@ -1,2 +1,2 @@
-/** Public protocol subpath compatibility barrel. */
-export * from "./host/protocol.ts";
+/** Package-local re-export of the plain public footer protocol. */
+export * from "./protocol/protocol.ts";

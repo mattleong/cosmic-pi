@@ -4,7 +4,10 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import type { CosmicFooterContribution, CosmicFooterSurfaceContribution } from "../host/protocol.ts";
+import type {
+  CosmicFooterContribution,
+  CosmicFooterSurfaceContribution,
+} from "../protocol/protocol.ts";
 import { HostCallbackBoundary } from "../boundary/host-callback.ts";
 
 interface RegistryEntry {

@@ -18,7 +18,7 @@ import type {
   AdvisorRuntimeServiceShape,
 } from "../runtime/runtime.ts";
 import { AdvisorRuntimeResetRequiredError } from "../runtime/runtime.ts";
-import { classifyAdvisorRuntimeFailure } from "../boundary/runtime-error-classifier.ts";
+import { classifyAdvisorRuntimeFailure } from "../domain/runtime-error-classifier.ts";
 import {
   AdvisorQueueBacklogExceededError,
   AdvisorQueueBatchDroppedError,

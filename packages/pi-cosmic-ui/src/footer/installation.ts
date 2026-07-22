@@ -4,7 +4,7 @@ import type { HostCallbackBoundaryShape } from "../boundary/host-callback.ts";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { createFooterComponent } from "./component.ts";
 import type { FooterRegistryBridge } from "./registry.ts";
-import type { CosmicUiProjection } from "../host/service.ts";
+import type { CosmicUiProjection } from "../protocol/service.ts";
 
 interface FooterInstallationOptions {
   readonly pi: ExtensionAPI;

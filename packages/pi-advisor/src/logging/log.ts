@@ -6,7 +6,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { ProcessCoordinator } from "pi-cosmic-core";
 import { nodeDirname, nodeJoin } from "../boundary/node.ts";
-import { snapshotDataRecord } from "../boundary/safe-data.ts";
+import { snapshotDataRecord } from "../domain/safe-data.ts";
 import { safeAdvisorLabel } from "../domain/label.ts";
 import { redactSensitiveText } from "../review/observation-protocol.ts";
 

@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { DeferredPreview, shouldRenderDeferred } from "../../../preview/deferred";
-import { isCodePreviewSessionActive } from "../../../application/session-projection";
+import { isCodePreviewSessionActive } from "../../../application/projection";
 
 export function cachedPreview(
   state: Record<string, unknown>,

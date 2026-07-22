@@ -1,11 +1,11 @@
-import { ON_OFF_VALUES } from "../values";
+import { ON_OFF_VALUES } from "../../config/values";
 import {
   DIFF_BACKGROUND_INTENSITIES,
   DIFF_WORD_EMPHASES,
   PATH_ICON_MODES,
   TOOL_CALL_BACKGROUND_MODES,
   type CodePreviewEditableSettingId,
-} from "../schema";
+} from "../../config/schema";
 
 export type SettingsUiItemId = CodePreviewEditableSettingId | "settingsFile";
 

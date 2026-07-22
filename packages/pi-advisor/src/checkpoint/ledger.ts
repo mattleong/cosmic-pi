@@ -2,7 +2,7 @@ import { stringifyJson } from "../boundary/json.ts";
 import { createHash } from "node:crypto";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { snapshotData, snapshotDataRecord } from "../boundary/safe-data.ts";
+import { snapshotData, snapshotDataRecord } from "../domain/safe-data.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   isValidAdvisorFindingRecord,

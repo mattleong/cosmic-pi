@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema";
 import {
   hasCodePreviewSessionCapability,
   runCodePreviewSessionEffect,
-} from "../application/session-capability";
+} from "../application/capability";
 import { resolvePreviewPath } from "../paths/resolve";
 import { getObjectValue } from "../shared/helpers";
 import { readExistingFileForPreviewEffect, type ExistingFilePreview } from "./diff";

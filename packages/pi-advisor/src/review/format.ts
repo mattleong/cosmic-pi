@@ -121,4 +121,3 @@ export function buildRevisionSteer(review: AdvisorReview): string {
     formatAdvisorReviewForInjection(review),
   ].join("\n");
 }
-

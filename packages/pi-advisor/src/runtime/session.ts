@@ -1,28 +1,24 @@
-import {
-  createAgentSession,
-  type AgentSession,
-} from "@earendil-works/pi-coding-agent";
+import { createAgentSession, type AgentSession } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { snapshotData } from "../boundary/safe-data.ts";
+import { snapshotData } from "../domain/safe-data.ts";
 import { isRecord } from "../shared/utils.ts";
 import { AdvisorModelError } from "./client.ts";
 import { ADVISOR_TOOL_NAMES } from "./tools.ts";
 
-export const assistantTextAfterPromptEffect = Effect.fn("AdvisorCheckpoint.correlatedText")(function* (
-  messages: readonly unknown[],
-  prompt: string,
-) {
-  return yield* Effect.try({
-    try: () => assistantTextAfterPrompt(messages, prompt),
-    catch: (error) =>
-      error instanceof AdvisorModelError
-        ? error
-        : new AdvisorModelError({ message: "Advisor correlated response was unavailable." }),
-  });
-});
+export const assistantTextAfterPromptEffect = Effect.fn("AdvisorCheckpoint.correlatedText")(
+  function* (messages: readonly unknown[], prompt: string) {
+    return yield* Effect.try({
+      try: () => assistantTextAfterPrompt(messages, prompt),
+      catch: (error) =>
+        error instanceof AdvisorModelError
+          ? error
+          : new AdvisorModelError({ message: "Advisor correlated response was unavailable." }),
+    });
+  },
+);
 
 export function assistantTextAfterPrompt(messages: readonly unknown[], prompt: string): string {
   let promptIndex = -1;
@@ -196,4 +192,3 @@ export function isolateCallback(action: () => void): void {
     /* host diagnostics are best-effort and never own cleanup */
   }
 }
-

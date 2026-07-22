@@ -11,13 +11,16 @@
 
 ## Source map
 
-- `src/runtime.ts`, `src/session-runtime.ts`, and `src/pi-api.ts` define Pi-owned execution boundaries.
+- `src/runtime/` defines Pi-owned execution boundaries (`runtime.ts`, `session-runtime.ts`, `pi-api.ts`).
+- `src/coordination/` provides scoped concurrency primitives (`refresh-coordinator.ts`, `subscription-refresh.ts`, `synchronous-ingress.ts`).
 - `src/platform/` contains typed Node, HTTP, document, file, process-coordination, and agent-directory adapters.
-- `src/config/` contains reusable scoped/tolerant configuration infrastructure.
+- `src/config/` contains reusable scoped-store and tolerant-field configuration infrastructure.
 - `src/projection.ts` publishes immutable synchronous snapshots.
-- `src/refresh-coordinator.ts`, `src/subscription-refresh.ts`, and `src/synchronous-ingress.ts` provide scoped concurrency primitives.
 - `src/security.ts` owns shared redaction/sanitization.
+- `src/subscription-format.ts` owns shared subscription countdown/formatting helpers.
 - `src/testing/` contains multi-consumer fakes and probes only.
+
+Public barrels (`index.ts`, `testing.ts`) re-export these modules; consumers import from `pi-cosmic-core` / `pi-cosmic-core/testing`, not internal paths.
 
 ## Dependency rule
 

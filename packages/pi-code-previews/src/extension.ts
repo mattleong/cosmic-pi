@@ -1,6 +1,6 @@
 /** Thin Pi registration adapter for code previews. */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerCodePreviewApplication } from "./application/session-lifecycle";
+import { registerCodePreviewApplication } from "./application/lifecycle";
 
 export function codePreviews(pi: ExtensionAPI): Promise<void> {
   return registerCodePreviewApplication(pi);
@@ -11,4 +11,4 @@ export {
   codePreviewExtensionTesting,
   type CodePreviewExtensionDependencies,
   type CodePreviewRuntime,
-} from "./application/session-lifecycle";
+} from "./application/lifecycle";

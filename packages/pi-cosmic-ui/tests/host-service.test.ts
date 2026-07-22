@@ -19,7 +19,7 @@ import {
 import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { HostCallbackBoundary, makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import { CosmicUiConfigStore } from "../src/config/service.ts";
-import { CosmicUiService, makeProjection } from "../src/host/service.ts";
+import { CosmicUiService, makeProjection } from "../src/protocol/service.ts";
 import { PiExec } from "../src/probe/pi-exec.ts";
 import { RepositoryProbe } from "../src/probe/repository-probe.ts";
 

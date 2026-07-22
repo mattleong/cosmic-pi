@@ -1,24 +1,28 @@
 /** Shared Effect-first foundations for cosmic-pi extensions. */
-export { PiApi } from "./src/pi-api.ts";
-export { makePiManagedRuntime, makePiRuntime, type PiManagedRuntime } from "./src/runtime.ts";
+export { PiApi } from "./src/runtime/pi-api.ts";
+export {
+  makePiManagedRuntime,
+  makePiRuntime,
+  type PiManagedRuntime,
+} from "./src/runtime/runtime.ts";
 export {
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,
   type PiSessionRuntimeHooks,
   type PiSessionRuntimeSlot,
-} from "./src/session-runtime.ts";
+} from "./src/runtime/session-runtime.ts";
 export {
   makeRefreshCoordinator,
   makeRefreshCoordinatorWith,
   mergeRefreshRequest,
   type RefreshCoordinator,
   type RefreshRequest,
-} from "./src/refresh-coordinator.ts";
+} from "./src/coordination/refresh-coordinator.ts";
 export {
   makeSubscriptionRefresh,
   type SubscriptionRefresh,
   type SubscriptionRefreshOptions,
-} from "./src/subscription-refresh.ts";
+} from "./src/coordination/subscription-refresh.ts";
 export { JsonDocumentError, JsonHttpError, StreamingHttpError } from "./src/platform/errors.ts";
 export { AgentDirectory, AgentDirectoryError } from "./src/platform/agent-directory.ts";
 export {
@@ -70,7 +74,7 @@ export {
   type ScopedDocumentPathOptions,
   type ScopedDocumentPaths,
   type ScopedDocumentSelection,
-} from "./src/config/scoped-repository.ts";
+} from "./src/config/scoped-store.ts";
 export {
   freezeSnapshot,
   makeFrozenProjection,
@@ -84,7 +88,7 @@ export {
   type SynchronousIngressOfferResult,
   type SynchronousIngressOptions,
   type SynchronousIngressOverflow,
-} from "./src/synchronous-ingress.ts";
+} from "./src/coordination/synchronous-ingress.ts";
 export {
   StreamingHttpClient,
   type StreamingHttpClientShape,

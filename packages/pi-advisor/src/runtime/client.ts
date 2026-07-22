@@ -9,7 +9,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import { standaloneAdvisorExecutor } from "../boundary/executor.ts";
-import { snapshotData } from "../boundary/safe-data.ts";
+import { snapshotData } from "../domain/safe-data.ts";
 import type { ResolvedAdvisorConfig } from "../config/resolve.ts";
 
 export class AdvisorModelError extends Schema.TaggedErrorClass<AdvisorModelError>()(

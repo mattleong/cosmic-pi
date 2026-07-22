@@ -35,7 +35,7 @@ import {
 } from "../config/index.ts";
 import { isModelUsingOAuth } from "../boundary/model-registry.ts";
 import { currentModelKey } from "../fast/controller.ts";
-import { getCodexCredentialsResult } from "../codex-auth.ts";
+import { getCodexCredentialsResult } from "../auth/codex-auth.ts";
 import {
   USAGE_URL,
   type CodexUsageResult,

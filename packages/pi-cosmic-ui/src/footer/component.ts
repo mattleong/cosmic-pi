@@ -9,7 +9,7 @@ import type {
   CosmicFooterContribution,
   CosmicFooterTextContribution,
   CosmicFooterTheme,
-} from "../host/protocol.ts";
+} from "../protocol/protocol.ts";
 import { formatGitStatus, type FooterGitStatus } from "./git.ts";
 import {
   combineSurface,

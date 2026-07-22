@@ -15,11 +15,13 @@ Adds OpenAI subscription usage, fast-mode request injection, image generation, s
 - `src/extension.ts` is the thin Pi package entrypoint.
 - `src/application.ts` coordinates commands, host events, projections, and one session runtime.
 - `src/layer.ts` composes usage, fast-mode, image, platform, and file/Sharp Layers.
+- `src/auth/` owns Codex OAuth credential reads (`codex-auth.ts`, `result.ts`).
 - `src/usage/index.ts`, `src/fast/service.ts`, and `src/image/` own the major feature resources.
-- `src/image/` splits types, pure helpers, Effect service, host registration, and protocol; `src/image.ts` remains a compatibility barrel.
+- `src/image/` splits types, pure helpers, Effect service, host registration, and protocol.
 - `src/config/`, `src/fast/controller.ts`, `src/fast/models.ts`, `src/usage/format.ts`, and `src/image/protocol.ts` contain schemas and deterministic policy/protocol logic.
 - `src/boundary/` isolates Pi UI, model registry, and Sharp.
 - `src/ui/` and `src/footer/` consume synchronous frozen projections.
+- `src/settings/controller.ts` registers settings commands/pickers.
 
 ## State and resources
 

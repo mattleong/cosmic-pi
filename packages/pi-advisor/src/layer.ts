@@ -6,11 +6,7 @@ import {
 } from "./application/controller.ts";
 import type { AdvisorHostBindings } from "./application/host-bindings.ts";
 import { advisorPlatformLayer, type AdvisorEffectExecutor } from "./boundary/executor.ts";
-import {
-  ConfigStore,
-  configStoreLayer,
-  configStoreTestLayer,
-} from "./config/store.ts";
+import { ConfigStore, configStoreLayer, configStoreTestLayer } from "./config/store.ts";
 import { FailureLogger, failureLoggerLayer, failureLoggerTestLayer } from "./logging/logger.ts";
 import { HostNotifier, hostNotifierLayer } from "./application/host-notifier.ts";
 import { PiCommandAdapter } from "./application/pi-command-adapter.ts";
@@ -26,7 +22,7 @@ export interface AdvisorApplicationLayerOptions {
 
 /** Sole composition root for one Advisor session application. */
 export const makeAdvisorApplicationLayer = (options: AdvisorApplicationLayerOptions) => {
-  const repositoryLayer = options.dependencies.loadConfig
+  const resolvedConfigStoreLayer = options.dependencies.loadConfig
     ? configStoreTestLayer(options.dependencies.loadConfig)
     : configStoreLayer;
   const loggerLayer = options.dependencies.logFailure
@@ -36,7 +32,7 @@ export const makeAdvisorApplicationLayer = (options: AdvisorApplicationLayerOpti
     advisorRuntimeServiceLayer(options.executor),
     advisorReviewQueueServiceLayer,
     PiCommandAdapter.layer,
-    repositoryLayer,
+    resolvedConfigStoreLayer,
     loggerLayer,
     hostNotifierLayer,
   ).pipe(Layer.provideMerge(advisorPlatformLayer));

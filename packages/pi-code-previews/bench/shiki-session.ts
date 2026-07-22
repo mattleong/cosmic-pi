@@ -9,8 +9,8 @@ import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
   type CodePreviewSessionCapability,
-} from "../src/application/session-capability";
-import { CodePreviewEnvironmentService } from "../src/settings/environment-service";
+} from "../src/application/capability";
+import { CodePreviewEnvironmentService } from "../src/config/environment-service";
 import { initializeShikiEffect } from "../src/syntax/shiki";
 import { CodePreviewSyntaxService } from "../src/syntax/service";
 

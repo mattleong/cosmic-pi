@@ -5,5 +5,5 @@
     "moduleResolution": "Bundler",
     "erasableSyntaxOnly": false
   },
-  "include": ["index.ts", "*.spec.ts", "src/**/*.ts", "bench/**/*.ts"]
+  "include": ["index.ts", "tests/**/*.ts", "src/**/*.ts", "bench/**/*.ts"]
 }

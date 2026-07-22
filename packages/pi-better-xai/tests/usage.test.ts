@@ -26,7 +26,7 @@ import {
   makeCapturedTracer,
   makeInMemoryDocuments,
 } from "pi-cosmic-core/testing";
-import { getXaiCredentials, getXaiCredentialsResult } from "../src/auth.ts";
+import { getXaiCredentials, getXaiCredentialsResult } from "../src/auth/auth.ts";
 import {
   applySettingToRawConfig,
   readRawConfig,

@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { codePreviewPerformanceConfig } from "../config/env";
-import { deferProjectedCodePreview } from "../application/session-projection";
+import { deferProjectedCodePreview } from "../application/projection";
 import { escapeControlChars } from "../shared/terminal-text";
 
 export function shouldRenderDeferred(text: string): boolean {

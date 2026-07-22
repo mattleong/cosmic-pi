@@ -5,9 +5,9 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { formatCompactReset, formatResetCountdown, JsonHttpClient } from "pi-cosmic-core";
-import { getCodexCredentials, type CodexCredentialsWithSource } from "../codex-auth.ts";
+import { getCodexCredentials, type CodexCredentialsWithSource } from "../auth/codex-auth.ts";
 
-export { readCodexAuth } from "../codex-auth.ts";
+export { readCodexAuth } from "../auth/codex-auth.ts";
 export type UsageScope = "default" | "spark";
 export type UsageSnapshot = {
   capturedAt: number;

@@ -18,19 +18,20 @@ Runs bounded second-model review of Pi responses, optionally delivers advice/rev
 - `src/application/controller.ts` is the public controller surface (types re-export, stub layer, application layer entry).
 - `src/application/controller-types.ts` holds controller errors, catch-up helpers, and the Context service (historical key retained).
 - `src/application/controller-helpers.ts` holds pure delivery/verification/messaging helpers used by the application layer.
-- `src/application/orchestration.ts` owns application orchestration and the transactional checkpoint/delivery flow.
+- `src/application/lifecycle.ts` owns application lifecycle and the transactional checkpoint/delivery flow.
+- `src/application/state.ts` owns immutable application state.
 - `src/layer.ts` is the sole outer composition root for controller, child runtime, queue, persistence, logging, notification, command, and platform Layers.
 - `src/runtime/` owns the child advisor session runtime (`runtime.ts` class + service), wire types, checkpoint parse, prompts, session lifecycle helpers, client, tools, and resource state.
 - `src/queue/` owns `service.ts`, pure `state.ts` transitions, and `errors.ts`.
 - `src/checkpoint/` owns checkpoint ledger and orchestrator resources.
 - `src/review/` contains review domain logic: `schema`/`parse`/`format` (via `review/index.ts` barrel), findings, routing, budgets, trajectory, observation protocol, context.
-- `src/config/` owns `resolve.ts`, `store.ts` (config persistence service), and model picking.
+- `src/config/` owns `schema.ts` (shape/defaults/normalize), `resolve.ts` (path + load/write), `store.ts` (persistence service), and model picking.
 - `src/logging/` owns `log.ts` persistence and `logger.ts` service.
 - `src/ui/` forms the synchronous UI boundary (projection, renderer, status).
 - `src/settings/` owns settings/status/usage command registration (`controller.ts`) and formatting helpers (`format.ts`).
-- `src/domain/` contains shared plain contracts (candidate classification, metrics, labels).
+- `src/domain/` contains shared plain contracts (candidate classification, metrics, labels, safe-data snapshots, runtime-error classification).
 - `src/shared/utils.ts` holds tiny shared type guards.
-- `src/boundary/` isolates Pi, clock, JSON, filesystem, executor, and host-context APIs.
+- `src/boundary/` isolates foreign APIs only: Pi, clock, JSON, filesystem, executor, and host-context.
 
 ## State and resources
 

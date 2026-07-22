@@ -10,7 +10,7 @@ import { renderPathListLines } from "../../../tools/path-list-render";
 import { escapeControlChars } from "../../../shared/terminal-text";
 import { renderSelectedOutputLines } from "./preview-text";
 import { renderHiddenPreviewPrelude, renderResultPrelude } from "./result-prelude";
-import type { PathIconMode } from "../../../settings/schema";
+import type { PathIconMode } from "../../../config/schema";
 
 export interface PathListResultConfig {
   cwd: string;

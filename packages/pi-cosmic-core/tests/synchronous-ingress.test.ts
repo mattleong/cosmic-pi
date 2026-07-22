@@ -2,7 +2,10 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { makeSynchronousIngress, type SynchronousIngress } from "../src/synchronous-ingress.ts";
+import {
+  makeSynchronousIngress,
+  type SynchronousIngress,
+} from "../src/coordination/synchronous-ingress.ts";
 import { yieldUntil } from "../testing.ts";
 
 class CallbackFailure extends Schema.TaggedErrorClass<CallbackFailure>()("CallbackFailure", {

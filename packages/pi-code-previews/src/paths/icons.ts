@@ -1,5 +1,5 @@
 import { nodeBasename, nodeExtname } from "../boundary/node";
-import type { PathIconMode } from "../settings/schema";
+import type { PathIconMode } from "../config/schema";
 
 const NERD_FILE = "\uf15b";
 const NERD_DIR = "\ue5ff";

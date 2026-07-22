@@ -11,7 +11,7 @@ import { HostNotifier, hostNotifierLayer } from "../src/application/host-notifie
 import { normalizeAdvisorConfig } from "../src/config/resolve.ts";
 import { PiCommandAdapter } from "../src/application/pi-command-adapter.ts";
 
-it.effect("converts the Promise config seam into a typed repository test Layer", () => {
+it.effect("converts the Promise config seam into a typed ConfigStore test Layer", () => {
   const paths: string[] = [];
   const layer = configStoreTestLayer((path) => {
     paths.push(path ?? "");
@@ -20,8 +20,8 @@ it.effect("converts the Promise config seam into a typed repository test Layer",
   return Effect.scoped(
     Effect.gen(function* () {
       const context = yield* Layer.build(layer);
-      const repository = Context.get(context, ConfigStore);
-      const loaded = yield* repository.load("/tmp/advisor.json");
+      const store = Context.get(context, ConfigStore);
+      const loaded = yield* store.load("/tmp/advisor.json");
       expect(paths).toEqual(["/tmp/advisor.json"]);
       expect(loaded).toMatchObject({ provider: "p", model: "m", configured: true });
     }),

@@ -2,11 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedConfig } from "../config/index.ts";
 import * as MutableRef from "effect/MutableRef";
 import { isUsingOAuthAtHostBoundary } from "../boundary/model-registry-auth.ts";
-import {
-  isXaiSubscriptionModel,
-  visibleStatusLine,
-  type XaiProjection,
-} from "../usage/index.ts";
+import { isXaiSubscriptionModel, visibleStatusLine, type XaiProjection } from "../usage/index.ts";
 import type { CosmicFooterTextContribution as FooterTextPrimitive } from "pi-cosmic-ui/protocol";
 
 export interface XaiUsageUiState {

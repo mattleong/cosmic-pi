@@ -3,7 +3,7 @@ import { pathIcon } from "../paths/icons";
 import { renderDisplayPath } from "../paths/display";
 import { escapeControlChars } from "../shared/terminal-text";
 import { isToolOutputNoticeLine } from "../shared/helpers";
-import type { PathIconMode } from "../settings/schema";
+import type { PathIconMode } from "../config/schema";
 
 export function renderPathListLines(
   output: string,

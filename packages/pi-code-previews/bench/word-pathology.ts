@@ -6,7 +6,7 @@
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/globalConsole:off
 // @effect-diagnostics effect/globalDate:off
-import type { DiffWordEmphasis } from "../src/settings/schema";
+import type { DiffWordEmphasis } from "../src/config/schema";
 import { renderSyntaxHighlightedDiff } from "../src/diff/index";
 import { wordEmphasisTelemetry } from "../src/testing/word-emphasis-telemetry";
 import { changedRanges, changedRangesWithConfidence } from "../src/diff/word/emphasis";

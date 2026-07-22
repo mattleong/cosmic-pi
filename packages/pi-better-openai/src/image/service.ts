@@ -1,7 +1,4 @@
-import {
-  CONFIG_DIR_NAME,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -29,7 +26,7 @@ import {
   type StreamingHttpError,
 } from "pi-cosmic-core";
 import { SharpAdapter } from "../boundary/sharp.ts";
-import { getCodexCredentials } from "../codex-auth.ts";
+import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { decodeImageStreamEvent, ImageRequestSchema } from "./protocol.ts";
 import type { OpenAIProjection } from "../usage/index.ts";
 import {
@@ -707,4 +704,3 @@ export class OpenAIImageService extends Context.Service<
     );
   }
 }
-

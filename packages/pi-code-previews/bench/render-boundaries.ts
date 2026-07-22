@@ -13,7 +13,7 @@ import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
   type CodePreviewSessionCapability,
-} from "../src/application/session-capability";
+} from "../src/application/capability";
 import { resolvePreviewLanguage } from "../src/syntax/language";
 import { benchTheme, printBenchHeader, printLayerSummary, runBench, timeOnce } from "./helpers";
 

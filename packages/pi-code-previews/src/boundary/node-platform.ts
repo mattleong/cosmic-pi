@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import type * as Layer from "effect/Layer";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { runCodePreviewSessionEffect } from "../application/session-capability";
+import { runCodePreviewSessionEffect } from "../application/capability";
 
 type NodePlatform = Layer.Success<typeof nodeFilePlatformLayer>;
 

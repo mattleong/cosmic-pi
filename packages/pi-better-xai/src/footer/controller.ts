@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ResolvedConfig } from "../config/index.ts";
-import { STATUS_KEY } from "../identity.ts";
+import { STATUS_KEY } from "../auth/identity.ts";
 import type * as MutableRef from "effect/MutableRef";
 import { visibleStatusLine, type XaiProjection } from "../usage/index.ts";
 

@@ -11,7 +11,10 @@ import {
 import { renderDisplayPath } from "../../paths/display";
 import { metadata } from "../../preview/format";
 import { countContentLines } from "../../preview/line-counts";
-import { createCodePreviewToolShell, hiddenPreviewExpandHintForShell } from "../../preview/tool-shell";
+import {
+  createCodePreviewToolShell,
+  hiddenPreviewExpandHintForShell,
+} from "../../preview/tool-shell";
 import { codePreviewSettings } from "../../settings/index";
 import { countLabel, formatBytes } from "../../shared/helpers";
 import { getObjectValue } from "../../shared/helpers";

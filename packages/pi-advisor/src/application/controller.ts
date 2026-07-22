@@ -5,10 +5,7 @@ import { normalizeAdvisorConfig } from "../config/resolve.ts";
 import { makeAdvisorResourceState } from "../runtime/resource-state.ts";
 import { makeAdvisorProjection } from "../ui/projection.ts";
 import { emptyAdvisorSessionMetrics } from "./state.ts";
-import {
-  AdvisorController,
-  AdvisorExtensionError,
-} from "./controller-types.ts";
+import { AdvisorController, AdvisorExtensionError } from "./controller-types.ts";
 
 export {
   ADVISOR_CATCH_UP_TIMEOUT_MS,
@@ -26,7 +23,7 @@ export {
   type AdvisorSkipReason,
 } from "./controller-types.ts";
 
-export { advisorControllerApplicationLayer } from "./orchestration.ts";
+export { advisorControllerApplicationLayer } from "./lifecycle.ts";
 export { _advisorControllerTest } from "./controller-helpers.ts";
 
 /** Unconfigured controller placeholder used before session application wiring. */

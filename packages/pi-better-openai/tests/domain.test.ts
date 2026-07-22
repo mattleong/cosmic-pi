@@ -30,7 +30,7 @@ import {
   getCodexCredentialsResult,
   parseCodexRegistryCredentials,
   readCodexAuth,
-} from "../src/codex-auth.ts";
+} from "../src/auth/codex-auth.ts";
 import { DEFAULT_IMAGE_CONFIG, readConfig, resolveConfig } from "../src/config/index.ts";
 import {
   initialFastSnapshot,

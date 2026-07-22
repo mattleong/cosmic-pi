@@ -18,7 +18,7 @@ import {
   FooterProtocolHost,
   makeFooterProtocolBuffer,
   type FooterProtocolEvent,
-} from "../src/host/protocol-host.ts";
+} from "../src/protocol/host.ts";
 
 const text = (id: string): FooterProtocolEvent => ({
   _tag: "Upsert",

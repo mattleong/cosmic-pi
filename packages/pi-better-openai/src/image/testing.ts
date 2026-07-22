@@ -1,10 +1,5 @@
-import { extractAccountIdFromJwt } from "../codex-auth.ts";
-import {
-  buildRequest,
-  dataUrlParts,
-  extractImageFromEvent,
-  imageMimeType,
-} from "./helpers.ts";
+import { extractAccountIdFromJwt } from "../auth/codex-auth.ts";
+import { buildRequest, dataUrlParts, extractImageFromEvent, imageMimeType } from "./helpers.ts";
 import {
   CODEX_RESPONSES_URL,
   DEFAULT_TIMEOUT_MS,

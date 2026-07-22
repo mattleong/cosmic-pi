@@ -14,7 +14,9 @@ import {
   type AdvisorCheckpoint,
 } from "./types.ts";
 
-export const decodeAdvisorCheckpoint = Effect.fn("AdvisorCheckpoint.decode")(function* (raw: string) {
+export const decodeAdvisorCheckpoint = Effect.fn("AdvisorCheckpoint.decode")(function* (
+  raw: string,
+) {
   if (raw.length > MAX_ADVISOR_CHECKPOINT_CHARS) {
     return yield* new AdvisorModelError({
       message: "Advisor checkpoint exceeds the maximum response size.",
@@ -124,5 +126,3 @@ function diagnoseAdvisorCheckpoint(raw: string): AdvisorCheckpoint {
   }
   return checkpoint;
 }
-
-

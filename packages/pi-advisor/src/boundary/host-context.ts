@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { snapshotData } from "./safe-data.ts";
+import { snapshotData } from "../domain/safe-data.ts";
 
 export class AdvisorHostContextError extends Schema.TaggedErrorClass<AdvisorHostContextError>()(
   "AdvisorHostContextError",

@@ -22,7 +22,7 @@ import {
   type RefreshRequest,
 } from "pi-cosmic-core";
 import { ModelRegistryAuth, isUsingOAuthAtHostBoundary } from "../boundary/model-registry-auth.ts";
-import { readXaiAuth } from "../auth.ts";
+import { readXaiAuth } from "../auth/auth.ts";
 import {
   decodeSettingUpdate,
   readRawConfig,

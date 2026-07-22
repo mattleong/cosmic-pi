@@ -4,8 +4,8 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
-import { CodePreviewEnvironmentService } from "../settings/environment-service";
-import { CodePreviewSettingsService } from "../settings/service";
+import { CodePreviewEnvironmentService } from "../config/environment-service";
+import { CodePreviewSettingsService } from "../config/service";
 
 const oneShotSettingsLayer = () => {
   const environment = Reflect.get(process, "env") as Readonly<Record<string, string>>;
