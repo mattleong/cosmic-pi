@@ -3,9 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
   decodeTolerantFields,
-  JsonDocumentStore,
+  modifyJsonObject,
+  readConfigOrWarn,
+  readOptionalJsonObject,
+  readRawJsonObject,
   scopedDocumentPaths,
   selectScopedDocument,
+  writeJsonObject,
   type JsonDocumentModification,
   type JsonObject,
 } from "pi-cosmic-core";
@@ -47,11 +51,7 @@ export const configPaths = Effect.fn("OpenAIConfig.configPaths")(function* (
 });
 
 export const readRawConfig = Effect.fn("OpenAIConfig.readRawConfig")(function* (path: string) {
-  const documents = yield* JsonDocumentStore;
-  return yield* documents.readObject(path).pipe(
-    Effect.mapError(mapError("read", path)),
-    Effect.map((value) => value ?? {}),
-  );
+  return yield* readRawJsonObject(path, mapError);
 });
 
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -209,32 +209,21 @@ export function resolveCommittedConfig(
 }
 
 export const readConfig = Effect.fn("OpenAIConfig.readConfig")(function* (path: string) {
-  const documents = yield* JsonDocumentStore;
-  const raw = yield* documents.readObject(path).pipe(Effect.mapError(mapError("read", path)));
-  return raw === undefined ? undefined : decodeConfig(raw);
+  return yield* readOptionalJsonObject(path, decodeConfig, mapError);
 });
 
 export const writeConfig = Effect.fn("OpenAIConfig.writeConfig")(function* (
   path: string,
   config: JsonObject,
 ) {
-  const documents = yield* JsonDocumentStore;
-  yield* documents.writeObject(path, config).pipe(Effect.mapError(mapError("write", path)));
+  yield* writeJsonObject(path, config, mapError);
 });
 
 export const modifyConfig = Effect.fn("OpenAIConfig.modifyConfig")(function* <A, AfterCommitR>(
   path: string,
   modify: (document: JsonObject) => JsonDocumentModification<A, AfterCommitR>,
 ) {
-  const documents = yield* JsonDocumentStore;
-  const modifyObject = documents.modifyObject;
-  if (modifyObject === undefined) return yield* mapError("write", path)();
-  return yield* modifyObject(path, (document) =>
-    Effect.try({
-      try: () => modify(document),
-      catch: mapError("write", path),
-    }),
-  ).pipe(Effect.mapError(mapError("write", path)));
+  return yield* modifyJsonObject(path, modify, mapError);
 });
 
 export const resolveConfig = Effect.fn("OpenAIConfig.resolveConfig")(function* (
@@ -252,16 +241,9 @@ export const resolveConfig = Effect.fn("OpenAIConfig.resolveConfig")(function* (
     yield* writeConfig(paths.global, DEFAULT_CONFIG as JsonObject);
     globalExists = true;
   }
-  const readOrWarn = (path: string) =>
-    readConfig(path).pipe(
-      Effect.catch(() =>
-        Effect.logWarning("Unable to read a Better OpenAI configuration document.").pipe(
-          Effect.as(undefined),
-        ),
-      ),
-    );
-  const project = projectExists ? yield* readOrWarn(paths.project) : undefined;
-  const global = globalExists ? yield* readOrWarn(paths.global) : undefined;
+  const warning = "Unable to read a Better OpenAI configuration document.";
+  const project = yield* readConfigOrWarn(paths.project, projectExists, readConfig, warning);
+  const global = yield* readConfigOrWarn(paths.global, globalExists, readConfig, warning);
   return resolveConfigFiles(
     {
       configPath: projectExists ? paths.project : paths.global,

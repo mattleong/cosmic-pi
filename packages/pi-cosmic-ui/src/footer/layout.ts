@@ -1,16 +1,12 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { formatTokens } from "pi-cosmic-core";
 import type {
   CosmicFooterPlacement,
   CosmicFooterTextContribution,
   CosmicFooterTheme,
 } from "../protocol/protocol.ts";
 
-export function formatTokens(count: number): string {
-  if (count < 1_000) return `${count}`;
-  if (count < 10_000) return `${(count / 1_000).toFixed(1)}k`;
-  if (count < 1_000_000) return `${Math.round(count / 1_000)}k`;
-  return `${(count / 1_000_000).toFixed(count < 10_000_000 ? 1 : 0)}M`;
-}
+export { formatTokens };
 
 function clampPercent(percent: number): number {
   return Math.max(0, Math.min(100, percent));

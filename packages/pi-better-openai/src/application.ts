@@ -2,7 +2,13 @@
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
-import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
+import {
+  captureSessionHost,
+  hasTerminalUI,
+  isProjectTrusted,
+  makePiManagedRuntime,
+  makePiSessionRuntimeSlot,
+} from "pi-cosmic-core";
 import { createCosmicFooterClient } from "pi-cosmic-ui/client";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "./boundary/host-ui.ts";
 import {
@@ -57,39 +63,21 @@ export interface BetterOpenAIExtensionDependencies {
   readonly startupEffect: (generation: number) => Effect.Effect<void, never, OpenAIUsageService>;
 }
 
-const hasTerminalUI = (ctx: ExtensionContext): boolean => {
-  try {
-    const mode = ctx.mode;
-    const hasUI = ctx.hasUI;
-    return mode === "tui" || (mode === undefined && hasUI);
-  } catch {
-    return false;
-  }
-};
-const isProjectTrusted = (ctx: ExtensionContext): boolean => {
-  try {
-    return typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
-  } catch {
-    return false;
-  }
-};
 const captureSessionHostContext = (ctx: ExtensionContext) => {
-  try {
-    const cwd = ctx.cwd;
-    const signal = ctx.signal;
-    const aborted = signal?.aborted === true;
-    if (typeof cwd !== "string" || cwd.length === 0)
-      throw new Error("The host returned an invalid working directory.");
-    return { _tag: "Success", value: { cwd, signal, aborted } } as const;
-  } catch {
+  const captured = captureSessionHost(ctx);
+  if (captured._tag === "Captured") {
     return {
-      _tag: "Failure",
-      error: new OpenAIBoundaryError({
-        operation: "session-context",
-        message: "Unable to capture the Pi session context.",
-      }),
-    } as const;
+      _tag: "Success" as const,
+      value: { cwd: captured.cwd, signal: captured.signal, aborted: captured.aborted },
+    };
   }
+  return {
+    _tag: "Failure" as const,
+    error: new OpenAIBoundaryError({
+      operation: "session-context",
+      message: "Unable to capture the Pi session context.",
+    }),
+  };
 };
 const requiredConfig = (projection: MutableRef.MutableRef<OpenAIProjection>): ResolvedConfig => {
   const cfg = MutableRef.get(projection).config;

@@ -4,15 +4,8 @@ import { isModelUsingOAuth } from "../boundary/model-registry.ts";
 import { isFastActive, statusSegment, type FastSnapshot } from "../fast/controller.ts";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import * as MutableRef from "effect/MutableRef";
+import { formatTokens } from "pi-cosmic-core";
 import { visibleStatusLine, type OpenAIProjection } from "../usage/index.ts";
-
-function formatTokens(count: number): string {
-  if (count < 1000) return count.toString();
-  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1000000) return `${Math.round(count / 1000)}k`;
-  if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
-  return `${Math.round(count / 1000000)}M`;
-}
 
 const sanitizeStatusText = (text: string) => text.replace(/[ \r\n\t]+/g, " ").trim();
 

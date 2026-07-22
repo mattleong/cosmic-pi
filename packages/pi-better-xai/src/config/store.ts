@@ -3,9 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
   decodeTolerantFields,
-  JsonDocumentStore,
+  modifyJsonObject,
+  readConfigOrWarn,
+  readOptionalJsonObject,
+  readRawJsonObject,
   scopedDocumentPaths,
   selectScopedDocument,
+  writeJsonObject,
   type JsonDocumentModification,
   type JsonObject,
 } from "pi-cosmic-core";
@@ -44,11 +48,7 @@ export const configPaths = Effect.fn("XaiConfig.configPaths")(function* (
 });
 
 export const readRawConfig = Effect.fn("XaiConfig.readRawConfig")(function* (path: string) {
-  const documents = yield* JsonDocumentStore;
-  return yield* documents.readObject(path).pipe(
-    Effect.mapError(mapDocumentError("read", path)),
-    Effect.map((value) => value ?? {}),
-  );
+  return yield* readRawJsonObject(path, mapDocumentError);
 });
 
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -122,19 +122,14 @@ export function resolveCommittedConfig(
 }
 
 export const readConfig = Effect.fn("XaiConfig.readConfig")(function* (path: string) {
-  const documents = yield* JsonDocumentStore;
-  const raw = yield* documents
-    .readObject(path)
-    .pipe(Effect.mapError(mapDocumentError("read", path)));
-  return raw === undefined ? undefined : decodeConfig(raw);
+  return yield* readOptionalJsonObject(path, decodeConfig, mapDocumentError);
 });
 
 export const writeConfig = Effect.fn("XaiConfig.writeConfig")(function* (
   path: string,
   config: JsonObject,
 ) {
-  const documents = yield* JsonDocumentStore;
-  yield* documents.writeObject(path, config).pipe(Effect.mapError(mapDocumentError("write", path)));
+  yield* writeJsonObject(path, config, mapDocumentError);
 });
 
 export const updateConfig = Effect.fn("XaiConfig.updateConfig")(function* (
@@ -143,22 +138,18 @@ export const updateConfig = Effect.fn("XaiConfig.updateConfig")(function* (
   update: (document: JsonObject) => JsonObject,
   afterCommit: (document: JsonObject) => Effect.Effect<void>,
 ) {
-  const documents = yield* JsonDocumentStore;
-  const modifyObject = documents.modifyObject;
-  if (!modifyObject) return yield* mapDocumentError("write", path)();
-  return yield* modifyObject(path, (current) =>
-    Effect.try({
-      try: () => {
-        const next = update(current);
-        return {
-          value: next,
-          document: next,
-          afterCommit: afterCommit(next),
-        } satisfies JsonDocumentModification<JsonObject>;
-      },
-      catch: mapDocumentError("write", path),
-    }),
-  ).pipe(Effect.mapError(mapDocumentError("write", path)));
+  return yield* modifyJsonObject(
+    path,
+    (current) => {
+      const next = update(current);
+      return {
+        value: next,
+        document: next,
+        afterCommit: afterCommit(next),
+      } satisfies JsonDocumentModification<JsonObject>;
+    },
+    mapDocumentError,
+  );
 });
 
 const defaultDocument = (): JsonObject => defaultConfigValues();
@@ -180,18 +171,9 @@ export const resolveConfig = Effect.fn("XaiConfig.resolveConfig")(function* (
     globalExists = true;
   }
 
-  const readOrDefault = (path: string, exists: boolean) =>
-    exists
-      ? readConfig(path).pipe(
-          Effect.catch(() =>
-            Effect.logWarning("Unable to read a Better xAI configuration document.").pipe(
-              Effect.as(undefined),
-            ),
-          ),
-        )
-      : Effect.void;
-  const project = yield* readOrDefault(paths.project, projectExists);
-  const global = yield* readOrDefault(paths.global, globalExists);
+  const warning = "Unable to read a Better xAI configuration document.";
+  const project = yield* readConfigOrWarn(paths.project, projectExists, readConfig, warning);
+  const global = yield* readConfigOrWarn(paths.global, globalExists, readConfig, warning);
   const globalValues = overlayConfigValues(global, defaultConfigValues());
   const resolved = overlayConfigValues(project, globalValues);
 

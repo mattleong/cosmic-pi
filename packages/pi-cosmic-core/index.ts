@@ -76,6 +76,26 @@ export {
   type ScopedDocumentSelection,
 } from "./src/config/scoped-store.ts";
 export {
+  modifyJsonObject,
+  readConfigOrWarn,
+  readOptionalJsonObject,
+  readRawJsonObject,
+  writeJsonObject,
+  type ConfigDocumentErrorFactory,
+} from "./src/config/document-ops.ts";
+export {
+  captureHostSignal,
+  captureSessionHost,
+  hasTerminalUI,
+  isProjectTrusted,
+  type CapturedHostSignal,
+  type CapturedSessionHost,
+  type HostSessionContext,
+  type HostTrustContext,
+  type HostUiContext,
+} from "./src/host-session.ts";
+export { withUsageEligibility, type UsageVisibilityFields } from "./src/usage-projection.ts";
+export {
   freezeSnapshot,
   makeFrozenProjection,
   ProjectionError,
@@ -109,7 +129,13 @@ export {
   type DiagnosticSanitizerOptions,
 } from "./src/security.ts";
 export {
+  clampPercent,
   formatCompactReset,
+  formatPercent,
   formatResetClock,
   formatResetCountdown,
+  formatTokens,
+  formatWindowedUsageLine,
+  remainingResetSeconds,
+  type UsageWindowLine,
 } from "./src/subscription-format.ts";

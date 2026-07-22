@@ -5,9 +5,13 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
+  clampPercent,
   formatCompactReset,
+  formatPercent,
   formatResetCountdown,
+  formatWindowedUsageLine,
   JsonHttpClient,
+  remainingResetSeconds,
   type JsonHttpResponseSchema,
 } from "pi-cosmic-core";
 import { getXaiCredentials } from "../auth/auth.ts";
@@ -68,10 +72,6 @@ export interface UsageSnapshot {
   readonly onDemandCap: number | null;
   readonly onDemandUsed: number | null;
   readonly isLimited: boolean;
-}
-
-function clampPercent(value: number): number {
-  return Math.min(100, Math.max(0, value));
 }
 
 function usedToLeftPercent(value: number | null | undefined): number | null {
@@ -161,53 +161,31 @@ export function parseUsageSnapshot(
   };
 }
 
-export function formatPercent(value: number | null): string {
-  return typeof value === "number" && Number.isFinite(value)
-    ? `${Math.round(clampPercent(value))}%`
-    : "--";
-}
-
-function remainingResetSeconds(
-  seconds: number | null,
-  capturedAt: number,
-  now: number,
-): number | null {
-  return seconds === null ? null : seconds - (now - capturedAt) / 1000;
-}
+export { formatPercent };
 
 export function formatUsageSnapshot(
   snapshot: UsageSnapshot,
   options: { readonly showResetTimes: boolean },
   now: number,
 ): string {
-  const hasWeekly = snapshot.weeklyLeftPercent !== null || snapshot.weeklyResetInSeconds !== null;
-  const hasMonthly =
-    snapshot.monthlyLeftPercent !== null || snapshot.monthlyResetInSeconds !== null;
-  const windows = [
-    hasWeekly ? `7d: ${formatPercent(snapshot.weeklyLeftPercent)}` : null,
-    hasMonthly ? `mo: ${formatPercent(snapshot.monthlyLeftPercent)}` : null,
-  ].filter((value): value is string => value !== null);
-  const resets = options.showResetTimes
-    ? [
-        hasWeekly
-          ? formatCompactReset(
-              "7d",
-              remainingResetSeconds(snapshot.weeklyResetInSeconds, snapshot.capturedAt, now),
-              undefined,
-              now,
-            )
-          : null,
-        hasMonthly
-          ? formatCompactReset(
-              "mo",
-              remainingResetSeconds(snapshot.monthlyResetInSeconds, snapshot.capturedAt, now),
-              { includeDate: true },
-              now,
-            )
-          : null,
-      ].filter((value): value is string => value !== null)
-    : [];
-  return `Usage: ${windows.length ? windows.join(" | ") : "--"}${resets.length ? ` | ${resets.join(" | ")}` : ""}`;
+  return formatWindowedUsageLine(
+    [
+      {
+        label: "7d",
+        leftPercent: snapshot.weeklyLeftPercent,
+        resetInSeconds: snapshot.weeklyResetInSeconds,
+      },
+      {
+        label: "mo",
+        leftPercent: snapshot.monthlyLeftPercent,
+        resetInSeconds: snapshot.monthlyResetInSeconds,
+        includeDate: true,
+      },
+    ],
+    options,
+    now,
+    snapshot.capturedAt,
+  );
 }
 
 export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string {

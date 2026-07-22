@@ -27,6 +27,13 @@ export {
 
 let lastCompatibilityLoadOptions: LoadSettingsOptions = {};
 
+/** Run a settings Effect on the live session runtime, or a one-shot runtime when idle. */
+function runSettingsEffect<A, E>(effect: Effect.Effect<A, E, CodePreviewSettingsService>) {
+  return hasCodePreviewSessionCapability()
+    ? runCodePreviewSessionEffect(effect)
+    : runOneShotSettingsEffect(effect);
+}
+
 /** Plain compatibility input only; authoritative save context remains inside the service. */
 export function compatibilitySettingsLoadOptions(): LoadSettingsOptions {
   return { ...lastCompatibilityLoadOptions };
@@ -46,43 +53,42 @@ export function loadSettingsFromDisk(
   options: LoadSettingsOptions = {},
 ): Promise<CodePreviewSettings | undefined> {
   lastCompatibilityLoadOptions = { ...options };
-  const effect = CodePreviewSettingsService.use((service) => service.loadFromDisk(options));
-  return hasCodePreviewSessionCapability()
-    ? runCodePreviewSessionEffect(effect)
-    : runOneShotSettingsEffect(effect);
+  return runSettingsEffect(
+    CodePreviewSettingsService.use((service) => service.loadFromDisk(options)),
+  );
 }
 
 export function saveSettingsToDisk(
   settings: CodePreviewSettings,
   context?: SettingsSaveContext,
 ): Promise<void> {
-  const effect = CodePreviewSettingsService.use((service) => service.save(settings, context));
-  return hasCodePreviewSessionCapability()
-    ? runCodePreviewSessionEffect(effect)
-    : runOneShotSettingsEffect(effect);
+  return runSettingsEffect(
+    CodePreviewSettingsService.use((service) => service.save(settings, context)),
+  );
 }
 
 /** Queue a settings save through the session runtime, or a one-shot runtime when idle. */
 export function queueSettingsSave(settings: CodePreviewSettings): Promise<void> {
   const next = cloneCodePreviewSettings(settings);
-  const save = CodePreviewSettingsService.use((service) => service.save(next));
-  if (hasCodePreviewSessionCapability()) return runCodePreviewSessionEffect(save);
+  if (hasCodePreviewSessionCapability()) {
+    return runCodePreviewSessionEffect(
+      CodePreviewSettingsService.use((service) => service.save(next)),
+    );
+  }
 
   // A one-shot runtime cannot retain service state. Rehydrate its authoritative state from the
   // last compatibility load inputs, then save within that same service instance.
-  const saveAfterLoad = CodePreviewSettingsService.use((service) =>
-    service
-      .loadFromDisk(compatibilitySettingsLoadOptions())
-      .pipe(Effect.andThen(service.save(next))),
+  return runOneShotSettingsEffect(
+    CodePreviewSettingsService.use((service) =>
+      service
+        .loadFromDisk(compatibilitySettingsLoadOptions())
+        .pipe(Effect.andThen(service.save(next))),
+    ),
   );
-  return runOneShotSettingsEffect(saveAfterLoad);
 }
 
 export function flushSettingsSaveQueue(): Promise<void> {
-  const effect = CodePreviewSettingsService.use((service) => service.flush);
-  return hasCodePreviewSessionCapability()
-    ? runCodePreviewSessionEffect(effect)
-    : runOneShotSettingsEffect(effect);
+  return runSettingsEffect(CodePreviewSettingsService.use((service) => service.flush));
 }
 
 export function formatSettingsSaveError(error: unknown): string {

@@ -4,7 +4,13 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { formatCompactReset, formatResetCountdown, JsonHttpClient } from "pi-cosmic-core";
+import {
+  clampPercent,
+  formatPercent,
+  formatResetCountdown,
+  formatWindowedUsageLine,
+  JsonHttpClient,
+} from "pi-cosmic-core";
 import { getCodexCredentials, type CodexCredentialsWithSource } from "../auth/codex-auth.ts";
 
 export { readCodexAuth } from "../auth/codex-auth.ts";
@@ -54,7 +60,6 @@ export class CodexUsageError extends Schema.TaggedErrorClass<CodexUsageError>()(
   message: Schema.String,
 }) {}
 
-const clampPercent = (value: number) => Math.min(100, Math.max(0, value));
 const usedToLeftPercent = (value: number | null | undefined): number | null =>
   typeof value === "number" && Number.isFinite(value) ? clampPercent(100 - value) : null;
 
@@ -117,46 +122,31 @@ export function parseUsageSnapshot(
   };
 }
 
-export const formatPercent = (value: number | null): string =>
-  typeof value === "number" && Number.isFinite(value)
-    ? `${Math.round(clampPercent(value))}%`
-    : "--";
-const remaining = (seconds: number | null, capturedAt: number, now: number) =>
-  seconds === null ? null : seconds - (now - capturedAt) / 1000;
+export { formatPercent };
 
 export function formatUsageSnapshot(
   snapshot: UsageSnapshot,
   options: { readonly showResetTimes: boolean },
   now: number,
 ): string {
-  const hasFive = snapshot.fiveHourLeftPercent !== null || snapshot.fiveHourResetInSeconds !== null;
-  const hasSeven =
-    snapshot.sevenDayLeftPercent !== null || snapshot.sevenDayResetInSeconds !== null;
-  const windows = [
-    hasFive ? `5h: ${formatPercent(snapshot.fiveHourLeftPercent)}` : null,
-    hasSeven ? `7d: ${formatPercent(snapshot.sevenDayLeftPercent)}` : null,
-  ].filter((value): value is string => value !== null);
-  const resets = options.showResetTimes
-    ? [
-        hasFive
-          ? formatCompactReset(
-              "5h",
-              remaining(snapshot.fiveHourResetInSeconds, snapshot.capturedAt, now),
-              undefined,
-              now,
-            )
-          : null,
-        hasSeven
-          ? formatCompactReset(
-              "7d",
-              remaining(snapshot.sevenDayResetInSeconds, snapshot.capturedAt, now),
-              { includeDate: true },
-              now,
-            )
-          : null,
-      ].filter((value): value is string => value !== null)
-    : [];
-  return `Usage: ${windows.length ? windows.join(" | ") : "--"}${resets.length ? ` | ${resets.join(" | ")}` : ""}`;
+  return formatWindowedUsageLine(
+    [
+      {
+        label: "5h",
+        leftPercent: snapshot.fiveHourLeftPercent,
+        resetInSeconds: snapshot.fiveHourResetInSeconds,
+      },
+      {
+        label: "7d",
+        leftPercent: snapshot.sevenDayLeftPercent,
+        resetInSeconds: snapshot.sevenDayResetInSeconds,
+        includeDate: true,
+      },
+    ],
+    options,
+    now,
+    snapshot.capturedAt,
+  );
 }
 
 export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string {

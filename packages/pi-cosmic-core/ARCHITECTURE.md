@@ -14,10 +14,12 @@
 - `src/runtime/` defines Pi-owned execution boundaries (`runtime.ts`, `session-runtime.ts`, `pi-api.ts`).
 - `src/coordination/` provides scoped concurrency primitives (`refresh-coordinator.ts`, `subscription-refresh.ts`, `synchronous-ingress.ts`).
 - `src/platform/` contains typed Node, HTTP, document, file, process-coordination, and agent-directory adapters.
-- `src/config/` contains reusable scoped-store and tolerant-field configuration infrastructure.
+- `src/config/` contains reusable scoped-store, document-ops, and tolerant-field configuration infrastructure.
 - `src/projection.ts` publishes immutable synchronous snapshots.
 - `src/security.ts` owns shared redaction/sanitization.
-- `src/subscription-format.ts` owns shared subscription countdown/formatting helpers.
+- `src/subscription-format.ts` owns shared subscription countdown/percent/token/status-line formatting helpers.
+- `src/host-session.ts` owns pure Pi host session capture helpers (UI mode, trust, cwd/signal).
+- `src/usage-projection.ts` owns shared usage eligibility/clearing projection transitions.
 - `src/testing/` contains multi-consumer fakes and probes only.
 
 Public barrels (`index.ts`, `testing.ts`) re-export these modules; consumers import from `pi-cosmic-core` / `pi-cosmic-core/testing`, not internal paths.

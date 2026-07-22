@@ -20,6 +20,7 @@ import {
   mergeRefreshRequest,
   makeSubscriptionRefresh,
   sanitizeDiagnosticError,
+  withUsageEligibility,
   type RefreshRequest,
 } from "pi-cosmic-core";
 import { ignoreHostUi } from "../boundary/host-ui.ts";
@@ -106,34 +107,14 @@ function synchronizedProjection(
   try {
     const eligible = state.config ? isOpenAISubscriptionModel(ctx, state.config) : false;
     const scopeMatches = state.snapshot?.scope === usageScopeForModel(ctx.model?.id);
-    const statusText = eligible
-      ? "Usage unavailable."
-      : "Usage hidden: current model is not an OpenAI subscription model.";
-    return {
-      ...state,
-      eligible,
-      ...(clearUsage || !scopeMatches
-        ? {
-            snapshot: undefined,
-            statusLine: undefined,
-            error: undefined,
-            updatedAt: undefined,
-            statusText,
-          }
-        : !eligible
-          ? { statusLine: undefined, error: undefined, statusText }
-          : {}),
-    };
+    return withUsageEligibility(state, eligible, clearUsage || !scopeMatches, {
+      hiddenStatusText: "Usage hidden: current model is not an OpenAI subscription model.",
+    });
   } catch {
-    return {
-      ...state,
-      eligible: false,
-      snapshot: undefined,
-      statusLine: undefined,
-      error: undefined,
-      updatedAt: undefined,
-      statusText: "Usage unavailable.",
-    };
+    return withUsageEligibility(state, false, true, {
+      hiddenStatusText: "Usage unavailable.",
+      unavailableStatusText: "Usage unavailable.",
+    });
   }
 }
 

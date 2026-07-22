@@ -2,7 +2,14 @@
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
-import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
+import {
+  captureHostSignal,
+  captureSessionHost,
+  hasTerminalUI,
+  isProjectTrusted,
+  makePiManagedRuntime,
+  makePiSessionRuntimeSlot,
+} from "pi-cosmic-core";
 import { createCosmicFooterClient } from "pi-cosmic-ui/client";
 import type { ResolvedConfig } from "./config/index.ts";
 import { createFooterController } from "./footer/controller.ts";
@@ -33,55 +40,6 @@ export interface BetterXaiExtensionDependencies {
 const defaultDependencies: BetterXaiExtensionDependencies = {
   startupEffect: () => XaiUsageService.use(() => Effect.void),
 };
-
-function hasTerminalUI(ctx: ExtensionContext): boolean {
-  try {
-    const mode = ctx.mode;
-    const hasUI = ctx.hasUI;
-    return mode === "tui" || (mode === undefined && hasUI);
-  } catch {
-    return false;
-  }
-}
-function isProjectTrusted(ctx: ExtensionContext): boolean {
-  try {
-    return typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
-  } catch {
-    return false;
-  }
-}
-
-type CapturedHostSignal =
-  | { readonly _tag: "Captured"; readonly signal: AbortSignal | undefined }
-  | { readonly _tag: "Unavailable" };
-
-function captureHostSignal(ctx: ExtensionContext): CapturedHostSignal {
-  try {
-    return { _tag: "Captured", signal: ctx.signal };
-  } catch {
-    return { _tag: "Unavailable" };
-  }
-}
-
-type CapturedSessionHost =
-  | {
-      readonly _tag: "Captured";
-      readonly cwd: string;
-      readonly signal: AbortSignal | undefined;
-      readonly aborted: boolean;
-    }
-  | { readonly _tag: "Unavailable" };
-
-function captureSessionHost(ctx: ExtensionContext): CapturedSessionHost {
-  try {
-    const cwd = ctx.cwd;
-    const signal = ctx.signal;
-    if (typeof cwd !== "string" || cwd.length === 0) return { _tag: "Unavailable" };
-    return { _tag: "Captured", cwd, signal, aborted: signal?.aborted === true };
-  } catch {
-    return { _tag: "Unavailable" };
-  }
-}
 
 function notifyAtHostBoundary(
   ctx: ExtensionContext,

@@ -19,6 +19,7 @@ import {
   makeSubscriptionRefresh,
   maskIdentifier,
   sanitizeDiagnosticError,
+  withUsageEligibility,
   type RefreshRequest,
 } from "pi-cosmic-core";
 import { ModelRegistryAuth, isUsingOAuthAtHostBoundary } from "../boundary/model-registry-auth.ts";
@@ -69,31 +70,6 @@ const initialProjection = (): XaiProjection => ({
   teamId: undefined,
 });
 
-function withEligibility(
-  current: XaiProjection,
-  eligible: boolean,
-  clearUsage: boolean,
-): XaiProjection {
-  const statusText = eligible
-    ? "Usage unavailable."
-    : "Usage hidden: current model is not an xAI subscription model.";
-  return {
-    ...current,
-    eligible,
-    ...(clearUsage
-      ? {
-          snapshot: undefined,
-          statusLine: undefined,
-          error: undefined,
-          updatedAt: undefined,
-          statusText,
-        }
-      : eligible
-        ? {}
-        : { statusLine: undefined, error: undefined, statusText }),
-  };
-}
-
 export const makeProjection = (): MutableRef.MutableRef<XaiProjection> =>
   MutableRef.make(freezeSnapshot(initialProjection()));
 
@@ -125,7 +101,11 @@ export function synchronizeProjectionContext(
   const eligible = state.config ? isXaiSubscriptionModel(ctx, state.config, isUsingOAuth) : false;
   MutableRef.set(
     projection,
-    freezeSnapshot(withEligibility(state, eligible, options.clearUsage ?? false)),
+    freezeSnapshot(
+      withUsageEligibility(state, eligible, options.clearUsage ?? false, {
+        hiddenStatusText: "Usage hidden: current model is not an xAI subscription model.",
+      }),
+    ),
   );
 }
 
@@ -260,7 +240,13 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
               return eligible.pipe(
                 Effect.map(
                   (eligible) =>
-                    [undefined, withEligibility(current, eligible, clearUsage)] as const,
+                    [
+                      undefined,
+                      withUsageEligibility(current, eligible, clearUsage, {
+                        hiddenStatusText:
+                          "Usage hidden: current model is not an xAI subscription model.",
+                      }),
+                    ] as const,
                 ),
               );
             })
