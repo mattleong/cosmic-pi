@@ -3,16 +3,19 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
+import { AgentDirectory, nodeFilePlatformLayer, piHostLoggerLayer } from "pi-cosmic-core";
 import { CodePreviewEnvironmentService } from "../config/environment-service";
 import { CodePreviewSettingsService } from "../config/service";
 
 const oneShotSettingsLayer = () => {
   const environment = Reflect.get(process, "env") as Readonly<Record<string, string>>;
-  return CodePreviewSettingsService.layer.pipe(
-    Layer.provideMerge(CodePreviewEnvironmentService.layerFrom(environment)),
-    Layer.provideMerge(AgentDirectory.layerFromHost(getAgentDir)),
-    Layer.provide(nodeFilePlatformLayer),
+  return Layer.merge(
+    CodePreviewSettingsService.layer.pipe(
+      Layer.provideMerge(CodePreviewEnvironmentService.layerFrom(environment)),
+      Layer.provideMerge(AgentDirectory.layerFromHost(getAgentDir)),
+      Layer.provide(nodeFilePlatformLayer),
+    ),
+    piHostLoggerLayer,
   );
 };
 
@@ -22,10 +25,8 @@ let oneShotTransition: Promise<unknown> = Promise.resolve();
 export function runOneShotSettingsEffect<A, E>(
   effect: Effect.Effect<A, E, CodePreviewSettingsService>,
 ): Promise<A> {
-  const result = oneShotTransition.then(
-    () => Effect.runPromise(effect.pipe(Effect.provide(oneShotSettingsLayer()))),
-    () => Effect.runPromise(effect.pipe(Effect.provide(oneShotSettingsLayer()))),
-  );
+  const run = () => Effect.runPromise(effect.pipe(Effect.provide(oneShotSettingsLayer())));
+  const result = oneShotTransition.then(run, run);
   oneShotTransition = result.then(
     () => undefined,
     () => undefined,

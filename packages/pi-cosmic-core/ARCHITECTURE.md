@@ -37,7 +37,8 @@ scoped services -> finalizers interrupt fibers and release resources
 Effect state -> frozen projection -> synchronous host renderer
 ```
 
-`makePiRuntime` / `makePiManagedRuntime` replace Effect's default console logger with
-`Logger.tracerLogger` only. Pi owns the TTY; `console.log` from Effect would corrupt the
-editor/input region. Packages may still install additional loggers (for tests or file sinks)
-via `Logger.layer`.
+`makePiRuntime` / `makePiManagedRuntime` install `piHostLoggerLayer` (Effect's
+`Logger.tracerLogger` only). Pi owns the TTY; `console.log` from Effect would corrupt the
+editor/input region. Pre-session / standalone Effect runners that bypass the managed runtime
+must provide the same `piHostLoggerLayer`. Packages may still install additional loggers
+(for tests or file sinks) via `Logger.layer`.

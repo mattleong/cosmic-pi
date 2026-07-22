@@ -11,8 +11,11 @@ import { PiApi } from "./pi-api.ts";
  * Pi owns the TTY. Effect's default console logger writes with `console.log` and
  * corrupts the TUI editor/input region. Keep only the span-event logger so
  * Effect.log* still contributes to traces without touching stdout/stderr.
+ *
+ * Use this for every Pi-hosted Effect runner, including pre-session one-shots that
+ * bypass {@link makePiManagedRuntime}.
  */
-const piHostLoggerLayer = Logger.layer([Logger.tracerLogger]);
+export const piHostLoggerLayer = Logger.layer([Logger.tracerLogger]);
 
 declare const PiManagedRuntimeRuntimeError: unique symbol;
 

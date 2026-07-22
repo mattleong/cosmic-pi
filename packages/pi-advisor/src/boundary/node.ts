@@ -105,6 +105,7 @@ export function writeTextFileAtomicSync(path: string, text: string): void {
   }
 }
 
-export function warnSyncBoundary(message: string): void {
-  console.warn(message);
+export function warnSyncBoundary(_message: string): void {
+  // Pi owns the TTY. console.warn corrupts the editor/input region the same way
+  // Effect's default logger does. Sync fail-open paths stay silent at the host boundary.
 }

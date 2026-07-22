@@ -242,7 +242,8 @@ describe("advisor config", () => {
         ...DEFAULT_ADVISOR_CONFIG,
         configured: false,
       });
-      expect(warn).toHaveBeenCalledTimes(2);
+      // Sync fail-open paths must not write to the TTY console.
+      expect(warn).not.toHaveBeenCalled();
     });
     warn.mockRestore();
   });
