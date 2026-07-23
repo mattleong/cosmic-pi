@@ -18,7 +18,7 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 - `src/footer/installation.ts` owns the synchronous footer installation generation and disposal state machine.
 - `src/footer/` contains registry/client behavior and synchronous footer components/layout.
 - `src/probe/`, `src/config/`, `src/settings/`, and `src/working/` are vertical application features.
-- `src/working/service.ts` owns the scoped elapsed-time ticker for Pi's working row.
+- `src/working/service.ts` owns the scoped elapsed-time ticker and streamed-output rate estimate for Pi's working row.
 - `src/boundary/` isolates hostile synchronous host callbacks, including working-message updates.
 - `src/protocol/protocol.ts` is the plain public protocol (package export `pi-cosmic-ui/protocol`).
 - `src/protocol/host.ts` is the scoped protocol ingress host.
@@ -33,7 +33,7 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 ```text
 protocol events -> bounded buffer -> scoped protocol host -> registry snapshot
 session_start -> application -> layer -> services -> footer installation
-agent_start -> working timer -> Pi working message updates -> agent_end reset
+agent_start + streaming deltas -> working timer/rate estimate -> Pi working message -> agent_end reset
 Pi changes -> service refresh -> frozen projection -> render request
 session_shutdown -> subscriptions/footer/runtime disposed
 ```

@@ -435,7 +435,21 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
     );
   });
   pi.on("message_start", invalidateContextUsage);
-  pi.on("message_update", invalidateContextUsage);
+  pi.on("message_update", (event, ctx) => {
+    invalidateContextUsage(event, ctx);
+    const update = event.assistantMessageEvent;
+    if (
+      !update ||
+      (update.type !== "text_delta" &&
+        update.type !== "thinking_delta" &&
+        update.type !== "toolcall_delta")
+    )
+      return;
+    forkFrom(
+      WorkingTimerService.use((timer) => timer.recordOutputCharacters(update.delta.length)),
+      ctx,
+    );
+  });
   pi.on("message_end", invalidateContextUsage);
   pi.on("session_shutdown", () => {
     disposeSubscriptions();
