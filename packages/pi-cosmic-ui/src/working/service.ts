@@ -10,6 +10,7 @@ const UPDATE_INTERVAL_MS = 1_000;
 interface WorkingTimerState {
   readonly generation: number;
   readonly startedAt: number;
+  readonly outputStartedAt: number | undefined;
   readonly outputCharacters: number;
   readonly active: boolean;
 }
@@ -34,9 +35,13 @@ export function estimateTokensPerSecond(
   return estimatedTokens / (milliseconds / 1_000);
 }
 
-export const formatWorkingMessage = (milliseconds: number, outputCharacters = 0): string => {
+export const formatWorkingMessage = (
+  milliseconds: number,
+  outputCharacters = 0,
+  outputMilliseconds = milliseconds,
+): string => {
   const elapsed = formatWorkingElapsed(milliseconds);
-  const tokensPerSecond = estimateTokensPerSecond(outputCharacters, milliseconds);
+  const tokensPerSecond = estimateTokensPerSecond(outputCharacters, outputMilliseconds);
   return tokensPerSecond === undefined
     ? `Working · ${elapsed}`
     : `Working · ${elapsed} · ~${tokensPerSecond.toFixed(1)} tok/s`;
@@ -61,6 +66,7 @@ export class WorkingTimerService extends Context.Service<
       const state = yield* SynchronizedRef.make<WorkingTimerState>({
         generation: 0,
         startedAt: 0,
+        outputStartedAt: undefined,
         outputCharacters: 0,
         active: false,
       });
@@ -71,7 +77,13 @@ export class WorkingTimerService extends Context.Service<
             return Effect.succeed([false, current] as const);
           return Clock.currentTimeMillis.pipe(
             Effect.flatMap((now) =>
-              host.set(formatWorkingMessage(now - current.startedAt, current.outputCharacters)),
+              host.set(
+                formatWorkingMessage(
+                  now - current.startedAt,
+                  current.outputCharacters,
+                  current.outputStartedAt === undefined ? undefined : now - current.outputStartedAt,
+                ),
+              ),
             ),
             Effect.map((available) => [available, { ...current, active: available }] as const),
           );
@@ -94,6 +106,7 @@ export class WorkingTimerService extends Context.Service<
             const next = {
               generation: current.generation + 1,
               startedAt,
+              outputStartedAt: undefined,
               outputCharacters: 0,
               active: available,
             } as const;
@@ -108,10 +121,18 @@ export class WorkingTimerService extends Context.Service<
       const recordOutputCharacters = (characters: number): Effect.Effect<void> => {
         const increment = Math.max(0, Math.floor(characters));
         if (increment === 0) return Effect.void;
-        return SynchronizedRef.update(state, (current) =>
-          current.active
-            ? { ...current, outputCharacters: current.outputCharacters + increment }
-            : current,
+        return Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) =>
+            SynchronizedRef.update(state, (current) =>
+              current.active
+                ? {
+                    ...current,
+                    outputStartedAt: current.outputStartedAt ?? now,
+                    outputCharacters: current.outputCharacters + increment,
+                  }
+                : current,
+            ),
+          ),
         );
       };
 

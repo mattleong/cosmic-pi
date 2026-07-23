@@ -29,6 +29,7 @@ export interface ResolvedConfig {
     showResetTimes: boolean;
   };
   footer: { mode: FooterMode };
+  compaction: { enabled: boolean };
   image: {
     enabled: boolean;
     defaultModel: string;
@@ -46,6 +47,7 @@ export type ConfigFile = OptionalFields<
 > & {
   readonly usage?: UsageConfig | undefined;
   readonly footer?: OptionalFields<ResolvedConfig["footer"]> | undefined;
+  readonly compaction?: OptionalFields<ResolvedConfig["compaction"]> | undefined;
   readonly image?: ImageConfig | undefined;
 };
 
@@ -56,6 +58,7 @@ export const DEFAULT_USAGE_CONFIG: ResolvedConfig["usage"] = {
   showResetTimes: true,
 };
 export const DEFAULT_FOOTER_CONFIG: ResolvedConfig["footer"] = { mode: "replace" };
+export const DEFAULT_COMPACTION_CONFIG: ResolvedConfig["compaction"] = { enabled: false };
 export const DEFAULT_IMAGE_CONFIG: ResolvedConfig["image"] = {
   enabled: true,
   defaultModel: "gpt-5.5",
@@ -69,5 +72,6 @@ export const DEFAULT_CONFIG: ConfigFile = {
   desiredActive: false,
   usage: DEFAULT_USAGE_CONFIG,
   footer: DEFAULT_FOOTER_CONFIG,
+  compaction: DEFAULT_COMPACTION_CONFIG,
   image: DEFAULT_IMAGE_CONFIG,
 };

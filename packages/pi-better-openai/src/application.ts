@@ -11,6 +11,8 @@ import {
 } from "pi-cosmic-core";
 import { createCosmicFooterClient } from "pi-cosmic-ui/client";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "./boundary/host-ui.ts";
+import { decodeOpenAICompactionDetails } from "./compaction/protocol.ts";
+import { OpenAICompactionService } from "./compaction/service.ts";
 import {
   CONFIG_BASENAME,
   DEFAULT_CONFIG,
@@ -253,6 +255,7 @@ export function betterOpenAIWithDependencies(
     return [
       ...fastDebugLines(ctx, MutableRef.get(fastProjection), FAST_SERVICE_TIER),
       `Footer mode: ${cfg.footer.mode}`,
+      `OpenAI compaction: ${cfg.compaction.enabled ? "enabled" : "disabled"}`,
       "",
       formatDebug(projection, ctx),
       "",
@@ -328,7 +331,30 @@ export function betterOpenAIWithDependencies(
     footerController.refreshTotals(ctx);
     updateFooter(ctx);
   };
-  pi.on("session_compact", (_event, ctx) => refreshFooter(ctx));
+  pi.on("session_before_compact", (event, ctx) => {
+    updateContext(ctx);
+    if (!sessionActive) return undefined;
+    return run(
+      OpenAICompactionService.use((service) => service.compact(event)),
+      event.signal,
+    )
+      .then((compaction) => {
+        if (!compaction) return undefined;
+        return { compaction };
+      })
+      .catch(() => {
+        if (!event.signal.aborted)
+          safeHostUi(() =>
+            ctx.ui.notify("OpenAI compaction failed; using Pi compaction.", "warning"),
+          );
+        return undefined;
+      });
+  });
+  pi.on("session_compact", (event, ctx) => {
+    refreshFooter(ctx);
+    if (event.fromExtension && decodeOpenAICompactionDetails(event.compactionEntry.details))
+      safeHostUi(() => ctx.ui.notify("Context compacted using OpenAI.", "info"));
+  });
   pi.on("session_tree", (_event, ctx) => refreshFooter(ctx));
   pi.on("model_select", (_event, ctx) => {
     const signal = safeHostSignal(ctx);
@@ -363,15 +389,32 @@ export function betterOpenAIWithDependencies(
     footerController.invalidateSessionName();
     return slot.shutdown();
   });
+  pi.on("context", (event, ctx) => {
+    updateContext(ctx);
+    if (!sessionActive) return undefined;
+    return run(
+      OpenAICompactionService.use((service) => service.filterContext(event.messages)),
+      safeHostSignal(ctx),
+    )
+      .then((messages) => (messages ? { messages } : undefined))
+      .catch(() => undefined);
+  });
   pi.on("before_provider_request", (event, ctx) => {
     updateContext(ctx);
-    return injectProviderPayload(
+    const fastPayload = injectProviderPayload(
       event,
       ctx,
       MutableRef.get(fastProjection),
       FAST_SERVICE_TIER,
       recordFastInjection,
     );
+    if (!sessionActive) return fastPayload;
+    return run(
+      OpenAICompactionService.use((service) => service.inject(fastPayload ?? event.payload)),
+      safeHostSignal(ctx),
+    )
+      .then((compactedPayload) => compactedPayload ?? fastPayload)
+      .catch(() => fastPayload);
   });
   const invalidateContextUsage = (_event: unknown, ctx: ExtensionContext) => {
     updateContext(ctx);

@@ -100,6 +100,7 @@ describe("config helpers", () => {
     ["usage.refreshIntervalMs", "15000", 15_000],
     ["usage.showResetTimes", "false", false],
     ["footer.mode", "status", "status"],
+    ["compaction.enabled", "true", true],
     ["image.defaultSave", "global", "global"],
     ["image.timeoutMs", "45000", 45_000],
   ])("parses setting %s from its persisted string form", async (id, raw, expected) => {
@@ -112,6 +113,7 @@ describe("config helpers", () => {
       ["usage.enabled", "yes"],
       ["usage.refreshIntervalMs", "NaN"],
       ["footer.mode", "other"],
+      ["compaction.enabled", "sometimes"],
     ] as const) {
       await expect(Effect.runPromise(applySettingToRawConfig({}, id, value))).rejects.toBeDefined();
     }

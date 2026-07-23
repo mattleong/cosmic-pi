@@ -46,6 +46,17 @@ export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
     decode: boolean("persistState"),
   },
 ];
+export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
+  {
+    id: "compaction.enabled",
+    label: "OpenAI compaction",
+    currentValue: (cfg) => String(cfg.compaction.enabled),
+    values: ["true", "false"],
+    description:
+      "Use OpenAI native compaction when Pi triggers compaction for OpenAI Responses models.",
+    decode: boolean("compaction.enabled"),
+  },
+];
 export const FOOTER_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   {
     id: "footer.mode",
@@ -143,6 +154,7 @@ export const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
 ];
 export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = [
   ...FAST_SETTING_DESCRIPTORS,
+  ...COMPACTION_SETTING_DESCRIPTORS,
   ...FOOTER_SETTING_DESCRIPTORS,
   ...USAGE_SETTING_DESCRIPTORS,
   ...IMAGE_SETTING_DESCRIPTORS,

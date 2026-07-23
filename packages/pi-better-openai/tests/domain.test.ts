@@ -31,7 +31,12 @@ import {
   parseCodexRegistryCredentials,
   readCodexAuth,
 } from "../src/auth/codex-auth.ts";
-import { DEFAULT_IMAGE_CONFIG, readConfig, resolveConfig } from "../src/config/index.ts";
+import {
+  DEFAULT_COMPACTION_CONFIG,
+  DEFAULT_IMAGE_CONFIG,
+  readConfig,
+  resolveConfig,
+} from "../src/config/index.ts";
 import {
   initialFastSnapshot,
   injectProviderPayload,
@@ -1053,6 +1058,7 @@ describe("usage payloads, visibility, and fast mode", () => {
           showResetTimes: false,
         },
         footer: { mode: "status" as const },
+        compaction: DEFAULT_COMPACTION_CONFIG,
         image: DEFAULT_IMAGE_CONFIG,
       };
       expect(isOpenAISubscriptionModel(ctx, cfg)).toBe(false);

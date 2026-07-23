@@ -10,6 +10,7 @@ import * as Predicate from "effect/Predicate";
 import { redactDiagnosticValue } from "pi-cosmic-core";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
 import {
+  COMPACTION_SETTING_DESCRIPTORS,
   FAST_SETTING_DESCRIPTORS,
   FOOTER_SETTING_DESCRIPTORS,
   IMAGE_SETTING_DESCRIPTORS,
@@ -133,6 +134,8 @@ export function registerSettingsController(
     );
   };
 
+  const compactionSummary = (cfg: ResolvedConfig) =>
+    cfg.compaction.enabled ? "OpenAI native" : "Pi default";
   const usageSummary = (cfg: ResolvedConfig) =>
     cfg.usage.enabled ? `enabled · ${Math.round(cfg.usage.refreshIntervalMs / 1000)}s` : "disabled";
   const imageSummary = (cfg: ResolvedConfig) =>
@@ -227,6 +230,19 @@ export function registerSettingsController(
                   submenu: (_value, complete) =>
                     submenu("Fast mode settings", fastItems, () =>
                       complete(settingsSummary(ctx, MutableRef.get(fastProjection))),
+                    ),
+                },
+                {
+                  id: "section.compaction",
+                  label: "Compaction",
+                  currentValue: compactionSummary(cfg),
+                  description: "Use OpenAI native compaction when Pi triggers compaction.",
+                  submenu: (_value, complete) =>
+                    submenu(
+                      "Compaction settings",
+                      () =>
+                        settingsItemsFromDescriptors(COMPACTION_SETTING_DESCRIPTORS, config(ctx)),
+                      () => complete(compactionSummary(config(ctx))),
                     ),
                 },
                 {

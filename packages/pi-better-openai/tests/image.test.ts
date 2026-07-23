@@ -40,7 +40,7 @@ import {
 } from "pi-cosmic-core/testing";
 import sharp from "sharp";
 import { SharpAdapter } from "../src/boundary/sharp.ts";
-import { DEFAULT_IMAGE_CONFIG } from "../src/config/index.ts";
+import { DEFAULT_COMPACTION_CONFIG, DEFAULT_IMAGE_CONFIG } from "../src/config/index.ts";
 import {
   OpenAIImageService,
   _imageTest,
@@ -113,6 +113,7 @@ function harness(
       showResetTimes: false,
     },
     footer: { mode: "off" as const },
+    compaction: DEFAULT_COMPACTION_CONFIG,
     image: { ...DEFAULT_IMAGE_CONFIG, defaultSave: "none" as const, timeoutMs },
   };
   const projection = makeProjection();

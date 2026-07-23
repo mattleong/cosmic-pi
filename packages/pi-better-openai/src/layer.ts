@@ -2,7 +2,9 @@ import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-ag
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import { AgentDirectory, SafeFile, nodePlatformLayer } from "pi-cosmic-core";
+import { OpenAICompactionClient } from "./boundary/openai-compaction.ts";
 import { SharpAdapter } from "./boundary/sharp.ts";
+import { OpenAICompactionService } from "./compaction/service.ts";
 import { FastModeService } from "./fast/service.ts";
 import { FAST_SERVICE_TIER } from "./fast/models.ts";
 import { OpenAIImageService } from "./image/index.ts";
@@ -47,11 +49,15 @@ export const makeOpenAIApplicationLayer = (
   const image = OpenAIImageService.layer({ context, projection: options.projection }).pipe(
     Layer.provide(Layer.merge(SharpAdapter.layer, SafeFile.layer)),
   );
+  const compaction = OpenAICompactionService.layer({
+    context,
+    projection: options.projection,
+  }).pipe(Layer.provide(OpenAICompactionClient.layer(() => MutableRef.get(context).modelRegistry)));
   const platform = Layer.merge(
     nodePlatformLayer,
     AgentDirectory.layerFromHost(() => getAgentDir()),
   );
-  return Layer.mergeAll(usage, fast, image).pipe(Layer.provide(platform));
+  return Layer.mergeAll(usage, fast, image, compaction).pipe(Layer.provide(platform));
 };
 
 export type OpenAIApplicationLayer = ReturnType<typeof makeOpenAIApplicationLayer>;

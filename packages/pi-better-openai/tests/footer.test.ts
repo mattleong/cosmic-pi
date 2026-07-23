@@ -600,12 +600,13 @@ describe("footer mode ownership", () => {
     await harness.commands.get("openai-settings")?.("", harness.ctx);
     const root = component!.render(120).join("\n");
     expect(root).toContain("Fast mode");
+    expect(root).toContain("Compaction");
     expect(root).toContain("Footer");
     expect(root).toContain("Usage");
     expect(root).toContain("Image tool");
     expect(root).toContain("Diagnostics");
 
-    for (let index = 0; index < 4; index++) component!.handleInput("\x1b[B");
+    for (let index = 0; index < 5; index++) component!.handleInput("\x1b[B");
     component!.handleInput("\r");
     expect(component!.render(120).join("\n")).toContain("Diagnostics");
     component!.handleInput("\x1b[B");

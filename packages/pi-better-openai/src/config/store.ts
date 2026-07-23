@@ -15,6 +15,7 @@ import {
 } from "pi-cosmic-core";
 import {
   CONFIG_BASENAME,
+  DEFAULT_COMPACTION_CONFIG,
   DEFAULT_CONFIG,
   DEFAULT_FOOTER_CONFIG,
   DEFAULT_IMAGE_CONFIG,
@@ -69,6 +70,7 @@ function decodeConfig(value: unknown): ConfigFile {
       desiredActive: Schema.Boolean,
       usage: UnknownRecordSchema,
       footer: UnknownRecordSchema,
+      compaction: UnknownRecordSchema,
       image: UnknownRecordSchema,
     },
     { path: "config" },
@@ -87,6 +89,11 @@ function decodeConfig(value: unknown): ConfigFile {
     root.footer,
     { mode: FooterModeSchema },
     { path: "footer" },
+  ).value;
+  const compaction = decodeTolerantFields(
+    root.compaction,
+    { enabled: Schema.Boolean },
+    { path: "compaction" },
   ).value;
   const imageFields = decodeTolerantFields(
     root.image,
@@ -110,6 +117,7 @@ function decodeConfig(value: unknown): ConfigFile {
     ...(root.desiredActive !== undefined ? { desiredActive: root.desiredActive } : {}),
     ...(Object.keys(usage).length ? { usage } : {}),
     ...(footer.mode !== undefined ? { footer: { mode: footer.mode } } : {}),
+    ...(compaction.enabled !== undefined ? { compaction: { enabled: compaction.enabled } } : {}),
     ...(Object.values(image).some((field) => field !== undefined) ? { image } : {}),
   };
 }
@@ -161,6 +169,12 @@ function resolveConfigFiles(
     },
     footer: {
       mode: project?.footer?.mode ?? global?.footer?.mode ?? DEFAULT_FOOTER_CONFIG.mode,
+    },
+    compaction: {
+      enabled:
+        project?.compaction?.enabled ??
+        global?.compaction?.enabled ??
+        DEFAULT_COMPACTION_CONFIG.enabled,
     },
     image: {
       enabled: project?.image?.enabled ?? global?.image?.enabled ?? DEFAULT_IMAGE_CONFIG.enabled,

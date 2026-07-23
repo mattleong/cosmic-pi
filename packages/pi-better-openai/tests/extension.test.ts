@@ -69,11 +69,14 @@ function harness(dependencies?: BetterOpenAIExtensionDependencies) {
     ui: { notify: vi.fn(), setStatus: vi.fn(), setFooter: vi.fn() },
     sessionManager: {
       getEntries: () => [],
+      getBranch: () => [],
+      buildContextEntries: () => [],
       getLeafId: () => null,
       getCwd: () => cwd,
       getSessionName: () => undefined,
     },
     getContextUsage: () => ({ contextWindow: 100, percent: 1 }),
+    getSystemPrompt: () => "system",
     isProjectTrusted: vi.fn(() => true),
   } as unknown as ExtensionContext;
   if (dependencies) betterOpenAIWithDependencies(pi, dependencies);

@@ -30,6 +30,7 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
 ## Features
 
 - Fast mode for supported OpenAI models, toggled with `/fast` or in `/openai-settings`.
+- Optional OpenAI-native context compaction for `openai-responses` models. Pi still decides when to compact; Better OpenAI replaces threshold and manual compaction with `POST /responses/compact`. Provider failures and overflow recovery fall back to Pi compaction.
 - OpenAI subscription usage display via `/openai-usage` and the footer.
 - Interactive TUI settings picker via `/openai-settings`, plus scriptable updates via `/openai-settings <id> <value>`; run `/openai-settings help` for available keys.
 - Standalone footer customization for model, thinking, fast mode, usage, and token/cost context.
@@ -57,6 +58,8 @@ The extension reads JSON config from two locations:
 
 Project overrides global. Global values fill fields omitted by the project file. Known fields are decoded independently, invalid values fall back without discarding valid siblings, and numeric settings are clamped to safe ranges.
 
+When `compaction.enabled` is true, Pi's normal compaction configuration still controls when compaction runs (`compaction.enabled`, `reserveTokens`, manual `/compact`, and overflow recovery in Pi settings). Better OpenAI only replaces the compaction operation for eligible OpenAI Responses models; OpenAI's canonical output determines the retained native window, so Pi's `keepRecentTokens` does not shape that output.
+
 The extension owns one scoped Effect runtime per Pi session. Repeated `session_start` replaces and disposes the previous runtime; usage polling and image streams are interrupted during replacement or `session_shutdown`.
 
 Fast-mode model support is controlled by the package and cannot be overridden in user configuration. The current allow-list is:
@@ -79,6 +82,9 @@ Example config:
 {
   "persistState": true,
   "desiredActive": false,
+  "compaction": {
+    "enabled": false
+  },
   "usage": {
     "enabled": true,
     "refreshIntervalMs": 60000,
