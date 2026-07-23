@@ -22,6 +22,7 @@ function harness(mode: "tui" | "rpc" = "tui") {
   const handlers = new Map<string, Handler[]>();
   const bus = new Map<string, Set<(data: unknown) => void>>();
   const setFooter = vi.fn();
+  const setWorkingMessage = vi.fn();
   const unsubscribed = vi.fn();
   const exec = vi.fn(
     async (command: string, args: string[], _options?: { signal?: AbortSignal }) => ({
@@ -71,11 +72,11 @@ function harness(mode: "tui" | "rpc" = "tui") {
       getSessionName: vi.fn(() => "session"),
       getLeafId: vi.fn(() => "leaf"),
     },
-    ui: { setFooter, notify: vi.fn(), custom: vi.fn() },
+    ui: { setFooter, setWorkingMessage, notify: vi.fn(), custom: vi.fn() },
     isProjectTrusted: vi.fn(() => true),
   } as unknown as ExtensionContext;
   cosmicUi(pi);
-  return { pi, ctx, handlers, setFooter, exec, unsubscribed };
+  return { pi, ctx, handlers, setFooter, setWorkingMessage, exec, unsubscribed };
 }
 
 async function emit(h: ReturnType<typeof harness>, name: string, event: unknown = {}) {
@@ -215,6 +216,22 @@ describe("Cosmic UI extension", () => {
     await emit(h, "message_update");
     footer.render(100);
     expect(h.ctx.getContextUsage).toHaveBeenCalledTimes(2);
+  });
+
+  test("shows elapsed working time for an agent run and restores Pi's default afterward", async () => {
+    const h = harness();
+    await emit(h, "session_start");
+
+    await emit(h, "agent_start");
+    await waitUntil(() => h.setWorkingMessage.mock.calls.length > 0);
+    expect(h.setWorkingMessage).toHaveBeenLastCalledWith("Working · 0s");
+
+    await emit(h, "agent_end");
+    await waitUntil(() =>
+      h.setWorkingMessage.mock.calls.some(([message]) => message === undefined),
+    );
+    expect(h.setWorkingMessage).toHaveBeenLastCalledWith(undefined);
+    await emit(h, "session_shutdown");
   });
 
   test("normalizes hostile protocol getters once and isolates throwing reads", async () => {

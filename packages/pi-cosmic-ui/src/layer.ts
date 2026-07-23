@@ -3,6 +3,7 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import { AgentDirectory, nodePlatformLayer } from "pi-cosmic-core";
 import { HostCallbackBoundary, type HostCallbackBoundaryShape } from "./boundary/host-callback.ts";
+import { WorkingMessageHost } from "./boundary/host-working-message.ts";
 import { CosmicUiConfigStore } from "./config/service.ts";
 import type { FooterTotals } from "./footer/component.ts";
 import { FooterRegistryService, type FooterRegistryBridge } from "./footer/registry.ts";
@@ -10,6 +11,7 @@ import { CosmicUiService, type CosmicUiProjection } from "./protocol/service.ts"
 import { PiExec } from "./probe/pi-exec.ts";
 import { RepositoryProbe } from "./probe/repository-probe.ts";
 import { FooterProtocolHost, type FooterProtocolBuffer } from "./protocol/host.ts";
+import { WorkingTimerService } from "./working/service.ts";
 
 /** Plain session values captured by the Pi adapter before runtime construction. */
 export interface CosmicUiSessionInput {
@@ -59,7 +61,11 @@ export const makeCosmicUiApplicationLayer = (
   const protocol = FooterProtocolHost.layer({ buffer: options.protocolBuffer }).pipe(
     Layer.provideMerge(registry),
   );
-  return Layer.merge(service, protocol);
+  const workingMessageHost = WorkingMessageHost.layer({ context }).pipe(
+    Layer.provide(callbackBoundary),
+  );
+  const workingTimer = WorkingTimerService.layer.pipe(Layer.provide(workingMessageHost));
+  return Layer.mergeAll(service, protocol, workingTimer);
 };
 
 export type CosmicUiApplicationLayer = ReturnType<typeof makeCosmicUiApplicationLayer>;

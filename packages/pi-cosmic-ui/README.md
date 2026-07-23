@@ -1,6 +1,6 @@
 # pi-cosmic-ui
 
-Composable, responsive UI elements for pi. The first element is a custom footer that combines pi's location, session, token, context, model, thinking, and extension-status information with contributions from other extensions.
+Composable, responsive UI elements for pi. Cosmic UI provides a custom footer that combines pi's location, session, token, context, model, thinking, and extension-status information with contributions from other extensions. While an agent is running, Pi's working row also shows elapsed time (for example, `Working · 2m 14s`).
 
 ## Install
 

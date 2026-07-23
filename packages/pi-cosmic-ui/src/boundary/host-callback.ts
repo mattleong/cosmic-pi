@@ -15,6 +15,7 @@ export type HostCallbackOperation =
   | "footer-render"
   | "footer-install"
   | "footer-remove"
+  | "working-message"
   | "branch-unsubscribe"
   | "event-unsubscribe"
   | "notify";

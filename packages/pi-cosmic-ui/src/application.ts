@@ -42,6 +42,7 @@ import {
 } from "./protocol/protocol.ts";
 import { registerSettingsCommand } from "./settings/controller.ts";
 import { createFooterInstallation } from "./footer/installation.ts";
+import { WorkingTimerService } from "./working/service.ts";
 
 const isProjectTrusted = (ctx: ExtensionContext): boolean => {
   try {
@@ -169,6 +170,7 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
         yield* CosmicUiService;
         yield* FooterRegistryService;
         yield* FooterProtocolHost;
+        yield* WorkingTimerService;
       }),
     onActivated: ({ ctx, context, signal }) => {
       currentContext = context;
@@ -201,7 +203,11 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
     return abort ? result.finally(abort.release) : result;
   };
   const forkFrom = <A, E>(
-    effect: Effect.Effect<A, E, CosmicUiService | FooterRegistryService | FooterProtocolHost>,
+    effect: Effect.Effect<
+      A,
+      E,
+      CosmicUiService | FooterRegistryService | FooterProtocolHost | WorkingTimerService
+    >,
     ctx: ExtensionContext,
   ) => {
     const abort = snapshotHostAbortSignal(callbacks, () => ctx.signal);
@@ -414,7 +420,20 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
   };
   pi.on("thinking_level_select", renderUpdatedContext);
   pi.on("session_info_changed", renderUpdatedContext);
-  pi.on("agent_start", invalidateContextUsage);
+  pi.on("agent_start", (event, ctx) => {
+    invalidateContextUsage(event, ctx);
+    forkFrom(
+      WorkingTimerService.use((timer) => timer.start),
+      ctx,
+    );
+  });
+  pi.on("agent_end", (_event, ctx) => {
+    updateContext(ctx);
+    forkFrom(
+      WorkingTimerService.use((timer) => timer.stop),
+      ctx,
+    );
+  });
   pi.on("message_start", invalidateContextUsage);
   pi.on("message_update", invalidateContextUsage);
   pi.on("message_end", invalidateContextUsage);
