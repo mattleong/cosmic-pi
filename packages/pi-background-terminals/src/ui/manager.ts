@@ -39,6 +39,23 @@ const stateGlyph = (job: BackgroundJobView) => {
   }
 };
 
+const stateColor = (job: BackgroundJobView) => {
+  switch (job.state) {
+    case "starting":
+      return "accent";
+    case "running":
+    case "exited":
+      return "success";
+    case "stopping":
+      return "warning";
+    case "failed":
+    case "timed_out":
+      return "error";
+    case "stopped":
+      return "muted";
+  }
+};
+
 const duration = (job: BackgroundJobView) => {
   if (job.endedAt === undefined) return "active";
   const seconds = Math.max(0, Math.floor((job.endedAt - job.startedAt) / 1000));
@@ -139,19 +156,11 @@ export class ProcessManagerComponent implements Component {
 
   private jobLine(job: BackgroundJobView, index: number, width: number): string {
     const selected = index === this.selected;
-    const color =
-      job.state === "failed" || job.state === "timed_out"
-        ? "error"
-        : job.state === "exited"
-          ? "success"
-          : isActiveJobState(job.state)
-            ? "accent"
-            : "muted";
-    const prefix = selected ? ">" : " ";
-    const label = sanitizeTerminalLine(
-      `${prefix} ${stateGlyph(job)} ${job.id} ${job.name ?? ""} ${job.state} ${duration(job)}`,
-    );
-    return padToWidth(this.options.theme.fg(color, label), width);
+    const prefix = selected ? this.options.theme.fg("accent", ">") : " ";
+    const glyph = this.options.theme.fg(stateColor(job), stateGlyph(job));
+    const label = sanitizeTerminalLine(`${job.id} ${job.name ?? ""} ${job.state} ${duration(job)}`);
+    const text = selected ? this.options.theme.fg("accent", label) : label;
+    return padToWidth(`${prefix} ${glyph} ${text}`, width);
   }
 
   private visibleJobs(

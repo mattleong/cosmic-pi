@@ -51,11 +51,41 @@ describe("/ps process manager", () => {
   it("renders width- and height-safe narrow fallbacks", () => {
     const lines = renderAt(42, 12);
     expect(lines).toHaveLength(12);
+    expect(lines.join("\n")).toContain("● term-1");
     expect(lines.every((line) => visibleWidth(line) <= 42)).toBe(true);
 
     const tiny = renderAt(12, 4);
     expect(tiny).toHaveLength(4);
     expect(tiny.every((line) => visibleWidth(line) <= 12)).toBe(true);
+  });
+
+  it.each([
+    ["starting", "accent", "◌"],
+    ["running", "success", "●"],
+    ["stopping", "warning", "◐"],
+    ["exited", "success", "✓"],
+    ["failed", "error", "×"],
+    ["stopped", "muted", "■"],
+    ["timed_out", "error", "⧖"],
+  ] as const)("renders the %s status icon in %s", (state, color, glyph) => {
+    const fg = vi.fn((_color: string, text: string) => text);
+    const stateProjection: BackgroundTerminalProjection = {
+      ...projection,
+      jobs: [{ ...projection.jobs[0]!, state }],
+    };
+    const component = new ProcessManagerComponent({
+      theme: { fg } as unknown as Theme,
+      getProjection: () => stateProjection,
+      getHeight: () => 12,
+      requestRender: vi.fn(),
+      close: vi.fn(),
+      stop: vi.fn(),
+      clear: vi.fn(),
+    });
+
+    component.render(42);
+
+    expect(fg).toHaveBeenCalledWith(color, glyph);
   });
 
   it("uses in-manager stop confirmation and Enter details", () => {
