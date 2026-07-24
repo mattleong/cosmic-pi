@@ -5,6 +5,7 @@
 - `packages/pi-advisor/` contains the automatic advisor and revision extension.
 - `packages/pi-better-openai/` contains the Better OpenAI pi extension.
 - `packages/pi-better-xai/` contains the Better xAI subscription usage extension.
+- `packages/pi-background-terminals/` contains the session-scoped background process extension.
 - `packages/pi-code-previews/` contains the code-preview pi extension.
 - `packages/pi-cosmic-core/` contains shared Effect-first runtime foundations for the extension packages.
 - `packages/pi-cosmic-ui/` contains composable shared UI elements, including the responsive footer.

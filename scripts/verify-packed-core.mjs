@@ -13,6 +13,7 @@ const extensionPackages = [
   "pi-cosmic-ui",
   "pi-code-previews",
   "pi-advisor",
+  "pi-background-terminals",
 ];
 const packageNames = ["pi-cosmic-core", ...extensionPackages];
 const manifests = new Map();
@@ -51,7 +52,7 @@ try {
   );
   if (tarballs.length !== packageNames.length || [...tarballNames.values()].some((name) => !name)) {
     throw new Error(
-      `Expected core, xAI, OpenAI, Cosmic UI, code-preview, and advisor tarballs, found: ${tarballs.join(", ")}.`,
+      `Expected core, xAI, OpenAI, Cosmic UI, code-preview, advisor, and background terminal tarballs, found: ${tarballs.join(", ")}.`,
     );
   }
   const tarballPath = (packageName) => join(temporaryDirectory, tarballNames.get(packageName));
@@ -72,6 +73,7 @@ try {
           "pi-cosmic-ui": `file:${tarballPath("pi-cosmic-ui")}`,
           "pi-code-previews": `file:${tarballPath("pi-code-previews")}`,
           "pi-advisor": `file:${tarballPath("pi-advisor")}`,
+          "pi-background-terminals": `file:${tarballPath("pi-background-terminals")}`,
         },
         pnpm: {
           overrides: {
@@ -79,6 +81,7 @@ try {
             "pi-cosmic-ui": `file:${tarballPath("pi-cosmic-ui")}`,
             "pi-better-openai": `file:${tarballPath("pi-better-openai")}`,
             "pi-better-xai": `file:${tarballPath("pi-better-xai")}`,
+            "pi-background-terminals": `file:${tarballPath("pi-background-terminals")}`,
           },
         },
       },
@@ -107,7 +110,7 @@ try {
     [
       "--input-type=module",
       "--eval",
-      "import { createJiti } from 'jiti'; const jiti = createJiti(import.meta.url); const xai = await jiti.import('pi-better-xai'); const openai = await jiti.import('pi-better-openai'); const cosmicUi = await jiti.import('pi-cosmic-ui'); const advisor = await jiti.import('pi-advisor'); const protocol = await jiti.import('pi-cosmic-ui/protocol'); const client = await jiti.import('pi-cosmic-ui/client'); const previews = await import('pi-code-previews'); if (typeof xai.default !== 'function') throw new Error('missing xAI extension export'); if (typeof openai.default !== 'function') throw new Error('missing OpenAI extension export'); if (typeof cosmicUi.default !== 'function') throw new Error('missing Cosmic UI extension export'); if (typeof advisor.default !== 'function') throw new Error('missing advisor extension export'); if (typeof previews.default !== 'function' || typeof previews.loadCodePreviewSettings !== 'function' || typeof previews.withCodePreviewShell !== 'function') throw new Error('missing code-preview public exports'); if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== 'function') throw new Error('missing Cosmic UI protocol exports'); if (typeof client.createCosmicFooterClient !== 'function') throw new Error('missing Cosmic UI client export');",
+      "import { createJiti } from 'jiti'; const jiti = createJiti(import.meta.url); const xai = await jiti.import('pi-better-xai'); const openai = await jiti.import('pi-better-openai'); const cosmicUi = await jiti.import('pi-cosmic-ui'); const advisor = await jiti.import('pi-advisor'); const terminals = await jiti.import('pi-background-terminals'); const protocol = await jiti.import('pi-cosmic-ui/protocol'); const client = await jiti.import('pi-cosmic-ui/client'); const previews = await import('pi-code-previews'); if (typeof xai.default !== 'function') throw new Error('missing xAI extension export'); if (typeof openai.default !== 'function') throw new Error('missing OpenAI extension export'); if (typeof cosmicUi.default !== 'function') throw new Error('missing Cosmic UI extension export'); if (typeof advisor.default !== 'function') throw new Error('missing advisor extension export'); if (typeof terminals.default !== 'function') throw new Error('missing background terminals extension export'); if (typeof previews.default !== 'function' || typeof previews.loadCodePreviewSettings !== 'function' || typeof previews.withCodePreviewShell !== 'function') throw new Error('missing code-preview public exports'); if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== 'function') throw new Error('missing Cosmic UI protocol exports'); if (typeof client.createCosmicFooterClient !== 'function') throw new Error('missing Cosmic UI client export');",
     ],
     temporaryDirectory,
   );
@@ -136,7 +139,7 @@ try {
   }
 
   console.log(
-    "Packed core, xAI, OpenAI, Cosmic UI, code-preview, and advisor packages install and import in a clean consumer.",
+    "Packed core, xAI, OpenAI, Cosmic UI, code-preview, advisor, and background terminal packages install and import in a clean consumer.",
   );
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });

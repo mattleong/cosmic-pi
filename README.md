@@ -7,6 +7,7 @@ A pnpm workspace for pi extensions.
 - [`pi-advisor`](packages/pi-advisor) — automatic review by a dedicated model with one fail-open revision pass.
 - [`pi-better-openai`](packages/pi-better-openai) — fast mode, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
 - [`pi-better-xai`](packages/pi-better-xai) — xAI/Grok subscription usage visibility and Cosmic UI footer polish.
+- [`pi-background-terminals`](packages/pi-background-terminals) — session-scoped background jobs with an agent tool and full-screen `/ps` manager.
 - [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted previews for pi's built-in tool calls.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements, beginning with the footer and information area.
@@ -23,6 +24,7 @@ Install the published extensions with pi:
 ```bash
 pi install npm:pi-better-openai
 pi install npm:pi-better-xai
+pi install npm:pi-background-terminals
 pi install npm:pi-code-previews
 pi install npm:pi-cosmic-ui
 ```
