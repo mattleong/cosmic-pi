@@ -34,7 +34,7 @@ import {
 } from "../controller-helpers.ts";
 import type { AdvisorApplicationState } from "../state.ts";
 import type { DeliverFn } from "./delivery.ts";
-import { parentHasPendingMessages, parentSignalAborted } from "./host-reads.ts";
+import { parentHasPendingMessages, parentSignalAborted } from "./parent-session.ts";
 
 export interface CheckpointRefs {
   queue: AdvisorReviewQueue | undefined;

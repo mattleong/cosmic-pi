@@ -4,33 +4,19 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSession,
-  type AgentSessionEvent,
   type CreateAgentSessionOptions,
 } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import {
-  makeSynchronousIngress,
-  type SynchronousIngress,
-  type SynchronousIngressOfferResult,
-} from "pi-cosmic-core";
-import { snapshotData } from "../domain/safe-data.ts";
-import { isRecord } from "../shared/utils.ts";
+import { makeSynchronousIngress, type SynchronousIngress } from "pi-cosmic-core";
 import { AdvisorTrajectoryDetector } from "../review/trajectory.ts";
 import { createAdvisorChildModelEffect, AdvisorModelError } from "./client.ts";
-import {
-  ADVISOR_TOOL_NAMES,
-  createAdvisorToolsEffect,
-  isPackageAdvisorTool,
-  type AdvisorToolRunner,
-} from "./tools.ts";
+import { ADVISOR_TOOL_NAMES, createAdvisorToolsEffect, type AdvisorToolRunner } from "./tools.ts";
 import { parseAdvisorCheckpointEffect } from "./checkpoint-parse.ts";
 import {
   buildCheckpointFinalizationPrompt,
@@ -44,14 +30,12 @@ import {
   createChildSessionEffect,
   disposeSessionNowEffect,
   isolateCallback,
-  isToolCallDelta,
   projectActiveToolNamesAtHostBoundary,
   stopSessionEffect,
   toModelError,
   unsafeToolNames,
 } from "./session.ts";
 import {
-  AdvisorUsageWireSchema,
   DEFAULT_ADVISOR_SESSION_ABORT_TIMEOUT_MS,
   MAX_ADVISOR_STREAM_CHARS,
   MAX_ADVISOR_TOOL_ROUNDS,
@@ -67,6 +51,8 @@ import {
   type AdvisorRuntimeStartOptions,
 } from "./types.ts";
 import { NoDiscoveryAdvisorResourceLoader } from "./resource-loader.ts";
+import { makeAdvisorSessionEvents } from "./session-events.ts";
+import { makeAdvisorSessionSafety } from "./session-safety.ts";
 
 export class AdvisorRuntime {
   private activeChildProjection: ActiveAdvisorChild | undefined;
@@ -85,6 +71,8 @@ export class AdvisorRuntime {
   private readonly controlMailbox: SynchronousIngress<void>;
   private readonly activeChild: SynchronizedRef.SynchronizedRef<ActiveAdvisorChild | undefined>;
   private readonly lifecycleLock: Semaphore.Semaphore;
+  private readonly sessionEvents: ReturnType<typeof makeAdvisorSessionEvents>;
+  private readonly sessionSafety: ReturnType<typeof makeAdvisorSessionSafety>;
   private pendingStartCleanup: Deferred.Deferred<void> | undefined;
   constructor(
     dependencies: AdvisorRuntimeDependencies,
@@ -100,6 +88,36 @@ export class AdvisorRuntime {
     this.controlMailbox = controlMailbox;
     this.activeChild = activeChild;
     this.lifecycleLock = lifecycleLock;
+    this.sessionSafety = makeAdvisorSessionSafety({
+      activeChild: this.activeChild,
+      resetRequiredReason: () => this.resetRequiredReason,
+      onDiagnostic: (message) => this.options?.onDiagnostic?.(message),
+      dispose: () => this.disposeEffect(),
+    });
+    this.sessionEvents = makeAdvisorSessionEvents({
+      epoch: () => this.epoch,
+      activeChild: () => this.activeChildProjection,
+      activeCheckpoint: () => this.activeCheckpoint,
+      invalidateForReprime: (message) => this.invalidateForReprime(message),
+      recordStream: (kind, text) => {
+        this.streamedChars += text.length;
+        if (this.streamedChars > MAX_ADVISOR_STREAM_CHARS)
+          this.invalidateForReprime("Advisor child stream exceeded the maximum response size.");
+        if (kind === "thinking" || kind === "text") {
+          const signal = this.childStreamDetector.push(kind, text);
+          if (signal) this.invalidateForReprime(`Advisor child stream loop: ${signal.reason}.`);
+        }
+      },
+      recordToolRound: () => {
+        this.toolRounds++;
+        if (this.toolRounds > MAX_ADVISOR_TOOL_ROUNDS)
+          this.invalidateForReprime("Advisor exceeded the read-only tool-round limit.");
+      },
+      recordStopError: (message) => {
+        this.lastStopError = message;
+      },
+      recordUsage: (usage) => this.options?.onUsage?.(usage),
+    });
   }
   get activeToolNames(): readonly string[] {
     const session = this.activeChildProjection?.session;
@@ -192,9 +210,9 @@ export class AdvisorRuntime {
         );
         if (startEpoch !== self.epoch)
           return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
-        yield* self.assertSessionSafeToolsEffect(result.session);
+        yield* self.sessionSafety.assertSessionSafeToolsEffect(result.session);
         if (result.session.sessionFile !== undefined)
-          return yield* self.fatalSafetyFailureEffect(
+          return yield* self.sessionSafety.fatalSafetyFailureEffect(
             "Advisor child session unexpectedly has a persistent file.",
           );
         self.resetRequiredReason = undefined;
@@ -221,10 +239,10 @@ export class AdvisorRuntime {
   checkpointEffect(request: AdvisorCheckpointRequest) {
     const self = this;
     return Effect.gen(function* () {
-      const child = yield* self.requireChildEffect();
+      const child = yield* self.sessionSafety.requireChildEffect();
       const session = child.session;
       child.releaseState.aborted = false;
-      yield* self.assertSafeToolsEffect();
+      yield* self.sessionSafety.assertSafeToolsEffect();
       const checkpointEpoch = self.epoch;
       self.toolRounds = 0;
       self.streamedChars = 0;
@@ -262,7 +280,7 @@ export class AdvisorRuntime {
         ),
       );
       yield* promptEffect.pipe(
-        Effect.andThen(self.awaitChildEventsEffect(checkpointEpoch)),
+        Effect.andThen(self.sessionEvents.awaitChildEventsEffect(checkpointEpoch)),
         Effect.andThen(
           Effect.suspend(() =>
             active.finalizationQueued
@@ -283,7 +301,7 @@ export class AdvisorRuntime {
               : Effect.void,
           ),
         ),
-        Effect.andThen(self.awaitChildEventsEffect(checkpointEpoch)),
+        Effect.andThen(self.sessionEvents.awaitChildEventsEffect(checkpointEpoch)),
         Effect.onInterrupt(() => self.abortEffect()),
         Effect.timeout(Duration.millis(self.options?.config.timeoutMs ?? 30_000)),
         Effect.mapError((error) => {
@@ -316,7 +334,7 @@ export class AdvisorRuntime {
           message:
             "Advisor prompt settled before correlated checkpoint finalization could be queued.",
         });
-      yield* self.assertSafeToolsEffect();
+      yield* self.sessionSafety.assertSafeToolsEffect();
       if (seed === self.pendingSeed) self.pendingSeed = undefined;
       const finalizedText = yield* assistantTextAfterPromptEffect(session.messages, finalPrompt);
       const checkpoint = yield* parseAdvisorCheckpointEffect(finalizedText);
@@ -333,8 +351,8 @@ export class AdvisorRuntime {
   steerEffect(observations: string) {
     const self = this;
     return Effect.gen(function* () {
-      const session = yield* self.requireSessionEffect();
-      yield* self.assertSafeToolsEffect();
+      const session = yield* self.sessionSafety.requireSessionEffect();
+      yield* self.sessionSafety.assertSafeToolsEffect();
       const steeringEpoch = self.epoch;
       if (!session.isStreaming || !self.activeCheckpoint) return false;
       yield* Effect.tryPromise({
@@ -371,10 +389,14 @@ export class AdvisorRuntime {
           Effect.suspend(() => stopSessionEffect(session, !releaseState.aborted, abortTimeoutMs)),
         );
         const acquire = Effect.gen(function* () {
+          let childHandle: ActiveAdvisorChild | undefined;
           const events = yield* makeSynchronousIngress<AdvisorChildEvent, never, never>({
             capacity: 128,
             overflow: "drop",
-            handle: (event) => self.handleChildEventEffect(event),
+            handle: (event) =>
+              childHandle
+                ? self.sessionEvents.handleChildEventEffect(childHandle, event)
+                : Effect.void,
           }).pipe(Effect.provideService(Scope.Scope, scope));
           const finalizations = yield* makeSynchronousIngress<
             AdvisorFinalizationCompletion,
@@ -383,7 +405,8 @@ export class AdvisorRuntime {
           >({
             capacity: 1,
             overflow: "coalesce-latest",
-            handle: (completion) => self.handleFinalizationCompletionEffect(completion),
+            handle: (completion) =>
+              self.sessionEvents.handleFinalizationCompletionEffect(completion),
           }).pipe(Effect.provideService(Scope.Scope, scope));
           const handle: ActiveAdvisorChild = {
             epoch: startEpoch,
@@ -394,8 +417,10 @@ export class AdvisorRuntime {
             events,
             finalizations,
           };
+          childHandle = handle;
           const unsubscribe = yield* Effect.try({
-            try: () => session.subscribe((event) => self.observeChildEvent(handle, event)),
+            try: () =>
+              session.subscribe((event) => self.sessionEvents.observeChildEvent(handle, event)),
             catch: () =>
               new AdvisorModelError({ message: "Advisor child event subscription failed." }),
           });
@@ -546,211 +571,6 @@ export class AdvisorRuntime {
     return active
       ? Deferred.succeed(active.abortRequested, undefined).pipe(Effect.asVoid)
       : this.disposeChildEffect();
-  }
-  private requireChildEffect() {
-    const self = this;
-    return SynchronizedRef.get(self.activeChild).pipe(
-      Effect.flatMap((active) => {
-        if (self.resetRequiredReason)
-          return Effect.fail(
-            new AdvisorRuntimeResetRequiredError({ message: self.resetRequiredReason }),
-          );
-        return active
-          ? Effect.succeed(active)
-          : Effect.fail(new AdvisorModelError({ message: "Advisor runtime is not started." }));
-      }),
-    );
-  }
-  private requireSessionEffect() {
-    return this.requireChildEffect().pipe(Effect.map((active) => active.session));
-  }
-  private assertSafeToolsEffect() {
-    const self = this;
-    return self
-      .requireSessionEffect()
-      .pipe(Effect.flatMap((session) => self.assertSessionSafeToolsEffect(session)));
-  }
-  private assertSessionSafeToolsEffect(session: AgentSession) {
-    const self = this;
-    return Effect.gen(function* () {
-      const activeToolNames = yield* Effect.try({
-        try: () => [...session.getActiveToolNames()],
-        catch: toModelError("Advisor active tool metadata could not be read."),
-      });
-      for (const name of activeToolNames) {
-        if (!(ADVISOR_TOOL_NAMES as readonly string[]).includes(name))
-          return yield* self.failSafetyEffect(`Unsafe Advisor tool became active: ${name}`);
-        const definition = yield* Effect.try({
-          try: () => session.getToolDefinition(name),
-          catch: toModelError("Advisor tool definition metadata could not be read."),
-        });
-        if (!isPackageAdvisorTool(definition))
-          return yield* self.failSafetyEffect(`Advisor tool identity mismatch: ${name}`);
-      }
-    });
-  }
-  private failSafetyEffect(message: string) {
-    return Effect.sync(() => isolateCallback(() => this.options?.onDiagnostic?.(message))).pipe(
-      Effect.andThen(
-        Effect.fail(
-          new AdvisorModelError({ message: `Advisor runtime safety check failed: ${message}` }),
-        ),
-      ),
-    );
-  }
-  private fatalSafetyFailureEffect(message: string) {
-    return this.disposeEffect().pipe(
-      Effect.ensuring(
-        Effect.sync(() => isolateCallback(() => this.options?.onDiagnostic?.(message))),
-      ),
-      Effect.andThen(Effect.fail(new AdvisorModelError({ message: message }))),
-    );
-  }
-  private observeChildEvent(child: ActiveAdvisorChild, event: AgentSessionEvent): void {
-    try {
-      if (child.epoch !== this.epoch || this.activeChildProjection !== child) return;
-      if (event.type === "message_update") {
-        const update = event.assistantMessageEvent;
-        if (update.type === "text_delta" || update.type === "thinking_delta") {
-          this.offerChildEvent(child, {
-            epoch: child.epoch,
-            type: "stream",
-            streamKind: update.type === "thinking_delta" ? "thinking" : "text",
-            text: update.delta,
-          });
-        } else if (isToolCallDelta(update)) {
-          this.offerChildEvent(child, {
-            epoch: child.epoch,
-            type: "stream",
-            streamKind: "tool",
-            text: update.delta,
-          });
-        }
-        return;
-      }
-      if (event.type === "turn_end") {
-        if (event.toolResults.length > 0)
-          this.offerChildEvent(child, {
-            epoch: child.epoch,
-            type: "tool-round",
-          });
-        return;
-      }
-      if (event.type !== "message_end") return;
-      const messageSnapshot = snapshotData(event.message);
-      if (!isRecord(messageSnapshot) || messageSnapshot.role !== "assistant") return;
-      const stopReason =
-        typeof messageSnapshot.stopReason === "string" ? messageSnapshot.stopReason : undefined;
-      const active = this.activeCheckpoint;
-      if (
-        active &&
-        active.epoch === child.epoch &&
-        !active.finalizationQueued &&
-        stopReason === "stop" &&
-        child.session.isStreaming
-      ) {
-        active.finalizationQueued = true;
-        try {
-          // AgentSession requires followUp to be invoked before this streaming callback returns.
-          // Its Promise completion is converted to plain bounded ingress and a typed Deferred.
-          void child.session.followUp(active.finalPrompt).then(
-            () => {
-              child.finalizations.offer({ epoch: child.epoch, succeeded: true });
-            },
-            () => {
-              child.finalizations.offer({ epoch: child.epoch, succeeded: false });
-            },
-          );
-        } catch {
-          child.finalizations.offer({ epoch: child.epoch, succeeded: false });
-        }
-      }
-      this.offerChildEvent(child, {
-        epoch: child.epoch,
-        type: "message-end",
-        ...(stopReason === undefined ? {} : { stopReason }),
-        ...(typeof messageSnapshot.errorMessage === "string"
-          ? { errorMessage: messageSnapshot.errorMessage }
-          : {}),
-        usage: snapshotData(messageSnapshot.usage),
-      });
-    } catch {
-      this.invalidateForReprime("Advisor child event boundary failed.");
-    }
-  }
-  private offerChildEvent(child: ActiveAdvisorChild, event: AdvisorChildEvent): void {
-    child.pendingEvents++;
-    const result: SynchronousIngressOfferResult = child.events.offer(event);
-    if (result !== "accepted") {
-      child.pendingEvents--;
-      this.invalidateForReprime("Advisor child event ingress overflowed.");
-    }
-  }
-  private awaitChildEventsEffect(epoch: number): Effect.Effect<void> {
-    return Effect.suspend(() => {
-      const child = this.activeChildProjection;
-      return !child || child.epoch !== epoch || child.pendingEvents === 0
-        ? Effect.void
-        : Effect.yieldNow.pipe(Effect.andThen(this.awaitChildEventsEffect(epoch)));
-    });
-  }
-  private handleChildEventEffect(event: AdvisorChildEvent) {
-    return Effect.sync(() => {
-      const child = this.activeChildProjection;
-      if (event.epoch !== this.epoch || !child || child.epoch !== event.epoch) return;
-      if (event.type === "stream") {
-        const text = event.text ?? "";
-        this.recordStreamChars(text.length);
-        if (event.streamKind === "thinking" || event.streamKind === "text") {
-          const signal = this.childStreamDetector.push(event.streamKind, text);
-          if (signal) this.invalidateForReprime(`Advisor child stream loop: ${signal.reason}.`);
-        }
-        return;
-      }
-      if (event.type === "tool-round") {
-        this.toolRounds++;
-        if (this.toolRounds > MAX_ADVISOR_TOOL_ROUNDS)
-          this.invalidateForReprime("Advisor exceeded the read-only tool-round limit.");
-        return;
-      }
-      if (event.stopReason === "aborted") this.lastStopError = "Advisor review was aborted.";
-      if (event.stopReason === "error")
-        this.lastStopError = event.errorMessage || "Advisor review failed.";
-      const usage = Schema.decodeUnknownOption(AdvisorUsageWireSchema)(event.usage);
-      if (Option.isNone(usage)) return;
-      isolateCallback(() =>
-        this.options?.onUsage?.({
-          cacheReadTokens: usage.value.cacheRead ?? 0,
-          cacheWriteTokens: usage.value.cacheWrite ?? 0,
-          cost: usage.value.cost?.total ?? 0,
-          inputTokens: usage.value.input ?? 0,
-          outputTokens: usage.value.output ?? 0,
-          totalTokens: usage.value.totalTokens ?? 0,
-        }),
-      );
-    }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          const child = this.activeChildProjection;
-          if (child?.epoch === event.epoch) child.pendingEvents--;
-        }),
-      ),
-    );
-  }
-  private handleFinalizationCompletionEffect(completion: AdvisorFinalizationCompletion) {
-    const active = this.activeCheckpoint;
-    if (!active || active.epoch !== completion.epoch) return Effect.void;
-    return completion.succeeded
-      ? Deferred.succeed(active.finalization, undefined).pipe(Effect.asVoid)
-      : Deferred.fail(
-          active.finalization,
-          new AdvisorModelError({ message: "Advisor checkpoint finalization failed." }),
-        ).pipe(Effect.asVoid);
-  }
-  private recordStreamChars(chars: number) {
-    this.streamedChars += chars;
-    if (this.streamedChars > MAX_ADVISOR_STREAM_CHARS)
-      this.invalidateForReprime("Advisor child stream exceeded the maximum response size.");
   }
   private invalidateForReprime(message: string) {
     if (!this.markResetRequired(message)) return;

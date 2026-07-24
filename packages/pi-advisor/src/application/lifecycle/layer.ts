@@ -2,7 +2,6 @@
 // @effect-diagnostics effect/deterministicKeys:off
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { advisorNow } from "../../boundary/clock.ts";
 import { type AdvisorEffectExecutor, type AdvisorPlatform } from "../../boundary/executor.ts";
@@ -26,13 +25,7 @@ import {
   exportAdvisorEmissionRecords,
   rollbackAdvisorEmission,
 } from "../../review/emission-guard.ts";
-import {
-  advisorFindingLifecycleCounts,
-  emptyAdvisorFindingLifecycle,
-} from "../../review/finding-lifecycle.ts";
 import { sanitizeInterventionBudgetSnapshot } from "../../review/intervention-budget.ts";
-import { redactSensitiveText } from "../../review/observation-protocol.ts";
-import { latchAdvisorCancellation } from "../../review/routing.ts";
 import { AdvisorRuntimeService } from "../../runtime/runtime.ts";
 import { makeAdvisorResourceState } from "../../runtime/resource-state.ts";
 import { type AdvisorCommandActions, registerAdvisorCommands } from "../../settings/controller.ts";
@@ -47,29 +40,22 @@ import {
   type AdvisorControllerApplicationOptions,
   type AdvisorSkipReason,
   type ParentAnchor,
-  STATUS_KEY,
-  STATUS_SPINNER_DELAY_MS,
-  STATUS_SPINNER_FRAMES,
-  STATUS_SPINNER_INTERVAL_MS,
   UNREADABLE_PARENT_ANCHOR,
 } from "../controller-types.ts";
 import {
   emptyAdvisorSessionMetrics,
   initialAdvisorApplicationState,
   makeAdvisorApplicationStateStore,
-  recordAdvisorReceipt,
-  resetAdvisorRequestDomain,
-  setAdvisorSpinnerOwner,
-  type AdvisorActiveTrajectoryState,
-  type AdvisorApplicationState,
 } from "../state.ts";
+import { makeLifecycleApplicationState } from "./application-state.ts";
 import { makeCheckpointControls } from "./checkpoint.ts";
 import { makeDeliver } from "./delivery.ts";
 import { registerLifecycleEvents } from "./events.ts";
-import { branchContainsAnchor, readLifecycleScope, readParentAnchor } from "./host-reads.ts";
+import { branchContainsAnchor, readLifecycleScope, readParentAnchor } from "./parent-session.ts";
 import { cloneSessionMetrics, recordReviewDurationMetrics, recordUsageMetrics } from "./metrics.ts";
 import { makeRuntimeControls } from "./runtime.ts";
 import { createSessionRefs } from "./session-refs.ts";
+import { makeLifecycleStatusControls } from "./status.ts";
 
 export const advisorControllerApplicationLayer = (options: AdvisorControllerApplicationOptions) =>
   Layer.effect(
@@ -115,113 +101,27 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         initialAdvisorApplicationState(normalizeAdvisorConfig({}, "")),
       );
 
-      const controllerSnapshot = (state: AdvisorApplicationState): AdvisorControllerSnapshot => ({
-        config: state.config,
-        metrics: {
-          ...state.metrics,
-          ...state.resourceSummary,
-          childResets: state.metrics.childResets ?? 0,
-          guidancePaths: state.guidancePaths,
-          hasLastCandidate: state.hasLastCandidate,
-          findingLifecycle: advisorFindingLifecycleCounts(state.findingLifecycle),
-          interventionBudget: state.interventionBudget,
-          paused: state.paused,
-          reviewNext: state.reviewNext,
-        },
-        paused: state.paused,
-        started: state.started,
+      const {
+        publishControllerSnapshotNow,
+        publishControllerSnapshot,
+        updateApplicationState,
+        mutateMetrics,
+        currentConfig,
+        isPaused,
+        isStarted,
+        mutateTrajectory,
+        setDomainCounter,
+        advanceDomainCounter,
+        recordReceipt,
+        clearPendingReceipt,
+        latchCancellation,
+        resetRequestDomain,
+      } = makeLifecycleApplicationState({
+        store: applicationStateStore,
+        refs,
+        publish: productionController.publish,
+        publishNow: productionController.publishNow,
       });
-      const refreshResourceSummary = (): AdvisorApplicationState =>
-        applicationStateStore.transition((state) => ({
-          ...state,
-          resourceSummary: {
-            activeToolNames: refs.queue?.activeToolNames ?? [],
-            backlog: refs.queue?.backlog ?? 0,
-            backgroundState: refs.queue?.hasActiveCheckpoint
-              ? "reviewing"
-              : refs.queue && refs.queue.pendingCheckpoints > 0
-                ? "queued"
-                : "idle",
-            processedSequence: refs.queue?.processedThrough ?? 0,
-            queuedReviews: refs.queue?.pendingCheckpoints ?? 0,
-            sequence: refs.queue?.sequence ?? 0,
-          },
-        }));
-      const publishControllerSnapshotNow = (): void => {
-        const state = refreshResourceSummary();
-        productionController.publishNow(controllerSnapshot(state));
-      };
-      const publishControllerSnapshot = (): Effect.Effect<void> => {
-        const state = refreshResourceSummary();
-        return productionController.publish(controllerSnapshot(state));
-      };
-      const updateApplicationState = (
-        update: (state: AdvisorApplicationState) => AdvisorApplicationState,
-      ): void => {
-        applicationStateStore.transition(update);
-        publishControllerSnapshotNow();
-      };
-      const cloneMetrics = cloneSessionMetrics;
-      const mutateMetrics = (
-        mutate: (next: ReturnType<typeof cloneSessionMetrics>) => void,
-      ): void => {
-        updateApplicationState((state) => {
-          const next = cloneMetrics(state.metrics);
-          mutate(next);
-          return { ...state, metrics: next };
-        });
-      };
-      const currentConfig = (): ResolvedAdvisorConfig => applicationStateStore.get().config;
-      const isPaused = (): boolean => applicationStateStore.get().paused;
-      const isStarted = (): boolean => applicationStateStore.get().started;
-      const mutateTrajectory = (
-        id: number,
-        mutate: (next: AdvisorActiveTrajectoryState) => AdvisorActiveTrajectoryState,
-      ): AdvisorActiveTrajectoryState | undefined => {
-        let result: AdvisorActiveTrajectoryState | undefined;
-        updateApplicationState((state) => {
-          if (!state.activeTrajectory || state.activeTrajectory.id !== id) return state;
-          result = mutate({ ...state.activeTrajectory });
-          return { ...state, activeTrajectory: result };
-        });
-        return result;
-      };
-      const setDomainCounter = (
-        key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
-        value: number,
-      ): number => {
-        updateApplicationState((state) => ({ ...state, [key]: value }));
-        return value;
-      };
-      const advanceDomainCounter = (
-        key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
-      ): number => setDomainCounter(key, applicationStateStore.get()[key] + 1);
-      const recordReceipt = (ids: readonly string[]): void => {
-        updateApplicationState((state) => recordAdvisorReceipt(state, ids));
-      };
-      const clearPendingReceipt = (): void => {
-        updateApplicationState((state) => ({ ...state, pendingReceipt: undefined }));
-      };
-      const latchCancellation = (): void => {
-        updateApplicationState((state) => ({
-          ...state,
-          routing: latchAdvisorCancellation(state.routing),
-        }));
-      };
-      const resetRequestDomain = (resetLifecycle = false): void => {
-        updateApplicationState((state) => {
-          const reset = resetAdvisorRequestDomain(state);
-          return {
-            ...reset,
-            cancellationEpoch: state.cancellationEpoch,
-            requestSequence: state.requestSequence,
-            findingLifecycle: resetLifecycle
-              ? emptyAdvisorFindingLifecycle()
-              : state.findingLifecycle,
-          };
-        });
-        refs.perspectiveCheckpointUsed = false;
-      };
       const runSessionEffect = <A, E>(
         effect: Effect.Effect<A, E, AdvisorPlatform | PiCommandAdapter>,
       ): Promise<A> =>
@@ -229,69 +129,13 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
 
       const notifyBestEffort = hostNotifier.notify;
 
-      const stopStatusSpinner = (): void => {
-        statusService.clear();
-        updateApplicationState((state) => setAdvisorSpinnerOwner(state));
-      };
-
-      const setAdvisorStatus = (ctx: ExtensionContext, text?: string): void => {
-        stopStatusSpinner();
-        try {
-          ctx.ui.setStatus(STATUS_KEY, text);
-        } catch {
-          // Status rendering cannot prevent resource cleanup.
-        }
-      };
-
-      const renderReviewStatus = (ctx: ExtensionContext, frameIndex: number): void => {
-        try {
-          const renderConfig = currentConfig();
-          const frame =
-            STATUS_SPINNER_FRAMES[frameIndex % STATUS_SPINNER_FRAMES.length] ??
-            STATUS_SPINNER_FRAMES[0];
-          const model =
-            renderConfig.provider && renderConfig.model
-              ? ctx.modelRegistry.find(renderConfig.provider, renderConfig.model)
-              : undefined;
-          const effort = model
-            ? clampThinkingLevel(model, renderConfig.thinkingLevel)
-            : renderConfig.thinkingLevel;
-          ctx.ui.setStatus(
-            STATUS_KEY,
-            `${frame} ${redactSensitiveText(renderConfig.model ?? "advisor").slice(0, 256)}:${effort} advising…`,
-          );
-        } catch {
-          stopStatusSpinner();
-        }
-      };
-
-      const startStatusSpinner = (ctx: ExtensionContext, owner: string): void => {
-        updateApplicationState((state) => setAdvisorSpinnerOwner(state, owner));
-        statusService.start({
-          owner,
-          delayMs: STATUS_SPINNER_DELAY_MS,
-          intervalMs: STATUS_SPINNER_INTERVAL_MS,
-          animated: ctx.mode === "tui",
-          frameCount: STATUS_SPINNER_FRAMES.length,
-          render: (frame) => {
-            updateApplicationState((state) => ({
-              ...state,
-              spinner: { ...state.spinner, frame },
-            }));
-            renderReviewStatus(ctx, frame);
-          },
+      const { stopStatusSpinner, setAdvisorStatus, startStatusSpinner, settleStatusSpinner } =
+        makeLifecycleStatusControls({
+          statusService,
+          currentConfig,
+          isPaused,
+          updateApplicationState,
         });
-      };
-
-      const settleStatusSpinner = (ctx: ExtensionContext, owner: string): void => {
-        if (!statusService.settle(owner)) return;
-        updateApplicationState((state) => setAdvisorSpinnerOwner(state));
-        try {
-          ctx.ui.setStatus(STATUS_KEY, isPaused() ? "advisor: paused" : undefined);
-        } catch {
-          // Status rendering cannot prevent resource cleanup.
-        }
-      };
 
       const recordSkip = (reason: AdvisorSkipReason): void => {
         mutateMetrics((next) => {
@@ -340,7 +184,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         updateApplicationState((state) => {
           const pending = state.pendingPersistentRecovery;
           if (pending) {
-            const nextMetrics = cloneMetrics(state.metrics);
+            const nextMetrics = cloneSessionMetrics(state.metrics);
             nextMetrics.outcomes.suppressed += 1;
             return {
               ...state,

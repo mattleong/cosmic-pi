@@ -1,7 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
@@ -12,15 +11,12 @@ import * as Tracer from "effect/Tracer";
 import {
   AgentDirectory,
   JsonDocumentStore,
-  freezeSnapshot,
   JsonHttpClient,
-  maskIdentifier,
   type JsonObject,
   makeFrozenProjection,
   mergeRefreshRequest,
   makeSubscriptionRefresh,
   sanitizeDiagnosticError,
-  withUsageEligibility,
   type RefreshRequest,
 } from "pi-cosmic-core";
 import { ignoreHostUi } from "../boundary/host-ui.ts";
@@ -34,112 +30,21 @@ import {
   type InvalidSettingError,
   type OpenAIConfigError,
 } from "../config/index.ts";
-import { isModelUsingOAuth } from "../boundary/model-registry.ts";
-import { currentModelKey } from "../fast/controller.ts";
 import { getCodexCredentialsResult } from "../auth/codex-auth.ts";
 import {
-  USAGE_URL,
+  initialProjection,
+  isOpenAISubscriptionModel,
+  synchronizedProjection,
+  usageConfigChanged,
+  type OpenAIProjection,
+} from "./projection.ts";
+import {
   type CodexUsageResult,
-  type UsageSnapshot,
   formatUsageDetails,
   formatUsageSnapshot,
   requestCodexUsageWithCredentials,
   usageScopeForModel,
 } from "./format.ts";
-
-export interface OpenAIProjection {
-  readonly config: ResolvedConfig | undefined;
-  readonly eligible: boolean;
-  readonly snapshot: UsageSnapshot | undefined;
-  readonly statusLine: string | undefined;
-  readonly statusText: string;
-  readonly error: string | undefined;
-  readonly lastFetchAt: number | undefined;
-  readonly updatedAt: number | undefined;
-  readonly authPath: string | undefined;
-  readonly authFound: boolean;
-  readonly authSource: "modelRegistry" | "authFile" | undefined;
-  readonly accountId: string | undefined;
-}
-const initial = (): OpenAIProjection => ({
-  config: undefined,
-  eligible: false,
-  snapshot: undefined,
-  statusLine: undefined,
-  statusText: "Usage unavailable.",
-  error: undefined,
-  lastFetchAt: undefined,
-  updatedAt: undefined,
-  authPath: undefined,
-  authFound: false,
-  authSource: undefined,
-  accountId: undefined,
-});
-export const makeProjection = () => MutableRef.make(freezeSnapshot(initial()));
-export const resetProjection = (projection: MutableRef.MutableRef<OpenAIProjection>): void => {
-  MutableRef.set(projection, freezeSnapshot(initial()));
-};
-
-function usageConfigChanged(left: ResolvedConfig, right: ResolvedConfig): boolean {
-  return (
-    left.usage.enabled !== right.usage.enabled ||
-    left.usage.refreshIntervalMs !== right.usage.refreshIntervalMs ||
-    left.usage.showOnlyOnSubscriptionModels !== right.usage.showOnlyOnSubscriptionModels ||
-    left.usage.showResetTimes !== right.usage.showResetTimes
-  );
-}
-
-export function isOpenAISubscriptionModel(
-  ctx: ExtensionContext,
-  cfg: ResolvedConfig,
-  isUsingOAuth?: boolean,
-): boolean {
-  const model = ctx.model;
-  if (!model || (model.provider !== "openai" && model.provider !== "openai-codex")) return false;
-  return !cfg.usage.showOnlyOnSubscriptionModels || (isUsingOAuth ?? isModelUsingOAuth(ctx, model));
-}
-
-function synchronizedProjection(
-  state: OpenAIProjection,
-  ctx: ExtensionContext,
-  clearUsage: boolean,
-): OpenAIProjection {
-  try {
-    const eligible = state.config ? isOpenAISubscriptionModel(ctx, state.config) : false;
-    const scopeMatches = state.snapshot?.scope === usageScopeForModel(ctx.model?.id);
-    return withUsageEligibility(state, eligible, clearUsage || !scopeMatches, {
-      hiddenStatusText: "Usage hidden: current model is not an OpenAI subscription model.",
-    });
-  } catch {
-    return withUsageEligibility(state, false, true, {
-      hiddenStatusText: "Usage unavailable.",
-      unavailableStatusText: "Usage unavailable.",
-    });
-  }
-}
-
-export function synchronizeProjectionContext(
-  projection: MutableRef.MutableRef<OpenAIProjection>,
-  ctx: ExtensionContext,
-  options: { readonly clearUsage?: boolean } = {},
-): void {
-  MutableRef.set(
-    projection,
-    freezeSnapshot(
-      synchronizedProjection(MutableRef.get(projection), ctx, options.clearUsage === true),
-    ),
-  );
-}
-export function visibleStatusLine(
-  ctx: ExtensionContext,
-  cfg: ResolvedConfig,
-  projection: MutableRef.MutableRef<OpenAIProjection>,
-  isUsingOAuth?: boolean,
-): string | undefined {
-  if (!cfg.usage.enabled || !isOpenAISubscriptionModel(ctx, cfg, isUsingOAuth)) return undefined;
-  const state = MutableRef.get(projection);
-  return state.snapshot?.scope === usageScopeForModel(ctx.model?.id) ? state.statusLine : undefined;
-}
 
 export class OpenAIBoundaryError extends Schema.TaggedErrorClass<OpenAIBoundaryError>()(
   "OpenAIBoundaryError",
@@ -211,7 +116,7 @@ export class OpenAIUsageService extends Context.Service<
         const projectTrusted = options.projectTrusted ?? true;
         const config = yield* resolveConfig(cwd, agentDir, projectTrusted);
         const state = yield* makeFrozenProjection<OpenAIProjection, OpenAIProjection>(
-          { ...initial(), config, authPath },
+          { ...initialProjection(), config, authPath },
           (current) => current,
           (published) => MutableRef.set(projection, published),
         );
@@ -504,28 +409,4 @@ export class OpenAIUsageService extends Context.Service<
       }).pipe(Effect.withSpan("pi-better-openai.usage.initialize")),
     );
   }
-}
-
-export function formatDebug(
-  projection: MutableRef.MutableRef<OpenAIProjection>,
-  ctx: ExtensionContext,
-): string {
-  const state = MutableRef.get(projection);
-  const cfg = state.config;
-  const time = (value: number | undefined) =>
-    value === undefined ? "never" : DateTime.formatLocal(DateTime.makeUnsafe(value));
-  return [
-    `Usage enabled: ${cfg?.usage.enabled ?? false}`,
-    `Current model: ${currentModelKey(ctx)}`,
-    `Current model eligible: ${cfg ? isOpenAISubscriptionModel(ctx, cfg) : false}`,
-    `Requires subscription model: ${cfg?.usage.showOnlyOnSubscriptionModels ?? true}`,
-    `Auth: ${state.authFound ? `found (${state.authSource ?? "unknown"})` : "missing"}`,
-    `Account ID: ${maskIdentifier(state.accountId) ?? "none"}`,
-    `Last fetch: ${time(state.lastFetchAt)}`,
-    `Last successful update: ${time(state.updatedAt)}`,
-    `Last error: ${state.error ?? "none"}`,
-    `Refresh interval: ${cfg?.usage.refreshIntervalMs ?? 60_000}ms`,
-    `Endpoint: ${USAGE_URL}`,
-    `Auth file: ${state.authPath ?? "unknown"}`,
-  ].join("\n");
 }

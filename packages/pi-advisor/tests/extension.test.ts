@@ -2215,6 +2215,31 @@ describe("persistent extension cutover", () => {
     }
   });
 
+  test("stops the delayed spinner when status rendering throws", async () => {
+    vi.useFakeTimers();
+    try {
+      const value = harness();
+      const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
+      setStatus.mockImplementation((_key: string, text: string | undefined) => {
+        if (text?.includes("advising")) throw new Error("hostile status renderer");
+      });
+      await value.emit("session_start", { type: "session_start" });
+      await value.emit("turn_end", finalTurn("candidate"));
+      await vi.advanceTimersByTimeAsync(200);
+
+      const current = value.runtimes[0]!;
+      const find = value.ctx.modelRegistry.find as ReturnType<typeof vi.fn>;
+      expect(find).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(find).toHaveBeenCalledOnce();
+      current.pending[0]!.resolve(pass(current.requests[0]!));
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("redacts model secrets in the delayed spinner label", async () => {
     vi.useFakeTimers();
     try {

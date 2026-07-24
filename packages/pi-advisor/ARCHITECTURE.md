@@ -19,19 +19,23 @@ Runs bounded second-model review of Pi responses, optionally delivers advice/rev
 - `src/application/controller-helpers.ts` holds pure delivery/verification/messaging helpers used by the application layer.
 - `src/application/lifecycle.ts` re-exports the lifecycle Layer entry.
 - `src/application/lifecycle/` owns session lifecycle split by role:
-  - `layer.ts` — composition entry (session wiring, status, commands, controller surface)
+  - `layer.ts` — composition entry (session wiring, commands, controller surface)
+  - `application-state.ts` — immutable state transitions and frozen controller publication
+  - `status.ts` — status spinner/rendering controls
   - `session-refs.ts` — shared mutable session handles (`createSessionRefs`)
   - `runtime.ts` — child runtime start/stop/replace (`makeRuntimeControls`)
   - `events.ts` — host event registration + session init/shutdown/compact/tree
   - `delivery.ts` — review delivery transaction (`makeDeliver`)
   - `checkpoint.ts` — checkpoint request + catch-up wait (`makeCheckpointControls`)
-  - `host-reads.ts` — pure parent session reads
+  - `parent-session.ts` — pure parent session reads through boundary adapters
   - `metrics.ts` — pure metrics helpers
 - `src/application/state.ts` owns immutable application state.
 - `src/layer.ts` is the sole outer composition root for controller, child runtime, queue, persistence, logging, notification, command, and platform Layers.
 - `src/runtime/` owns the child advisor session runtime:
   - `runtime.ts` — service Layer + public re-exports
-  - `session-runtime.ts` — `AdvisorRuntime` class
+  - `session-runtime.ts` — public `AdvisorRuntime` façade and child lifecycle orchestration
+  - `session-events.ts` — synchronous child-event ingress normalization and Effect consumption
+  - `session-safety.ts` — child lookup and tool-identity safety checks
   - `resource-loader.ts` — no-discovery resource loader
   - plus wire types, checkpoint parse, prompts, session helpers, client, tools, resource-state
 - `src/queue/` owns:
@@ -52,7 +56,7 @@ Runs bounded second-model review of Pi responses, optionally delivers advice/rev
 - `src/settings/` owns settings/status/usage command registration (`controller.ts`) and formatting helpers (`format.ts`).
 - `src/domain/` contains shared plain contracts (candidate classification, metrics, labels, safe-data snapshots, runtime-error classification).
 - `src/shared/utils.ts` holds tiny shared type guards.
-- `src/boundary/` isolates foreign APIs only: Pi, clock, JSON, filesystem, executor, plus host adapters (`host-context`, `host-bindings`, `host-notifier`, `host-commands`).
+- `src/boundary/` isolates foreign APIs only: Pi, clock, JSON, filesystem, executor, plus host adapters (`host-context`, `host-bindings`, `host-notifier`, `host-status`, `host-commands`).
 
 ## State and resources
 

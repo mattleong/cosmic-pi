@@ -438,8 +438,7 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
   pi.on("message_update", (event, ctx) => {
     invalidateContextUsage(event, ctx);
     const update = event.assistantMessageEvent;
-    if (!update || (update.type !== "text_delta" && update.type !== "thinking_delta"))
-      return;
+    if (!update || (update.type !== "text_delta" && update.type !== "thinking_delta")) return;
     forkFrom(
       WorkingTimerService.use((timer) => timer.recordOutputCharacters(update.delta.length)),
       ctx,

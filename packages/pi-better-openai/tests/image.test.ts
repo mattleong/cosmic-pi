@@ -742,6 +742,48 @@ describe("Effect-native OpenAI image service", () => {
     }).pipe(h.effect);
   });
 
+  it.effect("removes an owned destination when its first post-link stat fails", () => {
+    let destinationPath: string | undefined;
+    let destinationStatCalls = 0;
+    const failingFileSystem = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const built = yield* Layer.build(nodePlatformLayer);
+        const base = Context.get(built, FileSystem.FileSystem);
+        return FileSystem.FileSystem.of({
+          ...base,
+          link: (source, destination) =>
+            Effect.sync(() => {
+              destinationPath = destination;
+            }).pipe(Effect.andThen(base.link(source, destination))),
+          stat: (filePath) => {
+            if (filePath === destinationPath && destinationStatCalls++ === 0)
+              return base.stat(`${filePath}.missing`);
+            return base.stat(filePath);
+          },
+        });
+      }),
+    );
+    const h = harness(
+      () => Effect.succeed(httpResponse(200, sse([completed()]))),
+      DEFAULT_IMAGE_CONFIG.timeoutMs,
+      failingFileSystem,
+    );
+
+    return Effect.gen(function* () {
+      const error = yield* OpenAIImageService.use((service) =>
+        service.generate({ prompt: "x", save: "project" }),
+      ).pipe(Effect.flip);
+
+      expect(error.message).toContain("Unable to verify published image identity");
+      expect(destinationPath).toBeTypeOf("string");
+      expect(destinationStatCalls).toBe(2);
+      expect(
+        readdirSync(join(h.cwd, ".pi", "generated-images")).filter((name) => name.endsWith(".png")),
+      ).toEqual([]);
+    }).pipe(h.effect);
+  });
+
   it.effect("never removes a destination replaced after failed publication verification", () => {
     const outside = temp();
     const outsideTarget = join(outside, "outside.png");

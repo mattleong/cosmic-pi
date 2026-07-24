@@ -19,9 +19,7 @@ it("formats elapsed working time compactly", () => {
   expect(estimateTokensPerSecond(400, 999)).toBeUndefined();
   expect(formatWorkingMessage(134_000)).toBe("Working · 2m 14s");
   expect(formatWorkingMessage(10_000, 400)).toBe("Working · 10s · ~10.0 tok/s");
-  expect(formatWorkingMessage(10_000, 400, 2_000)).toBe(
-    "Working · 10s · ~50.0 tok/s",
-  );
+  expect(formatWorkingMessage(10_000, 400, 2_000)).toBe("Working · 10s · ~50.0 tok/s");
 });
 
 const messages: Array<string | undefined> = [];

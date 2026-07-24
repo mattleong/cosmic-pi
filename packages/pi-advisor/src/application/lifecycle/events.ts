@@ -60,7 +60,7 @@ import {
   type AdvisorActiveTrajectoryState,
   type AdvisorApplicationState,
 } from "../state.ts";
-import { parentHasPendingMessages, parentIsIdle, parentSignalAborted } from "./host-reads.ts";
+import { parentHasPendingMessages, parentIsIdle, parentSignalAborted } from "./parent-session.ts";
 import type { SessionRefs } from "./session-refs.ts";
 
 export interface EventsDeps {

@@ -47,7 +47,7 @@ import {
   sendAdvisorPerspective,
   sendCorrection,
 } from "../controller-helpers.ts";
-import { parentIsIdle, parentSignalAborted } from "./host-reads.ts";
+import { parentIsIdle, parentSignalAborted } from "./parent-session.ts";
 
 export type DeliverFn = (
   checkpoint: AdvisorCheckpoint,

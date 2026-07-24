@@ -17,7 +17,9 @@ Adds OpenAI subscription usage, fast-mode request injection, provider-native com
 - `src/layer.ts` composes usage, fast-mode, image, platform, and file/Sharp Layers.
 - `src/auth/` owns Codex OAuth credential reads (`codex-auth.ts`, `result.ts`).
 - `src/usage/index.ts`, `src/fast/service.ts`, `src/compaction/`, and `src/image/` own the major feature resources.
-- `src/image/` splits types, pure helpers, Effect service, host registration, and protocol.
+- `src/usage/controller.ts` is the usage Context service door; `projection.ts` owns frozen projection policy and `debug.ts` owns deterministic diagnostics.
+- `src/image/service.ts` is the image Context service door and orchestration path; `input.ts`, `stream.ts`, and `output.ts` isolate safe input reads, SSE decoding, generated-byte validation, and atomic publication.
+- The remaining `src/image/` modules own types, pure helpers, host registration, and protocol.
 - `src/config/`, `src/fast/controller.ts`, `src/fast/models.ts`, `src/usage/format.ts`, and `src/image/protocol.ts` contain schemas and deterministic policy/protocol logic.
 - `src/boundary/` isolates Pi UI, model registry, OpenAI compaction HTTP, and Sharp.
 - `src/ui/` and `src/footer/` consume synchronous frozen projections.

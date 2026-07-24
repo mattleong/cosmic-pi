@@ -16,7 +16,10 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 - `src/application.ts` owns Pi registration, protocol subscriptions, and session orchestration.
 - `src/layer.ts` composes config, repository probe, footer registry, protocol host, and host-callback Layers.
 - `src/footer/installation.ts` owns the synchronous footer installation generation and disposal state machine.
-- `src/footer/` contains registry/client behavior and synchronous footer components/layout.
+- `src/footer/component.ts` assembles synchronous footer lines and surfaces from detached projections.
+- `src/boundary/host-footer-projection.ts` materializes hostile Pi getters behind the host-callback boundary.
+- `src/footer/builtin-contributions.ts` projects detached host/application data into built-in text contributions.
+- The remaining `src/footer/` modules own registry/client behavior and pure responsive layout.
 - `src/probe/`, `src/config/`, `src/settings/`, and `src/working/` are vertical application features.
 - `src/working/service.ts` owns the scoped elapsed-time ticker and streamed-output rate estimate for Pi's working row.
 - `src/boundary/` isolates hostile synchronous host callbacks, including working-message updates.

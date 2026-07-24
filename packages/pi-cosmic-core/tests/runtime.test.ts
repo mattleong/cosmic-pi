@@ -6,11 +6,7 @@ import * as Logger from "effect/Logger";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { PiApi } from "../src/runtime/pi-api.ts";
-import {
-  makePiManagedRuntime,
-  makePiRuntime,
-  piHostLoggerLayer,
-} from "../src/runtime/runtime.ts";
+import { makePiManagedRuntime, makePiRuntime, piHostLoggerLayer } from "../src/runtime/runtime.ts";
 import { makeLifecycleProbe } from "../testing.ts";
 
 const makeHostileSignal = (operation: "aborted" | "addEventListener") => {
@@ -78,8 +74,13 @@ it.effect("keeps Effect log output off the TTY console", () =>
         ),
       );
       // Standalone runners share the same exported host logger layer.
-      yield* Effect.logWarning("standalone host logger must stay off the TTY").pipe(
-        Effect.provide(piHostLoggerLayer),
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const loggerContext = yield* Layer.build(piHostLoggerLayer);
+          yield* Effect.logWarning("standalone host logger must stay off the TTY").pipe(
+            Effect.provide(loggerContext),
+          );
+        }),
       );
     } finally {
       console.log = originalLog;

@@ -90,7 +90,7 @@ try {
 
   run(
     "pnpm",
-    ["install", "--offline", "--ignore-scripts", "--config.engine-strict=true"],
+    ["install", "--prefer-offline", "--ignore-scripts", "--config.engine-strict=true"],
     temporaryDirectory,
   );
   run(
