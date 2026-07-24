@@ -20,7 +20,7 @@ Provides syntax-highlighted previews, structured diffs, safer write/edit present
 - `src/layer.ts` is the sole application Layer composition root.
 - `src/config/store.ts` is the settings persistence **door** (Effect `CodePreviewSettingsService` plus promise/compat helpers). Rooms: `schema`, `defaults`, `definitions`, `values`, `state`, `env`, `environment-service`, `document-store`, and internal `service.ts` (Context key retained).
 - `src/settings/` owns host commands (`controller.ts`), pre-session bootstrap, the compatibility barrel (`index.ts`), and settings menus under `settings/ui/`.
-- `src/syntax/` and `src/write/` are the other primary stateful features.
+- `src/syntax/` and `src/write/` are the other primary stateful features; `syntax/service.ts` owns Shiki state/lifecycle while `syntax/ingress.ts` owns the bounded synchronous renderer request bridge.
 - `src/diff/`, `src/paths/`, `src/tools/` (including grep/path-list/shell helpers), and `src/warnings/` contain deterministic preview policy and transformation logic.
 - `src/tools/` owns tool names/policy, cooperative shell API (`cooperative-tools.ts`), tool argument/result helpers (`data/`), and synchronous tool renderers (`renderers/`).
 - `src/boundary/` wraps Pi/Node/Shiki/environment/JSON boundaries (`node-platform.ts` for Node file platform runs).

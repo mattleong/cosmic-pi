@@ -28,6 +28,7 @@ export const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SPARK_LIMIT_NAME = "GPT-5.3-Codex-Spark";
 
+const MAX_RESET_SECONDS = 366 * 86_400;
 const UsageWindowSchema = Schema.Struct({
   used_percent: Schema.optional(Schema.NullOr(Schema.Number)),
   reset_after_seconds: Schema.optional(Schema.NullOr(Schema.Number)),
@@ -82,15 +83,26 @@ function sparkBucket(data: CodexUsageResponse): RateLimitBucket | null {
   return null;
 }
 
+const boundedResetSeconds = (value: number | null | undefined): number | null =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_RESET_SECONDS
+    ? value
+    : null;
+
 function resetSeconds(window: UsageWindow | null | undefined, now: number): number | null {
+  const resetAfter = boundedResetSeconds(window?.reset_after_seconds);
+  if (resetAfter !== null) return resetAfter;
+
+  const resetAtValue = window?.reset_at;
   if (
-    typeof window?.reset_after_seconds === "number" &&
-    Number.isFinite(window.reset_after_seconds)
+    typeof resetAtValue !== "number" ||
+    !Number.isFinite(resetAtValue) ||
+    resetAtValue < 0 ||
+    !Number.isFinite(now)
   )
-    return window.reset_after_seconds;
-  if (typeof window?.reset_at !== "number" || !Number.isFinite(window.reset_at)) return null;
-  const resetAt = window.reset_at > 100_000_000_000 ? window.reset_at / 1000 : window.reset_at;
-  return Math.max(0, resetAt - now / 1000);
+    return null;
+
+  const resetAt = resetAtValue > 100_000_000_000 ? resetAtValue / 1000 : resetAtValue;
+  return boundedResetSeconds(Math.max(0, resetAt - now / 1000));
 }
 
 export const usageScopeForModel = (modelId: string | undefined): UsageScope =>

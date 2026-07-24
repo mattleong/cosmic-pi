@@ -19,12 +19,14 @@ Runs bounded second-model review of Pi responses, optionally delivers advice/rev
 - `src/application/controller-helpers.ts` holds pure delivery/verification/messaging helpers used by the application layer.
 - `src/application/lifecycle.ts` re-exports the lifecycle Layer entry.
 - `src/application/lifecycle/` owns session lifecycle split by role:
-  - `layer.ts` — composition entry (session wiring, commands, controller surface)
+  - `layer.ts` — composition entry (session wiring and controller surface)
   - `application-state.ts` — immutable state transitions and frozen controller publication
+  - `commands.ts` — command workflows and committed-config convergence
+  - `ledger.ts` — parent checkpoint-ledger persistence
   - `status.ts` — status spinner/rendering controls
   - `session-refs.ts` — shared mutable session handles (`createSessionRefs`)
   - `runtime.ts` — child runtime start/stop/replace (`makeRuntimeControls`)
-  - `events.ts` — host event registration + session init/shutdown/compact/tree
+  - `events.ts` — host event registration/composition; `events/session.ts`, `events/trajectory.ts`, and `events/turn.ts` own the lifecycle event families while `events/types.ts` holds their shared contract
   - `delivery.ts` — review delivery transaction (`makeDeliver`)
   - `checkpoint.ts` — checkpoint request + catch-up wait (`makeCheckpointControls`)
   - `parent-session.ts` — pure parent session reads through boundary adapters

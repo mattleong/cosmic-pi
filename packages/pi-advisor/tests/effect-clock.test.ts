@@ -1,5 +1,4 @@
 // Third-party AgentSession latch and explicit test entry-point Layer provision.
-// @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/strictEffectProvide:off
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
@@ -28,6 +27,60 @@ import {
   AdvisorRuntimeResetRequiredError,
   type AdvisorRuntimeServiceShape,
 } from "../src/runtime/runtime.ts";
+
+const runtimeOptions = (timeoutMs: number) => ({
+  ctx: { cwd: process.cwd(), modelRegistry: {} as never },
+  config: {
+    configPath: "/tmp/config",
+    enabled: true,
+    provider: "p",
+    model: "m",
+    fastMode: false,
+    thinkingLevel: "medium" as const,
+    reviewPolicy: "guardrail" as const,
+    timeoutMs,
+    maxContextChars: 48_000,
+    configured: true,
+  },
+  seed: "seed",
+});
+
+const makeRuntime = (
+  dependencies: ConstructorParameters<typeof AdvisorRuntime>[0],
+): Effect.Effect<AdvisorRuntime, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const scope = yield* Effect.scope;
+    return new AdvisorRuntime(
+      dependencies,
+      standaloneAdvisorExecutor,
+      scope,
+      { offer: () => "accepted", shutdown: Effect.void, awaitShutdown: Effect.void },
+      (yield* SynchronizedRef.make(undefined)) as never,
+      yield* Semaphore.make(1),
+    );
+  });
+
+const lateSession = (dispose: () => void): AgentSession =>
+  ({
+    sessionFile: undefined,
+    messages: [],
+    isStreaming: false,
+    getActiveToolNames: () => [],
+    getToolDefinition: () => undefined,
+    subscribe: () => () => undefined,
+    prompt: () => Promise.resolve(),
+    steer: () => Promise.resolve(),
+    followUp: () => Promise.resolve(),
+    abort: vi.fn(() => Promise.resolve()),
+    dispose: vi.fn(dispose),
+  }) as unknown as AgentSession;
+
+const childModel = () =>
+  Promise.resolve({
+    modelRuntime: {} as never,
+    model: { provider: "p", id: "m" } as never,
+    thinkingLevel: "medium" as const,
+  });
 
 const assertExactDelay = (milliseconds: number) =>
   Effect.gen(function* () {
@@ -136,13 +189,176 @@ describe("advisor Effect clock boundaries", () => {
     }),
   );
 
+  it.effect("bounds auth/model startup without creating a session", () =>
+    Effect.gen(function* () {
+      const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+      const modelStarted = yield* Deferred.make<void>();
+      const modelGate = yield* Deferred.make<never>();
+      const createSession = vi.fn();
+      const runtime = yield* makeRuntime({
+        createChildModel: () => {
+          Deferred.doneUnsafe(modelStarted, Effect.void);
+          return runPromise(Deferred.await(modelGate));
+        },
+        createSession,
+      });
+      const startup = yield* runtime
+        .startEffect(runtimeOptions(25))
+        .pipe(
+          Effect.provide(advisorPlatformLayer),
+          Effect.flip,
+          Effect.forkChild({ startImmediately: true }),
+        );
+      yield* Deferred.await(modelStarted);
+      yield* TestClock.adjust(25);
+      const failure = yield* Fiber.join(startup);
+      expect(failure.message).toContain("startup timed out");
+      expect(createSession).not.toHaveBeenCalled();
+      expect(runtime.childSession).toBeUndefined();
+      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+    }),
+  );
+
+  it.effect("replaces timed-out creation and disposes its late child exactly once", () =>
+    Effect.gen(function* () {
+      const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+      const createStarted = yield* Deferred.make<void>();
+      const lateCreate = yield* Deferred.make<{
+        session: AgentSession;
+        extensionsResult: never;
+      }>();
+      const lateDisposed = yield* Deferred.make<void>();
+      const first = lateSession(() => {
+        Deferred.doneUnsafe(lateDisposed, Effect.void);
+      });
+      const replacement = lateSession(() => undefined);
+      let createCalls = 0;
+      const runtime = yield* makeRuntime({
+        createChildModel: childModel,
+        createTools: () => Promise.resolve([]),
+        createSession: () => {
+          createCalls += 1;
+          if (createCalls === 1) {
+            Deferred.doneUnsafe(createStarted, Effect.void);
+            return runPromise(Deferred.await(lateCreate));
+          }
+          return Promise.resolve({ session: replacement, extensionsResult: {} as never });
+        },
+      });
+      const firstStart = yield* runtime
+        .startEffect(runtimeOptions(25))
+        .pipe(
+          Effect.provide(advisorPlatformLayer),
+          Effect.flip,
+          Effect.forkChild({ startImmediately: true }),
+        );
+      yield* Deferred.await(createStarted);
+      yield* TestClock.adjust(25);
+      expect((yield* Fiber.join(firstStart)).message).toContain("startup timed out");
+
+      yield* runtime.startEffect(runtimeOptions(1_000)).pipe(Effect.provide(advisorPlatformLayer));
+      expect(createCalls).toBe(2);
+      expect(runtime.childSession).toBe(replacement);
+      expect(first.dispose).not.toHaveBeenCalled();
+
+      yield* Deferred.succeed(lateCreate, { session: first, extensionsResult: {} as never });
+      yield* Deferred.await(lateDisposed);
+      expect(first.dispose).toHaveBeenCalledOnce();
+      expect(first.abort).not.toHaveBeenCalled();
+      expect(runtime.childSession).toBe(replacement);
+      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+      expect(replacement.abort).toHaveBeenCalledOnce();
+      expect(replacement.dispose).toHaveBeenCalledOnce();
+    }),
+  );
+
+  it.effect("disposes a late child after shutdown exactly once", () =>
+    Effect.gen(function* () {
+      const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+      const createStarted = yield* Deferred.make<void>();
+      const lateCreate = yield* Deferred.make<{
+        session: AgentSession;
+        extensionsResult: never;
+      }>();
+      const lateDisposed = yield* Deferred.make<void>();
+      const session = lateSession(() => {
+        Deferred.doneUnsafe(lateDisposed, Effect.void);
+      });
+      const runtime = yield* makeRuntime({
+        createChildModel: childModel,
+        createTools: () => Promise.resolve([]),
+        createSession: () => {
+          Deferred.doneUnsafe(createStarted, Effect.void);
+          return runPromise(Deferred.await(lateCreate));
+        },
+      });
+      const startup = yield* runtime
+        .startEffect(runtimeOptions(25))
+        .pipe(
+          Effect.provide(advisorPlatformLayer),
+          Effect.flip,
+          Effect.forkChild({ startImmediately: true }),
+        );
+      yield* Deferred.await(createStarted);
+      yield* TestClock.adjust(25);
+      expect((yield* Fiber.join(startup)).message).toContain("startup timed out");
+      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+      expect(session.dispose).not.toHaveBeenCalled();
+
+      yield* Deferred.succeed(lateCreate, { session, extensionsResult: {} as never });
+      yield* Deferred.await(lateDisposed);
+      expect(session.abort).not.toHaveBeenCalled();
+      expect(session.dispose).toHaveBeenCalledOnce();
+      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+      expect(session.dispose).toHaveBeenCalledOnce();
+    }),
+  );
+
+  it.effect("isolates a throwing late-child disposal callback", () =>
+    Effect.gen(function* () {
+      const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+      const createStarted = yield* Deferred.make<void>();
+      const lateCreate = yield* Deferred.make<{
+        session: AgentSession;
+        extensionsResult: never;
+      }>();
+      const lateDisposed = yield* Deferred.make<void>();
+      const session = lateSession(() => {
+        Deferred.doneUnsafe(lateDisposed, Effect.void);
+        throw new Error("sensitive disposal defect");
+      });
+      const runtime = yield* makeRuntime({
+        createChildModel: childModel,
+        createTools: () => Promise.resolve([]),
+        createSession: () => {
+          Deferred.doneUnsafe(createStarted, Effect.void);
+          return runPromise(Deferred.await(lateCreate));
+        },
+      });
+      const startup = yield* runtime
+        .startEffect(runtimeOptions(25))
+        .pipe(
+          Effect.provide(advisorPlatformLayer),
+          Effect.flip,
+          Effect.forkChild({ startImmediately: true }),
+        );
+      yield* Deferred.await(createStarted);
+      yield* TestClock.adjust(25);
+      expect((yield* Fiber.join(startup)).message).toContain("startup timed out");
+      yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
+
+      yield* Deferred.succeed(lateCreate, { session, extensionsResult: {} as never });
+      yield* Deferred.await(lateDisposed);
+      expect(session.abort).not.toHaveBeenCalled();
+      expect(session.dispose).toHaveBeenCalledOnce();
+    }),
+  );
+
   it.effect("awaits AgentSession abort settlement and still disposes exactly once", () =>
     Effect.gen(function* () {
       const scope = yield* Effect.scope;
-      let releaseAbort!: () => void;
-      const abortGate = new Promise<void>((resolve) => {
-        releaseAbort = resolve;
-      });
+      const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+      const abortGate = yield* Deferred.make<void>();
       const session = {
         sessionFile: undefined,
         messages: [],
@@ -153,7 +369,7 @@ describe("advisor Effect clock boundaries", () => {
         prompt: () => Promise.resolve(),
         steer: () => Promise.resolve(),
         followUp: () => Promise.resolve(),
-        abort: vi.fn(() => abortGate),
+        abort: vi.fn(() => runPromise(Deferred.await(abortGate))),
         dispose: vi.fn(),
       } as unknown as AgentSession;
       const runtime = new AdvisorRuntime(
@@ -202,7 +418,7 @@ describe("advisor Effect clock boundaries", () => {
       );
       yield* Effect.yieldNow;
       expect(completed).toBe(false);
-      yield* Effect.sync(releaseAbort);
+      yield* Deferred.succeed(abortGate, undefined);
       yield* Fiber.join(abort);
       expect(completed).toBe(true);
       yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
@@ -214,6 +430,7 @@ describe("advisor Effect clock boundaries", () => {
   it.effect("bounds a stuck AgentSession abort and requires a clean re-prime", () =>
     Effect.gen(function* () {
       const scope = yield* Effect.scope;
+      const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
       const makeSession = (abort: () => Promise<void>) =>
         ({
           sessionFile: undefined,
@@ -228,7 +445,8 @@ describe("advisor Effect clock boundaries", () => {
           abort: vi.fn(abort),
           dispose: vi.fn(),
         }) as unknown as AgentSession;
-      const stuck = makeSession(() => new Promise<void>(() => undefined));
+      const stuckAbort = yield* Deferred.make<void>();
+      const stuck = makeSession(() => runPromise(Deferred.await(stuckAbort)));
       const fresh = makeSession(() => Promise.resolve());
       const sessions = [stuck, fresh];
       const runtime = new AdvisorRuntime(
@@ -301,8 +519,9 @@ describe("advisor Effect clock boundaries", () => {
 
       yield* runtime.reprimeEffect("fresh").pipe(Effect.provide(advisorPlatformLayer));
       expect(runtime.childSession).toBe(fresh);
-      (fresh.abort as ReturnType<typeof vi.fn>).mockImplementationOnce(
-        () => new Promise<void>(() => undefined),
+      const interruptedFreshAbort = yield* Deferred.make<void>();
+      (fresh.abort as ReturnType<typeof vi.fn>).mockImplementationOnce(() =>
+        runPromise(Deferred.await(interruptedFreshAbort)),
       );
       const interruptedAbort = yield* runtime
         .abortEffect()

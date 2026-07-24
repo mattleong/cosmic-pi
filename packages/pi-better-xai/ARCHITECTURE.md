@@ -16,7 +16,8 @@ Adds xAI subscription-usage refresh, settings, status commands, and footer outpu
 - `src/layer.ts` composes the xAI application Layer.
 - `src/auth/` owns credential reads (`auth.ts`, `result.ts`) and stable identity constants (`identity.ts`).
 - `src/usage/index.ts`, `src/settings/`, and `src/footer/` are the usage, settings, and fallback-footer features.
-- `src/config/` and `src/usage/format.ts` contain schemas and deterministic subscription logic.
+- `src/usage/controller.ts` owns the usage Context service, `projection.ts` owns frozen projection policy, `debug.ts` owns deterministic diagnostics, and `format.ts` owns provider schemas and subscription formatting.
+- `src/config/` contains configuration schemas and deterministic policy.
 - `src/boundary/` contains model-registry/host adapters.
 - `src/ui/` reads frozen usage projections and emits plain Cosmic UI contributions.
 

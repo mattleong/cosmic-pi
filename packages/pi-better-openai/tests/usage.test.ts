@@ -51,6 +51,21 @@ describe("usage helpers", () => {
     expect(expired).toContain("7d ↺ 0s");
   });
 
+  test.each([
+    ["relative", { reset_after_seconds: 1e300 }],
+    ["absolute", { reset_at: 1e300 }],
+  ])("rejects an out-of-range %s reset without discarding usage", (_kind, reset) => {
+    const usage = _test.parseUsageSnapshot(
+      { rate_limit: { primary_window: { used_percent: 10, ...reset } } },
+      "gpt-5.5",
+      NOW,
+    );
+
+    expect(usage.sevenDayLeftPercent).toBe(90);
+    expect(usage.sevenDayResetInSeconds).toBeNull();
+    expect(_test.formatUsageSnapshot(usage, { showResetTimes: true }, NOW)).toBe("Usage: 7d: 90%");
+  });
+
   test("falls back to base rate limit for Spark", () => {
     const usage = _test.parseUsageSnapshot(payload(), "gpt-5.3-codex-spark", NOW);
     expect(usage.scope).toBe("spark");

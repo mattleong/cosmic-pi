@@ -1,4 +1,5 @@
 import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 
 export function formatResetCountdown(seconds: number | null): string | null {
   if (typeof seconds !== "number" || !Number.isFinite(seconds)) return null;
@@ -18,24 +19,26 @@ export function formatResetClock(
   options: { readonly includeDate?: boolean } | undefined,
   now: number,
 ): string | null {
-  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return null;
-  const reset = DateTime.makeUnsafe(now + seconds * 1000);
-  const current = DateTime.makeUnsafe(now);
-  const time = DateTime.formatLocal(reset, { hour: "numeric", minute: "2-digit" });
-  const resetDay = DateTime.formatLocal(reset, {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || !Number.isFinite(now))
+    return null;
+  const reset = DateTime.make(now + seconds * 1000);
+  const current = DateTime.make(now);
+  if (Option.isNone(reset) || Option.isNone(current)) return null;
+  const time = DateTime.formatLocal(reset.value, { hour: "numeric", minute: "2-digit" });
+  const resetDay = DateTime.formatLocal(reset.value, {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   });
-  const currentDay = DateTime.formatLocal(current, {
+  const currentDay = DateTime.formatLocal(current.value, {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   });
   if (!options?.includeDate && resetDay === currentDay) return time;
-  const weekday = DateTime.formatLocal(reset, { weekday: "short" });
+  const weekday = DateTime.formatLocal(reset.value, { weekday: "short" });
   if (!options?.includeDate) return `${weekday} ${time}`;
-  return `${weekday} ${DateTime.formatLocal(reset, { month: "numeric", day: "numeric" })} ${time}`;
+  return `${weekday} ${DateTime.formatLocal(reset.value, { month: "numeric", day: "numeric" })} ${time}`;
 }
 
 export function formatCompactReset(
@@ -67,7 +70,15 @@ export function remainingResetSeconds(
   capturedAt: number,
   now: number,
 ): number | null {
-  return seconds === null ? null : seconds - (now - capturedAt) / 1000;
+  if (
+    seconds === null ||
+    !Number.isFinite(seconds) ||
+    !Number.isFinite(capturedAt) ||
+    !Number.isFinite(now)
+  )
+    return null;
+  const remaining = seconds - (now - capturedAt) / 1000;
+  return Number.isFinite(remaining) ? remaining : null;
 }
 
 export type UsageWindowLine = {

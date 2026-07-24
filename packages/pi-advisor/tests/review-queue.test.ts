@@ -1,16 +1,12 @@
-// Test harness boundary: only the diagnostics used by this file are suppressed.
+// Promise-shaped driver characterization intentionally remains at this test boundary.
 // @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as Queue from "effect/Queue";
-import * as Scope from "effect/Scope";
-import * as SynchronizedRef from "effect/SynchronizedRef";
-import { describe, expect, test, vi } from "vitest";
+import type * as Scope from "effect/Scope";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type {
   AdvisorCheckpoint,
   AdvisorCheckpointRequest,
@@ -33,7 +29,6 @@ import {
   type AdvisorReviewQueueOptions,
   type QueuedCheckpoint,
 } from "../src/queue/service.ts";
-import { initialReviewQueueState } from "../src/queue/state.ts";
 import { AdvisorModelError } from "../src/runtime/client.ts";
 
 type TestQueue = AdvisorReviewQueue & {
@@ -44,11 +39,16 @@ type TestQueue = AdvisorReviewQueue & {
   reset: (seed: string, stateSummary?: string) => Promise<void>;
 };
 
+const activeQueueCleanups = new Set<() => Promise<void>>();
+
+afterEach(async () => {
+  await Promise.all([...activeQueueCleanups].map((cleanup) => cleanup()));
+});
+
 async function makeQueue(
   driver: AdvisorRuntimeDriver,
   options: AdvisorReviewQueueOptions = {},
 ): Promise<TestQueue> {
-  const scope = Scope.makeUnsafe();
   const runtime: AdvisorRuntimeServiceShape = {
     activeToolNames: () => driver.activeToolNames,
     start: (value) => Effect.tryPromise({ try: () => driver.start(value), catch: modelError }),
@@ -66,18 +66,21 @@ async function makeQueue(
         Effect.catch(() => Effect.void),
       ),
   };
-  const queue = new AdvisorReviewQueue(
-    runtime,
-    options,
-    scope,
-    Effect.runSync(SynchronizedRef.make(initialReviewQueueState())),
-    Effect.runSync(Queue.dropping<QueuedCheckpoint>(MAX_PENDING_CHECKPOINTS + 1)),
-  ) as TestQueue;
-  await Effect.runPromise(queue.initializeEffect());
-  queue.checkpoint = (request) => Effect.runPromise(queue.checkpointEffect(request));
-  queue.reset = (seed, state) => Effect.runPromise(queue.resetEffect(seed, state));
-  queue.dispose = () =>
-    Effect.runPromise(queue.disposeEffect().pipe(Effect.andThen(Scope.close(scope, Exit.void))));
+  const managed = ManagedRuntime.make(advisorReviewQueueServiceLayer);
+  const service = await managed.runPromise(AdvisorReviewQueueService);
+  const queue = (await managed.runPromise(service.make(runtime, options))) as TestQueue;
+  const dispose = async () => {
+    if (!activeQueueCleanups.delete(dispose)) return;
+    try {
+      await managed.runPromise(queue.disposeEffect());
+    } finally {
+      await managed.dispose();
+    }
+  };
+  activeQueueCleanups.add(dispose);
+  queue.checkpoint = (request) => managed.runPromise(queue.checkpointEffect(request));
+  queue.reset = (seed, state) => managed.runPromise(queue.resetEffect(seed, state));
+  queue.dispose = dispose;
   return queue;
 }
 
@@ -87,13 +90,16 @@ const modelError = (error: unknown) =>
     : new AdvisorModelError({ message: error instanceof Error ? error.message : "test failure" });
 
 function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, reject, resolve };
+  const value = Deferred.makeUnsafe<T, Error>();
+  return {
+    promise: Effect.runPromise(Deferred.await(value)),
+    resolve: (next: T) => {
+      Deferred.doneUnsafe(value, Effect.succeed(next));
+    },
+    reject: (error: Error) => {
+      Deferred.doneUnsafe(value, Effect.fail(error));
+    },
+  };
 }
 
 function result(request: AdvisorCheckpointRequest): AdvisorCheckpoint {
@@ -135,7 +141,7 @@ function runtimeHarness() {
 }
 
 async function tick() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await Effect.runPromise(Effect.sleep(1));
 }
 
 describe("AdvisorReviewQueue", () => {
@@ -682,9 +688,11 @@ describe("AdvisorReviewQueue", () => {
   test("disposal prevents a rejected checkpoint from re-priming or retrying", async () => {
     const harness = runtimeHarness();
     const failure = deferred<AdvisorCheckpoint>();
-    (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(
-      () => failure.promise,
-    );
+    const checkpointStarted = deferred<void>();
+    (harness.runtime.checkpoint as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      checkpointStarted.resolve(undefined);
+      return failure.promise;
+    });
     const queue = await makeQueue(harness.runtime, {
       getReprimeState: () => ({ seed: "obsolete cursor", stateSummary: "obsolete state" }),
     });
@@ -695,12 +703,11 @@ describe("AdvisorReviewQueue", () => {
       parentTurnId: 1,
     });
     const rejection = expect(checkpoint).rejects.toThrow(/disposed|stale/);
-    await tick();
+    await checkpointStarted.promise;
 
     await queue.dispose();
     failure.reject(new Error("context overflow"));
     await rejection;
-    await tick();
 
     expect(harness.runtime.checkpoint).toHaveBeenCalledOnce();
     expect(harness.runtime.abort).toHaveBeenCalledOnce();

@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   clampPercent,
   formatPercent,
+  formatResetClock,
   formatTokens,
   formatWindowedUsageLine,
   remainingResetSeconds,
@@ -40,6 +41,21 @@ describe("subscription-format helpers", () => {
         { showResetTimes: false },
         now,
         capturedAt,
+      ),
+    ).toBe("Usage: 5h: 80%");
+  });
+
+  it("rejects invalid reset instants without throwing", () => {
+    const now = 1_700_000_000_000;
+    expect(formatResetClock(1e300, undefined, now)).toBeNull();
+    expect(formatResetClock(60, undefined, Number.NaN)).toBeNull();
+    expect(remainingResetSeconds(60, Number.NaN, now)).toBeNull();
+    expect(
+      formatWindowedUsageLine(
+        [{ label: "5h", leftPercent: 80, resetInSeconds: 1e300 }],
+        { showResetTimes: true },
+        now,
+        now,
       ),
     ).toBe("Usage: 5h: 80%");
   });

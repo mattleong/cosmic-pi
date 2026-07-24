@@ -4,13 +4,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { makeSynchronousIngress, type SynchronousIngress } from "pi-cosmic-core";
 import { disposeShikiHighlighter, ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
 import { codePreviewPerformanceConfig } from "../config/env";
 import { codePreviewSettings } from "../settings/index";
+import { makeSyntaxIngress } from "./ingress";
 import {
   clearSyntaxProjection,
-  installSyntaxRequests,
   publishSyntaxProjection,
   type CodePreviewSyntaxSnapshot,
   type ShikiStatus,
@@ -47,9 +46,6 @@ type SyntaxState = {
   readonly languageCallbacks: ReadonlyMap<string, readonly (() => void)[]>;
   readonly statusVersion: number;
 };
-type SyntaxRequest =
-  | { readonly tag: "Initialize"; readonly theme: string }
-  | { readonly tag: "Language"; readonly language: string };
 type InitializeDecision =
   | { readonly tag: "Ready" }
   | { readonly tag: "Await"; readonly done: Deferred.Deferred<InitializationOutcome> }
@@ -75,18 +71,6 @@ const invokeCallbacks = (callbacks: readonly (() => void)[]) =>
     (callback) => Effect.try({ try: callback, catch: () => undefined }).pipe(Effect.ignore),
     { discard: true },
   );
-
-const syntaxRequestKey = (request: SyntaxRequest): string =>
-  request.tag === "Initialize" ? `initialize:${request.theme}` : `language:${request.language}`;
-
-const invokeHostInvalidation = (callback: (() => void) | undefined): void => {
-  if (!callback) return;
-  try {
-    callback();
-  } catch {
-    // Renderer invalidation is a hostile synchronous host capability.
-  }
-};
 
 const syntaxSnapshot = (current: SyntaxState): CodePreviewSyntaxSnapshot =>
   Object.freeze({
@@ -344,82 +328,9 @@ export class CodePreviewSyntaxService extends Context.Service<
         );
       });
 
-      // Host renderers may synchronously repeat the same request many times. Retain at most one
-      // queued operation per key and a finite number of callbacks; once the callback budget is
-      // full, invalidate that caller immediately instead of retaining another capability.
-      const INGRESS_CAPACITY = 32;
-      const CALLBACK_CAPACITY = 128;
-      type PendingRequest = {
-        readonly callbacks: (() => void)[];
-      };
-      const pendingRequests = new Map<string, PendingRequest>();
-      let retainedCallbacks = 0;
-      let acceptingRequests = true;
-      const takeCallbacks = (key: string): readonly (() => void)[] => {
-        const pending = pendingRequests.get(key);
-        if (!pending) return [];
-        pendingRequests.delete(key);
-        retainedCallbacks -= pending.callbacks.length;
-        return pending.callbacks;
-      };
-      const completeRequest = (key: string) =>
-        Effect.sync(() => takeCallbacks(key)).pipe(Effect.flatMap(invokeCallbacks));
-      const flushPendingCallbacks = Effect.sync(() => {
-        const callbacks = [...pendingRequests.values()].flatMap((pending) => pending.callbacks);
-        pendingRequests.clear();
-        retainedCallbacks = 0;
-        for (const callback of callbacks) invokeHostInvalidation(callback);
-      });
-
-      let ingress: SynchronousIngress<SyntaxRequest>;
-      ingress = yield* makeSynchronousIngress<SyntaxRequest, never, never>({
-        capacity: INGRESS_CAPACITY,
-        overflow: "drop",
-        handle: (request) => {
-          const key = syntaxRequestKey(request);
-          const operation =
-            request.tag === "Language"
-              ? requestLanguage(request.language)
-              : initialize(request.theme);
-          return operation.pipe(Effect.ensuring(completeRequest(key)));
-        },
-      });
-      const offerRequest = (request: SyntaxRequest, invalidate?: () => void): void => {
-        if (!acceptingRequests) return;
-        const key = syntaxRequestKey(request);
-        const pending = pendingRequests.get(key);
-        if (pending) {
-          if (invalidate) {
-            if (retainedCallbacks < CALLBACK_CAPACITY) {
-              pending.callbacks.push(invalidate);
-              retainedCallbacks++;
-            } else {
-              invokeHostInvalidation(invalidate);
-            }
-          }
-          return;
-        }
-        if (pendingRequests.size >= INGRESS_CAPACITY) {
-          invokeHostInvalidation(invalidate);
-          return;
-        }
-        const callbacks = invalidate ? [invalidate] : [];
-        pendingRequests.set(key, { callbacks });
-        retainedCallbacks += callbacks.length;
-        const result = ingress.offer(request);
-        switch (result) {
-          case "accepted":
-            return;
-          case "dropped":
-          case "coalesced":
-          case "closed":
-            for (const callback of takeCallbacks(key)) invokeHostInvalidation(callback);
-            return;
-        }
-      };
-      installSyntaxRequests(owner, {
-        initialize: (theme, invalidate) => offerRequest({ tag: "Initialize", theme }, invalidate),
-        language: (language, invalidate) => offerRequest({ tag: "Language", language }, invalidate),
+      const ingress = yield* makeSyntaxIngress(owner, {
+        initialize,
+        language: requestLanguage,
       });
 
       const service = CodePreviewSyntaxService.of({
@@ -438,11 +349,7 @@ export class CodePreviewSyntaxService extends Context.Service<
       });
 
       return yield* Effect.acquireRelease(Effect.succeed(service), () =>
-        Effect.sync(() => {
-          acceptingRequests = false;
-        }).pipe(
-          Effect.andThen(ingress.shutdown),
-          Effect.andThen(flushPendingCallbacks),
+        ingress.shutdown.pipe(
           Effect.andThen(dispose),
           Effect.ensuring(Effect.sync(() => clearSyntaxProjection(owner))),
         ),

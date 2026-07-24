@@ -1,7 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
@@ -11,18 +10,16 @@ import * as Semaphore from "effect/Semaphore";
 import * as Tracer from "effect/Tracer";
 import {
   AgentDirectory,
-  freezeSnapshot,
   JsonDocumentStore,
   JsonHttpClient,
   makeFrozenProjection,
   mergeRefreshRequest,
   makeSubscriptionRefresh,
-  maskIdentifier,
   sanitizeDiagnosticError,
   withUsageEligibility,
   type RefreshRequest,
 } from "pi-cosmic-core";
-import { ModelRegistryAuth, isUsingOAuthAtHostBoundary } from "../boundary/model-registry-auth.ts";
+import { ModelRegistryAuth } from "../boundary/model-registry-auth.ts";
 import { readXaiAuth } from "../auth/auth.ts";
 import {
   decodeSettingUpdate,
@@ -35,87 +32,12 @@ import {
   type XaiConfigError,
 } from "../config/index.ts";
 import {
-  BILLING_BASE_URL,
   type UsageSnapshot,
   formatUsageDetails,
   formatUsageSnapshot,
   requestXaiUsage,
 } from "./format.ts";
-
-export interface XaiProjection {
-  readonly config: ResolvedConfig | undefined;
-  readonly eligible: boolean;
-  readonly snapshot: UsageSnapshot | undefined;
-  readonly statusLine: string | undefined;
-  readonly statusText: string;
-  readonly error: string | undefined;
-  readonly lastFetchAt: number | undefined;
-  readonly updatedAt: number | undefined;
-  readonly authPath: string | undefined;
-  readonly authFound: boolean;
-  readonly teamId: string | undefined;
-}
-
-const initialProjection = (): XaiProjection => ({
-  config: undefined,
-  eligible: false,
-  snapshot: undefined,
-  statusLine: undefined,
-  statusText: "Usage unavailable.",
-  error: undefined,
-  lastFetchAt: undefined,
-  updatedAt: undefined,
-  authPath: undefined,
-  authFound: false,
-  teamId: undefined,
-});
-
-export const makeProjection = (): MutableRef.MutableRef<XaiProjection> =>
-  MutableRef.make(freezeSnapshot(initialProjection()));
-
-export function resetProjection(projection: MutableRef.MutableRef<XaiProjection>): void {
-  MutableRef.set(projection, freezeSnapshot(initialProjection()));
-}
-
-export function isXaiSubscriptionModel(
-  ctx: ExtensionContext,
-  cfg: ResolvedConfig,
-  isUsingOAuth = false,
-): boolean {
-  const model = ctx.model;
-  if (!model || model.provider !== "xai") return false;
-  return !cfg.usage.showOnlyOnSubscriptionModels || isUsingOAuth;
-}
-
-export function synchronizeProjectionContext(
-  projection: MutableRef.MutableRef<XaiProjection>,
-  ctx: ExtensionContext,
-  options: { readonly clearUsage?: boolean } = {},
-): void {
-  const state = MutableRef.get(projection);
-  const model = ctx.model;
-  const isUsingOAuth =
-    model?.provider === "xai" && state.config?.usage.showOnlyOnSubscriptionModels
-      ? isUsingOAuthAtHostBoundary(ctx.modelRegistry, model)
-      : false;
-  const eligible = state.config ? isXaiSubscriptionModel(ctx, state.config, isUsingOAuth) : false;
-  MutableRef.set(
-    projection,
-    freezeSnapshot(
-      withUsageEligibility(state, eligible, options.clearUsage ?? false, {
-        hiddenStatusText: "Usage hidden: current model is not an xAI subscription model.",
-      }),
-    ),
-  );
-}
-
-export function visibleStatusLine(
-  projection: MutableRef.MutableRef<XaiProjection>,
-): string | undefined {
-  const state = MutableRef.get(projection);
-  if (!state.config?.usage.enabled || !state.eligible) return undefined;
-  return state.statusLine;
-}
+import { initialXaiProjection, type XaiProjection } from "./projection.ts";
 
 export class XaiBoundaryError extends Schema.TaggedErrorClass<XaiBoundaryError>()(
   "XaiBoundaryError",
@@ -187,7 +109,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
         const projectTrusted = options.projectTrusted ?? true;
         const config = yield* resolveConfig(cwd, agentDir, projectTrusted);
         const state = yield* makeFrozenProjection<XaiProjection, XaiProjection>(
-          { ...initialProjection(), config, authPath },
+          { ...initialXaiProjection(), config, authPath },
           (current) => current,
           (published) => MutableRef.set(projection, published),
         );
@@ -429,28 +351,4 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
       Layer.provide(ModelRegistryAuth.layer(() => MutableRef.get(options.context).modelRegistry)),
     );
   }
-}
-
-export function formatDebug(
-  projection: MutableRef.MutableRef<XaiProjection>,
-  ctx: ExtensionContext,
-): string {
-  const state = MutableRef.get(projection);
-  const cfg = state.config;
-  const formatTime = (value: number | undefined) =>
-    value === undefined ? "never" : DateTime.formatLocal(DateTime.makeUnsafe(value));
-  return [
-    `Usage enabled: ${cfg?.usage.enabled ?? false}`,
-    `Current model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none"}`,
-    `Current model eligible: ${state.eligible}`,
-    `Requires subscription model: ${cfg?.usage.showOnlyOnSubscriptionModels ?? true}`,
-    `Auth: ${state.authFound ? "found" : "missing"}`,
-    `Team ID: ${maskIdentifier(state.teamId) ?? "none"}`,
-    `Last fetch: ${formatTime(state.lastFetchAt)}`,
-    `Last successful update: ${formatTime(state.updatedAt)}`,
-    `Last error: ${state.error ?? "none"}`,
-    `Refresh interval: ${cfg?.usage.refreshIntervalMs ?? 60_000}ms`,
-    `Endpoint: ${BILLING_BASE_URL}/billing*`,
-    `Auth file: ${state.authPath ?? "unknown"}`,
-  ].join("\n");
 }

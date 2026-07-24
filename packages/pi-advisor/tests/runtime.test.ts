@@ -1,19 +1,18 @@
-// Test harness boundary: only the diagnostics used by this file are suppressed.
+// Promise-shaped driver characterization intentionally remains at this test boundary.
 // @effect-diagnostics effect/asyncFunction:off
-// @effect-diagnostics effect/newPromise:off
-// @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
 // @effect-diagnostics effect/strictEffectProvide:off
 import type { AgentSession, CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   AdvisorRuntime,
   AdvisorRuntimeService,
@@ -37,12 +36,30 @@ import { makeCapturedTracer } from "pi-cosmic-core/testing";
 import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
 
 type TestRuntime = AdvisorRuntime & AdvisorRuntimeDriver;
+
+const promiseLatch = <T>() => {
+  const value = Deferred.makeUnsafe<T>();
+  return {
+    promise: Effect.runPromise(Deferred.await(value)),
+    resolve: (next?: T) => {
+      Deferred.doneUnsafe(value, Effect.succeed(next as T));
+    },
+  };
+};
+
+const activeRuntimeCleanups = new Set<() => Promise<void>>();
+
+afterEach(async () => {
+  await Promise.all([...activeRuntimeCleanups].map((cleanup) => cleanup()));
+});
+
 const makeTestRuntime = (dependencies: ConstructorParameters<typeof AdvisorRuntime>[0]) => {
+  const scope = Scope.makeUnsafe();
   let runtime!: TestRuntime;
   runtime = new AdvisorRuntime(
     dependencies,
     standaloneAdvisorExecutor,
-    Scope.makeUnsafe(),
+    scope,
     {
       offer: () => {
         standaloneAdvisorExecutor.fork(runtime.controlEffect());
@@ -54,6 +71,15 @@ const makeTestRuntime = (dependencies: ConstructorParameters<typeof AdvisorRunti
     Effect.runSync(SynchronizedRef.make(undefined)) as never,
     Effect.runSync(Semaphore.make(1)),
   ) as TestRuntime;
+  const dispose = async () => {
+    if (!activeRuntimeCleanups.delete(dispose)) return;
+    try {
+      await standaloneAdvisorExecutor.run(runtime.disposeEffect());
+    } finally {
+      await standaloneAdvisorExecutor.run(Scope.close(scope, Exit.void));
+    }
+  };
+  activeRuntimeCleanups.add(dispose);
   Object.defineProperties(runtime, {
     start: {
       value: (options: AdvisorRuntimeStartOptions) =>
@@ -72,7 +98,7 @@ const makeTestRuntime = (dependencies: ConstructorParameters<typeof AdvisorRunti
         standaloneAdvisorExecutor.run(runtime.reprimeEffect(seed, state)),
     },
     abort: { value: () => standaloneAdvisorExecutor.run(runtime.abortEffect()) },
-    dispose: { value: () => standaloneAdvisorExecutor.run(runtime.disposeEffect()) },
+    dispose: { value: dispose },
   });
   return runtime;
 };
@@ -110,10 +136,7 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
   let promptCount = 0;
   let streaming = false;
   let queuedFinalPrompt: string | undefined;
-  let releaseAnalysis!: () => void;
-  const analysisGate = new Promise<void>((resolve) => {
-    releaseAnalysis = resolve;
-  });
+  const { promise: analysisGate, resolve: releaseAnalysis } = promiseLatch<void>();
   const actions: string[] = [];
   const messages: unknown[] = [];
   const unsubscribe = vi.fn();
@@ -571,18 +594,11 @@ describe("AdvisorRuntime", () => {
   });
 
   test("a stale service startup cannot dispose its live replacement", async () => {
-    let resolveFirst!: (value: {
+    const { promise: firstModel, resolve: resolveFirst } = promiseLatch<{
       modelRuntime: never;
       model: never;
       thinkingLevel: "medium";
-    }) => void;
-    const firstModel = new Promise<{
-      modelRuntime: never;
-      model: never;
-      thinkingLevel: "medium";
-    }>((resolve) => {
-      resolveFirst = resolve;
-    });
+    }>();
     let modelCalls = 0;
     const unsubscribe = vi.fn();
     const session = {
@@ -642,10 +658,7 @@ describe("AdvisorRuntime", () => {
   });
 
   test("replacement and reprime wait for the prior abort before creating a new child", async () => {
-    let releaseOldAbort!: () => void;
-    const oldAbortGate = new Promise<void>((resolve) => {
-      releaseOldAbort = resolve;
-    });
+    const { promise: oldAbortGate, resolve: releaseOldAbort } = promiseLatch<void>();
     const makeSession = (abort: () => Promise<void>) => ({
       sessionFile: undefined,
       messages: [],
@@ -829,162 +842,6 @@ describe("AdvisorRuntime", () => {
     await managed.dispose();
     expect(session.abort).toHaveBeenCalledOnce();
     expect(session.dispose).toHaveBeenCalledOnce();
-  });
-
-  test("bounds auth/model startup and rejects without creating a session", async () => {
-    vi.useFakeTimers();
-    try {
-      const never = new Promise<never>(() => undefined);
-      const runtime = makeTestRuntime({ createChildModel: vi.fn(() => never) });
-      const pending = start(runtime, { timeoutMs: 25 });
-      const rejection = expect(pending).rejects.toThrow("startup timed out");
-      await vi.advanceTimersByTimeAsync(25);
-      await rejection;
-      expect(runtime.childSession).toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test("replaces a timed-out create without waiting and disposes its late child once", async () => {
-    vi.useFakeTimers();
-    let resolveLate!: (value: { session: AgentSession; extensionsResult: never }) => void;
-    try {
-      const late = new Promise<{ session: AgentSession; extensionsResult: never }>((resolve) => {
-        resolveLate = resolve;
-      });
-      const first = harness();
-      const replacement = harness();
-      replacement.session.getActiveToolNames.mockReturnValue([]);
-      const sessions = [
-        late,
-        Promise.resolve({
-          session: replacement.session as unknown as AgentSession,
-          extensionsResult: {} as never,
-        }),
-      ];
-      const createSession = vi.fn(() => sessions.shift()!);
-      const runtime = makeTestRuntime({
-        createChildModel: vi.fn(async () => ({
-          modelRuntime: {} as never,
-          model: { provider: "p", id: "m" } as never,
-          thinkingLevel: "medium" as const,
-        })),
-        createTools: vi.fn(async () => []),
-        createSession,
-      });
-
-      const firstStart = start(runtime, { timeoutMs: 25 });
-      const firstRejection = expect(firstStart).rejects.toThrow("startup timed out");
-      await Promise.resolve();
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(25);
-      await firstRejection;
-
-      await start(runtime, { timeoutMs: 1_000 });
-      expect(createSession).toHaveBeenCalledTimes(2);
-      expect(runtime.childSession).toBe(replacement.session);
-      expect(first.session.abort).not.toHaveBeenCalled();
-      expect(first.session.dispose).not.toHaveBeenCalled();
-
-      resolveLate({
-        session: first.session as unknown as AgentSession,
-        extensionsResult: {} as never,
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      await Promise.resolve();
-      expect(first.session.dispose).toHaveBeenCalledOnce();
-      expect(first.session.abort).not.toHaveBeenCalled();
-      expect(runtime.childSession).toBe(replacement.session);
-      await runtime.dispose();
-      expect(replacement.session.abort).toHaveBeenCalledOnce();
-      expect(replacement.session.dispose).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test("shuts down after timed-out create and still disposes a late child once", async () => {
-    vi.useFakeTimers();
-    let resolveLate!: (value: { session: AgentSession; extensionsResult: never }) => void;
-    const late = new Promise<{ session: AgentSession; extensionsResult: never }>((resolve) => {
-      resolveLate = resolve;
-    });
-    try {
-      const value = harness();
-      const runtime = makeTestRuntime({
-        createChildModel: vi.fn(async () => ({
-          modelRuntime: {} as never,
-          model: { provider: "p", id: "m" } as never,
-          thinkingLevel: "medium" as const,
-        })),
-        createTools: vi.fn(async () => []),
-        createSession: vi.fn(() => late),
-      });
-      const firstStart = start(runtime, { timeoutMs: 25 });
-      const firstRejection = expect(firstStart).rejects.toThrow("startup timed out");
-      await Promise.resolve();
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(25);
-      await firstRejection;
-
-      await runtime.dispose();
-      expect(value.session.abort).not.toHaveBeenCalled();
-      expect(value.session.dispose).not.toHaveBeenCalled();
-
-      resolveLate({
-        session: value.session as unknown as AgentSession,
-        extensionsResult: {} as never,
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      await Promise.resolve();
-      expect(value.session.abort).not.toHaveBeenCalled();
-      expect(value.session.dispose).toHaveBeenCalledOnce();
-      await runtime.dispose();
-      expect(value.session.dispose).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test("isolates a throwing late-child disposal callback", async () => {
-    vi.useFakeTimers();
-    try {
-      let resolveSession!: (value: { session: AgentSession; extensionsResult: never }) => void;
-      const late = new Promise<{ session: AgentSession; extensionsResult: never }>((resolve) => {
-        resolveSession = resolve;
-      });
-      const base = harness();
-      base.session.dispose.mockImplementationOnce(() => {
-        throw new Error("sensitive disposal defect");
-      });
-      const runtime = makeTestRuntime({
-        createChildModel: vi.fn(async () => ({
-          modelRuntime: {} as never,
-          model: { provider: "p", id: "m" } as never,
-          thinkingLevel: "medium" as const,
-        })),
-        createTools: vi.fn(async () => []),
-        createSession: vi.fn(() => late),
-      });
-      const pending = start(runtime, { timeoutMs: 25 });
-      const rejection = expect(pending).rejects.toThrow("startup timed out");
-      await Promise.resolve();
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(25);
-      await rejection;
-      await runtime.dispose();
-      resolveSession({
-        session: base.session as unknown as AgentSession,
-        extensionsResult: {} as never,
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      await Promise.resolve();
-      expect(base.session.abort).not.toHaveBeenCalled();
-      expect(base.session.dispose).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   test("event ingress overflow requests a reset and releases its child without leaks", async () => {

@@ -8,27 +8,19 @@ import { type AdvisorEffectExecutor, type AdvisorPlatform } from "../../boundary
 import type { AdvisorHostCommandDefinition } from "../../boundary/host-bindings.ts";
 import { PiCommandAdapter } from "../../boundary/host-commands.ts";
 import { HostNotifier } from "../../boundary/host-notifier.ts";
-import {
-  ADVISOR_CHECKPOINT_ENTRY_TYPE,
-  createCheckpointLedger,
-  createLedgerFingerprint,
-  summarizeAdvisorReview,
-} from "../../checkpoint/ledger.ts";
+import { createLedgerFingerprint } from "../../checkpoint/ledger.ts";
 import { makeCheckpointOrchestrator } from "../../checkpoint/orchestrator.ts";
-import { normalizeAdvisorConfig, type ResolvedAdvisorConfig } from "../../config/options.ts";
+import { normalizeAdvisorConfig } from "../../config/options.ts";
 import { ConfigStore } from "../../config/store.ts";
 import { FailureLogger } from "../../logging/logger.ts";
 import { AdvisorReviewQueue, AdvisorReviewQueueService } from "../../queue/service.ts";
 import { rollbackAdvisorFindingDedupe } from "../../review/dedupe.ts";
 import { buildAdvisorContext } from "../../review/context.ts";
-import {
-  exportAdvisorEmissionRecords,
-  rollbackAdvisorEmission,
-} from "../../review/emission-guard.ts";
+import { rollbackAdvisorEmission } from "../../review/emission-guard.ts";
 import { sanitizeInterventionBudgetSnapshot } from "../../review/intervention-budget.ts";
 import { AdvisorRuntimeService } from "../../runtime/runtime.ts";
 import { makeAdvisorResourceState } from "../../runtime/resource-state.ts";
-import { type AdvisorCommandActions, registerAdvisorCommands } from "../../settings/controller.ts";
+import { registerAdvisorCommands } from "../../settings/controller.ts";
 import { makeAdvisorStatusService } from "../../status/service.ts";
 import { makeAdvisorProjection, type AdvisorControllerSnapshot } from "../../ui/projection.ts";
 import { activeContextMessages, incrementBounded } from "../controller-helpers.ts";
@@ -39,8 +31,6 @@ import {
   extensionError,
   type AdvisorControllerApplicationOptions,
   type AdvisorSkipReason,
-  type ParentAnchor,
-  UNREADABLE_PARENT_ANCHOR,
 } from "../controller-types.ts";
 import {
   emptyAdvisorSessionMetrics,
@@ -48,9 +38,11 @@ import {
   makeAdvisorApplicationStateStore,
 } from "../state.ts";
 import { makeLifecycleApplicationState } from "./application-state.ts";
+import { makeCommandWorkflows } from "./commands.ts";
 import { makeCheckpointControls } from "./checkpoint.ts";
 import { makeDeliver } from "./delivery.ts";
 import { registerLifecycleEvents } from "./events.ts";
+import { makeLedgerPersistence } from "./ledger.ts";
 import { branchContainsAnchor, readLifecycleScope, readParentAnchor } from "./parent-session.ts";
 import { cloneSessionMetrics, recordReviewDurationMetrics, recordUsageMetrics } from "./metrics.ts";
 import { makeRuntimeControls } from "./runtime.ts";
@@ -251,41 +243,13 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         recordUsage,
       });
 
-      const persistLedger = (anchor: ParentAnchor): void => {
-        if (!anchor || anchor === UNREADABLE_PARENT_ANCHOR || typeof pi.appendEntry !== "function")
-          return;
-        const state = applicationStateStore.get();
-        const pending = state.pendingPersistentRecovery;
-        try {
-          pi.appendEntry(
-            ADVISOR_CHECKPOINT_ENTRY_TYPE,
-            createCheckpointLedger({
-              fingerprint: fingerprint(),
-              anchorId: anchor,
-              reviewSummary: refs.latestDurableSummary,
-              cancellationLatched: state.routing.cancellationLatched,
-              completedPrimaryTurns: state.routing.completedPrimaryTurns,
-              immunityUntilCompletedTurn: state.routing.immunityUntilCompletedTurn,
-              interventionBudget: pending
-                ? {
-                    ...pending.budgetBefore,
-                    correctionUsed: true,
-                  }
-                : state.interventionBudget,
-              findingLifecycle: state.findingLifecycle.records,
-              emissionHashes: exportAdvisorEmissionRecords(state.emissionGuard).filter(
-                (record) => !pending || !record.endsWith(`:${pending.emission.hash}`),
-              ),
-            }),
-          );
-        } catch {
-          // Parent persistence is fail-open and cannot own runtime cleanup.
-        }
-      };
-
-      const persistCurrentLedger = (ctx: ExtensionContext): void => {
-        persistLedger(parentAnchor(ctx));
-      };
+      const { persistLedger, persistCurrentLedger } = makeLedgerPersistence({
+        pi,
+        refs,
+        getState: () => applicationStateStore.get(),
+        fingerprint,
+        parentAnchor,
+      });
 
       const ingest = (input: Parameters<AdvisorReviewQueue["ingest"]>[1]): void => {
         try {
@@ -338,106 +302,28 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         catchUpTimeoutMs,
       });
 
-      const cancelEffect = (
-        ctx: Parameters<AdvisorCommandActions["cancel"]>[0],
-      ): Effect.Effect<boolean> =>
-        Effect.suspend(() => {
-          const hadRequestedReview = applicationStateStore.get().reviewNext;
-          const hadExplicitStart = refs.pendingExplicitStart !== undefined;
-          const hadRecovery = Boolean(applicationStateStore.get().pendingPersistentRecovery);
-          updateApplicationState((state) => ({ ...state, reviewNext: false }));
-          refs.pendingExplicitStart = undefined;
-          clearPendingRecovery();
-          clearPendingReceipt();
-          latchCancellation();
-          advanceDomainCounter("cancellationEpoch");
-          persistCurrentLedger(ctx);
-          const hadWork =
-            hadRequestedReview ||
-            hadExplicitStart ||
-            hadRecovery ||
-            Boolean(
-              refs.queue &&
-              (refs.queue.pendingCheckpoints > 0 ||
-                refs.queue.backlog > 0 ||
-                refs.queue.processedThrough < refs.queue.sequence),
-            );
-          return checkpointOrchestrator
-            .cancelAll()
-            .pipe(Effect.andThen(startRuntimeEffect(ctx)), Effect.as(hadWork));
-        });
-
-      const commandActions: AdvisorCommandActions = {
-        cancel: (ctx) => runSessionEffect(cancelEffect(ctx)),
-        pause: (ctx) => {
-          updateApplicationState((state) => ({ ...state, paused: true, reviewNext: false }));
-          refs.pendingExplicitStart = undefined;
-          clearPendingRecovery();
-          clearPendingReceipt();
-          latchCancellation();
-          advanceDomainCounter("cancellationEpoch");
-          persistCurrentLedger(ctx);
-          advanceDomainCounter("epoch");
-          void runSessionEffect(
-            checkpointOrchestrator.cancelAll().pipe(Effect.andThen(stopRuntimeEffect())),
-          );
-          setAdvisorStatus(ctx, "advisor: paused");
-          publishControllerSnapshotNow();
-        },
-        resume: (ctx) => {
-          updateApplicationState((state) => ({ ...state, paused: false }));
-          publishControllerSnapshotNow();
-          void startRuntime(ctx);
-        },
-        reviewLast: (ctx, focus) => {
-          const candidate = refs.lastCandidate;
-          if (!candidate) return runSessionEffect(Effect.succeed("unavailable" as const));
-          return runSessionEffect(
-            runWithExplicitRuntimeEffect(ctx, () => {
-              if (refs.lastCandidate !== candidate) return undefined;
-              return requestCheckpoint({
-                ctx,
-                focus,
-                phase: "final",
-                source: focus === "verification" ? "verify" : "last",
-                requiresEnabled: false,
-              });
-            }).pipe(
-              Effect.map((handle) => (handle ? ("started" as const) : ("cancelled" as const))),
-            ),
-          );
-        },
-        reviewNext: () => {
-          updateApplicationState((state) => ({ ...state, reviewNext: true }));
-        },
-      };
-
-      const applyCommittedConfigEffect = (next: ResolvedAdvisorConfig): Effect.Effect<void> =>
-        Effect.sync(() => {
-          const enabledChanged = currentConfig().enabled !== next.enabled;
-          const disabling = currentConfig().enabled && !next.enabled;
-          updateApplicationState((state) => ({
-            ...state,
-            config: next,
-            paused: enabledChanged ? false : state.paused,
-          }));
-          refs.configRevision += 1;
-          clearPendingRecovery();
-          resetRequestDomain(true);
-          refs.latestStateSummary = "";
-          refs.latestDurableSummary = summarizeAdvisorReview();
-          refs.pendingExplicitStart = undefined;
-          if (disabling) latchCancellation();
-          advanceDomainCounter("cancellationEpoch");
-          const ctx = refs.activeContext;
-          if (!ctx) return;
-          persistCurrentLedger(ctx);
-          try {
-            parentExecutor.fork(startRuntimeEffect(ctx));
-          } catch {
-            // Slot deactivation already owns runtime cleanup; the next session reloads disk state.
-          }
-        });
+      const { cancelEffect, commandActions, applyCommittedConfigEffect } = makeCommandWorkflows({
+        refs,
+        getState: () => applicationStateStore.get(),
+        updateApplicationState,
+        currentConfig,
+        clearPendingRecovery,
+        clearPendingReceipt,
+        latchCancellation,
+        resetRequestDomain,
+        advanceDomainCounter,
+        persistCurrentLedger,
+        checkpointOrchestrator,
+        startRuntimeEffect,
+        stopRuntimeEffect,
+        runSessionEffect,
+        setAdvisorStatus,
+        publishControllerSnapshotNow,
+        startRuntime,
+        runWithExplicitRuntimeEffect,
+        requestCheckpoint,
+        parentExecutor,
+      });
 
       registerAdvisorCommands(
         commandRegistrar,
