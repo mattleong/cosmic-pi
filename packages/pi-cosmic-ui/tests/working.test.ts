@@ -50,8 +50,14 @@ layer(timer)("working timer", (it) => {
       yield* Effect.yieldNow;
       yield* TestClock.adjust(1_000);
       expect(messages.at(-1)).toBe("Working · 6s · ~10.0 tok/s");
-      yield* TestClock.adjust(2_000);
-      expect(messages.at(-1)).toBe("Working · 8s · ~3.3 tok/s");
+
+      yield* service.pauseOutput;
+      yield* TestClock.adjust(5_000);
+      expect(messages.at(-1)).toBe("Working · 11s · ~10.0 tok/s");
+
+      yield* service.recordOutputCharacters(40);
+      yield* TestClock.adjust(1_000);
+      expect(messages.at(-1)).toBe("Working · 12s · ~10.0 tok/s");
 
       yield* service.stop;
       expect(messages.at(-1)).toBeUndefined();

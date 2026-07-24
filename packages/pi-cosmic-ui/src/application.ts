@@ -406,6 +406,13 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
     requestRender();
   };
   pi.on("model_select", invalidateContextUsage);
+  pi.on("tool_execution_start", (_event, ctx) => {
+    updateContext(ctx);
+    forkFrom(
+      WorkingTimerService.use((timer) => timer.pauseOutput),
+      ctx,
+    );
+  });
   pi.on("tool_execution_end", (event, ctx) => {
     updateContext(ctx);
     if (!["bash", "edit", "write"].includes(event.toolName)) return;
@@ -438,13 +445,25 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
   pi.on("message_update", (event, ctx) => {
     invalidateContextUsage(event, ctx);
     const update = event.assistantMessageEvent;
-    if (!update || (update.type !== "text_delta" && update.type !== "thinking_delta")) return;
+    if (
+      !update ||
+      (update.type !== "text_delta" &&
+        update.type !== "thinking_delta" &&
+        update.type !== "toolcall_delta")
+    )
+      return;
     forkFrom(
       WorkingTimerService.use((timer) => timer.recordOutputCharacters(update.delta.length)),
       ctx,
     );
   });
-  pi.on("message_end", invalidateContextUsage);
+  pi.on("message_end", (event, ctx) => {
+    invalidateContextUsage(event, ctx);
+    forkFrom(
+      WorkingTimerService.use((timer) => timer.pauseOutput),
+      ctx,
+    );
+  });
   pi.on("session_shutdown", () => {
     disposeSubscriptions();
     footerInstallation.uninstall();

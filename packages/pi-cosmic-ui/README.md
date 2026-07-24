@@ -1,6 +1,6 @@
 # pi-cosmic-ui
 
-Composable, responsive UI elements for pi. Cosmic UI provides a custom footer that combines pi's location, session, token, context, model, thinking, and extension-status information with contributions from other extensions. While an agent is running, Pi's working row also shows elapsed time and estimated output speed (for example, `Working · 2m 14s · ~18.4 tok/s`). The estimate uses Pi's four-characters-per-token heuristic across streamed text, thinking, and tool-call output.
+Composable, responsive UI elements for pi. Cosmic UI provides a custom footer that combines pi's location, session, token, context, model, thinking, and extension-status information with contributions from other extensions. While an agent is running, Pi's working row also shows elapsed time and estimated output speed (for example, `Working · 2m 14s · ~18.4 tok/s`). The estimate uses Pi's four-characters-per-token heuristic across streamed text, thinking, and tool-call arguments. Its generation clock pauses during tool execution, while the working elapsed time continues to show total agent wall time.
 
 ## Install
 
