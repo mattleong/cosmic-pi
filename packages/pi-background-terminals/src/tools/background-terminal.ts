@@ -3,6 +3,7 @@
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
+  defineTool,
   truncateTail,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
@@ -10,6 +11,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
+import { withCodePreviewShell } from "pi-code-previews";
 import { Type, type Static } from "typebox";
 import { BackgroundTerminalService, type BackgroundJobFilter } from "../job/service.ts";
 import { InvalidBackgroundCommandError } from "../job/errors.ts";
@@ -107,7 +109,7 @@ export function registerBackgroundTerminalTool(
   pi: ExtensionAPI,
   runner: BackgroundTerminalToolRunner,
 ): void {
-  pi.registerTool({
+  const tool = defineTool({
     name: "background_terminal",
     label: "Background Terminal",
     description:
@@ -138,7 +140,10 @@ export function registerBackgroundTerminalTool(
               });
               return {
                 content: `Started ${formatJob(snapshot)}`,
-                details: { action: input.action, snapshot } satisfies BackgroundTerminalToolDetails,
+                details: {
+                  action: input.action,
+                  snapshot,
+                } satisfies BackgroundTerminalToolDetails,
               };
             }
             case "list": {
@@ -152,7 +157,10 @@ export function registerBackgroundTerminalTool(
               const snapshot = yield* service.status(yield* required(input.id, "id"));
               return {
                 content: formatJob(snapshot),
-                details: { action: input.action, snapshot } satisfies BackgroundTerminalToolDetails,
+                details: {
+                  action: input.action,
+                  snapshot,
+                } satisfies BackgroundTerminalToolDetails,
               };
             }
             case "logs": {
@@ -176,7 +184,10 @@ export function registerBackgroundTerminalTool(
               const snapshot = yield* service.stop(yield* required(input.id, "id"), input.force);
               return {
                 content: `Stopped ${formatJob(snapshot)}`,
-                details: { action: input.action, snapshot } satisfies BackgroundTerminalToolDetails,
+                details: {
+                  action: input.action,
+                  snapshot,
+                } satisfies BackgroundTerminalToolDetails,
               };
             }
             case "stop_all": {
@@ -190,7 +201,10 @@ export function registerBackgroundTerminalTool(
               const removed = yield* service.clear;
               return {
                 content: `Cleared ${removed} completed background job${removed === 1 ? "" : "s"}.`,
-                details: { action: input.action, removed } satisfies BackgroundTerminalToolDetails,
+                details: {
+                  action: input.action,
+                  removed,
+                } satisfies BackgroundTerminalToolDetails,
               };
             }
           }
@@ -236,4 +250,5 @@ export function registerBackgroundTerminalTool(
       );
     },
   });
+  pi.registerTool(withCodePreviewShell(tool));
 }

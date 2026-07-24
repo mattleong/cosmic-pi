@@ -217,7 +217,7 @@ Default collapsed rendering should show:
   npm run dev
 ```
 
-Terminal states use success, warning, or error colors. Expanded results include cwd, PID, exit details, dropped-log information, and a bounded log tail. Tool rendering must sanitize terminal control sequences and obey render width.
+Terminal states use success, warning, or error colors. Expanded results include cwd, PID, exit details, dropped-log information, and a bounded log tail. Tool rendering must sanitize terminal control sequences and obey render width. The package decorates its own tool definition with the public `pi-code-previews` cooperative shell after loading trusted session settings, preserving tool ownership while sharing configured shell chrome and timing.
 
 ## 6. Human-facing launcher
 

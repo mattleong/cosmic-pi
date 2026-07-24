@@ -81,6 +81,7 @@ try {
             "pi-cosmic-ui": `file:${tarballPath("pi-cosmic-ui")}`,
             "pi-better-openai": `file:${tarballPath("pi-better-openai")}`,
             "pi-better-xai": `file:${tarballPath("pi-better-xai")}`,
+            "pi-code-previews": `file:${tarballPath("pi-code-previews")}`,
             "pi-background-terminals": `file:${tarballPath("pi-background-terminals")}`,
           },
         },

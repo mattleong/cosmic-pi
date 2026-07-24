@@ -6,6 +6,8 @@ The main agent uses one `background_terminal` tool to decide when work should ru
 
 Use `/ps` to open the full-screen human process manager. It shows live bounded logs and permits explicit stop or clear actions, but does not provide a command-entry field.
 
+`background_terminal` tool calls use the `pi-code-previews` cooperative shell, including its configured background or border treatment and tool-call timing. Trusted project preview settings are loaded before the tool is registered for a session.
+
 ## Lifecycle
 
 Background jobs are non-interactive in the MVP and are always terminated when the Pi session reloads, switches, forks, or shuts down. Jobs have no default runtime timeout; the agent may provide one per start.

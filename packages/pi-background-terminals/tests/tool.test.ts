@@ -15,6 +15,9 @@ import {
 } from "../src/tools/background-terminal.ts";
 
 interface CapturedTool {
+  readonly name: string;
+  readonly renderShell?: "default" | "self";
+  readonly promptGuidelines?: ReadonlyArray<string>;
   readonly execute: (
     id: string,
     input: BackgroundTerminalToolInput,
@@ -81,6 +84,10 @@ describe("background_terminal tool", () => {
     registerBackgroundTerminalTool(pi, {
       run: (effect, signal) => runtime.runPromise(effect, signal ? { signal } : undefined),
     });
+    expect(tool?.name).toBe("background_terminal");
+    expect(tool?.renderShell).toBe("default");
+    expect(tool?.promptGuidelines?.join(" ")).toContain("use bash");
+
     const context = { cwd: "/project" } as ExtensionContext;
     const execute = (input: BackgroundTerminalToolInput) =>
       tool?.execute("call", input, undefined, undefined, context) ??

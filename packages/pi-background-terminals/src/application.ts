@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import { loadCodePreviewSettings } from "pi-code-previews";
 import {
   captureSessionHost,
   isProjectTrusted,
@@ -57,7 +58,6 @@ export function registerBackgroundTerminalsApplication(pi: ExtensionAPI): void {
     signal?: AbortSignal,
   ) => slot.run(effect, signal);
 
-  registerBackgroundTerminalTool(pi, { run });
   registerProcessManagerCommand(pi, bridge, {
     stop: (id) =>
       run(BackgroundTerminalService.use((service) => service.stop(id))).then(() => undefined),
@@ -69,15 +69,20 @@ export function registerBackgroundTerminalsApplication(pi: ExtensionAPI): void {
     bridge.clear();
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable") return slot.shutdown().then(() => undefined);
-    return slot
-      .start(
-        {
-          ctx,
-          cwd: captured.cwd,
-          projectTrusted: isProjectTrusted(ctx),
-        },
-        captured.signal,
-      )
+    const projectTrusted = isProjectTrusted(ctx);
+    return loadCodePreviewSettings(captured.cwd, projectTrusted)
+      .catch(() => undefined)
+      .then(() => {
+        registerBackgroundTerminalTool(pi, { run });
+        return slot.start(
+          {
+            ctx,
+            cwd: captured.cwd,
+            projectTrusted,
+          },
+          captured.signal,
+        );
+      })
       .then(() => undefined);
   });
 
