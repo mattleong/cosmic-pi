@@ -1,0 +1,155 @@
+// The child-only Pi/Node bridge is intentionally Promise- and callback-shaped.
+// @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/processEnv:off
+// @effect-diagnostics effect/globalTimers:off
+// @effect-diagnostics effect/asyncFunction:off
+import { StringEnum } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { Type } from "typebox";
+
+const MAX_MESSAGE_CHARS = 64 * 1024;
+let nextRequest = 1;
+
+interface PendingReply {
+  readonly resolve: (message: string) => void;
+  readonly reject: (error: Error) => void;
+}
+
+const ParentControlSchema = Schema.Union([
+  Schema.Struct({
+    channel: Schema.Literal("pi-subagents"),
+    type: Schema.Literal("parent_reply"),
+    requestId: Schema.String,
+    message: Schema.String,
+  }),
+  Schema.Struct({
+    channel: Schema.Literal("pi-subagents"),
+    type: Schema.Literal("peer_notice"),
+    message: Schema.String,
+  }),
+]);
+
+const ContactParentParameters = Type.Object({
+  kind: StringEnum(["progress", "question", "warning"] as const),
+  message: Type.String({ minLength: 1, maxLength: MAX_MESSAGE_CHARS }),
+});
+
+function sendIpc(message: object): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!process.send || !process.connected) {
+      reject(new Error("The parent subagent supervisor is unavailable."));
+      return;
+    }
+    process.send(message, (error) => {
+      if (error) reject(new Error("Unable to contact the parent subagent supervisor."));
+      else resolve();
+    });
+  });
+}
+
+export default function subagentChildBridge(pi: ExtensionAPI): void {
+  if (process.env.PI_SUBAGENT_CHILD !== "1") return;
+  const pending = new Map<string, PendingReply>();
+  let listening = false;
+
+  const onMessage = (raw: unknown) => {
+    const message = Option.getOrUndefined(Schema.decodeUnknownOption(ParentControlSchema)(raw));
+    if (!message) return;
+    if (message.type === "parent_reply") {
+      const waiter = pending.get(message.requestId);
+      if (!waiter) return;
+      pending.delete(message.requestId);
+      waiter.resolve(message.message);
+      return;
+    }
+    if (message.type === "peer_notice") {
+      try {
+        pi.sendMessage(
+          {
+            customType: "pi-subagents-peer-notice",
+            content: message.message,
+            display: true,
+          },
+          { deliverAs: "steer", triggerTurn: false },
+        );
+      } catch {
+        // The child may already be shutting down.
+      }
+    }
+  };
+
+  const rejectPending = () => {
+    for (const waiter of pending.values())
+      waiter.reject(new Error("The parent subagent supervisor disconnected."));
+    pending.clear();
+  };
+
+  pi.on("session_start", () => {
+    if (listening) return;
+    listening = true;
+    process.on("message", onMessage);
+    process.on("disconnect", rejectPending);
+  });
+
+  pi.on("session_shutdown", () => {
+    if (!listening) return;
+    listening = false;
+    process.off("message", onMessage);
+    process.off("disconnect", rejectPending);
+    rejectPending();
+  });
+
+  pi.registerTool({
+    name: "contact_parent",
+    label: "Contact Parent",
+    description:
+      "Send progress, a warning, or a blocking question to the parent agent supervising this subagent.",
+    parameters: ContactParentParameters,
+    async execute(_toolCallId, params, signal) {
+      const requestId = `contact-${process.pid}-${nextRequest++}`;
+      const envelope = {
+        channel: "pi-subagents" as const,
+        type: "contact_parent" as const,
+        requestId,
+        kind: params.kind,
+        message: params.message.slice(0, MAX_MESSAGE_CHARS),
+      };
+      if (params.kind !== "question") {
+        await sendIpc(envelope);
+        return {
+          content: [{ type: "text" as const, text: `Parent received ${params.kind}.` }],
+          details: {},
+        };
+      }
+
+      const reply = await new Promise<string>((resolve, reject) => {
+        const abort = () => {
+          pending.delete(requestId);
+          reject(new Error("Parent question was cancelled."));
+        };
+        pending.set(requestId, {
+          resolve: (message) => {
+            signal?.removeEventListener("abort", abort);
+            resolve(message);
+          },
+          reject: (error) => {
+            signal?.removeEventListener("abort", abort);
+            reject(error);
+          },
+        });
+        signal?.addEventListener("abort", abort, { once: true });
+        void sendIpc(envelope).catch((error: unknown) => {
+          pending.delete(requestId);
+          signal?.removeEventListener("abort", abort);
+          reject(error instanceof Error ? error : new Error("Unable to contact parent."));
+        });
+      });
+      return {
+        content: [{ type: "text" as const, text: `Parent replied: ${reply}` }],
+        details: {},
+      };
+    },
+  });
+}

@@ -1,0 +1,80 @@
+{
+  "name": "pi-subagents",
+  "version": "0.2.0",
+  "description": "Session-scoped foreground and background subagents for pi.",
+  "keywords": [
+    "agents",
+    "background-agents",
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "subagents"
+  ],
+  "homepage": "https://github.com/mattleong/cosmic-pi/tree/main/packages/pi-subagents#readme",
+  "bugs": {
+    "url": "https://github.com/mattleong/cosmic-pi/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mattleong/cosmic-pi.git",
+    "directory": "packages/pi-subagents"
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "README.md",
+    "ARCHITECTURE.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "validate": "pnpm check && pnpm test",
+    "pretypecheck": "pnpm --filter pi-cosmic-core build",
+    "typecheck": "tsc --noEmit",
+    "effect:diagnostics": "effect-language-service diagnostics --project tsconfig.json",
+    "lint": "oxlint --deny-warnings .",
+    "lint:fix": "oxlint --fix .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "pretest": "pnpm --filter pi-cosmic-core build",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm validate",
+    "pack:dry": "pnpm pack --dry-run"
+  },
+  "dependencies": {
+    "effect": "catalog:",
+    "pi-cosmic-core": "workspace:*",
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.80.8",
+    "@earendil-works/pi-coding-agent": "0.80.8",
+    "@earendil-works/pi-tui": "0.80.8",
+    "@effect/vitest": "catalog:",
+    "@types/node": "~22.19.0",
+    "oxfmt": "^0.47.0",
+    "oxlint": "^1.62.0",
+    "vitest": "^4.1.5"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
