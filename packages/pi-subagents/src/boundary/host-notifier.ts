@@ -24,8 +24,16 @@ export type SubagentNotification =
 
 export type SubagentNotifier = (notification: SubagentNotification) => void;
 
-const clip = (value: string): string =>
-  sanitizeDiagnosticError(value, { maximumLength: 32 * 1024 });
+const clip = (value: string): string => {
+  const sanitized = value
+    .split(/\r?\n/)
+    .map((line) => (line.trim() ? sanitizeDiagnosticError(line, { maximumLength: 32 * 1024 }) : ""))
+    .join("\n")
+    .trim();
+  return sanitized.length <= 32 * 1024
+    ? sanitized
+    : `${sanitized.slice(0, 32 * 1024 - 1).trimEnd()}…`;
+};
 
 export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
   return (notification) => {

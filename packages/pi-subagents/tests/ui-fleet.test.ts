@@ -44,7 +44,11 @@ const projection: SubagentProjection = {
   ],
 };
 
-const makeComponent = (width: number, height: number) => {
+const makeComponent = (
+  width: number,
+  height: number,
+  currentProjection: SubagentProjection = projection,
+) => {
   const actions = {
     stop: vi.fn(),
     interrupt: vi.fn(),
@@ -54,8 +58,9 @@ const makeComponent = (width: number, height: number) => {
   };
   const component = new SubagentFleetComponent({
     theme,
-    getProjection: () => projection,
+    getProjection: () => currentProjection,
     getHeight: () => height,
+    getNow: () => 20_000,
     requestRender: vi.fn(),
     close: vi.fn(),
     actions,
@@ -77,6 +82,23 @@ describe("/subagents fleet UI", () => {
     expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
   });
 
+  it("shows completion age in fleet rows", () => {
+    const completed: SubagentProjection = {
+      revision: 2,
+      runs: [
+        {
+          ...projection.runs[0]!,
+          state: "completed",
+          endedAt: 2_000,
+          lastActivityAt: 2_000,
+          question: undefined,
+        },
+      ],
+    };
+    const { lines } = makeComponent(80, 18, completed);
+    expect(lines.join("\n")).toContain("completed 18s ago");
+  });
+
   it("wraps structured narrow details without showing raw transcript duplicates", () => {
     const { component } = makeComponent(42, 24);
     component.handleInput("\r");
@@ -95,6 +117,7 @@ describe("/subagents fleet UI", () => {
     component.handleInput("\r");
     const bottom = component.render(42).join("\n");
     expect(bottom).toContain("of");
+    expect(bottom).toContain("C-k up · C-j down");
     expect(bottom).toContain("Final report");
 
     for (let index = 0; index < 40; index += 1) component.handleInput("\u000b");

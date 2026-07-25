@@ -126,17 +126,38 @@ describe("structured subagent session output", () => {
       renderSubagentSessionOutput(
         runView({ sessionEvents: repeatedReads, pid: 42, sessionFile: "/tmp/session.jsonl" }),
         theme,
-        { showTechnicalDetails: true },
+        { now: 22_000, showTechnicalDetails: true },
       )
         .render(100)
         .join("\n"),
     );
 
+    expect(rendered).toContain("✓ completed 18s ago");
     expect(rendered).toContain("read ×2");
+    expect(rendered).toContain("src/one.ts · src/two.ts");
     expect(rendered).toContain("300ms");
     expect(rendered).toContain("Technical details");
     expect(rendered).toContain("agent-1 · background · pid 42");
     expect(rendered).toContain("session  /tmp/session.jsonl");
+  });
+
+  it.each([
+    ["starting", "Starting…"],
+    ["running", "Working…"],
+    ["waiting_for_parent", "Waiting for parent…"],
+    ["paused", "Paused."],
+  ] as const)("renders state-specific empty activity for %s", (state, label) => {
+    const rendered = sanitizeTerminalText(
+      renderSubagentSessionOutput(
+        runView({ state, endedAt: undefined, finalText: undefined }),
+        theme,
+        { now: 4_000 },
+      )
+        .render(80)
+        .join("\n"),
+    );
+    expect(rendered).toContain(label);
+    expect(rendered).not.toContain("No child activity yet");
   });
 
   it("wraps every expanded row within the available viewport width", () => {

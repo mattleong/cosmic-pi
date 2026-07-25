@@ -9,8 +9,9 @@
 - `src/application/` — tool, command, notification, and session lifecycle wiring.
 - `src/boundary/child-process.ts` — Node child-process, strict JSONL RPC, session-fork, and process-tree adapter.
 - `src/boundary/host-child.ts` — child-only `contact_parent` Pi extension and IPC bridge.
+- `src/boundary/native-clock.ts` — synchronous native clock isolated for Pi render callbacks.
 - `src/boundary/host-environment.ts` — process-role detection.
-- `src/boundary/host-notifier.ts` — exception-safe parent transcript delivery.
+- `src/boundary/host-notifier.ts` — exception-safe immediate parent transcript delivery.
 - `src/boundary/host-ui.ts` — synchronous immutable fleet projection bridge.
 - `src/run/` — run model, protocol decoding, errors, bounded text and structured child-session timelines, projection, and scoped fleet owner.
 - `src/tools/subagent.ts` — the single agent-facing management tool, with cooperative `pi-code-previews` shell rendering.

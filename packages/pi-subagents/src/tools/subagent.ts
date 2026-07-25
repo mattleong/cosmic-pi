@@ -17,6 +17,7 @@ import type {
   SubagentModelView,
   SubagentRunView,
 } from "../run/model.ts";
+import { synchronousNow } from "../boundary/native-clock.ts";
 import { SubagentService } from "../run/service.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 import { renderSubagentSessionOutput } from "./renderers/session-output.ts";
@@ -331,7 +332,7 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
       const details = result.details as SubagentToolDetails | undefined;
       if (expanded && !isPartial && details?.action !== "list" && details?.runs?.length === 1) {
         const run = details.runs[0];
-        if (run) return renderSubagentSessionOutput(run, theme, { now: run.lastActivityAt });
+        if (run) return renderSubagentSessionOutput(run, theme, { now: synchronousNow() });
       }
       let text = sanitizeTerminalText(
         result.content

@@ -39,6 +39,17 @@ const formatDuration = (milliseconds: number): string => {
   return `${minutes}m ${seconds % 60}s`;
 };
 
+export const formatRelativeAge = (milliseconds: number): string => {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
+  if (seconds < 1) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+};
+
 const runDuration = (run: SubagentRunView, now: number): string => {
   const active = isActiveRunState(run.state);
   const end = run.endedAt ?? (active ? now : run.lastActivityAt);
@@ -48,11 +59,14 @@ const runDuration = (run: SubagentRunView, now: number): string => {
   return active ? `running for ${elapsed}` : elapsed;
 };
 
-const stateLabel = (run: SubagentRunView, theme: Theme): string => {
+const stateLabel = (run: SubagentRunView, theme: Theme, now: number): string => {
   const label = run.state;
   switch (run.state) {
     case "completed":
-      return theme.fg("success", `✓ ${label}`);
+      return theme.fg(
+        "success",
+        `✓ ${label} ${formatRelativeAge(now - (run.endedAt ?? run.lastActivityAt))}`,
+      );
     case "failed":
       return theme.fg("error", `× ${label}`);
     case "stopped":
@@ -139,6 +153,19 @@ function addToolGroup(container: Container, events: ReadonlyArray<ToolEvent>, th
   const elapsed = toolDuration(events);
   const body = `${theme.fg("toolTitle", first.toolName)}${theme.fg("muted", count)}${theme.fg("dim", target)}${elapsed ? theme.fg("dim", `  ${elapsed}`) : ""}`;
   container.addChild(new HangingText(`${theme.fg(color, glyph)} `, body));
+  if (events.length > 1) {
+    const targets = [
+      ...new Set(
+        events.flatMap((event) => (event.target ? [sanitizeTerminalLine(event.target)] : [])),
+      ),
+    ];
+    if (targets.length > 0) {
+      const shown = targets.slice(0, 3);
+      const remaining = targets.length - shown.length;
+      const summary = `${shown.join(" · ")}${remaining > 0 ? ` · +${remaining}` : ""}`;
+      container.addChild(new HangingText("  ", theme.fg("dim", summary)));
+    }
+  }
 }
 
 function addNotice(container: Container, event: NoticeEvent, theme: Theme): void {
@@ -151,6 +178,27 @@ function addNotice(container: Container, event: NoticeEvent, theme: Theme): void
     ),
   );
 }
+
+const emptyActivityLabel = (run: SubagentRunView): string => {
+  switch (run.state) {
+    case "starting":
+      return "Starting…";
+    case "running":
+      return "Working…";
+    case "waiting_for_parent":
+      return "Waiting for parent…";
+    case "paused":
+      return "Paused.";
+    case "stopping":
+      return "Stopping…";
+    case "completed":
+      return "Completed without tool activity.";
+    case "failed":
+      return "No tool activity before failure.";
+    case "stopped":
+      return "Stopped.";
+  }
+};
 
 function addTechnicalDetails(container: Container, run: SubagentRunView, theme: Theme): void {
   container.addChild(new Spacer(1));
@@ -180,7 +228,11 @@ export function renderSubagentSessionOutput(
   const now = options.now ?? run.lastActivityAt;
   const container = new Container();
   container.addChild(
-    new Text(`${theme.fg("toolTitle", theme.bold(run.name))}  ${stateLabel(run, theme)}`, 0, 0),
+    new Text(
+      `${theme.fg("toolTitle", theme.bold(run.name))}  ${stateLabel(run, theme, now)}`,
+      0,
+      0,
+    ),
   );
   container.addChild(
     new Text(
@@ -240,7 +292,7 @@ export function renderSubagentSessionOutput(
     run.warning === undefined &&
     run.progress === undefined
   ) {
-    container.addChild(new Text(theme.fg("dim", "No child activity yet."), 2, 0));
+    container.addChild(new Text(theme.fg("dim", emptyActivityLabel(run)), 2, 0));
   }
 
   const assistantOutput =

@@ -7,7 +7,10 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import { isActiveRunState, type SubagentProjection, type SubagentRunView } from "../run/model.ts";
-import { renderSubagentSessionOutput } from "../tools/renderers/session-output.ts";
+import {
+  formatRelativeAge,
+  renderSubagentSessionOutput,
+} from "../tools/renderers/session-output.ts";
 import { sanitizeTerminalLine } from "./sanitize.ts";
 
 export interface FleetActions {
@@ -22,6 +25,7 @@ export interface FleetOptions {
   readonly theme: Theme;
   readonly getProjection: () => SubagentProjection;
   readonly getHeight: () => number;
+  readonly getNow: () => number;
   readonly requestRender: () => void;
   readonly close: () => void;
   readonly actions: FleetActions;
@@ -185,9 +189,11 @@ export class SubagentFleetComponent implements Component {
     const selected = index === this.selected;
     const prefix = selected ? this.options.theme.fg("accent", ">") : " ";
     const glyph = this.options.theme.fg(stateColor(run), stateGlyph(run));
-    const label = sanitizeTerminalLine(
-      `${run.name} · ${run.id} · ${run.state} · ${run.writeIntent}`,
-    );
+    const state =
+      run.state === "completed"
+        ? `completed ${formatRelativeAge(this.options.getNow() - (run.endedAt ?? run.lastActivityAt))}`
+        : run.state;
+    const label = sanitizeTerminalLine(`${run.name} · ${state} · ${run.writeIntent} · ${run.id}`);
     return pad(
       `${prefix} ${glyph} ${selected ? this.options.theme.fg("accent", label) : label}`,
       width,
@@ -206,18 +212,18 @@ export class SubagentFleetComponent implements Component {
   private helpText(width: number): string {
     if (this.pendingStop) return ` x confirm stop ${this.pendingStop} · esc cancel `;
     if (width >= 100)
-      return " ↑↓/jk select · ^J/^K scroll · enter details · t technical · m message · i interrupt · r resume · n rename · x stop · esc close ";
+      return " ↑↓/jk select · C-j/C-k scroll · enter details · t technical · m message · i interrupt · r resume · n rename · x stop · esc close ";
     if (width >= 60)
-      return " jk select · ^J/^K scroll · enter details · t tech · ? keys · esc close ";
+      return " jk select · C-j/C-k scroll · enter details · t tech · ? keys · esc close ";
     return this.alternateHelp
       ? " m msg · i int · r res · n name · x/esc "
-      : " jk · ^J/^K scroll · t tech · ? help ";
+      : " jk · C-j/C-k scroll · t · ? help ";
   }
 
   private detailLines(run: SubagentRunView | undefined, width: number): string[] {
     if (!run) return [this.options.theme.fg("dim", "No subagents in this parent session.")];
     return renderSubagentSessionOutput(run, this.options.theme, {
-      now: run.lastActivityAt,
+      now: this.options.getNow(),
       showTechnicalDetails: this.showTechnicalDetails,
     }).render(Math.max(1, width));
   }
@@ -241,7 +247,7 @@ export class SubagentFleetComponent implements Component {
     const end = Math.min(lines.length, start + bodyHeight);
     const position = this.options.theme.fg(
       "dim",
-      ` ${start + 1}–${end} of ${lines.length} · ^K up · ^J down `,
+      ` ${start + 1}–${end} of ${lines.length} · C-k up · C-j down `,
     );
     return [pad(position, width), ...visible];
   }

@@ -1,6 +1,7 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 // @effect-diagnostics effect/asyncFunction:off
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { synchronousNow } from "../boundary/native-clock.ts";
 import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import { SubagentFleetComponent } from "../ui/fleet.ts";
 
@@ -58,6 +59,7 @@ async function openFleetManager(
         theme,
         getProjection: bridge.get,
         getHeight: () => tui.terminal.rows,
+        getNow: synchronousNow,
         requestRender: () => tui.requestRender(),
         close: () => done(undefined),
         actions: {
