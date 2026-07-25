@@ -123,6 +123,19 @@ describe("SubagentService", () => {
       ]);
 
       fake.controls[0]?.offer({
+        type: "tool_execution_start",
+        toolCallId: "tool-1",
+        toolName: "read",
+        args: { path: "src/auth.ts" },
+      });
+      fake.controls[0]?.offer({
+        type: "tool_execution_end",
+        toolCallId: "tool-1",
+        toolName: "read",
+        result: { content: [{ type: "text", text: "auth source" }] },
+        isError: false,
+      });
+      fake.controls[0]?.offer({
         type: "message_update",
         assistantMessageEvent: { type: "text_delta", delta: "Review complete." },
       });
@@ -141,6 +154,10 @@ describe("SubagentService", () => {
       expect(completed.finalText).toBe("Review complete.");
       expect(completed.usage.totalTokens).toBe(12);
       expect(completed.transcript.join("\n")).toContain("Review complete.");
+      expect(completed.sessionEvents).toMatchObject([
+        { type: "tool", toolName: "read", target: "src/auth.ts", state: "completed" },
+        { type: "assistant", text: "Review complete." },
+      ]);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

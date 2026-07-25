@@ -66,13 +66,15 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
     }
     if (message.type === "peer_notice") {
       try {
+        // Dynamic fleet changes should inform a later parent prompt without steering the
+        // current turn; steering an active child causes repeated final responses.
         pi.sendMessage(
           {
             customType: "pi-subagents-peer-notice",
             content: message.message,
             display: true,
           },
-          { deliverAs: "steer", triggerTurn: false },
+          { deliverAs: "nextTurn", triggerTurn: false },
         );
       } catch {
         // The child may already be shutting down.

@@ -38,6 +38,7 @@ const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   startedAt: 1,
   lastActivityAt: 1,
   transcript: [],
+  sessionEvents: [],
   usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
   ...overrides,
 });

@@ -19,6 +19,7 @@ import type {
 } from "../run/model.ts";
 import { SubagentService } from "../run/service.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
+import { renderSubagentSessionOutput } from "./renderers/session-output.ts";
 
 const ACTIONS = [
   "start",
@@ -316,6 +317,11 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
       );
     },
     renderResult(result, { isPartial, expanded }, theme) {
+      const details = result.details as SubagentToolDetails | undefined;
+      if (expanded && !isPartial && details?.action !== "list" && details?.runs?.length === 1) {
+        const run = details.runs[0];
+        if (run) return renderSubagentSessionOutput(run, theme);
+      }
       let text = sanitizeTerminalText(
         result.content
           .filter((part) => part.type === "text")

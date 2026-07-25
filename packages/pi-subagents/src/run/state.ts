@@ -16,7 +16,12 @@ export const sanitizeName = (value: string): string => {
 };
 
 export const snapshotView = (view: SubagentRunView): SubagentRunView =>
-  freezeSnapshot({ ...view, transcript: [...view.transcript], usage: { ...view.usage } });
+  freezeSnapshot({
+    ...view,
+    transcript: [...view.transcript],
+    sessionEvents: view.sessionEvents.map((event) => ({ ...event })),
+    usage: { ...view.usage },
+  });
 
 export const clipText = (value: string, limit: number): string =>
   value.length <= limit ? value : `${value.slice(0, limit)}…`;

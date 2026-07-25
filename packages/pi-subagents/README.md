@@ -11,7 +11,7 @@ Session-scoped foreground and background subagents for pi.
 - Child-to-parent progress, warnings, and blocking questions.
 - Parent steering, replies, interruption, resumption, renaming, and stopping.
 - A full-screen `/subagents` fleet inspector.
-- Tool calls rendered through the configurable `pi-code-previews` shell.
+- Tool calls rendered through the configurable `pi-code-previews` shell, with expanded structured child-session output and Markdown reports.
 - One declared writer per shared working directory.
 - Exact session ownership: every child process stops when the parent session ends.
 

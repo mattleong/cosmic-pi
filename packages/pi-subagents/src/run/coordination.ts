@@ -29,6 +29,7 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
     "Use contact_parent(kind=progress) only for meaningful progress or discoveries that change the plan.",
     "Use contact_parent(kind=question) when blocked on a decision; wait for the parent reply instead of guessing.",
     "Use contact_parent(kind=warning) for a material non-blocking risk.",
+    "Always end with a concise, self-contained final report containing the actual findings or work completed, even if you already sent them through contact_parent. Never finish with only an acknowledgement or 'findings sent to parent'.",
     request.writeIntent === "writer"
       ? "You are the sole declared writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."
       : "Your run is declared read-only. You have full tools for inspection, but you must not edit, write, patch, generate, or otherwise mutate project files.",

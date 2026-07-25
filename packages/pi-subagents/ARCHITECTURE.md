@@ -12,8 +12,9 @@
 - `src/boundary/host-environment.ts` — process-role detection.
 - `src/boundary/host-notifier.ts` — exception-safe parent transcript delivery.
 - `src/boundary/host-ui.ts` — synchronous immutable fleet projection bridge.
-- `src/run/` — run model, protocol decoding, errors, transcript bounds, projection, and scoped fleet owner.
+- `src/run/` — run model, protocol decoding, errors, bounded text and structured child-session timelines, projection, and scoped fleet owner.
 - `src/tools/subagent.ts` — the single agent-facing management tool, with cooperative `pi-code-previews` shell rendering.
+- `src/tools/renderers/session-output.ts` — pure expanded child-session presentation with Markdown assistant output and structured tool activity.
 - `src/settings/controller.ts` — `/subagents` command registration.
 - `src/ui/` — pure responsive fleet presentation and terminal-text sanitization.
 

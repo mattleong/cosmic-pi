@@ -33,6 +33,16 @@ describe("child protocol", () => {
     );
     expect("channel" in contact && contact.kind).toBe("question");
 
+    const tool = await Effect.runPromise(
+      decodeChildEnvelope({
+        type: "tool_execution_start",
+        toolCallId: "tool-1",
+        toolName: "read",
+        args: { path: "AGENTS.md" },
+      }),
+    );
+    expect(tool).toMatchObject({ type: "tool_execution_start", toolCallId: "tool-1" });
+
     const ignored = await Effect.runPromise(decodeChildEnvelope({ type: "queue_update" }));
     expect(ignored).toEqual({ type: "ignored", eventType: "queue_update" });
   });

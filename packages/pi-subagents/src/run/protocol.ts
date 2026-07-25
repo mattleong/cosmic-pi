@@ -29,11 +29,15 @@ const MessageEndSchema = Schema.Struct({
 });
 const ToolStartSchema = Schema.Struct({
   type: Schema.Literal("tool_execution_start"),
+  toolCallId: Schema.String,
   toolName: Schema.String,
+  args: Schema.Unknown,
 });
 const ToolEndSchema = Schema.Struct({
   type: Schema.Literal("tool_execution_end"),
+  toolCallId: Schema.String,
   toolName: Schema.String,
+  result: Schema.Unknown,
   isError: Schema.Boolean,
 });
 const ExtensionErrorSchema = Schema.Struct({

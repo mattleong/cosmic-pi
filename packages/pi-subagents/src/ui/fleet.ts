@@ -7,7 +7,8 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import { isActiveRunState, type SubagentProjection, type SubagentRunView } from "../run/model.ts";
-import { sanitizeTerminalLine, sanitizeTerminalText } from "./sanitize.ts";
+import { renderSubagentSessionOutput } from "../tools/renderers/session-output.ts";
+import { sanitizeTerminalLine } from "./sanitize.ts";
 
 export interface FleetActions {
   readonly stop: (id: string) => void;
@@ -184,51 +185,9 @@ export class SubagentFleetComponent implements Component {
     return runs.slice(start, start + size).map((run, offset) => ({ run, index: start + offset }));
   }
 
-  private detailLines(run: SubagentRunView | undefined): string[] {
+  private detailLines(run: SubagentRunView | undefined, width: number): string[] {
     if (!run) return [this.options.theme.fg("dim", "No subagents in this parent session.")];
-    const header = this.options.theme.fg(
-      "accent",
-      sanitizeTerminalLine(`${run.name} · ${run.state}`),
-    );
-    const metadata = this.options.theme.fg(
-      "dim",
-      sanitizeTerminalLine(
-        `${run.model}:${run.effort} · ${run.context} · ${run.execution}${run.currentTool ? ` · tool ${run.currentTool}` : ""}`,
-      ),
-    );
-    const notices = [
-      run.question
-        ? this.options.theme.fg(
-            "warning",
-            `Question: ${sanitizeTerminalLine(run.question.message)}`,
-          )
-        : undefined,
-      run.progress
-        ? this.options.theme.fg("muted", `Progress: ${sanitizeTerminalLine(run.progress)}`)
-        : undefined,
-      run.warning
-        ? this.options.theme.fg("warning", `Warning: ${sanitizeTerminalLine(run.warning)}`)
-        : undefined,
-      run.error
-        ? this.options.theme.fg("error", `Error: ${sanitizeTerminalLine(run.error)}`)
-        : undefined,
-    ].filter((line): line is string => line !== undefined);
-    const transcript = run.transcript.flatMap((line) => sanitizeTerminalText(line).split("\n"));
-    return [
-      header,
-      metadata,
-      ...(this.details
-        ? [
-            this.options.theme.fg("dim", sanitizeTerminalLine(run.task)),
-            ...(run.sessionFile
-              ? [this.options.theme.fg("dim", sanitizeTerminalLine(run.sessionFile))]
-              : []),
-          ]
-        : []),
-      ...notices,
-      "",
-      ...(transcript.length ? transcript : [this.options.theme.fg("dim", "(no transcript yet)")]),
-    ];
+    return renderSubagentSessionOutput(run, this.options.theme).render(Math.max(1, width));
   }
 
   private renderWide(
@@ -246,7 +205,7 @@ export class SubagentFleetComponent implements Component {
         this.runLine(run, index, leftWidth),
       ),
     ];
-    const detail = this.detailLines(selected);
+    const detail = this.detailLines(selected, rightWidth);
     const start = Math.max(0, detail.length - height);
     return Array.from(
       { length: height },
@@ -271,7 +230,7 @@ export class SubagentFleetComponent implements Component {
     ];
     const divider = this.options.theme.fg("borderMuted", `├${"─".repeat(inner)}┤`);
     const remaining = Math.max(0, height - list.length - 1);
-    const detail = this.detailLines(selected);
+    const detail = this.detailLines(selected, inner);
     const start = Math.max(0, detail.length - remaining);
     const lines = [
       ...list.map((line) => `│${pad(line, inner)}│`),
@@ -291,7 +250,7 @@ export class SubagentFleetComponent implements Component {
     const inner = width - 2;
     const lines =
       this.details && selected
-        ? this.detailLines(selected)
+        ? this.detailLines(selected, inner)
         : runs.length
           ? this.visibleRuns(runs, height).map(({ run, index }) => this.runLine(run, index, inner))
           : [this.options.theme.fg("dim", "No subagents.")];

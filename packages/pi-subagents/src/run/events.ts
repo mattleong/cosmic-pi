@@ -14,6 +14,12 @@ import {
   type ContactParentEnvelope,
 } from "./protocol.ts";
 import {
+  appendAssistantSessionEvent,
+  appendNoticeSessionEvent,
+  finishToolSessionEvent,
+  startToolSessionEvent,
+} from "./session-output.ts";
+import {
   addUsage,
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
@@ -53,6 +59,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           progress: message,
           lastActivityAt: now,
           transcript: appendTranscript(current.transcript, `progress: ${message}`),
+          sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "progress", message, now),
         }));
         return;
       }
@@ -62,6 +69,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           warning: message,
           lastActivityAt: now,
           transcript: appendTranscript(current.transcript, `warning: ${message}`),
+          sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "warning", message, now),
         }));
         notify({ type: "warning", id: view.id, name: view.name, message });
         return;
@@ -72,6 +80,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         lastActivityAt: now,
         question: { requestId: envelope.requestId, message, createdAt: now },
         transcript: appendTranscript(current.transcript, `question for parent: ${message}`),
+        sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "question", message, now),
       }));
       Deferred.doneUnsafe(record.foregroundOutcome, Effect.succeed(view));
       if (record.view.execution === "background")
@@ -166,7 +175,14 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                       ...current,
                       lastActivityAt: now,
                       ...(text
-                        ? { finalText: sanitizeOutputText(text, MAX_FINAL_TEXT_CHARS) }
+                        ? {
+                            finalText: sanitizeOutputText(text, MAX_FINAL_TEXT_CHARS),
+                            sessionEvents: appendAssistantSessionEvent(
+                              current.sessionEvents,
+                              text,
+                              now,
+                            ),
+                          }
                         : {}),
                       usage: addUsage(current.usage, usageFromMessage(message.usage)),
                     })),
@@ -183,6 +199,12 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                   currentTool: envelope.toolName,
                   lastActivityAt: now,
                   transcript: appendTranscript(current.transcript, `▶ ${envelope.toolName}`),
+                  sessionEvents: startToolSessionEvent(current.sessionEvents, {
+                    toolCallId: envelope.toolCallId,
+                    toolName: envelope.toolName,
+                    args: envelope.args,
+                    startedAt: now,
+                  }),
                 })),
               ),
               Effect.asVoid,
@@ -198,6 +220,12 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                     current.transcript,
                     `${envelope.isError ? "×" : "✓"} ${envelope.toolName}`,
                   ),
+                  sessionEvents: finishToolSessionEvent(current.sessionEvents, {
+                    toolCallId: envelope.toolCallId,
+                    toolName: envelope.toolName,
+                    isError: envelope.isError,
+                    endedAt: now,
+                  }),
                 })),
               ),
               Effect.asVoid,
@@ -212,6 +240,12 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                   transcript: appendTranscript(
                     current.transcript,
                     `extension error: ${sanitizeDiagnosticText(envelope.error, MAX_ERROR_CHARS)}`,
+                  ),
+                  sessionEvents: appendNoticeSessionEvent(
+                    current.sessionEvents,
+                    "warning",
+                    `Extension error: ${envelope.error}`,
+                    now,
                   ),
                 })),
               ),

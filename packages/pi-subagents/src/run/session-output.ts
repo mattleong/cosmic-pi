@@ -1,0 +1,160 @@
+import type { SubagentSessionEvent } from "./model.ts";
+import { sanitizeDiagnosticText, sanitizeOutputText } from "./state.ts";
+
+const MAX_SESSION_EVENTS = 120;
+const MAX_SESSION_BYTES = 192 * 1024;
+const MAX_TOOL_TARGET_CHARS = 500;
+const MAX_ASSISTANT_TEXT_CHARS = 16 * 1024;
+const MAX_NOTICE_CHARS = 4 * 1024;
+
+const bytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
+
+const asRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
+
+const stringField = (
+  record: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): string | undefined => {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+};
+
+export function summarizeToolArguments(toolName: string, args: unknown): string | undefined {
+  const input = asRecord(args);
+  const path = stringField(input, "path") ?? stringField(input, "cwd");
+  let summary: string | undefined;
+  switch (toolName) {
+    case "bash":
+      summary = stringField(input, "command");
+      break;
+    case "read":
+    case "write":
+    case "edit":
+    case "ls":
+      summary = path;
+      break;
+    case "grep": {
+      const pattern = stringField(input, "pattern");
+      summary = [pattern ? `/${pattern}/` : undefined, path].filter(Boolean).join(" · ");
+      break;
+    }
+    case "find":
+      summary = [stringField(input, "pattern"), path].filter(Boolean).join(" · ");
+      break;
+    case "contact_parent":
+      summary = [stringField(input, "kind"), stringField(input, "message")]
+        .filter(Boolean)
+        .join(": ");
+      break;
+    default:
+      summary =
+        path ??
+        stringField(input, "query") ??
+        stringField(input, "id") ??
+        stringField(input, "name") ??
+        stringField(input, "message") ??
+        stringField(input, "command");
+  }
+  return summary ? sanitizeDiagnosticText(summary, MAX_TOOL_TARGET_CHARS) : undefined;
+}
+
+export function appendSessionEvent(
+  current: ReadonlyArray<SubagentSessionEvent>,
+  event: SubagentSessionEvent,
+): ReadonlyArray<SubagentSessionEvent> {
+  const next = [...current, event].slice(-MAX_SESSION_EVENTS);
+  let retainedBytes = 0;
+  let start = next.length;
+  while (start > 0) {
+    const size = bytes(next[start - 1]);
+    if (retainedBytes + size > MAX_SESSION_BYTES) break;
+    retainedBytes += size;
+    start -= 1;
+  }
+  return next.slice(start);
+}
+
+export function appendAssistantSessionEvent(
+  current: ReadonlyArray<SubagentSessionEvent>,
+  text: string,
+  createdAt: number,
+): ReadonlyArray<SubagentSessionEvent> {
+  const sanitized = sanitizeOutputText(text, MAX_ASSISTANT_TEXT_CHARS).trim();
+  return sanitized
+    ? appendSessionEvent(current, { type: "assistant", text: sanitized, createdAt })
+    : current;
+}
+
+export function appendNoticeSessionEvent(
+  current: ReadonlyArray<SubagentSessionEvent>,
+  kind: "parent" | "progress" | "warning" | "question",
+  text: string,
+  createdAt: number,
+): ReadonlyArray<SubagentSessionEvent> {
+  return appendSessionEvent(current, {
+    type: "notice",
+    kind,
+    text: sanitizeDiagnosticText(text, MAX_NOTICE_CHARS),
+    createdAt,
+  });
+}
+
+export function startToolSessionEvent(
+  current: ReadonlyArray<SubagentSessionEvent>,
+  input: {
+    readonly toolCallId: string;
+    readonly toolName: string;
+    readonly args: unknown;
+    readonly startedAt: number;
+  },
+): ReadonlyArray<SubagentSessionEvent> {
+  const target = summarizeToolArguments(input.toolName, input.args);
+  return appendSessionEvent(current, {
+    type: "tool",
+    toolCallId: input.toolCallId,
+    toolName: sanitizeDiagnosticText(input.toolName, 200),
+    ...(target ? { target } : {}),
+    state: "running",
+    startedAt: input.startedAt,
+  });
+}
+
+export function finishToolSessionEvent(
+  current: ReadonlyArray<SubagentSessionEvent>,
+  input: {
+    readonly toolCallId: string;
+    readonly toolName: string;
+    readonly isError: boolean;
+    readonly endedAt: number;
+  },
+): ReadonlyArray<SubagentSessionEvent> {
+  let index = -1;
+  for (let candidate = current.length - 1; candidate >= 0; candidate -= 1) {
+    const event = current[candidate];
+    if (event?.type === "tool" && event.toolCallId === input.toolCallId) {
+      index = candidate;
+      break;
+    }
+  }
+  if (index < 0)
+    return appendSessionEvent(current, {
+      type: "tool",
+      toolCallId: input.toolCallId,
+      toolName: sanitizeDiagnosticText(input.toolName, 200),
+      state: input.isError ? "failed" : "completed",
+      startedAt: input.endedAt,
+      endedAt: input.endedAt,
+    });
+  return current.map((event, eventIndex) =>
+    eventIndex === index && event.type === "tool"
+      ? {
+          ...event,
+          state: input.isError ? "failed" : "completed",
+          endedAt: input.endedAt,
+        }
+      : event,
+  );
+}

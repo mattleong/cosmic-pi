@@ -40,6 +40,7 @@ import {
   type RpcResponse,
 } from "./protocol.ts";
 import { sortRuns } from "./projection.ts";
+import { appendNoticeSessionEvent } from "./session-output.ts";
 import {
   MAX_ERROR_CHARS,
   MAX_TASK_CHARS,
@@ -310,6 +311,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               startedAt: now,
               lastActivityAt: now,
               transcript: [],
+              sessionEvents: [],
               usage: emptyUsage(),
             };
             const record: RunRecord = {
@@ -423,9 +425,16 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           message: `Subagent ${id} is ${record.view.state}; use action=resume.`,
         });
       yield* rpc(record, { type: "steer", message: message.trim() });
+      const now = yield* Clock.currentTimeMillis;
       return yield* mutateView(record, (current) => ({
         ...current,
         transcript: appendTranscript(current.transcript, `parent guidance: ${message.trim()}`),
+        sessionEvents: appendNoticeSessionEvent(
+          current.sessionEvents,
+          "parent",
+          `Guidance: ${message.trim()}`,
+          now,
+        ),
       }));
     });
 
@@ -452,11 +461,18 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         message: message.trim(),
       };
       yield* process.sendIpc(envelope);
+      const now = yield* Clock.currentTimeMillis;
       return yield* mutateView(record, (current) => ({
         ...current,
         state: "running",
         question: undefined,
         transcript: appendTranscript(current.transcript, `parent reply: ${message.trim()}`),
+        sessionEvents: appendNoticeSessionEvent(
+          current.sessionEvents,
+          "parent",
+          `Reply: ${message.trim()}`,
+          now,
+        ),
       }));
     });
 
@@ -535,6 +551,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               state: "running",
               lastActivityAt: now,
               transcript: appendTranscript(current.transcript, `parent resumed: ${prompt}`),
+              sessionEvents: appendNoticeSessionEvent(
+                current.sessionEvents,
+                "parent",
+                `Resume: ${prompt}`,
+                now,
+              ),
             }
           : current,
       );
