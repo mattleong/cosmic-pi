@@ -18,6 +18,6 @@ describe("subagent Pi registration", () => {
 
     expect(tools).toEqual([]);
     expect(commands).toEqual(["subagents"]);
-    expect(events).toEqual(["session_start", "turn_end", "session_shutdown"]);
+    expect(events).toEqual(["session_start", "turn_end", "session_tree", "session_shutdown"]);
   });
 });

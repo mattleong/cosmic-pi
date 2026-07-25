@@ -8,9 +8,24 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Type } from "typebox";
+import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS } from "../run/limits.ts";
 
-const MAX_MESSAGE_CHARS = 64 * 1024;
+const ProtocolIdSchema = Schema.String.check(Schema.isMaxLength(MAX_PROTOCOL_ID_CHARS));
+const ParentMessageSchema = Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS));
+const MAX_TOOL_REPLY_BYTES = 48 * 1024;
 let nextRequest = 1;
+
+function clipToolReply(value: string): string {
+  if (Buffer.byteLength(value, "utf8") <= MAX_TOOL_REPLY_BYTES) return value;
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(value.slice(0, middle), "utf8") <= MAX_TOOL_REPLY_BYTES - 3) low = middle;
+    else high = middle - 1;
+  }
+  return `${value.slice(0, low)}…`;
+}
 
 interface PendingReply {
   readonly resolve: (message: string) => void;
@@ -21,19 +36,19 @@ const ParentControlSchema = Schema.Union([
   Schema.Struct({
     channel: Schema.Literal("pi-subagents"),
     type: Schema.Literal("parent_reply"),
-    requestId: Schema.String,
-    message: Schema.String,
+    requestId: ProtocolIdSchema,
+    message: ParentMessageSchema,
   }),
   Schema.Struct({
     channel: Schema.Literal("pi-subagents"),
     type: Schema.Literal("peer_notice"),
-    message: Schema.String,
+    message: ParentMessageSchema,
   }),
 ]);
 
 const ContactParentParameters = Type.Object({
   kind: StringEnum(["progress", "question", "warning"] as const),
-  message: Type.String({ minLength: 1, maxLength: MAX_MESSAGE_CHARS }),
+  message: Type.String({ minLength: 1, maxLength: MAX_PARENT_MESSAGE_CHARS }),
 });
 
 function sendIpc(message: object): Promise<void> {
@@ -51,6 +66,12 @@ function sendIpc(message: object): Promise<void> {
 
 export default function subagentChildBridge(pi: ExtensionAPI): void {
   if (process.env.PI_SUBAGENT_CHILD !== "1") return;
+  const runtimeApiKey = process.env.PI_SUBAGENT_RUNTIME_API_KEY;
+  const runtimeApiProvider = process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER;
+  delete process.env.PI_SUBAGENT_RUNTIME_API_KEY;
+  delete process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER;
+  if (runtimeApiKey && runtimeApiProvider)
+    pi.registerProvider(runtimeApiProvider, { apiKey: runtimeApiKey });
   const pending = new Map<string, PendingReply>();
   let listening = false;
 
@@ -117,7 +138,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
         type: "contact_parent" as const,
         requestId,
         kind: params.kind,
-        message: params.message.slice(0, MAX_MESSAGE_CHARS),
+        message: params.message.slice(0, MAX_PARENT_MESSAGE_CHARS),
       };
       if (params.kind !== "question") {
         await sendIpc(envelope);
@@ -147,6 +168,10 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
           },
         });
         signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
         void sendIpc(envelope).catch((error: unknown) => {
           pending.delete(requestId);
           signal?.removeEventListener("abort", abort);
@@ -154,7 +179,12 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
         });
       });
       return {
-        content: [{ type: "text" as const, text: `Parent replied: ${reply}` }],
+        content: [
+          {
+            type: "text" as const,
+            text: `Parent replied: ${clipToolReply(reply)}`,
+          },
+        ],
         details: {},
       };
     },

@@ -1,0 +1,2 @@
+export const MAX_PARENT_MESSAGE_CHARS = 64 * 1024;
+export const MAX_PROTOCOL_ID_CHARS = 1_024;

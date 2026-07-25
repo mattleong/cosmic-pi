@@ -16,10 +16,11 @@ export type SubagentNotification =
       readonly message: string;
     }
   | {
-      readonly type: "warning";
+      readonly type: "progress" | "warning";
       readonly id: string;
       readonly name: string;
       readonly message: string;
+      readonly triggerTurn: boolean;
     };
 
 export type SubagentNotifier = (notification: SubagentNotification) => void;
@@ -34,8 +35,12 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
         ? `Background subagent ${notification.name} (${notification.id}) completed.${notification.finalText ? `\n\n${notification.finalText}` : ""}`
         : notification.type === "question"
           ? `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with subagent({ action: "reply", runId: "${notification.id}", message: "..." }).`
-          : `Subagent ${notification.name} (${notification.id}) warning: ${notification.message}`,
+          : `Subagent ${notification.name} (${notification.id}) ${notification.type}: ${notification.message}`,
     );
+    const triggerTurn =
+      notification.type === "completed" ||
+      notification.type === "question" ||
+      notification.triggerTurn;
     try {
       pi.sendMessage(
         {
@@ -44,8 +49,9 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
           display: true,
         },
         {
-          deliverAs: notification.type === "question" ? "steer" : "followUp",
-          triggerTurn: true,
+          deliverAs:
+            notification.type === "question" ? "steer" : triggerTurn ? "followUp" : "nextTurn",
+          triggerTurn,
         },
       );
     } catch {

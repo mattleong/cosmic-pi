@@ -3,6 +3,7 @@
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/cryptoRandomUUID:off
 // @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
 import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
@@ -31,7 +32,17 @@ import type { SubagentContextMode, SubagentEffort } from "../run/model.ts";
 const MAX_RPC_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_STDERR_BYTES = 128 * 1024;
 const EVENT_CAPACITY = 512;
-const BLOCKED_ENV_KEYS = new Set(["NODE_OPTIONS", "NODE_PATH", "PI_SESSION_FILE", "PI_SESSION_ID"]);
+const TRANSPORT_WRITE_TIMEOUT = "10 seconds";
+const RUNTIME_API_KEY_ENV = "PI_SUBAGENT_RUNTIME_API_KEY";
+const RUNTIME_API_PROVIDER_ENV = "PI_SUBAGENT_RUNTIME_API_PROVIDER";
+const BLOCKED_ENV_KEYS = new Set([
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "PI_SESSION_FILE",
+  "PI_SESSION_ID",
+  RUNTIME_API_KEY_ENV,
+  RUNTIME_API_PROVIDER_ENV,
+]);
 
 export interface ChildLaunchRequest {
   readonly runId: string;
@@ -40,6 +51,7 @@ export interface ChildLaunchRequest {
   readonly context: SubagentContextMode;
   readonly model: string;
   readonly effort: SubagentEffort;
+  readonly runtimeApiKey?: string | undefined;
   readonly activeTools: ReadonlyArray<string>;
   readonly projectTrusted: boolean;
   readonly parentSessionId: string;
@@ -112,32 +124,42 @@ function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
     PI_SUBAGENT_CHILD: "1",
     PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
     PI_SUBAGENT_RUN_ID: request.runId,
+    ...(request.runtimeApiKey
+      ? {
+          [RUNTIME_API_KEY_ENV]: request.runtimeApiKey,
+          [RUNTIME_API_PROVIDER_ENV]: request.model.slice(0, request.model.indexOf("/")),
+        }
+      : {}),
   };
 }
 
-function terminateTree(child: NodeChildProcess, mode: "graceful" | "force"): void {
+async function terminateTree(child: NodeChildProcess, mode: "graceful" | "force"): Promise<void> {
   const pid = child.pid;
-  if (!pid) return;
+  if (!pid || child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === "win32") {
-    const killer = spawn(
-      "taskkill",
-      ["/pid", String(pid), "/T", ...(mode === "force" ? ["/F"] : [])],
-      { stdio: "ignore", windowsHide: true },
-    );
-    killer.on("error", () => {});
-    killer.unref();
+    await new Promise<void>((resolve, reject) => {
+      const killer = spawn(
+        "taskkill",
+        ["/pid", String(pid), "/T", ...(mode === "force" ? ["/F"] : [])],
+        { stdio: "ignore", windowsHide: true },
+      );
+      killer.once("error", reject);
+      killer.once("close", (code) => {
+        if (code === 0 || child.exitCode !== null || child.signalCode !== null) resolve();
+        else reject(new Error(`taskkill exited with code ${code ?? "unknown"}.`));
+      });
+    });
     return;
   }
   const signal = mode === "force" ? "SIGKILL" : "SIGTERM";
   try {
     process.kill(-pid, signal);
-  } catch {
-    if (child.exitCode === null && child.signalCode === null) {
-      try {
-        child.kill(signal);
-      } catch {
-        // Process exit and termination can race.
-      }
+  } catch (error) {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try {
+      if (!child.kill(signal)) throw error;
+    } catch {
+      throw error;
     }
   }
 }
@@ -246,8 +268,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
   const ready = yield* Deferred.make<void, SubagentProcessError>();
   const exited = yield* Deferred.make<Extract<ChildWireEvent, { readonly type: "exit" }>>();
   const cliEntry = join(getPackageDir(), "dist", "cli.js");
-  const args = [
-    cliEntry,
+  const cliArgs = [
     "--mode",
     "rpc",
     "--model",
@@ -267,6 +288,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
     extensionPath(),
     ...(sessionFile ? ["--session", sessionFile] : ["--session-dir", runDir]),
   ];
+  const args = [cliEntry, ...cliArgs];
   let stderr = "";
   let settled = false;
   let spawned = false;
@@ -292,7 +314,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
         if (Queue.offerUnsafe(events, event) || overflowed) return;
         overflowed = true;
         stderr = `${stderr}\nSubagent event queue exceeded ${EVENT_CAPACITY} pending events.`;
-        terminateTree(child, "force");
+        void terminateTree(child, "force").catch(() => {});
       };
       const onLine = (line: string) => {
         try {
@@ -361,63 +383,108 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
       const pid = child.pid;
       if (!pid) return yield* processError("spawn", "Subagent process did not expose a pid.");
 
+      const withWriteTimeout = (
+        effect: Effect.Effect<void, SubagentProcessError>,
+        operation: string,
+      ) =>
+        effect.pipe(
+          Effect.timeoutOption(TRANSPORT_WRITE_TIMEOUT),
+          Effect.flatMap((outcome) =>
+            outcome._tag === "Some"
+              ? Effect.void
+              : Effect.fail(
+                  processError(
+                    operation,
+                    `Subagent transport write exceeded ${TRANSPORT_WRITE_TIMEOUT}.`,
+                  ),
+                ),
+          ),
+        );
       const send = (command: RpcCommand) =>
-        Effect.callback<void, SubagentProcessError>((resume) => {
-          const stdin = child.stdin;
-          if (!stdin || stdin.destroyed || stdinError) {
-            resume(
-              Effect.fail(
-                processError("send RPC command to", stdinError ?? "Subagent RPC input is closed."),
-              ),
-            );
-            return;
-          }
-          let encoded: string;
-          try {
-            encoded = `${JSON.stringify(command)}\n`;
-          } catch (error) {
-            resume(Effect.fail(processError("encode RPC command for", error)));
-            return;
-          }
-          stdin.write(encoded, (error) =>
-            resume(error ? Effect.fail(processError("send RPC command to", error)) : Effect.void),
-          );
-        });
+        withWriteTimeout(
+          Effect.callback<void, SubagentProcessError>((resume) => {
+            const stdin = child.stdin;
+            if (!stdin || stdin.destroyed || stdinError) {
+              resume(
+                Effect.fail(
+                  processError(
+                    "send RPC command to",
+                    stdinError ?? "Subagent RPC input is closed.",
+                  ),
+                ),
+              );
+              return;
+            }
+            let encoded: string;
+            try {
+              encoded = `${JSON.stringify(command)}\n`;
+              stdin.write(encoded, (error) =>
+                resume(
+                  error ? Effect.fail(processError("send RPC command to", error)) : Effect.void,
+                ),
+              );
+            } catch (error) {
+              resume(Effect.fail(processError("encode RPC command for", error)));
+            }
+          }),
+          "send RPC command to",
+        );
       const sendIpc = (message: ParentReply | PeerNotice) =>
-        Effect.callback<void, SubagentProcessError>((resume) => {
-          if (!child.connected) {
-            resume(Effect.fail(processError("send IPC message to", "Subagent IPC is closed.")));
-            return;
-          }
-          child.send(message, (error) =>
-            resume(error ? Effect.fail(processError("send IPC message to", error)) : Effect.void),
-          );
-        });
+        withWriteTimeout(
+          Effect.callback<void, SubagentProcessError>((resume) => {
+            if (!child.connected) {
+              resume(Effect.fail(processError("send IPC message to", "Subagent IPC is closed.")));
+              return;
+            }
+            try {
+              child.send(message, (error) =>
+                resume(
+                  error ? Effect.fail(processError("send IPC message to", error)) : Effect.void,
+                ),
+              );
+            } catch (error) {
+              resume(Effect.fail(processError("send IPC message to", error)));
+            }
+          }),
+          "send IPC message to",
+        );
       const terminate = (mode: "graceful" | "force") =>
-        Effect.try({
-          try: () => terminateTree(child, mode),
-          catch: (error) => processError("terminate", error),
-        });
-      const release = requestCooperativeAbort(send).pipe(
+        Effect.suspend(() =>
+          settled
+            ? Effect.void
+            : Effect.tryPromise({
+                try: () => terminateTree(child, mode),
+                catch: (error) => processError("terminate", error),
+              }),
+        );
+      const waitForExit = Deferred.await(exited).pipe(
+        Effect.interruptible,
+        Effect.timeoutOption("2 seconds"),
+      );
+      const releaseActive = requestCooperativeAbort(send).pipe(
         Effect.andThen(Effect.sleep("100 millis")),
         Effect.andThen(terminate("graceful").pipe(Effect.catch(() => Effect.void))),
-        Effect.andThen(
-          Deferred.await(exited).pipe(Effect.interruptible, Effect.timeoutOption("2 seconds")),
-        ),
-        Effect.flatMap((outcome) =>
-          outcome._tag === "Some"
+        Effect.andThen(waitForExit),
+        Effect.flatMap((gracefulExit) =>
+          gracefulExit._tag === "Some"
             ? Effect.void
             : terminate("force").pipe(
                 Effect.catch(() => Effect.void),
-                Effect.andThen(
-                  Deferred.await(exited).pipe(
-                    Effect.interruptible,
-                    Effect.timeoutOption("2 seconds"),
-                  ),
+                Effect.andThen(waitForExit),
+                Effect.flatMap((forcedExit) =>
+                  forcedExit._tag === "Some"
+                    ? Effect.void
+                    : Effect.die(
+                        processError(
+                          "terminate",
+                          "Subagent process did not exit after forced termination.",
+                        ),
+                      ),
                 ),
-                Effect.asVoid,
               ),
         ),
+      );
+      const release = Effect.suspend(() => (settled ? Effect.void : releaseActive)).pipe(
         Effect.ensuring(Effect.sync(cleanup)),
       );
 

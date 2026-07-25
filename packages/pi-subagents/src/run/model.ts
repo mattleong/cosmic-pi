@@ -92,6 +92,7 @@ export interface StartSubagentRequest {
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
+  readonly runtimeApiKey?: string | undefined;
   readonly activeTools: ReadonlyArray<string>;
   readonly projectTrusted: boolean;
   readonly parentSessionId: string;

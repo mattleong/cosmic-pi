@@ -89,9 +89,19 @@ describe("child protocol", () => {
     expect(message && assistantText(message)).toBe("Finished work.");
   });
 
-  it("rejects malformed known events", async () => {
+  it("rejects malformed or oversized known events", async () => {
     await expect(
       Effect.runPromise(decodeChildEnvelope({ type: "tool_execution_start" })),
+    ).rejects.toBeDefined();
+    await expect(
+      Effect.runPromise(
+        decodeChildEnvelope({
+          type: "tool_execution_start",
+          toolCallId: "x".repeat(1_025),
+          toolName: "read",
+          args: {},
+        }),
+      ),
     ).rejects.toBeDefined();
   });
 });

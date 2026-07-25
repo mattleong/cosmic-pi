@@ -99,5 +99,20 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
     bridge.setContext(ctx);
   });
 
+  pi.on("session_tree", (_event, ctx) => {
+    const captured = captureSessionHost(ctx);
+    if (captured._tag === "Unavailable") return slot.shutdown().then(() => undefined);
+    return slot
+      .start(
+        {
+          ctx,
+          cwd: captured.cwd,
+          projectTrusted: isProjectTrusted(ctx),
+        },
+        captured.signal,
+      )
+      .then(() => undefined);
+  });
+
   pi.on("session_shutdown", () => slot.shutdown());
 }

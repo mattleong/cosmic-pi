@@ -18,7 +18,9 @@ import type {
   SubagentRunView,
 } from "../run/model.ts";
 import { synchronousNow } from "../boundary/native-clock.ts";
+import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
 import { SubagentService } from "../run/service.ts";
+import { MAX_TASK_CHARS } from "../run/state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 import { renderSubagentSessionOutput } from "./renderers/session-output.ts";
 
@@ -37,7 +39,9 @@ const ACTIONS = [
 
 const SubagentToolParameters = Type.Object({
   action: StringEnum(ACTIONS),
-  task: Type.Optional(Type.String({ description: "Task for action=start." })),
+  task: Type.Optional(
+    Type.String({ description: "Task for action=start.", maxLength: MAX_TASK_CHARS }),
+  ),
   name: Type.Optional(
     Type.String({ description: "Optional display name, or new name for rename." }),
   ),
@@ -65,7 +69,12 @@ const SubagentToolParameters = Type.Object({
     }),
   ),
   runId: Type.Optional(Type.String({ description: "Target run ID for management actions." })),
-  message: Type.Optional(Type.String({ description: "Guidance, reply, or resume message." })),
+  message: Type.Optional(
+    Type.String({
+      description: "Guidance, reply, or resume message.",
+      maxLength: MAX_PARENT_MESSAGE_CHARS,
+    }),
+  ),
   query: Type.Optional(Type.String({ description: "Optional model search text." })),
 });
 
@@ -113,29 +122,45 @@ function stableParentLeaf(ctx: ExtensionContext): string | undefined {
 function resolveModel(
   input: SubagentToolInput,
   ctx: ExtensionContext,
-): Effect.Effect<{ readonly model: string }, InvalidSubagentRequestError> {
-  const requested = input.model?.trim();
-  const inherited = ctx.model;
-  const modelId = requested ?? (inherited ? `${inherited.provider}/${inherited.id}` : undefined);
-  if (!modelId)
-    return Effect.fail(
-      new InvalidSubagentRequestError({ message: "No parent model is active; specify model." }),
-    );
-  const slash = modelId.indexOf("/");
-  if (slash <= 0 || slash === modelId.length - 1)
-    return Effect.fail(
-      new InvalidSubagentRequestError({ message: "model must use canonical provider/model form." }),
-    );
-  const provider = modelId.slice(0, slash);
-  const id = modelId.slice(slash + 1);
-  const model = ctx.modelRegistry.find(provider, id);
-  if (!model || !ctx.modelRegistry.hasConfiguredAuth(model))
-    return Effect.fail(
-      new InvalidSubagentRequestError({
+): Effect.Effect<
+  { readonly model: string; readonly runtimeApiKey?: string | undefined },
+  InvalidSubagentRequestError
+> {
+  return Effect.gen(function* () {
+    const requested = input.model?.trim();
+    const inherited = ctx.model;
+    const modelId = requested ?? (inherited ? `${inherited.provider}/${inherited.id}` : undefined);
+    if (!modelId)
+      return yield* new InvalidSubagentRequestError({
+        message: "No parent model is active; specify model.",
+      });
+    const slash = modelId.indexOf("/");
+    if (slash <= 0 || slash === modelId.length - 1)
+      return yield* new InvalidSubagentRequestError({
+        message: "model must use canonical provider/model form.",
+      });
+    const provider = modelId.slice(0, slash);
+    const id = modelId.slice(slash + 1);
+    const model = ctx.modelRegistry.find(provider, id);
+    if (!model || !ctx.modelRegistry.hasConfiguredAuth(model))
+      return yield* new InvalidSubagentRequestError({
         message: `Model is unavailable or unauthenticated: ${modelId}`,
-      }),
-    );
-  return Effect.succeed({ model: `${model.provider}/${model.id}` });
+      });
+    if (ctx.modelRegistry.getProviderAuthStatus(model.provider).source !== "runtime")
+      return { model: `${model.provider}/${model.id}` };
+    const auth = yield* Effect.tryPromise({
+      try: () => ctx.modelRegistry.getApiKeyAndHeaders(model),
+      catch: () =>
+        new InvalidSubagentRequestError({
+          message: `Unable to resolve runtime authentication for ${modelId}.`,
+        }),
+    });
+    if (!auth.ok || !auth.apiKey)
+      return yield* new InvalidSubagentRequestError({
+        message: `Runtime authentication is unavailable for ${modelId}.`,
+      });
+    return { model: `${model.provider}/${model.id}`, runtimeApiKey: auth.apiKey };
+  });
 }
 
 function resolveStart(
@@ -173,6 +198,7 @@ function resolveStart(
       context: input.context ?? "fresh",
       writeIntent: input.writeIntent,
       model: resolved.model,
+      ...(resolved.runtimeApiKey ? { runtimeApiKey: resolved.runtimeApiKey } : {}),
       effort: input.effort ?? (pi.getThinkingLevel() as SubagentEffort),
       effortWasExplicit: input.effort !== undefined,
       activeTools: pi.getActiveTools().filter((name) => !blocked.has(name)),
@@ -296,6 +322,10 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
       });
       const result = await runtime.run(effect, signal);
       const runs = Array.isArray(result) ? result : [result];
+      const details: SubagentToolDetails =
+        input.action === "list" || input.action === "status"
+          ? { action: input.action }
+          : { action: input.action, runs };
       return {
         content: [
           {
@@ -306,7 +336,7 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
                 : "No subagent runs.",
           },
         ],
-        details: { action: input.action, runs } satisfies SubagentToolDetails,
+        details,
       };
     },
     renderCall(args, theme) {

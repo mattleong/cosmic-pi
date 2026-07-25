@@ -28,12 +28,12 @@ import {
   sanitizeOutputText,
   usageFromMessage,
 } from "./state.ts";
-import { appendTranscript, appendTranscriptDelta } from "./transcript.ts";
+import { appendTranscript } from "./transcript.ts";
 
 export interface RunEventDependencies {
   readonly mutateView: (
     record: RunRecord,
-    update: (view: SubagentRunView) => SubagentRunView,
+    update: (view: SubagentRunView) => SubagentRunView | undefined,
   ) => Effect.Effect<SubagentRunView | undefined>;
   readonly settle: (
     record: RunRecord,
@@ -73,35 +73,70 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       const now = yield* Clock.currentTimeMillis;
       const message = sanitizeDiagnosticText(envelope.message, 16 * 1024);
       if (envelope.kind === "progress") {
-        yield* mutateView(record, (current) => ({
-          ...current,
-          progress: message,
-          lastActivityAt: now,
-          transcript: appendTranscript(current.transcript, `progress: ${message}`),
-          sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "progress", message, now),
-        }));
+        const duplicate = record.view.progress === message;
+        const view = yield* mutateView(record, (current) =>
+          current.state === "paused"
+            ? undefined
+            : {
+                ...current,
+                progress: message,
+                lastActivityAt: now,
+                transcript: appendTranscript(current.transcript, `progress: ${message}`),
+                sessionEvents: appendNoticeSessionEvent(
+                  current.sessionEvents,
+                  "progress",
+                  message,
+                  now,
+                ),
+              },
+        );
+        if (!view || duplicate) return;
+        if (record.progressTurnTriggered) return;
+        record.progressTurnTriggered = true;
+        notify({ type: "progress", id: view.id, name: view.name, message, triggerTurn: true });
         return;
       }
       if (envelope.kind === "warning") {
-        const view = yield* mutateView(record, (current) => ({
-          ...current,
-          warning: message,
-          lastActivityAt: now,
-          transcript: appendTranscript(current.transcript, `warning: ${message}`),
-          sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "warning", message, now),
-        }));
-        if (!view) return;
-        notify({ type: "warning", id: view.id, name: view.name, message });
+        const duplicate = record.view.warning === message;
+        const view = yield* mutateView(record, (current) =>
+          current.state === "paused"
+            ? undefined
+            : {
+                ...current,
+                warning: message,
+                lastActivityAt: now,
+                transcript: appendTranscript(current.transcript, `warning: ${message}`),
+                sessionEvents: appendNoticeSessionEvent(
+                  current.sessionEvents,
+                  "warning",
+                  message,
+                  now,
+                ),
+              },
+        );
+        if (!view || duplicate) return;
+        if (record.warningTurnTriggered) return;
+        record.warningTurnTriggered = true;
+        notify({ type: "warning", id: view.id, name: view.name, message, triggerTurn: true });
         return;
       }
-      const view = yield* mutateView(record, (current) => ({
-        ...current,
-        state: "waiting_for_parent",
-        lastActivityAt: now,
-        question: { requestId: envelope.requestId, message, createdAt: now },
-        transcript: appendTranscript(current.transcript, `question for parent: ${message}`),
-        sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "question", message, now),
-      }));
+      const view = yield* mutateView(record, (current) =>
+        current.state !== "running"
+          ? undefined
+          : {
+              ...current,
+              state: "waiting_for_parent",
+              lastActivityAt: now,
+              question: { requestId: envelope.requestId, message, createdAt: now },
+              transcript: appendTranscript(current.transcript, `question for parent: ${message}`),
+              sessionEvents: appendNoticeSessionEvent(
+                current.sessionEvents,
+                "question",
+                message,
+                now,
+              ),
+            },
+      );
       if (!view) return;
       if (!deliverForeground(record, view)) {
         notify({
@@ -170,7 +205,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                 mutateView(record, (current) => ({
                   ...current,
                   lastActivityAt: now,
-                  transcript: appendTranscriptDelta(current.transcript, event.delta ?? ""),
                 })),
               ),
               Effect.asVoid,
@@ -192,11 +226,15 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                     mutateView(record, (current) => ({
                       ...current,
                       lastActivityAt: now,
-                      ...(text
+                      ...(record.latestAssistantText
                         ? {
+                            transcript: appendTranscript(
+                              current.transcript,
+                              record.latestAssistantText,
+                            ),
                             sessionEvents: appendAssistantSessionEvent(
                               current.sessionEvents,
-                              text,
+                              record.latestAssistantText,
                               now,
                             ),
                           }
@@ -209,11 +247,13 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
               }),
             );
           case "tool_execution_start":
+            if (record.view.state === "paused") return Effect.void;
+            record.activeTools.set(envelope.toolCallId, envelope.toolName);
             return Clock.currentTimeMillis.pipe(
               Effect.flatMap((now) =>
                 mutateView(record, (current) => ({
                   ...current,
-                  currentTool: envelope.toolName,
+                  currentTool: [...record.activeTools.values()].at(-1),
                   lastActivityAt: now,
                   transcript: appendTranscript(current.transcript, `▶ ${envelope.toolName}`),
                   sessionEvents: startToolSessionEvent(current.sessionEvents, {
@@ -227,11 +267,13 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
               Effect.asVoid,
             );
           case "tool_execution_end":
+            if (record.view.state === "paused") return Effect.void;
+            record.activeTools.delete(envelope.toolCallId);
             return Clock.currentTimeMillis.pipe(
               Effect.flatMap((now) =>
                 mutateView(record, (current) => ({
                   ...current,
-                  currentTool: undefined,
+                  currentTool: [...record.activeTools.values()].at(-1),
                   lastActivityAt: now,
                   transcript: appendTranscript(
                     current.transcript,

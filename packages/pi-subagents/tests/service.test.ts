@@ -23,15 +23,19 @@ interface FakeChildControl {
   readonly commands: RpcCommand[];
   readonly ipc: Array<ParentReply | PeerNotice>;
   readonly terminations: Array<"graceful" | "force">;
+  readonly released: () => number;
   readonly failNext: (type: RpcCommand["type"], error: string) => void;
   readonly dropNext: (type: RpcCommand["type"]) => void;
+  readonly gateNextSend: (type: RpcCommand["type"], gate: Deferred.Deferred<void, never>) => void;
+  readonly gateNextIpc: (gate: Deferred.Deferred<void, never>) => void;
+  readonly gateRelease: (gate: Deferred.Deferred<void, never>) => void;
   readonly beforeNextResponse: (type: RpcCommand["type"], value: unknown) => void;
   readonly offer: (value: unknown) => void;
   readonly offerIpc: (value: unknown) => void;
   readonly exit: (exitCode?: number | null) => void;
 }
 
-function fakeChildLayer(beforeSpawn: Effect.Effect<void> = Effect.void) {
+function fakeChildLayer(beforeSpawn: Effect.Effect<void, never, never> = Effect.void) {
   const controls: FakeChildControl[] = [];
   const layer = Layer.succeed(ChildProcess, {
     spawn: () =>
@@ -43,8 +47,15 @@ function fakeChildLayer(beforeSpawn: Effect.Effect<void> = Effect.void) {
           const commands: RpcCommand[] = [];
           const ipc: Array<ParentReply | PeerNotice> = [];
           const terminations: Array<"graceful" | "force"> = [];
+          let releaseCount = 0;
+          let releaseGate: Deferred.Deferred<void, never> | undefined;
           const failures: Array<{ readonly type: RpcCommand["type"]; readonly error: string }> = [];
           const dropped: RpcCommand["type"][] = [];
+          const sendGates: Array<{
+            readonly type: RpcCommand["type"];
+            readonly gate: Deferred.Deferred<void, never>;
+          }> = [];
+          const ipcGates: Array<Deferred.Deferred<void, never>> = [];
           const beforeResponses: Array<{
             readonly type: RpcCommand["type"];
             readonly value: unknown;
@@ -54,6 +65,15 @@ function fakeChildLayer(beforeSpawn: Effect.Effect<void> = Effect.void) {
           };
           const dropNext = (type: RpcCommand["type"]) => {
             dropped.push(type);
+          };
+          const gateNextSend = (type: RpcCommand["type"], gate: Deferred.Deferred<void, never>) => {
+            sendGates.push({ type, gate });
+          };
+          const gateNextIpc = (gate: Deferred.Deferred<void, never>) => {
+            ipcGates.push(gate);
+          };
+          const gateRelease = (gate: Deferred.Deferred<void, never>) => {
+            releaseGate = gate;
           };
           const beforeNextResponse = (type: RpcCommand["type"], value: unknown) => {
             beforeResponses.push({ type, value });
@@ -71,8 +91,13 @@ function fakeChildLayer(beforeSpawn: Effect.Effect<void> = Effect.void) {
             events,
             awaitExit: Deferred.await(exited),
             send: (command) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 commands.push(command);
+                const gateIndex = sendGates.findIndex(
+                  (candidate) => candidate.type === command.type,
+                );
+                const gate = gateIndex >= 0 ? sendGates.splice(gateIndex, 1)[0]?.gate : undefined;
+                if (gate) yield* Deferred.await(gate);
                 const beforeIndex = beforeResponses.findIndex(
                   (candidate) => candidate.type === command.type,
                 );
@@ -111,23 +136,39 @@ function fakeChildLayer(beforeSpawn: Effect.Effect<void> = Effect.void) {
                       },
                 );
               }),
-            sendIpc: (message) => Effect.sync(() => void ipc.push(message)),
+            sendIpc: (message) =>
+              Effect.gen(function* () {
+                const gate = ipcGates.shift();
+                if (gate) yield* Deferred.await(gate);
+                ipc.push(message);
+              }),
             terminate: (mode) => Effect.sync(() => void terminations.push(mode)),
           };
           controls.push({
             commands,
             ipc,
             terminations,
+            released: () => releaseCount,
             failNext,
             dropNext,
+            gateNextSend,
+            gateNextIpc,
+            gateRelease,
             beforeNextResponse,
             offer,
             offerIpc,
             exit,
           });
-          return { handle, events };
+          return {
+            handle,
+            release: Effect.gen(function* () {
+              if (releaseGate) yield* Deferred.await(releaseGate);
+              releaseCount += 1;
+              Queue.endUnsafe(events);
+            }),
+          };
         }),
-        ({ events }) => Effect.sync(() => Queue.endUnsafe(events)),
+        ({ release }) => release,
       ).pipe(Effect.map(({ handle }) => handle)),
   });
   return { controls, layer };
@@ -205,7 +246,9 @@ describe("SubagentService", () => {
       const completed = yield* service.status(started.id);
       expect(completed.finalText).toBe("Review complete.");
       expect(completed.usage.totalTokens).toBe(12);
-      expect(completed.transcript.join("\n")).toContain("Review complete.");
+      expect(completed.transcript).toContain("✓ read");
+      expect(completed.transcript).toContain("Review complete.");
+      expect(completed.transcript).not.toContain("✓ readReview complete.");
       expect(completed.sessionEvents).toMatchObject([
         { type: "tool", toolName: "read", target: "src/auth.ts", state: "completed" },
         { type: "assistant", text: "Review complete." },
@@ -625,5 +668,259 @@ describe("SubagentService", () => {
       );
       expect(second.state).toBe("running");
     }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("retains failed writer ownership until its child scope is released", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      yield* service.start(request({ name: "failed-writer", writeIntent: "writer" }));
+      fake.controls[0]?.offer({ type: "tool_execution_start" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      expect(fake.controls[0]?.released()).toBe(0);
+
+      const conflict = yield* Effect.flip(
+        service.start(request({ name: "next-writer", writeIntent: "writer" })),
+      );
+      expect(conflict._tag).toBe("SubagentWriterConflictError");
+
+      fake.controls[0]?.exit(1);
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+      const next = yield* service.start(request({ name: "next-writer", writeIntent: "writer" }));
+      expect(next.state).toBe("running");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("finishes stop cleanup after the requesting fiber is interrupted", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "cancel-safe-stop" }));
+      const releaseGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateRelease(releaseGate);
+      const stopping = yield* service.stop(run.id).pipe(Effect.forkScoped);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopping");
+      yield* Fiber.interrupt(stopping);
+      yield* Deferred.succeed(releaseGate, undefined);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopped");
+      expect(fake.controls[0]?.released()).toBe(1);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("ignores a parent question that arrives after interruption", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "late-question" }));
+      expect((yield* service.interrupt(run.id)).state).toBe("paused");
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "late-question",
+        kind: "question",
+        message: "Too late?",
+      });
+      yield* Effect.yieldNow;
+      const paused = yield* service.status(run.id);
+      expect(paused.state).toBe("paused");
+      expect(paused.question).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("claims a parent question before sending its reply", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "single-reply" }));
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "question-1",
+        kind: "question",
+        message: "Which answer?",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      const ipcGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextIpc(ipcGate);
+      const first = yield* service.reply(run.id, "First").pipe(Effect.forkScoped);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
+      const second = yield* Effect.flip(service.reply(run.id, "Second"));
+      expect(second._tag).toBe("InvalidSubagentRequestError");
+      yield* Deferred.succeed(ipcGate, undefined);
+      expect((yield* Fiber.join(first)).state).toBe("running");
+      expect(fake.controls[0]?.ipc.filter((message) => message.type === "parent_reply")).toEqual([
+        {
+          channel: "pi-subagents",
+          type: "parent_reply",
+          requestId: "question-1",
+          message: "First",
+        },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("notifies only the first progress and warning in a run", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const layer = SubagentService.layer({
+      notify: (notification) => notifications.push(notification),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      yield* service.start(request({ name: "bounded-notices" }));
+      for (const [kind, message] of [
+        ["progress", "First progress"],
+        ["progress", "Second progress"],
+        ["warning", "First warning"],
+        ["warning", "Second warning"],
+      ] as const)
+        fake.controls[0]?.offerIpc({
+          channel: "pi-subagents",
+          type: "contact_parent",
+          requestId: `${kind}-${message}`,
+          kind,
+          message,
+        });
+      yield* yieldUntil(() => notifications.length === 2);
+      expect(notifications).toMatchObject([
+        { type: "progress", message: "First progress", triggerTurn: true },
+        { type: "warning", message: "First warning", triggerTurn: true },
+      ]);
+      const status = yield* service.status("agent-1");
+      expect(status.progress).toBe("Second progress");
+      expect(status.warning).toBe("Second warning");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("keeps currentTool accurate while parallel tools finish", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "parallel-tools" }));
+      fake.controls[0]?.offer({
+        type: "tool_execution_start",
+        toolCallId: "tool-a",
+        toolName: "read",
+        args: {},
+      });
+      fake.controls[0]?.offer({
+        type: "tool_execution_start",
+        toolCallId: "tool-b",
+        toolName: "grep",
+        args: {},
+      });
+      fake.controls[0]?.offer({
+        type: "tool_execution_end",
+        toolCallId: "tool-a",
+        toolName: "read",
+        result: {},
+        isError: false,
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.currentTool === "grep");
+      expect((yield* service.status(run.id)).currentTool).toBe("grep");
+      fake.controls[0]?.offer({
+        type: "tool_execution_end",
+        toolCallId: "tool-b",
+        toolName: "grep",
+        result: {},
+        isError: false,
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.currentTool === undefined);
+      expect((yield* service.status(run.id)).currentTool).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("times out when an RPC transport write never completes", () => {
+    const fake = fakeChildLayer();
+    const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "blocked-write" }));
+      const sendGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextSend("steer", sendGate);
+      const sending = yield* service.send(run.id, "Continue").pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () => fake.controls[0]?.commands.some((command) => command.type === "steer") ?? false,
+      );
+      yield* TestClock.adjust("10 seconds");
+      const failure = yield* Fiber.join(sending).pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "SubagentProcessError",
+        operation: "await RPC response from",
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("fails pending RPCs immediately after a schema-invalid event", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "invalid-event-rpc" }));
+      fake.controls[0]?.dropNext("set_session_name");
+      const renaming = yield* service.rename(run.id, "renamed").pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () =>
+          fake.controls[0]?.commands.some((command) => command.type === "set_session_name") ??
+          false,
+      );
+      fake.controls[0]?.offer({ type: "tool_execution_start" });
+      const failure = yield* Fiber.join(renaming).pipe(Effect.flip);
+      expect(failure._tag).toBe("SubagentProtocolError");
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      expect((yield* service.status(run.id)).name).toBe("invalid-event-rpc");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("rejects oversized parent messages before transport", () => {
+    const fake = fakeChildLayer();
+    const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "bounded-message" }));
+      const failure = yield* Effect.flip(service.send(run.id, "x".repeat(64 * 1024 + 1)));
+      expect(failure._tag).toBe("InvalidSubagentRequestError");
+      expect(fake.controls[0]?.commands.filter((command) => command.type === "steer")).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("silently releases children when the session runtime is replaced", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const layer = SubagentService.layer({
+      notify: (notification) => notifications.push(notification),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        yield* service.start(request());
+      }).pipe(Effect.scoped, Effect.provide(layer));
+
+      expect(fake.controls[0]?.released()).toBe(1);
+      expect(notifications).toEqual([]);
+    });
   });
 });

@@ -1,14 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeDiagnosticText, sanitizeOutputText } from "../src/run/state.ts";
-import { appendTranscript, appendTranscriptDelta } from "../src/run/transcript.ts";
+import { appendTranscript } from "../src/run/transcript.ts";
 import { sanitizeTerminalText } from "../src/ui/sanitize.ts";
 
 describe("subagent transcript", () => {
-  it("assembles streaming deltas and bounds retained lines", () => {
-    let transcript = appendTranscriptDelta([], "hello ");
-    transcript = appendTranscriptDelta(transcript, "world\nnext");
-    expect(transcript).toEqual(["hello world", "next"]);
-
+  it("bounds retained lines", () => {
     const bounded = appendTranscript(
       [],
       Array.from({ length: 700 }, (_, index) => `line-${index}`).join("\n"),

@@ -71,6 +71,20 @@ describe("structured subagent session output", () => {
     );
   });
 
+  it("clips oversized tool identifiers without erasing prior activity", () => {
+    const prior = appendNoticeSessionEvent([], "parent", "Keep this", 1);
+    const events = startToolSessionEvent(prior, {
+      toolCallId: "x".repeat(256 * 1024),
+      toolName: "read",
+      args: { path: "README.md" },
+      startedAt: 2,
+    });
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ type: "notice", text: "Keep this" });
+    expect(events[1]?.type === "tool" ? events[1].toolCallId.length : 0).toBeLessThanOrEqual(1_024);
+  });
+
   it("renders task, grouped activity, a final report, and compact metadata", () => {
     const sessionEvents = appendAssistantSessionEvent(
       finishToolSessionEvent(

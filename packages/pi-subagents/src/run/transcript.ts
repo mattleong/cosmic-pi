@@ -28,18 +28,3 @@ export function appendTranscript(
   }
   return next.slice(start);
 }
-
-export function appendTranscriptDelta(
-  current: ReadonlyArray<string>,
-  delta: string,
-): ReadonlyArray<string> {
-  if (!delta) return current;
-  const normalized = delta.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
-  const parts = normalized.split("\n");
-  const next = [...current];
-  const first = parts.shift() ?? "";
-  if (next.length === 0) next.push(clipLine(first));
-  else next[next.length - 1] = clipLine(`${next[next.length - 1] ?? ""}${first}`);
-  for (const part of parts) next.push(clipLine(part));
-  return appendTranscript([], next.join("\n"));
-}

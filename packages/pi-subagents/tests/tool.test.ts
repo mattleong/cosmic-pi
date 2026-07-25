@@ -21,6 +21,7 @@ interface CapturedTool {
     ctx: ExtensionContext,
   ) => Promise<{
     readonly content: ReadonlyArray<{ readonly type: string; readonly text: string }>;
+    readonly details?: unknown;
   }>;
 }
 
@@ -59,6 +60,8 @@ const context = {
       reasoning: true,
     }),
     hasConfiguredAuth: () => true,
+    getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
+    getApiKeyAndHeaders: () => Promise.resolve({ ok: true, apiKey: "stored-key" }),
     getAvailable: () => [
       {
         provider: "openai-codex",
@@ -135,6 +138,54 @@ describe("subagent tool", () => {
     });
   });
 
+  it("transfers runtime-only authentication without exposing it in the model id", async () => {
+    let request: StartSubagentRequest | undefined;
+    const service = {
+      start: (input: StartSubagentRequest) => Effect.sync(() => ((request = input), view())),
+      waitForForeground: () => Effect.succeed(view()),
+      list: Effect.succeed([]),
+      status: () => Effect.succeed(view()),
+      send: () => Effect.succeed(view()),
+      reply: () => Effect.succeed(view()),
+      interrupt: () => Effect.succeed(view()),
+      resume: () => Effect.succeed(view()),
+      rename: () => Effect.succeed(view()),
+      stop: () => Effect.succeed(view()),
+      projection: Effect.succeed({ revision: 0, runs: [] }),
+    } satisfies SubagentServiceShape;
+    let tool: CapturedTool | undefined;
+    const pi = {
+      registerTool: (definition: unknown) => {
+        tool = definition as CapturedTool;
+      },
+      getThinkingLevel: () => "high",
+      getActiveTools: () => ["read"],
+    } as unknown as ExtensionAPI;
+    registerSubagentTool(pi, {
+      run: (effect) =>
+        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
+    });
+    const runtimeContext = {
+      ...context,
+      modelRegistry: {
+        ...context.modelRegistry,
+        getProviderAuthStatus: () => ({ configured: true, source: "runtime" }),
+        getApiKeyAndHeaders: () => Promise.resolve({ ok: true as const, apiKey: "runtime-key" }),
+      },
+    } as unknown as ExtensionContext;
+
+    await tool?.execute(
+      "call",
+      { action: "start", task: "Review auth", writeIntent: "read-only" },
+      undefined,
+      undefined,
+      runtimeContext,
+    );
+
+    expect(request?.runtimeApiKey).toBe("runtime-key");
+    expect(request?.model).toBe("openai-codex/gpt-5.6-sol");
+  });
+
   it("returns formatted status metadata and one final report without activity duplication", async () => {
     const completed = view({
       state: "completed",
@@ -195,6 +246,10 @@ describe("subagent tool", () => {
     expect(text).toContain("Final report\nViewport report.");
     expect(text).not.toContain("Activity:");
     expect(text.match(/Viewport report\./g)).toHaveLength(1);
+    expect(result?.details).toEqual({ action: "status" });
+
+    const listed = await tool?.execute("call", { action: "list" }, undefined, undefined, context);
+    expect(listed?.details).toEqual({ action: "list" });
   });
 
   it("requires write intent and lists authenticated models without a runtime", async () => {

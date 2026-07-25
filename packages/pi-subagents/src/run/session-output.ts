@@ -1,4 +1,5 @@
 import type { SubagentSessionEvent } from "./model.ts";
+import { MAX_PROTOCOL_ID_CHARS } from "./limits.ts";
 import { sanitizeDiagnosticText, sanitizeOutputText } from "./state.ts";
 
 const MAX_SESSION_EVENTS = 120;
@@ -65,6 +66,7 @@ export function appendSessionEvent(
   current: ReadonlyArray<SubagentSessionEvent>,
   event: SubagentSessionEvent,
 ): ReadonlyArray<SubagentSessionEvent> {
+  if (bytes(event) > MAX_SESSION_BYTES) return current;
   const next = [...current, event].slice(-MAX_SESSION_EVENTS);
   let retainedBytes = 0;
   let start = next.length;
@@ -114,7 +116,7 @@ export function startToolSessionEvent(
   const target = summarizeToolArguments(input.toolName, input.args);
   return appendSessionEvent(current, {
     type: "tool",
-    toolCallId: input.toolCallId,
+    toolCallId: sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS),
     toolName: sanitizeDiagnosticText(input.toolName, 200),
     ...(target ? { target } : {}),
     state: "running",
@@ -131,10 +133,11 @@ export function finishToolSessionEvent(
     readonly endedAt: number;
   },
 ): ReadonlyArray<SubagentSessionEvent> {
+  const toolCallId = sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS);
   let index = -1;
   for (let candidate = current.length - 1; candidate >= 0; candidate -= 1) {
     const event = current[candidate];
-    if (event?.type === "tool" && event.toolCallId === input.toolCallId) {
+    if (event?.type === "tool" && event.toolCallId === toolCallId) {
       index = candidate;
       break;
     }
@@ -142,7 +145,7 @@ export function finishToolSessionEvent(
   if (index < 0)
     return appendSessionEvent(current, {
       type: "tool",
-      toolCallId: input.toolCallId,
+      toolCallId,
       toolName: sanitizeDiagnosticText(input.toolName, 200),
       state: input.isError ? "failed" : "completed",
       startedAt: input.endedAt,

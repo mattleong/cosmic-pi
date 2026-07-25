@@ -10,6 +10,7 @@ export interface RunRecord {
   readonly scope: Scope.Closeable;
   process?: ChildProcessHandle | undefined;
   readonly responses: Map<string, Deferred.Deferred<RpcResponse, SubagentError>>;
+  readonly activeTools: Map<string, string>;
   nextRpcId: number;
   settlement: Deferred.Deferred<SubagentRunView>;
   readonly foregroundOutcome: Deferred.Deferred<SubagentRunView>;
@@ -18,4 +19,8 @@ export interface RunRecord {
   latestAssistantText?: string | undefined;
   pauseRequested: boolean;
   stoppedByParent: boolean;
+  cleanupPending: boolean;
+  replyPendingRequestId?: string | undefined;
+  progressTurnTriggered: boolean;
+  warningTurnTriggered: boolean;
 }

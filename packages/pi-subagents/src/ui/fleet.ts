@@ -153,12 +153,17 @@ export class SubagentFleetComponent implements Component {
     } else if (
       data === "m" &&
       selected &&
-      (selected.state === "starting" ||
-        selected.state === "running" ||
-        selected.state === "waiting_for_parent")
+      (selected.state === "running" || selected.state === "waiting_for_parent")
     ) {
       this.options.actions.message(selected.id, selected.state === "waiting_for_parent");
-    } else if (data === "n" && selected) {
+    } else if (
+      data === "n" &&
+      selected &&
+      selected.state !== "starting" &&
+      selected.state !== "stopping" &&
+      selected.state !== "stopped" &&
+      selected.state !== "failed"
+    ) {
       this.options.actions.rename(selected.id);
     }
     this.options.requestRender();
