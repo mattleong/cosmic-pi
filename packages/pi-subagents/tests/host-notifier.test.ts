@@ -11,7 +11,7 @@ describe("subagent host notifier", () => {
       type: "completed",
       id: "agent-1",
       name: "reader",
-      finalText: "## Read report\n\n- Complete.",
+      finalText: "## Read report\n\n- Complete.\n  - Nested.\n\n    const value = 1;",
     });
 
     expect(sendMessage).toHaveBeenCalledOnce();
@@ -19,7 +19,8 @@ describe("subagent host notifier", () => {
     expect(message).toMatchObject({
       customType: "pi-subagents-completed",
       display: true,
-      content: "Background subagent reader (agent-1) completed.\n\n## Read report\n\n- Complete.",
+      content:
+        "Background subagent reader (agent-1) completed.\n\n## Read report\n\n- Complete.\n  - Nested.\n\n    const value = 1;",
     });
     expect(options).toEqual({ deliverAs: "followUp", triggerTurn: true });
   });

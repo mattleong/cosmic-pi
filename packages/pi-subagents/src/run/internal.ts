@@ -13,6 +13,8 @@ export interface RunRecord {
   nextRpcId: number;
   settlement: Deferred.Deferred<SubagentRunView>;
   readonly foregroundOutcome: Deferred.Deferred<SubagentRunView>;
+  foregroundWaitPending: boolean;
+  latestAssistantText?: string | undefined;
   pauseRequested: boolean;
   stoppedByParent: boolean;
 }

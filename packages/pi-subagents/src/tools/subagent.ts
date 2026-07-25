@@ -184,34 +184,26 @@ function resolveStart(
   });
 }
 
-const formatActivity = (run: SubagentRunView): string | undefined => {
-  const lines = run.sessionEvents
-    .flatMap((event) => {
-      if (event.type === "assistant" || (event.type === "notice" && event.kind === "progress"))
-        return [];
-      if (event.type === "notice") return [`${event.kind}: ${event.text}`];
-      const glyph = event.state === "running" ? "▶" : event.state === "failed" ? "×" : "✓";
-      return [`${glyph} ${event.toolName}${event.target ? `  ${event.target}` : ""}`];
-    })
-    .slice(-12);
-  return lines.length > 0 ? `Activity:\n${lines.join("\n")}` : undefined;
-};
-
 const formatRun = (run: SubagentRunView, detailed = false): string => {
   const header = `${run.id} ${run.name} · ${run.state} · ${run.writeIntent} · ${run.model}:${run.effort}`;
   if (!detailed) return header;
+  const field = (label: string, value: string): string => `  ${label.padEnd(10)} ${value}`;
   const formatted = [
-    header,
-    `context=${run.context} execution=${run.execution}${run.pid ? ` pid=${run.pid}` : ""}`,
-    run.sessionFile ? `session=${run.sessionFile}` : undefined,
-    run.currentTool ? `tool=${run.currentTool}` : undefined,
-    run.progress ? `progress=${run.progress}` : undefined,
-    run.warning ? `warning=${run.warning}` : undefined,
-    run.question ? `question=${run.question.message}` : undefined,
-    run.error ? `error=${run.error}` : undefined,
-    `usage=${run.usage.totalTokens} tokens · $${run.usage.cost.toFixed(4)}`,
-    formatActivity(run),
-    run.finalText ? `Final report:\n${run.finalText}` : undefined,
+    "Subagent status",
+    field("Name", run.name),
+    field("ID", run.id),
+    field("State", run.state),
+    field("Model", `${run.model} · ${run.effort}`),
+    field("Mode", `${run.execution} · ${run.context}`),
+    field("Intent", run.writeIntent),
+    run.pid ? field("Process", `pid ${run.pid}`) : undefined,
+    field("Usage", `${run.usage.totalTokens} tokens · $${run.usage.cost.toFixed(4)}`),
+    run.currentTool ? field("Tool", run.currentTool) : undefined,
+    run.progress ? field("Progress", run.progress) : undefined,
+    run.warning ? field("Warning", run.warning) : undefined,
+    run.question ? field("Question", run.question.message) : undefined,
+    run.error ? field("Error", run.error) : undefined,
+    run.finalText ? `\nFinal report\n${run.finalText}` : undefined,
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
@@ -330,7 +322,13 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
     },
     renderResult(result, { isPartial, expanded }, theme) {
       const details = result.details as SubagentToolDetails | undefined;
-      if (expanded && !isPartial && details?.action !== "list" && details?.runs?.length === 1) {
+      if (
+        expanded &&
+        !isPartial &&
+        details?.action !== "list" &&
+        details?.action !== "status" &&
+        details?.runs?.length === 1
+      ) {
         const run = details.runs[0];
         if (run) return renderSubagentSessionOutput(run, theme, { now: synchronousNow() });
       }

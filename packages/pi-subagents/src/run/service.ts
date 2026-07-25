@@ -189,10 +189,17 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         lastActivityAt: now,
         currentTool: undefined,
         question: undefined,
+        ...(state === "completed" && record.latestAssistantText
+          ? { finalText: record.latestAssistantText }
+          : {}),
         ...(error ? { error } : {}),
       }));
       Deferred.doneUnsafe(record.settlement, Effect.succeed(view));
-      Deferred.doneUnsafe(record.foregroundOutcome, Effect.succeed(view));
+      const deliveredToForeground = record.foregroundWaitPending;
+      if (deliveredToForeground) {
+        record.foregroundWaitPending = false;
+        Deferred.doneUnsafe(record.foregroundOutcome, Effect.succeed(view));
+      }
       const evicted = yield* withLock(
         Effect.sync(() => {
           if (records.size <= MAX_RETAINED) return [] as RunRecord[];
@@ -222,7 +229,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         concurrency: 8,
         discard: true,
       });
-      if (record.view.execution === "background") {
+      if (!deliveredToForeground) {
         if (state === "completed")
           notify({
             type: "completed",
@@ -321,6 +328,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               nextRpcId: 1,
               settlement,
               foregroundOutcome,
+              foregroundWaitPending: request.execution === "foreground",
               pauseRequested: false,
               stoppedByParent: false,
             };
@@ -350,9 +358,24 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           const process = yield* childProcesses
             .spawn(launch)
             .pipe(Effect.provideService(Scope.Scope, scope));
-          reserved.process = process;
-          reserved.view = { ...reserved.view, pid: process.pid };
-          publish();
+          const attached = yield* withLock(
+            Effect.sync(() => {
+              if (
+                reserved.stoppedByParent ||
+                reserved.view.state === "stopping" ||
+                reserved.view.state === "stopped"
+              )
+                return false;
+              reserved.process = process;
+              reserved.view = { ...reserved.view, pid: process.pid };
+              publish();
+              return true;
+            }),
+          );
+          if (!attached)
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${reserved.view.id} was stopped during startup.`,
+            });
           yield* Stream.fromQueue(process.events).pipe(
             Stream.runForEach((event) =>
               handleWireEvent(reserved, event).pipe(
@@ -376,14 +399,29 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               message: `Model ${request.model} does not support requested effort ${request.effort}; effective level was ${state.thinkingLevel}.`,
             });
           const startedAt = yield* Clock.currentTimeMillis;
-          reserved.view = {
-            ...reserved.view,
-            state: "running",
-            effort: state.thinkingLevel as StartSubagentRequest["effort"],
-            lastActivityAt: startedAt,
-            ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
-          };
-          publish();
+          const activated = yield* withLock(
+            Effect.sync(() => {
+              if (
+                reserved.stoppedByParent ||
+                reserved.view.state === "stopping" ||
+                reserved.view.state === "stopped"
+              )
+                return false;
+              reserved.view = {
+                ...reserved.view,
+                state: "running",
+                effort: state.thinkingLevel as StartSubagentRequest["effort"],
+                lastActivityAt: startedAt,
+                ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
+              };
+              publish();
+              return true;
+            }),
+          );
+          if (!activated)
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${reserved.view.id} was stopped during startup.`,
+            });
           yield* rpc(reserved, { type: "prompt", message: taskPrompt(request, peerNotice) });
           yield* sendPeerNotices(reserved.view.id);
           return snapshotView(reserved.view);
@@ -393,7 +431,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           Effect.onError((cause) =>
             Effect.gen(function* () {
               const message = sanitizeDiagnosticText(Cause.pretty(cause), MAX_ERROR_CHARS);
-              yield* settle(reserved, "failed", message);
+              if (!reserved.stoppedByParent) yield* settle(reserved, "failed", message);
               yield* Scope.close(scope, Exit.void);
             }),
           ),
@@ -402,7 +440,15 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     );
 
   const waitForForeground: SubagentServiceShape["waitForForeground"] = (id) =>
-    Effect.flatMap(requireRecord(id), (record) => Deferred.await(record.foregroundOutcome));
+    Effect.flatMap(requireRecord(id), (record) =>
+      Deferred.await(record.foregroundOutcome).pipe(
+        Effect.onInterrupt(() =>
+          Effect.sync(() => {
+            record.foregroundWaitPending = false;
+          }),
+        ),
+      ),
+    );
   const list = withLock(
     Effect.sync(() => sortRuns([...records.values()].map((record) => snapshotView(record.view)))),
   );
@@ -426,16 +472,30 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         });
       yield* rpc(record, { type: "steer", message: message.trim() });
       const now = yield* Clock.currentTimeMillis;
-      return yield* mutateView(record, (current) => ({
-        ...current,
-        transcript: appendTranscript(current.transcript, `parent guidance: ${message.trim()}`),
-        sessionEvents: appendNoticeSessionEvent(
-          current.sessionEvents,
-          "parent",
-          `Guidance: ${message.trim()}`,
-          now,
-        ),
-      }));
+      return yield* withLock(
+        Effect.gen(function* () {
+          if (record.view.state !== "running" && record.view.state !== "starting")
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${id} stopped before guidance was recorded.`,
+            });
+          record.view = {
+            ...record.view,
+            lastActivityAt: now,
+            transcript: appendTranscript(
+              record.view.transcript,
+              `parent guidance: ${message.trim()}`,
+            ),
+            sessionEvents: appendNoticeSessionEvent(
+              record.view.sessionEvents,
+              "parent",
+              `Guidance: ${message.trim()}`,
+              now,
+            ),
+          };
+          publish();
+          return snapshotView(record.view);
+        }),
+      );
     });
 
   const reply: SubagentServiceShape["reply"] = (id, message) =>
@@ -444,7 +504,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         return yield* new InvalidSubagentRequestError({ message: "Reply message is required." });
       const record = yield* requireRecord(id);
       const question = record.view.question;
-      if (!question)
+      if (record.view.state !== "waiting_for_parent" || !question)
         return yield* new InvalidSubagentRequestError({
           message: `Subagent ${id} has no pending parent question.`,
         });
@@ -462,18 +522,32 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       };
       yield* process.sendIpc(envelope);
       const now = yield* Clock.currentTimeMillis;
-      return yield* mutateView(record, (current) => ({
-        ...current,
-        state: "running",
-        question: undefined,
-        transcript: appendTranscript(current.transcript, `parent reply: ${message.trim()}`),
-        sessionEvents: appendNoticeSessionEvent(
-          current.sessionEvents,
-          "parent",
-          `Reply: ${message.trim()}`,
-          now,
-        ),
-      }));
+      return yield* withLock(
+        Effect.gen(function* () {
+          if (
+            record.view.state !== "waiting_for_parent" ||
+            record.view.question?.requestId !== question.requestId
+          )
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${id} no longer has that pending parent question.`,
+            });
+          record.view = {
+            ...record.view,
+            state: "running",
+            question: undefined,
+            lastActivityAt: now,
+            transcript: appendTranscript(record.view.transcript, `parent reply: ${message.trim()}`),
+            sessionEvents: appendNoticeSessionEvent(
+              record.view.sessionEvents,
+              "parent",
+              `Reply: ${message.trim()}`,
+              now,
+            ),
+          };
+          publish();
+          return snapshotView(record.view);
+        }),
+      );
     });
 
   const interrupt: SubagentServiceShape["interrupt"] = (id) =>
@@ -528,11 +602,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           }
           selected.settlement = nextSettlement;
           selected.pauseRequested = false;
+          selected.latestAssistantText = undefined;
           selected.view = {
             ...selected.view,
             state: "starting",
             endedAt: undefined,
             error: undefined,
+            finalText: undefined,
             lastActivityAt: now,
           };
           publish();

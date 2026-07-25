@@ -29,4 +29,4 @@ Fleet controls:
 - `m`, `i`, `r`, `n`, and `x` message, interrupt, resume, rename, and stop the selected run.
 - `Esc` closes the inspector.
 
-Structured session output groups adjacent repeated tools while retaining compact target summaries, wraps long targets and paths, shows state-specific idle messages and completion age, and labels the child's delivered response as **Final report — sent to parent**. Background completions are delivered to the parent immediately. The main agent operates the fleet through the `subagent` tool.
+Structured session output groups adjacent repeated tools while retaining compact target summaries, wraps long targets and paths, shows state-specific idle messages and completion age, and labels the child's delivered response as **Final report — sent to parent**. `subagent status` returns a compact labeled metadata summary without activity history; full activity remains in `/subagents`. Background completions are delivered to the parent immediately. The main agent operates the fleet through the `subagent` tool.

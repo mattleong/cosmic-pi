@@ -24,7 +24,28 @@ export interface DiagnosticSanitizerOptions {
 
 const replaceControlCharacters = (value: string): string => value.replace(/\p{Cc}/gu, " ");
 
+const replaceContentControlCharacters = (value: string): string =>
+  value
+    .replaceAll("\r\n", "\n")
+    .replaceAll("\r", "\n")
+    .replace(/\p{Cc}/gu, (character) =>
+      character === "\n" || character === "\t" ? character : " ",
+    );
+
 export const stripAnsi = (value: string): string => value.replace(ANSI_ESCAPE_REGEXP, "");
+
+const redactSensitiveText = (message: string, extraPatterns: readonly RegExp[] = []): string => {
+  let redacted = stripAnsi(message)
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-[REDACTED]")
+    .replace(/\bacct_[A-Za-z0-9_-]{6,}\b/g, "acct_[REDACTED]")
+    .replace(
+      /(["']?(?:access|access_token|refresh|refresh_token|token|api[_-]?key|authorization|accountId|account_id|teamId|team_id)["']?\s*[:=]\s*["']?)([^"',\s}\]]+)/gi,
+      "$1[REDACTED]",
+    );
+  for (const pattern of extraPatterns) redacted = redacted.replace(pattern, REDACTED);
+  return redacted.replace(/\[REDACTED\](?:\])+/g, REDACTED);
+};
 
 export function decodeJwtPayloadText(token: string): string | undefined {
   const payload = token.split(".")[1];
@@ -46,20 +67,22 @@ export function sanitizeDiagnosticError(
   options: DiagnosticSanitizerOptions = {},
 ): string {
   const maximumLength = options.maximumLength ?? DIAGNOSTIC_MAX_LENGTH;
-  let redacted = stripAnsi(message)
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-[REDACTED]")
-    .replace(/\bacct_[A-Za-z0-9_-]{6,}\b/g, "acct_[REDACTED]")
-    .replace(
-      /(["']?(?:access|access_token|refresh|refresh_token|token|api[_-]?key|authorization|accountId|account_id|teamId|team_id)["']?\s*[:=]\s*["']?)([^"',\s}\]]+)/gi,
-      "$1[REDACTED]",
-    );
-  for (const pattern of options.extraPatterns ?? []) redacted = redacted.replace(pattern, REDACTED);
-  redacted = replaceControlCharacters(redacted)
-    .replace(/\[REDACTED\](?:\])+/g, REDACTED)
-    .replace(/ +/g, " ")
-    .trim();
+  let redacted = redactSensitiveText(message, options.extraPatterns ?? []);
+  redacted = replaceControlCharacters(redacted).replace(/ +/g, " ").trim();
   const sanitized = redacted || "Unknown error.";
+  if (sanitized.length <= maximumLength) return sanitized;
+  return `${sanitized.slice(0, Math.max(0, maximumLength - 1)).trimEnd()}…`;
+}
+
+/** Redact secrets and terminal controls without collapsing Markdown-significant whitespace. */
+export function sanitizeDiagnosticContent(
+  content: string,
+  options: DiagnosticSanitizerOptions = {},
+): string {
+  const maximumLength = options.maximumLength ?? DIAGNOSTIC_MAX_LENGTH;
+  const sanitized = replaceContentControlCharacters(
+    redactSensitiveText(content, options.extraPatterns ?? []),
+  );
   if (sanitized.length <= maximumLength) return sanitized;
   return `${sanitized.slice(0, Math.max(0, maximumLength - 1)).trimEnd()}…`;
 }

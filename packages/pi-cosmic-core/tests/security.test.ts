@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { maskIdentifier, redactDiagnosticValue, sanitizeDiagnosticError } from "../index.ts";
+import {
+  maskIdentifier,
+  redactDiagnosticValue,
+  sanitizeDiagnosticContent,
+  sanitizeDiagnosticError,
+} from "../index.ts";
 
 describe("security formatting", () => {
   it("redacts provider credentials and identifiers", () => {
@@ -10,6 +15,12 @@ describe("security formatting", () => {
     expect(message).not.toContain("abcdefgh");
     expect(message).not.toContain("123456789");
     expect(message).toContain("[REDACTED]");
+  });
+
+  it("preserves Markdown whitespace while redacting content", () => {
+    expect(sanitizeDiagnosticContent("- parent\n  - child\n\n    token=secret-value\n\tcode")).toBe(
+      "- parent\n  - child\n\n    token=[REDACTED]\n\tcode",
+    );
   });
 
   it("redacts nested fields and masks display identifiers", () => {

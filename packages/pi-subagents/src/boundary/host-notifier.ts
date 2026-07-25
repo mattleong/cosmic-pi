@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { sanitizeDiagnosticError } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 
 export type SubagentNotification =
   | {
@@ -24,16 +24,8 @@ export type SubagentNotification =
 
 export type SubagentNotifier = (notification: SubagentNotification) => void;
 
-const clip = (value: string): string => {
-  const sanitized = value
-    .split(/\r?\n/)
-    .map((line) => (line.trim() ? sanitizeDiagnosticError(line, { maximumLength: 32 * 1024 }) : ""))
-    .join("\n")
-    .trim();
-  return sanitized.length <= 32 * 1024
-    ? sanitized
-    : `${sanitized.slice(0, 32 * 1024 - 1).trimEnd()}…`;
-};
+const clip = (value: string): string =>
+  sanitizeDiagnosticContent(value, { maximumLength: 32 * 1024 }).trim();
 
 export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
   return (notification) => {

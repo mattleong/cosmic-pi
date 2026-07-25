@@ -135,7 +135,7 @@ describe("subagent tool", () => {
     });
   });
 
-  it("returns structured activity and one final report without raw transcript duplication", async () => {
+  it("returns formatted status metadata and one final report without activity duplication", async () => {
     const completed = view({
       state: "completed",
       endedAt: 2,
@@ -188,9 +188,12 @@ describe("subagent tool", () => {
       context,
     );
     const text = result?.content[0]?.text ?? "";
-    expect(text).toContain("Activity:\n✓ read  README.md");
-    expect(text).toContain("Final report:\nViewport report.");
-    expect(text).not.toContain("Recent transcript");
+    expect(text).toContain("Subagent status");
+    expect(text).toContain("Name       auth-review");
+    expect(text).toContain("ID         agent-1");
+    expect(text).toContain("Model      openai-codex/gpt-5.6-sol · high");
+    expect(text).toContain("Final report\nViewport report.");
+    expect(text).not.toContain("Activity:");
     expect(text.match(/Viewport report\./g)).toHaveLength(1);
   });
 

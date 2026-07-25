@@ -6,7 +6,7 @@
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
 import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -85,6 +85,21 @@ const processError = (operation: string, error?: unknown) =>
           ? error
           : `Unable to ${operation} subagent process.`,
   });
+
+export function safeSubagentDirectorySegment(value: string): string {
+  if (/^[A-Za-z0-9_-]{1,128}$/.test(value)) return value;
+  return `id-${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
+}
+
+export const requestCooperativeAbort = (
+  send: (command: RpcCommand) => Effect.Effect<void, SubagentProcessError>,
+): Effect.Effect<void> =>
+  send({ type: "abort" }).pipe(
+    Effect.interruptible,
+    Effect.timeoutOption("250 millis"),
+    Effect.catch(() => Effect.void),
+    Effect.asVoid,
+  );
 
 function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
   return {
@@ -203,7 +218,12 @@ function appendLineParser(
 }
 
 const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: ChildLaunchRequest) {
-  const runDir = join(getAgentDir(), "subagents", request.parentSessionId, request.runId);
+  const runDir = join(
+    getAgentDir(),
+    "subagents",
+    safeSubagentDirectorySegment(request.parentSessionId),
+    safeSubagentDirectorySegment(request.runId),
+  );
   yield* Effect.tryPromise({
     try: () => mkdir(runDir, { recursive: true, mode: 0o700 }),
     catch: (error) => processError("create subagent run directory", error),
@@ -374,17 +394,23 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
           try: () => terminateTree(child, mode),
           catch: (error) => processError("terminate", error),
         });
-      const release = send({ type: "abort" }).pipe(
-        Effect.catch(() => Effect.void),
+      const release = requestCooperativeAbort(send).pipe(
         Effect.andThen(Effect.sleep("100 millis")),
         Effect.andThen(terminate("graceful").pipe(Effect.catch(() => Effect.void))),
-        Effect.andThen(Deferred.await(exited).pipe(Effect.timeoutOption("2 seconds"))),
+        Effect.andThen(
+          Deferred.await(exited).pipe(Effect.interruptible, Effect.timeoutOption("2 seconds")),
+        ),
         Effect.flatMap((outcome) =>
           outcome._tag === "Some"
             ? Effect.void
             : terminate("force").pipe(
                 Effect.catch(() => Effect.void),
-                Effect.andThen(Deferred.await(exited).pipe(Effect.timeoutOption("2 seconds"))),
+                Effect.andThen(
+                  Deferred.await(exited).pipe(
+                    Effect.interruptible,
+                    Effect.timeoutOption("2 seconds"),
+                  ),
+                ),
                 Effect.asVoid,
               ),
         ),

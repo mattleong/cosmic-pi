@@ -295,9 +295,7 @@ export function renderSubagentSessionOutput(
     container.addChild(new Text(theme.fg("dim", emptyActivityLabel(run)), 2, 0));
   }
 
-  const assistantOutput =
-    run.finalText ??
-    [...run.sessionEvents].reverse().find((event) => event.type === "assistant")?.text;
+  const assistantOutput = isActiveRunState(run.state) ? undefined : run.finalText;
   if (assistantOutput) {
     container.addChild(new Spacer(1));
     container.addChild(

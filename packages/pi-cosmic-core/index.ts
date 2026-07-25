@@ -125,6 +125,7 @@ export {
   decodeJwtPayloadText,
   maskIdentifier,
   redactDiagnosticValue,
+  sanitizeDiagnosticContent,
   sanitizeDiagnosticError,
   stripAnsi,
   type DiagnosticSanitizerOptions,

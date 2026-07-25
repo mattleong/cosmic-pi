@@ -43,6 +43,18 @@ const projection: SubagentProjection = {
     },
   ],
 };
+const completedProjection: SubagentProjection = {
+  revision: 2,
+  runs: [
+    {
+      ...projection.runs[0]!,
+      state: "completed",
+      endedAt: 2_000,
+      lastActivityAt: 2_000,
+      question: undefined,
+    },
+  ],
+};
 
 const makeComponent = (
   width: number,
@@ -83,24 +95,12 @@ describe("/subagents fleet UI", () => {
   });
 
   it("shows completion age in fleet rows", () => {
-    const completed: SubagentProjection = {
-      revision: 2,
-      runs: [
-        {
-          ...projection.runs[0]!,
-          state: "completed",
-          endedAt: 2_000,
-          lastActivityAt: 2_000,
-          question: undefined,
-        },
-      ],
-    };
-    const { lines } = makeComponent(80, 18, completed);
+    const { lines } = makeComponent(80, 18, completedProjection);
     expect(lines.join("\n")).toContain("completed 18s ago");
   });
 
   it("wraps structured narrow details without showing raw transcript duplicates", () => {
-    const { component } = makeComponent(42, 24);
+    const { component } = makeComponent(42, 24, completedProjection);
     component.handleInput("\r");
     const lines = component.render(42);
     const rendered = lines.join("\n");
@@ -113,7 +113,7 @@ describe("/subagents fleet UI", () => {
   });
 
   it("scrolls detail output with ctrl+k and ctrl+j", () => {
-    const { component } = makeComponent(42, 12);
+    const { component } = makeComponent(42, 12, completedProjection);
     component.handleInput("\r");
     const bottom = component.render(42).join("\n");
     expect(bottom).toContain("of");

@@ -82,8 +82,11 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         transcript: appendTranscript(current.transcript, `question for parent: ${message}`),
         sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "question", message, now),
       }));
-      Deferred.doneUnsafe(record.foregroundOutcome, Effect.succeed(view));
-      if (record.view.execution === "background")
+      const deliveredToForeground = record.foregroundWaitPending;
+      if (deliveredToForeground) {
+        record.foregroundWaitPending = false;
+        Deferred.doneUnsafe(record.foregroundOutcome, Effect.succeed(view));
+      } else {
         notify({
           type: "question",
           id: view.id,
@@ -91,25 +94,29 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           requestId: envelope.requestId,
           message,
         });
+      }
     });
 
   const handleEnvelope = (record: RunRecord, value: unknown) =>
     decodeChildEnvelope(value).pipe(
       Effect.mapError(() => protocolError("Subagent emitted an invalid protocol event.")),
       Effect.flatMap((envelope) => {
-        if ("channel" in envelope) return handleContact(record, envelope);
-        switch (envelope.type) {
-          case "response": {
-            if (envelope.id) {
-              const response = record.responses.get(envelope.id);
-              if (response) Deferred.doneUnsafe(response, Effect.succeed(envelope));
-            }
-            return Effect.void;
+        if (!("channel" in envelope) && envelope.type === "response") {
+          if (envelope.id) {
+            const response = record.responses.get(envelope.id);
+            if (response) Deferred.doneUnsafe(response, Effect.succeed(envelope));
           }
-          default:
-            if (record.view.state === "failed" || record.view.state === "stopped")
-              return Effect.void;
+          return Effect.void;
         }
+        if (
+          record.stoppedByParent ||
+          record.view.state === "stopping" ||
+          record.view.state === "completed" ||
+          record.view.state === "failed" ||
+          record.view.state === "stopped"
+        )
+          return Effect.void;
+        if ("channel" in envelope) return handleContact(record, envelope);
         switch (envelope.type) {
           case "agent_start":
             return Clock.currentTimeMillis.pipe(
@@ -144,7 +151,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                   ),
                   Effect.asVoid,
                 )
-              : record.stoppedByParent || record.view.state === "stopping"
+              : record.stoppedByParent
                 ? Effect.void
                 : settle(record, "completed").pipe(Effect.asVoid);
           case "message_update": {
@@ -169,6 +176,9 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
               Effect.flatMap((message) => {
                 if (!message) return Effect.void;
                 const text = assistantText(message);
+                record.latestAssistantText = text
+                  ? sanitizeOutputText(text, MAX_FINAL_TEXT_CHARS)
+                  : undefined;
                 return Clock.currentTimeMillis.pipe(
                   Effect.flatMap((now) =>
                     mutateView(record, (current) => ({
@@ -176,7 +186,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                       lastActivityAt: now,
                       ...(text
                         ? {
-                            finalText: sanitizeOutputText(text, MAX_FINAL_TEXT_CHARS),
                             sessionEvents: appendAssistantSessionEvent(
                               current.sessionEvents,
                               text,

@@ -141,6 +141,20 @@ describe("structured subagent session output", () => {
     expect(rendered).toContain("session  /tmp/session.jsonl");
   });
 
+  it("does not label stale assistant text as a final report while active", () => {
+    const rendered = sanitizeTerminalText(
+      renderSubagentSessionOutput(
+        runView({ state: "running", endedAt: undefined, finalText: "Old report." }),
+        theme,
+        { now: 5_000 },
+      )
+        .render(80)
+        .join("\n"),
+    );
+    expect(rendered).not.toContain("Final report");
+    expect(rendered).not.toContain("Old report.");
+  });
+
   it.each([
     ["starting", "Starting…"],
     ["running", "Working…"],

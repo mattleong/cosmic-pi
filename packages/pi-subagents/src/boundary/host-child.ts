@@ -109,6 +109,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
     description:
       "Send progress, a warning, or a blocking question to the parent agent supervising this subagent.",
     parameters: ContactParentParameters,
+    executionMode: "sequential",
     async execute(_toolCallId, params, signal) {
       const requestId = `contact-${process.pid}-${nextRequest++}`;
       const envelope = {
@@ -131,6 +132,10 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
           pending.delete(requestId);
           reject(new Error("Parent question was cancelled."));
         };
+        if (signal?.aborted) {
+          reject(new Error("Parent question was cancelled."));
+          return;
+        }
         pending.set(requestId, {
           resolve: (message) => {
             signal?.removeEventListener("abort", abort);
