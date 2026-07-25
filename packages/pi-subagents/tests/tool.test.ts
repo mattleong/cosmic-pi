@@ -9,6 +9,9 @@ import { registerSubagentTool, type SubagentToolInput } from "../src/tools/subag
 
 interface CapturedTool {
   readonly name: string;
+  readonly renderShell?: "default" | "self";
+  readonly renderCall?: (...args: ReadonlyArray<unknown>) => unknown;
+  readonly renderResult?: (...args: ReadonlyArray<unknown>) => unknown;
   readonly promptGuidelines?: ReadonlyArray<string>;
   readonly execute: (
     id: string,
@@ -115,6 +118,9 @@ describe("subagent tool", () => {
     );
 
     expect(tool?.name).toBe("subagent");
+    expect(tool?.renderShell).toBe("default");
+    expect(tool?.renderCall).toBeTypeOf("function");
+    expect(tool?.renderResult).toBeTypeOf("function");
     expect(tool?.promptGuidelines?.join(" ")).toContain("one writer");
     expect(result?.content[0]?.text).toContain("agent-1");
     expect(request).toMatchObject({

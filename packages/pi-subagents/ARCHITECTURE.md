@@ -13,7 +13,7 @@
 - `src/boundary/host-notifier.ts` — exception-safe parent transcript delivery.
 - `src/boundary/host-ui.ts` — synchronous immutable fleet projection bridge.
 - `src/run/` — run model, protocol decoding, errors, transcript bounds, projection, and scoped fleet owner.
-- `src/tools/subagent.ts` — the single agent-facing management tool.
+- `src/tools/subagent.ts` — the single agent-facing management tool, with cooperative `pi-code-previews` shell rendering.
 - `src/settings/controller.ts` — `/subagents` command registration.
 - `src/ui/` — pure responsive fleet presentation and terminal-text sanitization.
 

@@ -37,20 +37,21 @@
   "scripts": {
     "check": "pnpm typecheck && pnpm lint && pnpm format:check",
     "validate": "pnpm check && pnpm test",
-    "pretypecheck": "pnpm --filter pi-cosmic-core build",
+    "pretypecheck": "pnpm --filter pi-cosmic-core build && pnpm --filter pi-code-previews build",
     "typecheck": "tsc --noEmit",
     "effect:diagnostics": "effect-language-service diagnostics --project tsconfig.json",
     "lint": "oxlint --deny-warnings .",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "pretest": "pnpm --filter pi-cosmic-core build",
+    "pretest": "pnpm --filter pi-cosmic-core build && pnpm --filter pi-code-previews build",
     "test": "vitest run",
     "prepublishOnly": "pnpm validate",
     "pack:dry": "pnpm pack --dry-run"
   },
   "dependencies": {
     "effect": "catalog:",
+    "pi-code-previews": "workspace:*",
     "pi-cosmic-core": "workspace:*",
     "typebox": "1.1.38"
   },

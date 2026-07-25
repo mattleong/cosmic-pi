@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import { loadCodePreviewSettings } from "pi-code-previews";
 import {
   captureSessionHost,
   isProjectTrusted,
@@ -55,9 +56,6 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
   const run = <A, E>(effect: Effect.Effect<A, E, SubagentApplication>, signal?: AbortSignal) =>
     slot.run(effect, signal);
 
-  registerSubagentTool(pi, {
-    run: (effect, signal) => run(effect, signal),
-  });
   registerSubagentManagerCommand(pi, bridge, {
     stop: (id) => run(SubagentService.use((service) => service.stop(id))).then(() => undefined),
     interrupt: (id) =>
@@ -76,15 +74,22 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
     bridge.clear();
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable") return slot.shutdown().then(() => undefined);
-    return slot
-      .start(
-        {
-          ctx,
-          cwd: captured.cwd,
-          projectTrusted: isProjectTrusted(ctx),
-        },
-        captured.signal,
-      )
+    const projectTrusted = isProjectTrusted(ctx);
+    return loadCodePreviewSettings(captured.cwd, projectTrusted)
+      .catch(() => undefined)
+      .then(() => {
+        registerSubagentTool(pi, {
+          run: (effect, signal) => run(effect, signal),
+        });
+        return slot.start(
+          {
+            ctx,
+            cwd: captured.cwd,
+            projectTrusted,
+          },
+          captured.signal,
+        );
+      })
       .then(() => undefined);
   });
 

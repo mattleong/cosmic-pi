@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
 
 describe("subagent Pi registration", () => {
-  it("registers one tool, one command, and session lifecycle events", () => {
+  it("defers the agent tool until session settings load", () => {
     const tools: string[] = [];
     const commands: string[] = [];
     const events: string[] = [];
@@ -16,7 +16,7 @@ describe("subagent Pi registration", () => {
 
     registerSubagentApplication(pi);
 
-    expect(tools).toEqual(["subagent"]);
+    expect(tools).toEqual([]);
     expect(commands).toEqual(["subagents"]);
     expect(events).toEqual(["session_start", "turn_end", "session_shutdown"]);
   });

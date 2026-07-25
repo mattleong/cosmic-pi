@@ -1,8 +1,14 @@
 // Pi tool execution is a Promise-shaped host boundary.
 // @effect-diagnostics effect/asyncFunction:off
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  defineTool,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import { withCodePreviewShell } from "pi-code-previews";
 import { Type, type Static } from "typebox";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import type {
@@ -12,20 +18,23 @@ import type {
   SubagentRunView,
 } from "../run/model.ts";
 import { SubagentService } from "../run/service.ts";
+import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
+
+const ACTIONS = [
+  "start",
+  "list",
+  "status",
+  "models",
+  "send",
+  "reply",
+  "interrupt",
+  "resume",
+  "rename",
+  "stop",
+] as const;
 
 const SubagentToolParameters = Type.Object({
-  action: StringEnum([
-    "start",
-    "list",
-    "status",
-    "models",
-    "send",
-    "reply",
-    "interrupt",
-    "resume",
-    "rename",
-    "stop",
-  ] as const),
+  action: StringEnum(ACTIONS),
   task: Type.Optional(Type.String({ description: "Task for action=start." })),
   name: Type.Optional(
     Type.String({ description: "Optional display name, or new name for rename." }),
@@ -59,6 +68,12 @@ const SubagentToolParameters = Type.Object({
 });
 
 export type SubagentToolInput = Static<typeof SubagentToolParameters>;
+
+export interface SubagentToolDetails {
+  readonly action: (typeof ACTIONS)[number];
+  readonly runs?: ReadonlyArray<SubagentRunView>;
+  readonly models?: ReadonlyArray<SubagentModelView>;
+}
 
 export interface SubagentToolRuntime {
   readonly run: <A, E>(
@@ -207,7 +222,7 @@ function availableModels(
 }
 
 export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRuntime): void {
-  pi.registerTool({
+  const tool = defineTool({
     name: "subagent",
     label: "Subagent",
     description:
@@ -240,7 +255,7 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
                   : "No matching authenticated models.",
             },
           ],
-          details: { models },
+          details: { action: input.action, models } satisfies SubagentToolDetails,
         };
       }
 
@@ -286,8 +301,37 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
                 : "No subagent runs.",
           },
         ],
-        details: { action: input.action, runs },
+        details: { action: input.action, runs } satisfies SubagentToolDetails,
       };
     },
+    renderCall(args, theme) {
+      const action = args.action ?? "...";
+      const target = sanitizeTerminalLine(
+        args.runId ?? args.name ?? args.task ?? args.query ?? args.message ?? "",
+      ).slice(0, 160);
+      return new Text(
+        `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("muted", action)}${target ? ` ${theme.fg("dim", target)}` : ""}`,
+        0,
+        0,
+      );
+    },
+    renderResult(result, { isPartial, expanded }, theme) {
+      let text = sanitizeTerminalText(
+        result.content
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("\n"),
+      );
+      if (!expanded) {
+        const lines = text.split("\n");
+        if (lines.length > 12) text = `${lines.slice(0, 12).join("\n")}\n…`;
+      }
+      return new Text(
+        theme.fg(isPartial ? "warning" : "toolOutput", text || (isPartial ? "Working…" : "Done")),
+        0,
+        0,
+      );
+    },
   });
+  pi.registerTool(withCodePreviewShell(tool));
 }

@@ -9,6 +9,7 @@
 - `packages/pi-code-previews/` contains the code-preview pi extension.
 - `packages/pi-cosmic-core/` contains shared Effect-first runtime foundations for the extension packages.
 - `packages/pi-cosmic-ui/` contains composable shared UI elements, including the responsive footer.
+- `packages/pi-subagents/` contains the session-scoped foreground/background subagent extension.
 - The repository is a pnpm workspace. Keep shared workspace configuration at the root and package-specific source, tests, and build configuration inside each package.
 
 ## Package layout conventions
@@ -88,6 +89,11 @@ ARCHITECTURE.md
 10. **Tests:** package-root `tests/` (not colocated under `src/`). File suffix is always `*.test.ts` (never `*.spec.ts`). Large packages should mirror `src/`; smaller packages may use flat names without package-name prefixes.
 11. **Docs:** every package keeps `ARCHITECTURE.md` with a source map. Package-level `AGENTS.md` is optional and must not contradict this file.
 12. **Compat:** temporary legacy call shapes go under an explicit `compat/` file or folder, not a second architectural door.
+13. **Tool rendering:** every new extension-owned agent tool must render through `pi-code-previews` using `withCodePreviewShell`.
+
+- List `pi-code-previews` as a runtime dependency.
+- When trusted project settings apply, call `loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted())` before wrapping and registering tools inside `session_start`; the wrapper captures its shell mode at registration time.
+- Wrap only tools owned by the extension, never tools registered by another extension.
 
 Shared Effect platform code belongs in `pi-cosmic-core`; do not invent parallel runtime helpers in feature packages.
 
@@ -119,6 +125,7 @@ src/
 - [ ] No new re-export hub files; no giant-file merges to “simplify”
 - [ ] Tests are `tests/**/*.test.ts`
 - [ ] `ARCHITECTURE.md` source map updated when layout changed
+- [ ] Every new extension-owned agent tool uses the `pi-code-previews` cooperative shell
 
 ## Effect architecture
 
