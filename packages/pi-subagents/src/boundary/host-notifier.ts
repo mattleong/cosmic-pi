@@ -42,7 +42,6 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
           customType: `pi-subagents-${notification.type}`,
           content,
           display: true,
-          details: notification,
         },
         {
           deliverAs: notification.type === "question" ? "steer" : "followUp",

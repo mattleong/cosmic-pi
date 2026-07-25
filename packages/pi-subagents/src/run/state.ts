@@ -1,4 +1,4 @@
-import { freezeSnapshot, sanitizeDiagnosticError, stripAnsi } from "pi-cosmic-core";
+import { freezeSnapshot, sanitizeDiagnosticError, stripTerminalControls } from "pi-cosmic-core";
 import type { SubagentRunView, SubagentUsage } from "./model.ts";
 
 export const MAX_NAME_CHARS = 80;
@@ -30,7 +30,7 @@ export const sanitizeDiagnosticText = (value: string, limit: number): string =>
   sanitizeDiagnosticError(value, { maximumLength: limit });
 
 export const sanitizeOutputText = (value: string, limit: number): string =>
-  clipText(stripAnsi(value), limit);
+  clipText(stripTerminalControls(value), limit);
 
 export const usageFromMessage = (
   usage:

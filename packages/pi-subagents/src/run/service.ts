@@ -4,6 +4,7 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
@@ -53,6 +54,9 @@ import { appendTranscript } from "./transcript.ts";
 const MAX_RUNS = 8;
 const MAX_RETAINED = 50;
 const RPC_TIMEOUT = "10 seconds";
+
+const isTerminalState = (state: SubagentRunView["state"]): boolean =>
+  state === "completed" || state === "failed" || state === "stopped";
 
 export interface SubagentServiceOptions {
   readonly publish?: (projection: SubagentProjection) => void;
@@ -119,6 +123,53 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         return snapshotView(record.view);
       }),
     );
+  const mutateEventView = (record: RunRecord, update: (view: SubagentRunView) => SubagentRunView) =>
+    withLock(
+      Effect.sync(() => {
+        if (
+          record.stoppedByParent ||
+          record.view.state === "stopping" ||
+          isTerminalState(record.view.state)
+        )
+          return undefined;
+        record.view = update(record.view);
+        publish();
+        return snapshotView(record.view);
+      }),
+    );
+  const deliverForeground = (record: RunRecord, view: SubagentRunView): boolean => {
+    if (!record.foregroundWaitPending) return false;
+    record.foregroundWaitPending = false;
+    Deferred.doneUnsafe(record.foregroundOutcome, Effect.succeed(view));
+    return true;
+  };
+  const pauseFromEvent = (record: RunRecord, now: number) =>
+    withLock(
+      Effect.sync(() => {
+        if (
+          !record.pauseRequested ||
+          record.stoppedByParent ||
+          record.view.state === "stopping" ||
+          isTerminalState(record.view.state)
+        )
+          return undefined;
+        record.view = {
+          ...record.view,
+          state: "paused",
+          lastActivityAt: now,
+          question: undefined,
+          currentTool: undefined,
+        };
+        const view = snapshotView(record.view);
+        record.pauseRequested = false;
+        const outcome = record.pauseOutcome;
+        record.pauseOutcome = undefined;
+        publish();
+        if (outcome) Deferred.doneUnsafe(outcome, Effect.succeed(view));
+        deliverForeground(record, view);
+        return view;
+      }),
+    );
   const failPendingResponses = (record: RunRecord, error: SubagentError) => {
     for (const response of record.responses.values())
       Deferred.doneUnsafe(response, Effect.fail(error));
@@ -143,8 +194,14 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           }),
         ),
       );
-      const outcome = yield* Deferred.await(response).pipe(Effect.timeoutOption(RPC_TIMEOUT));
-      record.responses.delete(id);
+      const outcome = yield* Deferred.await(response).pipe(
+        Effect.timeoutOption(RPC_TIMEOUT),
+        Effect.ensuring(
+          Effect.sync(() => {
+            record.responses.delete(id);
+          }),
+        ),
+      );
       if (Option.isNone(outcome))
         return yield* new SubagentProcessError({
           operation: "await RPC response from",
@@ -179,27 +236,44 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const settle = (record: RunRecord, state: "completed" | "failed" | "stopped", error?: string) =>
     Effect.gen(function* () {
-      if (record.view.state === state && record.view.endedAt !== undefined)
-        return snapshotView(record.view);
       const now = yield* Clock.currentTimeMillis;
-      const view = yield* mutateView(record, (current) => ({
-        ...current,
-        state,
-        endedAt: now,
-        lastActivityAt: now,
-        currentTool: undefined,
-        question: undefined,
-        ...(state === "completed" && record.latestAssistantText
-          ? { finalText: record.latestAssistantText }
-          : {}),
-        ...(error ? { error } : {}),
-      }));
-      Deferred.doneUnsafe(record.settlement, Effect.succeed(view));
-      const deliveredToForeground = record.foregroundWaitPending;
-      if (deliveredToForeground) {
-        record.foregroundWaitPending = false;
-        Deferred.doneUnsafe(record.foregroundOutcome, Effect.succeed(view));
-      }
+      const result = yield* withLock(
+        Effect.sync(() => {
+          if (
+            isTerminalState(record.view.state) ||
+            (state !== "stopped" && (record.stoppedByParent || record.view.state === "stopping"))
+          )
+            return { transitioned: false as const, view: snapshotView(record.view) };
+          const settlement = record.settlement;
+          const pauseOutcome = record.pauseOutcome;
+          record.pauseOutcome = undefined;
+          record.pauseRequested = false;
+          record.view = {
+            ...record.view,
+            state,
+            endedAt: now,
+            lastActivityAt: now,
+            currentTool: undefined,
+            question: undefined,
+            ...(state === "completed" && record.latestAssistantText
+              ? { finalText: record.latestAssistantText }
+              : {}),
+            ...(error ? { error } : {}),
+          };
+          publish();
+          return {
+            transitioned: true as const,
+            view: snapshotView(record.view),
+            settlement,
+            pauseOutcome,
+          };
+        }),
+      );
+      const view = result.view;
+      if (!result.transitioned) return view;
+      Deferred.doneUnsafe(result.settlement, Effect.succeed(view));
+      if (result.pauseOutcome) Deferred.doneUnsafe(result.pauseOutcome, Effect.succeed(view));
+      const deliveredToForeground = deliverForeground(record, view);
       const evicted = yield* withLock(
         Effect.sync(() => {
           if (records.size <= MAX_RETAINED) return [] as RunRecord[];
@@ -258,11 +332,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     );
 
   const handleWireEvent = makeRunEventHandler({
-    mutateView,
+    mutateView: mutateEventView,
     settle,
     notify,
     failPendingResponses,
     failRun,
+    deliverForeground,
+    pauseFromEvent,
   });
 
   const start: SubagentServiceShape["start"] = (request) =>
@@ -376,7 +452,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             return yield* new InvalidSubagentRequestError({
               message: `Subagent ${reserved.view.id} was stopped during startup.`,
             });
-          yield* Stream.fromQueue(process.events).pipe(
+          const eventConsumer = yield* Stream.fromQueue(process.events).pipe(
             Stream.runForEach((event) =>
               handleWireEvent(reserved, event).pipe(
                 Effect.catch((error) => failRun(reserved, error.message).pipe(Effect.asVoid)),
@@ -386,7 +462,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             Effect.forkIn(scope, { startImmediately: true }),
           );
           yield* process.awaitExit.pipe(
-            Effect.flatMap((event) => handleWireEvent(reserved, event)),
+            Effect.flatMap((event) =>
+              Fiber.join(eventConsumer).pipe(Effect.andThen(handleWireEvent(reserved, event))),
+            ),
             Effect.catch((error) => failRun(reserved, error.message).pipe(Effect.asVoid)),
             Effect.forkIn(scope, { startImmediately: true }),
           );
@@ -552,27 +630,65 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const interrupt: SubagentServiceShape["interrupt"] = (id) =>
     Effect.gen(function* () {
-      const record = yield* requireRecord(id);
-      if (record.view.state !== "running" && record.view.state !== "waiting_for_parent")
-        return yield* new InvalidSubagentRequestError({
-          message: `Subagent ${id} cannot be interrupted while ${record.view.state}.`,
-        });
-      record.pauseRequested = true;
-      yield* rpc(record, { type: "abort" }).pipe(
-        Effect.onError(() =>
-          Effect.sync(() => {
-            record.pauseRequested = false;
-          }),
+      const pauseOutcome = yield* Deferred.make<SubagentRunView, SubagentError>();
+      const record = yield* withLock(
+        Effect.gen(function* () {
+          const selected = yield* requireRecord(id);
+          if (selected.view.state !== "running" && selected.view.state !== "waiting_for_parent")
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${id} cannot be interrupted while ${selected.view.state}.`,
+            });
+          if (selected.pauseRequested)
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${id} already has an interrupt pending.`,
+            });
+          selected.pauseRequested = true;
+          selected.pauseOutcome = pauseOutcome;
+          return selected;
+        }),
+      );
+      yield* Effect.raceFirst(
+        rpc(record, { type: "abort" }).pipe(Effect.asVoid),
+        Deferred.await(pauseOutcome).pipe(Effect.asVoid),
+      ).pipe(
+        Effect.catch((error) =>
+          withLock(
+            Effect.gen(function* () {
+              if (record.view.state === "paused") return;
+              const responseTimedOut =
+                error._tag === "SubagentProcessError" &&
+                error.operation === "await RPC response from";
+              if (!responseTimedOut && record.pauseOutcome === pauseOutcome) {
+                record.pauseRequested = false;
+                record.pauseOutcome = undefined;
+              }
+              return yield* error;
+            }),
+          ),
         ),
       );
       const now = yield* Clock.currentTimeMillis;
-      return yield* mutateView(record, (current) => ({
-        ...current,
-        state: "paused",
-        question: undefined,
-        currentTool: undefined,
-        lastActivityAt: now,
-      }));
+      const view = yield* withLock(
+        Effect.gen(function* () {
+          if (record.view.state === "paused") return snapshotView(record.view);
+          if (record.view.state !== "running" && record.view.state !== "waiting_for_parent")
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${id} stopped before interruption completed.`,
+            });
+          record.view = {
+            ...record.view,
+            state: "paused",
+            question: undefined,
+            currentTool: undefined,
+            lastActivityAt: now,
+          };
+          const view = snapshotView(record.view);
+          publish();
+          deliverForeground(record, view);
+          return view;
+        }),
+      );
+      return view;
     });
 
   const resume: SubagentServiceShape["resume"] = (id, message) =>
@@ -602,6 +718,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           }
           selected.settlement = nextSettlement;
           selected.pauseRequested = false;
+          selected.pauseOutcome = undefined;
           selected.latestAssistantText = undefined;
           selected.view = {
             ...selected.view,
@@ -609,6 +726,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             endedAt: undefined,
             error: undefined,
             finalText: undefined,
+            question: undefined,
+            currentTool: undefined,
             lastActivityAt: now,
           };
           publish();

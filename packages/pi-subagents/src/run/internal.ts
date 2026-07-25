@@ -14,6 +14,7 @@ export interface RunRecord {
   settlement: Deferred.Deferred<SubagentRunView>;
   readonly foregroundOutcome: Deferred.Deferred<SubagentRunView>;
   foregroundWaitPending: boolean;
+  pauseOutcome?: Deferred.Deferred<SubagentRunView, SubagentError> | undefined;
   latestAssistantText?: string | undefined;
   pauseRequested: boolean;
   stoppedByParent: boolean;

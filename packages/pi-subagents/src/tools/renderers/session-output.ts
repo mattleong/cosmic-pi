@@ -14,7 +14,7 @@ import {
   type SubagentRunView,
   type SubagentSessionEvent,
 } from "../../run/model.ts";
-import { sanitizeTerminalLine } from "../../ui/sanitize.ts";
+import { sanitizeTerminalLine, sanitizeTerminalText } from "../../ui/sanitize.ts";
 
 export interface SessionOutputRenderOptions {
   readonly now?: number;
@@ -247,7 +247,7 @@ export function renderSubagentSessionOutput(
   container.addChild(new Spacer(1));
   container.addChild(new Text(theme.fg("muted", theme.bold("Task")), 0, 0));
   container.addChild(
-    new Markdown(run.task, 2, 0, getMarkdownTheme(), {
+    new Markdown(sanitizeTerminalText(run.task), 2, 0, getMarkdownTheme(), {
       color: (text) => theme.fg("toolOutput", text),
     }),
   );
@@ -306,7 +306,7 @@ export function renderSubagentSessionOutput(
       ),
     );
     container.addChild(
-      new Markdown(assistantOutput, 2, 0, getMarkdownTheme(), {
+      new Markdown(sanitizeTerminalText(assistantOutput), 2, 0, getMarkdownTheme(), {
         color: (text) => theme.fg("toolOutput", text),
       }),
     );

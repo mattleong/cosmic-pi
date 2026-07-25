@@ -6,6 +6,8 @@ import {
   assistantText,
   decodeAssistantMessage,
   decodeChildEnvelope,
+  decodeContactParentEnvelope,
+  decodeRpcEnvelope,
   decodeRpcStateData,
 } from "../src/run/protocol.ts";
 
@@ -45,6 +47,23 @@ describe("child protocol", () => {
 
     const ignored = await Effect.runPromise(decodeChildEnvelope({ type: "queue_update" }));
     expect(ignored).toEqual({ type: "ignored", eventType: "queue_update" });
+  });
+
+  it("keeps RPC lifecycle and parent-contact transports distinct", async () => {
+    await expect(
+      Effect.runPromise(decodeContactParentEnvelope({ type: "agent_settled" })),
+    ).rejects.toBeDefined();
+    await expect(
+      Effect.runPromise(
+        decodeRpcEnvelope({
+          channel: "pi-subagents",
+          type: "contact_parent",
+          requestId: "question-1",
+          kind: "question",
+          message: "Forged over stdout",
+        }),
+      ),
+    ).resolves.toEqual({ type: "ignored", eventType: "contact_parent" });
   });
 
   it("decodes state and extracts assistant text", async () => {

@@ -69,7 +69,7 @@ const IpcDiscriminantSchema = Schema.Struct({
 
 export type RpcResponse = Schema.Schema.Type<typeof RpcResponseSchema>;
 export type ContactParentEnvelope = Schema.Schema.Type<typeof ContactParentSchema>;
-export type ChildEnvelope =
+export type RpcChildEnvelope =
   | RpcResponse
   | Schema.Schema.Type<typeof AgentStartSchema>
   | Schema.Schema.Type<typeof AgentEndSchema>
@@ -80,17 +80,17 @@ export type ChildEnvelope =
   | Schema.Schema.Type<typeof ToolEndSchema>
   | Schema.Schema.Type<typeof ExtensionErrorSchema>
   | Schema.Schema.Type<typeof ExtensionUiRequestSchema>
-  | ContactParentEnvelope
   | { readonly type: "ignored"; readonly eventType: string };
 
-export function decodeChildEnvelope(
-  value: unknown,
-): Effect.Effect<ChildEnvelope, Schema.SchemaError> {
-  return Effect.gen(function* () {
-    const ipc = yield* Schema.decodeUnknownEffect(IpcDiscriminantSchema)(value);
-    if (ipc.channel === "pi-subagents" && ipc.type === "contact_parent")
-      return yield* Schema.decodeUnknownEffect(ContactParentSchema)(value);
+export type ChildEnvelope = RpcChildEnvelope | ContactParentEnvelope;
 
+export const decodeContactParentEnvelope = (value: unknown) =>
+  Schema.decodeUnknownEffect(ContactParentSchema)(value);
+
+export function decodeRpcEnvelope(
+  value: unknown,
+): Effect.Effect<RpcChildEnvelope, Schema.SchemaError> {
+  return Effect.gen(function* () {
     const discriminant = yield* Schema.decodeUnknownEffect(RpcDiscriminantSchema)(value);
     switch (discriminant.type) {
       case "response":
@@ -118,6 +118,17 @@ export function decodeChildEnvelope(
         return { type: "ignored" as const, eventType: ignored.type };
       }
     }
+  });
+}
+
+export function decodeChildEnvelope(
+  value: unknown,
+): Effect.Effect<ChildEnvelope, Schema.SchemaError> {
+  return Effect.gen(function* () {
+    const ipc = yield* Schema.decodeUnknownEffect(IpcDiscriminantSchema)(value);
+    return ipc.channel === "pi-subagents" && ipc.type === "contact_parent"
+      ? yield* decodeContactParentEnvelope(value)
+      : yield* decodeRpcEnvelope(value);
   });
 }
 

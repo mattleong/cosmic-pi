@@ -150,7 +150,13 @@ export class SubagentFleetComponent implements Component {
       (selected.state === "paused" || selected.state === "completed")
     ) {
       this.options.actions.resume(selected.id);
-    } else if (data === "m" && selected && isActiveRunState(selected.state)) {
+    } else if (
+      data === "m" &&
+      selected &&
+      (selected.state === "starting" ||
+        selected.state === "running" ||
+        selected.state === "waiting_for_parent")
+    ) {
       this.options.actions.message(selected.id, selected.state === "waiting_for_parent");
     } else if (data === "n" && selected) {
       this.options.actions.rename(selected.id);

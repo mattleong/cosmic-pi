@@ -4,6 +4,7 @@ import {
   redactDiagnosticValue,
   sanitizeDiagnosticContent,
   sanitizeDiagnosticError,
+  stripTerminalControls,
 } from "../index.ts";
 
 describe("security formatting", () => {
@@ -20,6 +21,21 @@ describe("security formatting", () => {
   it("preserves Markdown whitespace while redacting content", () => {
     expect(sanitizeDiagnosticContent("- parent\n  - child\n\n    token=secret-value\n\tcode")).toBe(
       "- parent\n  - child\n\n    token=[REDACTED]\n\tcode",
+    );
+  });
+
+  it("redacts common explicit secret assignments", () => {
+    const content = sanitizeDiagnosticContent(
+      'password=hunter2\nsecret: abc123\nprivate_key="key value"\ncredential=usable',
+    );
+    expect(content).toBe(
+      "password=[REDACTED]\nsecret: [REDACTED]\nprivate_key=[REDACTED]\ncredential=[REDACTED]",
+    );
+  });
+
+  it("removes complete terminal control strings while preserving Markdown", () => {
+    expect(stripTerminalControls("- item\n  code\u001b]52;c;Y2xpcA==\u0007\n\tmore")).toBe(
+      "- item\n  code\n\tmore",
     );
   });
 

@@ -141,6 +141,24 @@ describe("structured subagent session output", () => {
     expect(rendered).toContain("session  /tmp/session.jsonl");
   });
 
+  it("removes OSC terminal controls from Markdown task and report text", () => {
+    const rendered = renderSubagentSessionOutput(
+      runView({
+        task: "Inspect\u001b]52;c;dGFzaw==\u0007 safely.",
+        finalText: "Report\u001b]2;forged-title\u0007 complete.",
+      }),
+      theme,
+    )
+      .render(80)
+      .join("\n");
+
+    expect(rendered).toContain("Inspect safely.");
+    expect(rendered).toContain("Report complete.");
+    expect(rendered).not.toContain("dGFzaw==");
+    expect(rendered).not.toContain("forged-title");
+    expect(rendered).not.toContain("\u001b");
+  });
+
   it("does not label stale assistant text as a final report while active", () => {
     const rendered = sanitizeTerminalText(
       renderSubagentSessionOutput(

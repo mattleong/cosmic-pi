@@ -10,7 +10,8 @@ import type { SubagentRunView } from "./model.ts";
 import {
   assistantText,
   decodeAssistantMessage,
-  decodeChildEnvelope,
+  decodeContactParentEnvelope,
+  decodeRpcEnvelope,
   type ContactParentEnvelope,
 } from "./protocol.ts";
 import {
@@ -33,7 +34,7 @@ export interface RunEventDependencies {
   readonly mutateView: (
     record: RunRecord,
     update: (view: SubagentRunView) => SubagentRunView,
-  ) => Effect.Effect<SubagentRunView>;
+  ) => Effect.Effect<SubagentRunView | undefined>;
   readonly settle: (
     record: RunRecord,
     state: "completed" | "failed" | "stopped",
@@ -42,12 +43,30 @@ export interface RunEventDependencies {
   readonly notify: (notification: SubagentNotification) => void;
   readonly failPendingResponses: (record: RunRecord, error: SubagentError) => void;
   readonly failRun: (record: RunRecord, message: string) => Effect.Effect<SubagentRunView>;
+  readonly deliverForeground: (record: RunRecord, view: SubagentRunView) => boolean;
+  readonly pauseFromEvent: (
+    record: RunRecord,
+    now: number,
+  ) => Effect.Effect<SubagentRunView | undefined>;
 }
 
 const protocolError = (message: string) => new SubagentProtocolError({ message });
+const isRawRpcResponse = (value: unknown): boolean =>
+  typeof value === "object" &&
+  value !== null &&
+  "type" in value &&
+  (value as { readonly type?: unknown }).type === "response";
 
 export function makeRunEventHandler(dependencies: RunEventDependencies) {
-  const { mutateView, settle, notify, failPendingResponses, failRun } = dependencies;
+  const {
+    mutateView,
+    settle,
+    notify,
+    failPendingResponses,
+    failRun,
+    deliverForeground,
+    pauseFromEvent,
+  } = dependencies;
 
   const handleContact = (record: RunRecord, envelope: ContactParentEnvelope) =>
     Effect.gen(function* () {
@@ -71,6 +90,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           transcript: appendTranscript(current.transcript, `warning: ${message}`),
           sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "warning", message, now),
         }));
+        if (!view) return;
         notify({ type: "warning", id: view.id, name: view.name, message });
         return;
       }
@@ -82,11 +102,8 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         transcript: appendTranscript(current.transcript, `question for parent: ${message}`),
         sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "question", message, now),
       }));
-      const deliveredToForeground = record.foregroundWaitPending;
-      if (deliveredToForeground) {
-        record.foregroundWaitPending = false;
-        Deferred.doneUnsafe(record.foregroundOutcome, Effect.succeed(view));
-      } else {
+      if (!view) return;
+      if (!deliverForeground(record, view)) {
         notify({
           type: "question",
           id: view.id,
@@ -97,11 +114,11 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       }
     });
 
-  const handleEnvelope = (record: RunRecord, value: unknown) =>
-    decodeChildEnvelope(value).pipe(
+  const handleRpcEnvelope = (record: RunRecord, value: unknown) =>
+    decodeRpcEnvelope(value).pipe(
       Effect.mapError(() => protocolError("Subagent emitted an invalid protocol event.")),
       Effect.flatMap((envelope) => {
-        if (!("channel" in envelope) && envelope.type === "response") {
+        if (envelope.type === "response") {
           if (envelope.id) {
             const response = record.responses.get(envelope.id);
             if (response) Deferred.doneUnsafe(response, Effect.succeed(envelope));
@@ -116,7 +133,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           record.view.state === "stopped"
         )
           return Effect.void;
-        if ("channel" in envelope) return handleContact(record, envelope);
         switch (envelope.type) {
           case "agent_start":
             return Clock.currentTimeMillis.pipe(
@@ -136,20 +152,12 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           case "agent_settled":
             return record.pauseRequested
               ? Clock.currentTimeMillis.pipe(
-                  Effect.flatMap((now) =>
-                    mutateView(record, (current) => ({
-                      ...current,
-                      state: "paused",
-                      lastActivityAt: now,
-                      currentTool: undefined,
-                    })),
+                  Effect.flatMap((now) => pauseFromEvent(record, now)),
+                  Effect.flatMap((view) =>
+                    view || record.stoppedByParent
+                      ? Effect.void
+                      : settle(record, "completed").pipe(Effect.asVoid),
                   ),
-                  Effect.tap(() =>
-                    Effect.sync(() => {
-                      record.pauseRequested = false;
-                    }),
-                  ),
-                  Effect.asVoid,
                 )
               : record.stoppedByParent
                 ? Effect.void
@@ -278,9 +286,45 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       }),
     );
 
+  const handleIpcEnvelope = (record: RunRecord, value: unknown) =>
+    decodeContactParentEnvelope(value).pipe(
+      Effect.mapError(() => protocolError("Subagent emitted an invalid parent-contact event.")),
+      Effect.flatMap((envelope) => handleContact(record, envelope)),
+    );
+
   return (record: RunRecord, event: ChildWireEvent) => {
-    if (event.type === "message") return handleEnvelope(record, event.value);
+    if (event.type === "rpc_message") {
+      if (
+        !isRawRpcResponse(event.value) &&
+        (record.stoppedByParent ||
+          record.view.state === "stopping" ||
+          record.view.state === "completed" ||
+          record.view.state === "failed" ||
+          record.view.state === "stopped")
+      )
+        return Effect.void;
+      return handleRpcEnvelope(record, event.value);
+    }
+    if (event.type === "ipc_message") {
+      if (
+        record.stoppedByParent ||
+        record.view.state === "stopping" ||
+        record.view.state === "completed" ||
+        record.view.state === "failed" ||
+        record.view.state === "stopped"
+      )
+        return Effect.void;
+      return handleIpcEnvelope(record, event.value);
+    }
     if (event.type === "protocol_error") {
+      if (
+        record.stoppedByParent ||
+        record.view.state === "stopping" ||
+        record.view.state === "completed" ||
+        record.view.state === "failed" ||
+        record.view.state === "stopped"
+      )
+        return Effect.void;
       const error = protocolError(event.message);
       failPendingResponses(record, error);
       return failRun(record, error.message).pipe(Effect.asVoid);

@@ -128,6 +128,7 @@ export {
   sanitizeDiagnosticContent,
   sanitizeDiagnosticError,
   stripAnsi,
+  stripTerminalControls,
   type DiagnosticSanitizerOptions,
 } from "./src/security.ts";
 export {

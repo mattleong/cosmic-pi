@@ -49,7 +49,8 @@ export interface ChildLaunchRequest {
 }
 
 export type ChildWireEvent =
-  | { readonly type: "message"; readonly value: unknown }
+  | { readonly type: "rpc_message"; readonly value: unknown }
+  | { readonly type: "ipc_message"; readonly value: unknown }
   | { readonly type: "protocol_error"; readonly message: string }
   | {
       readonly type: "exit";
@@ -268,6 +269,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
   ];
   let stderr = "";
   let settled = false;
+  let spawned = false;
   let cleaned = false;
   let overflowed = false;
   let stdinError: Error | undefined;
@@ -294,7 +296,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
       };
       const onLine = (line: string) => {
         try {
-          offer({ type: "message", value: JSON.parse(line) as unknown });
+          offer({ type: "rpc_message", value: JSON.parse(line) as unknown });
         } catch {
           offer({ type: "protocol_error", message: "Subagent emitted malformed RPC JSON." });
         }
@@ -312,8 +314,11 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
       const onStdinError = (error: Error) => {
         stdinError = error;
       };
-      const onSpawn = () => Deferred.doneUnsafe(ready, Effect.void);
-      const onMessage = (message: unknown) => offer({ type: "message", value: message });
+      const onSpawn = () => {
+        spawned = true;
+        Deferred.doneUnsafe(ready, Effect.void);
+      };
+      const onMessage = (message: unknown) => offer({ type: "ipc_message", value: message });
       const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
         if (settled) return;
         settled = true;
@@ -323,15 +328,14 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
           ...(signal ? { signal } : {}),
           stderr,
         };
-        offer(event);
         Queue.endUnsafe(events);
         Deferred.doneUnsafe(exited, Effect.succeed(event));
       };
       const onError = (error: Error) => {
         Deferred.doneUnsafe(ready, Effect.fail(processError("spawn", error)));
-        finish(null, null);
+        if (!spawned) finish(null, null);
       };
-      const onExit = (code: number | null, signal: NodeJS.Signals | null) => finish(code, signal);
+      const onClose = (code: number | null, signal: NodeJS.Signals | null) => finish(code, signal);
       const cleanup = () => {
         if (cleaned) return;
         cleaned = true;
@@ -341,7 +345,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
         child.off("spawn", onSpawn);
         child.off("message", onMessage);
         child.off("error", onError);
-        child.off("exit", onExit);
+        child.off("close", onClose);
         child.stdin?.destroy();
         child.stdout?.destroy();
         child.stderr?.destroy();
@@ -352,7 +356,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
       child.once("spawn", onSpawn);
       child.on("message", onMessage);
       child.once("error", onError);
-      child.once("exit", onExit);
+      child.once("close", onClose);
       yield* Deferred.await(ready);
       const pid = child.pid;
       if (!pid) return yield* processError("spawn", "Subagent process did not expose a pid.");

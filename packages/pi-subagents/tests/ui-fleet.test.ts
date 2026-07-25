@@ -140,6 +140,19 @@ describe("/subagents fleet UI", () => {
     expect(component.render(42).at(-1)).toContain("m msg");
   });
 
+  it.each(["paused", "stopping"] as const)(
+    "does not offer messaging while a run is %s",
+    (state) => {
+      const currentProjection: SubagentProjection = {
+        revision: 3,
+        runs: [{ ...projection.runs[0]!, state, question: undefined }],
+      };
+      const { actions, component } = makeComponent(80, 18, currentProjection);
+      component.handleInput("m");
+      expect(actions.message).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes message, interrupt, rename, and confirmed stop controls", () => {
     const { actions, component } = makeComponent(80, 18);
     component.handleInput("m");
