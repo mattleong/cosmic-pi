@@ -1,5 +1,9 @@
 /** Thin Pi registration boundary for the Advisor application. */
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import {
@@ -69,7 +73,11 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       AdvisorExtensionError,
       Layer.Error<typeof applicationLayer>
     >({
-      makeRuntime: () => makePiManagedRuntime(pi, applicationLayer),
+      makeRuntime: () =>
+        makePiManagedRuntime(pi, applicationLayer, {
+          agentDirectory: getAgentDir,
+          packageName: "pi-advisor",
+        }),
       startup: (input) =>
         Effect.gen(function* () {
           const controller = yield* AdvisorController;

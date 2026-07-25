@@ -604,19 +604,24 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const send: SubagentServiceShape["send"] = (id, message) =>
     Effect.gen(function* () {
       const normalized = yield* validateParentMessage(message, "Guidance message is required.");
-      const record = yield* requireRecord(id);
-      if (record.view.state === "waiting_for_parent")
-        return yield* new InvalidSubagentRequestError({
-          message: `Subagent ${id} is waiting for a reply; use action=reply.`,
-        });
-      if (record.replyPendingRequestId)
-        return yield* new InvalidSubagentRequestError({
-          message: `Subagent ${id} already has a parent reply in flight.`,
-        });
-      if (record.view.state !== "running")
-        return yield* new InvalidSubagentRequestError({
-          message: `Subagent ${id} is ${record.view.state}; use action=resume.`,
-        });
+      const record = yield* withLock(
+        Effect.gen(function* () {
+          const selected = yield* requireRecord(id);
+          if (selected.view.state === "waiting_for_parent")
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${id} is waiting for a reply; use action=reply.`,
+            });
+          if (selected.replyPendingRequestId)
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${id} already has a parent reply in flight.`,
+            });
+          if (selected.view.state !== "running")
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${id} is ${selected.view.state}; use action=resume.`,
+            });
+          return selected;
+        }),
+      );
       yield* rpc(record, { type: "steer", message: normalized });
       const now = yield* Clock.currentTimeMillis;
       return yield* withLock(
@@ -624,6 +629,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           if (record.view.state !== "running")
             return yield* new InvalidSubagentRequestError({
               message: `Subagent ${id} stopped before guidance was recorded.`,
+            });
+          if (record.replyPendingRequestId)
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${id} claimed a parent reply before guidance was recorded.`,
             });
           record.view = {
             ...record.view,

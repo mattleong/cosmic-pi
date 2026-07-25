@@ -3,7 +3,9 @@ export { PiApi } from "./src/runtime/pi-api.ts";
 export {
   makePiManagedRuntime,
   makePiRuntime,
+  piHostFileLoggerLayer,
   piHostLoggerLayer,
+  type PiHostLogTarget,
   type PiManagedRuntime,
 } from "./src/runtime/runtime.ts";
 export {

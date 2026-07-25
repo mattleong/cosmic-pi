@@ -1,5 +1,9 @@
 /** Cosmic UI host with one Effect-managed runtime per Pi session. */
-import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
@@ -164,6 +168,7 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
           protocolBuffer,
           requestRender,
         }),
+        { agentDirectory: getAgentDir, packageName: "pi-cosmic-ui" },
       ),
     startup: () =>
       Effect.gen(function* () {

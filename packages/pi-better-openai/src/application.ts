@@ -1,5 +1,9 @@
 /** Better OpenAI, implemented as one Effect-managed runtime per Pi session. */
-import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import {
@@ -158,6 +162,7 @@ export function betterOpenAIWithDependencies(
             recordFastInjection = offer;
           },
         }),
+        { agentDirectory: getAgentDir, packageName: "pi-better-openai" },
       ),
     startup: ({ ctx, generation }) =>
       dependencies

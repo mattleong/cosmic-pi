@@ -775,6 +775,51 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("rejects guidance that a parent reply claimed mid-transport", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "steer-vs-reply" }));
+
+      // Hold the steer transport open: `send` is past its guards but has recorded nothing.
+      const steerGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextSend("steer", steerGate);
+      const sending = yield* service.send(run.id, "Continue").pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () => fake.controls[0]?.commands.some((command) => command.type === "steer") ?? false,
+      );
+
+      // A question arrives and the parent claims it while that steer is still in flight.
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "question-1",
+        kind: "question",
+        message: "Which answer?",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      const replyGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextIpc(replyGate);
+      const replying = yield* service.reply(run.id, "Answer").pipe(Effect.forkScoped);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
+
+      // The run is "running" again, so only the reply claim can reject the guidance.
+      yield* Deferred.succeed(steerGate, undefined);
+      const failure = yield* Fiber.join(sending).pipe(Effect.flip);
+      expect(failure._tag).toBe("InvalidSubagentRequestError");
+
+      yield* Deferred.succeed(replyGate, undefined);
+      expect((yield* Fiber.join(replying)).state).toBe("running");
+      const transcript = (yield* service.status(run.id)).transcript;
+      expect(transcript.some((entry) => entry.includes("parent guidance"))).toBe(false);
+      expect(transcript.some((entry) => entry.includes("parent reply: Answer"))).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("notifies only the first progress and warning in a run", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];

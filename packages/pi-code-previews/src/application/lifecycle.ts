@@ -1,5 +1,9 @@
 /** Effect-managed Pi boundary for code previews. */
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
@@ -88,7 +92,11 @@ export interface CodePreviewExtensionDependencies {
 }
 
 const defaultDependencies: CodePreviewExtensionDependencies = {
-  makeRuntime: (pi) => makePiManagedRuntime(pi, codePreviewApplicationLayer),
+  makeRuntime: (pi) =>
+    makePiManagedRuntime(pi, codePreviewApplicationLayer, {
+      agentDirectory: getAgentDir,
+      packageName: "pi-code-previews",
+    }),
   registerHealth: registerHealthCommand,
   registerSettings: registerSettingsCommand,
   registerRenderers: registerToolRenderers,

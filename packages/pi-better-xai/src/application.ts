@@ -1,5 +1,9 @@
 /** Better xAI for pi, implemented as an Effect-managed session runtime. */
-import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import {
@@ -97,6 +101,7 @@ export function betterXaiWithDependencies(
           projection,
           onChange: (context) => updateFooter(MutableRef.get(context)),
         }),
+        { agentDirectory: getAgentDir, packageName: "pi-better-xai" },
       ),
     startup: ({ generation }) => dependencies.startupEffect(generation),
     onActivated: ({ ctx }) => {

@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { loadCodePreviewSettings } from "pi-code-previews";
 import {
@@ -35,6 +39,7 @@ export function registerBackgroundTerminalsApplication(pi: ExtensionAPI): void {
         makeBackgroundTerminalLayer(input, {
           publish: bridge.publish,
         }),
+        { agentDirectory: getAgentDir, packageName: "pi-background-terminals" },
       ),
     startup: () =>
       Effect.gen(function* () {
