@@ -36,6 +36,27 @@ export interface PiHostLogTarget {
   readonly packageName: string;
 }
 
+/** One retained generation, matching the advisor failure log's bound. */
+const MAX_HOST_LOG_BYTES = 1_000_000;
+
+/**
+ * Rotates at session start rather than per write: `Logger.toFile` has no size bound, and a
+ * once-per-runtime check keeps growth bounded without adding work to the logging path.
+ *
+ * Failure is absorbed separately from the open below. Concurrent sessions of the same package
+ * can race here, and a lost race must not cost that session its log sink.
+ */
+const rotateHostLog = (fs: FileSystem.FileSystem, logPath: string) =>
+  Effect.gen(function* () {
+    if (!(yield* fs.exists(logPath))) return;
+    const info = yield* fs.stat(logPath);
+    if (info.size < BigInt(MAX_HOST_LOG_BYTES)) return;
+    const previous = `${logPath}.1`;
+    yield* fs.remove(previous).pipe(Effect.catch(() => Effect.void));
+    yield* fs.rename(logPath, previous);
+    yield* fs.chmod(previous, 0o600);
+  }).pipe(Effect.catchCause(() => Effect.void));
+
 /**
  * Opens the package's JSONL host log, degrading to a discarding logger when the
  * directory cannot be resolved, created, or opened. The handle closes with the scope.
@@ -47,9 +68,9 @@ const makePiHostFileLogger = (target: PiHostLogTarget) =>
     const agentDirectory = yield* Effect.try(target.agentDirectory);
     const directory = path.join(agentDirectory, "logs");
     yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
-    return yield* Logger.formatJson.pipe(
-      Logger.toFile(path.join(directory, `${target.packageName}.jsonl`), { mode: 0o600 }),
-    );
+    const logPath = path.join(directory, `${target.packageName}.jsonl`);
+    yield* rotateHostLog(fs, logPath);
+    return yield* Logger.formatJson.pipe(Logger.toFile(logPath, { mode: 0o600 }));
   }).pipe(Effect.catchCause(() => Effect.succeed(discardLogger)));
 
 /**

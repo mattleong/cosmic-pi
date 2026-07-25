@@ -1,7 +1,7 @@
 // Host log sink coverage intentionally uses real Node filesystem primitives.
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/strictEffectProvide:off
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "@effect/vitest";
@@ -71,6 +71,51 @@ it.live("writes host logs to the package JSONL file and stays off the TTY", () =
       );
       expect(contents).toContain("usage refresh failed");
       expect(consoleCalls).toEqual([]);
+    }),
+  ),
+);
+
+it.live("rotates one generation once the host log passes its size bound", () =>
+  withDirectory((directory) =>
+    Effect.gen(function* () {
+      const logPath = join(directory, "logs", "pi-test.jsonl");
+      yield* testFileSystem("make log directory", () =>
+        mkdir(join(directory, "logs"), { recursive: true }),
+      );
+      yield* testFileSystem("seed oversized log", () => writeFile(logPath, "x".repeat(1_000_001)));
+
+      yield* logThrough(
+        { agentDirectory: () => directory, packageName: "pi-test" },
+        "after rotation",
+      );
+
+      const rotated = yield* testFileSystem("read rotated log", () =>
+        readFile(`${logPath}.1`, "utf8"),
+      );
+      const current = yield* testFileSystem("read current log", () => readFile(logPath, "utf8"));
+      expect(rotated).toHaveLength(1_000_001);
+      expect(current).toContain("after rotation");
+      expect(current).not.toContain("xxx");
+    }),
+  ),
+);
+
+it.live("leaves a host log below its size bound in place", () =>
+  withDirectory((directory) =>
+    Effect.gen(function* () {
+      const logPath = join(directory, "logs", "pi-test.jsonl");
+      yield* testFileSystem("make log directory", () =>
+        mkdir(join(directory, "logs"), { recursive: true }),
+      );
+      yield* testFileSystem("seed small log", () =>
+        writeFile(logPath, '{"message":"earlier session"}\n'),
+      );
+
+      yield* logThrough({ agentDirectory: () => directory, packageName: "pi-test" }, "appended");
+
+      const current = yield* testFileSystem("read current log", () => readFile(logPath, "utf8"));
+      expect(current).toContain("earlier session");
+      expect(current).toContain("appended");
     }),
   ),
 );

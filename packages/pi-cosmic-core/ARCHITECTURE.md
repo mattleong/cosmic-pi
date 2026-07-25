@@ -37,8 +37,22 @@ scoped services -> finalizers interrupt fibers and release resources
 Effect state -> frozen projection -> synchronous host renderer
 ```
 
-`makePiRuntime` / `makePiManagedRuntime` install `piHostLoggerLayer` (Effect's
-`Logger.tracerLogger` only). Pi owns the TTY; `console.log` from Effect would corrupt the
-editor/input region. Pre-session / standalone Effect runners that bypass the managed runtime
-must provide the same `piHostLoggerLayer`. Packages may still install additional loggers
-(for tests or file sinks) via `Logger.layer`.
+Pi owns the TTY; `console.log` from Effect would corrupt the editor/input region, so no host
+logger ever writes to stdout/stderr.
+
+`makePiRuntime` / `makePiManagedRuntime` take an optional `PiHostLogTarget`. With one, they
+install `piHostFileLoggerLayer`: the span-event logger plus a JSONL sink at
+`<agentDirectory>/logs/<packageName>.jsonl` (mode `0o600`, append, batched, flushed when the
+runtime scope closes). Without one they fall back to `piHostLoggerLayer`
+(`Logger.tracerLogger` only), which has no diagnostic sink of its own because no extension owns
+a span exporter. Every session runtime passes a target; pre-session / standalone runners that
+bypass the managed runtime still provide the bare `piHostLoggerLayer`.
+
+`piHostFileLoggerLayer` is deliberately `Layer<never, never, never>`. Directory resolution,
+directory creation, and file opening are all absorbed into a discarding logger, so a broken log
+sink can neither fail a session start nor widen the `Layer.Error` that Pi session-runtime
+facades carry. `agentDirectory` is a thunk for the same reason: the Pi host resolves it lazily
+and may throw, and that throw must land inside the fail-safe region.
+
+The sink has no size bound. Anything that logs per-turn or per-request needs rotation first —
+see `pi-advisor/src/logging/log.ts` for the coordinator-locked rotating pattern.

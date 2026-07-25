@@ -39,6 +39,13 @@ Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, fail
   no runtime error may be defaulted or asserted to `never`.
 - Dispose runtimes and close session resources explicitly.
 - Effect services own state transitions in `Ref` or `SynchronizedRef`. When Pi requires synchronous rendering, services atomically publish immutable snapshots to a boundary `MutableRef`; renderers only read those snapshots.
+- A service may instead hold plain mutable state (`Map`, counters) behind a `Semaphore`
+  when the state is a keyed registry that a single `Ref` would serialize too coarsely.
+  That choice carries one invariant the type system cannot enforce: **every read-modify-write
+  that spans a yield point must hold the lock for its whole duration**. Re-validate after any
+  `await` — guards checked before an RPC are stale once it returns. `SubagentService` and
+  `BackgroundTerminalService` use this pattern; new services should prefer `SynchronizedRef`
+  unless they have the same shape.
 - Keep stale-result validation and its commit inside the same serialized transition. Likewise,
   persistence plus authoritative projection publication is one serialized commit whenever
   concurrent callers could otherwise publish an older read after a newer write.
@@ -93,7 +100,21 @@ The shared projection primitive uses `SynchronizedRef` to serialize authoritativ
 
 ## Observability contract
 
-Stable operation spans use package-prefixed names. Required families are:
+Two things emit spans, and they use different names on purpose:
+
+- `Effect.withSpan` marks a **stable operation boundary**. These names are package-prefixed
+  (`pi-<package>.<area>.<operation>`), are treated as a public observability surface, and the
+  required families below must keep their exact names.
+- `Effect.fn("Name.method")` marks an **internal function boundary**, named after the service
+  and method it wraps. These are diagnostic aids, not a contract; renaming one alongside its
+  function is an ordinary refactor. Use `Effect.fnUntraced` when only the stack-frame boundary
+  is wanted and a span would be noise.
+
+Do not convert between the two to satisfy a naming rule. If an internal boundary becomes
+something operators depend on, promote it deliberately: give it a package-prefixed
+`Effect.withSpan` and add it to the required families.
+
+Required `withSpan` families are:
 
 - `pi-cosmic-core.runtime.startup`, `pi-cosmic-core.http.{json,streaming}.*`, and `pi-cosmic-core.safe-file.initialize`;
 - `pi-better-{openai,xai}.usage.{initialize,refresh}`;
