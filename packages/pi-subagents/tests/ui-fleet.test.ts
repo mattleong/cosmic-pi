@@ -83,11 +83,38 @@ describe("/subagents fleet UI", () => {
     const lines = component.render(42);
     const rendered = lines.join("\n");
 
-    expect(rendered).toContain("Session output");
+    expect(rendered).toContain("Activity");
     expect(rendered).toContain("Viewport-safe result.");
     expect(rendered).not.toContain("duplicate event");
     expect(rendered).not.toContain("Need a decision");
     expect(lines.every((line) => visibleWidth(line) <= 42)).toBe(true);
+  });
+
+  it("scrolls detail output with ctrl+k and ctrl+j", () => {
+    const { component } = makeComponent(42, 12);
+    component.handleInput("\r");
+    const bottom = component.render(42).join("\n");
+    expect(bottom).toContain("of");
+    expect(bottom).toContain("Final report");
+
+    for (let index = 0; index < 40; index += 1) component.handleInput("\u000b");
+    const top = component.render(42).join("\n");
+    expect(top).toContain("Task");
+    expect(top).not.toBe(bottom);
+
+    component.handleInput("\n");
+    expect(component.render(42).join("\n")).not.toBe(top);
+  });
+
+  it("toggles technical details and responsive shortcut help", () => {
+    const { component } = makeComponent(42, 24);
+    component.handleInput("\r");
+    expect(component.render(42).join("\n")).not.toContain("Technical details");
+    component.handleInput("t");
+    expect(component.render(42).join("\n")).toContain("Technical details");
+    expect(component.render(42).at(-1)).toContain("? help");
+    component.handleInput("?");
+    expect(component.render(42).at(-1)).toContain("m msg");
   });
 
   it("routes message, interrupt, rename, and confirmed stop controls", () => {

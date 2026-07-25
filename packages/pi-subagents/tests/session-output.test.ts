@@ -71,7 +71,7 @@ describe("structured subagent session output", () => {
     );
   });
 
-  it("renders an expanded session as task, activity, markdown assistant output, and footer", () => {
+  it("renders task, grouped activity, a final report, and compact metadata", () => {
     const sessionEvents = appendAssistantSessionEvent(
       finishToolSessionEvent(
         startToolSessionEvent([], {
@@ -88,15 +88,55 @@ describe("structured subagent session output", () => {
     const component = renderSubagentSessionOutput(runView({ sessionEvents }), theme);
     const rendered = sanitizeTerminalText(component.render(100).join("\n"));
 
-    expect(rendered).toContain("preview-check agent-1  COMPLETED");
+    expect(rendered).toContain("preview-check  ✓ completed");
+    expect(rendered).toContain("read-only · fresh · openai-codex/gpt-5.6-sol:high · 3s");
     expect(rendered).toContain("Task");
     expect(rendered).toContain("Inspect preview rendering.");
-    expect(rendered).toContain("Session output");
+    expect(rendered).toContain("Activity");
     expect(rendered).toContain("✓ read  AGENTS.md");
-    expect(rendered).toContain("Assistant");
+    expect(rendered).toContain("Final report  sent to parent");
     expect(rendered).toContain("Preview rendering works.");
     expect(rendered).not.toContain("Rule confirmed.");
+    expect(rendered).not.toContain("agent-1");
     expect(rendered).toContain("15 tokens · $0.0100");
+  });
+
+  it("groups adjacent repeated tools and reveals technical details on request", () => {
+    const repeatedReads: SubagentRunView["sessionEvents"] = [
+      {
+        type: "tool",
+        toolCallId: "tool-1",
+        toolName: "read",
+        target: "src/one.ts",
+        state: "completed",
+        startedAt: 1_000,
+        endedAt: 1_100,
+      },
+      {
+        type: "tool",
+        toolCallId: "tool-2",
+        toolName: "read",
+        target: "src/two.ts",
+        state: "completed",
+        startedAt: 1_200,
+        endedAt: 1_400,
+      },
+    ];
+    const rendered = sanitizeTerminalText(
+      renderSubagentSessionOutput(
+        runView({ sessionEvents: repeatedReads, pid: 42, sessionFile: "/tmp/session.jsonl" }),
+        theme,
+        { showTechnicalDetails: true },
+      )
+        .render(100)
+        .join("\n"),
+    );
+
+    expect(rendered).toContain("read ×2");
+    expect(rendered).toContain("300ms");
+    expect(rendered).toContain("Technical details");
+    expect(rendered).toContain("agent-1 · background · pid 42");
+    expect(rendered).toContain("session  /tmp/session.jsonl");
   });
 
   it("wraps every expanded row within the available viewport width", () => {

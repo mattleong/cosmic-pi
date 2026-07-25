@@ -17,6 +17,16 @@ Session-scoped foreground and background subagents for pi.
 
 ## Commands
 
-- `/subagents` opens the fleet inspector in interactive TUI mode.
+- `/subagents` opens the responsive fleet inspector in interactive TUI mode.
 
-The main agent operates the fleet through the `subagent` tool.
+Fleet controls:
+
+- `j` / `k` or arrow keys select a run.
+- `Ctrl-J` / `Ctrl-K` scroll the selected run's session output while preserving live tail-follow at the bottom.
+- `Enter` toggles details in narrow layouts.
+- `t` toggles technical details such as run ID, PID, cwd, and session file.
+- `?` switches compact shortcut help on narrow terminals.
+- `m`, `i`, `r`, `n`, and `x` message, interrupt, resume, rename, and stop the selected run.
+- `Esc` closes the inspector.
+
+Structured session output groups adjacent repeated tools, wraps long targets and paths, and labels the child's delivered response as **Final report — sent to parent**. The main agent operates the fleet through the `subagent` tool.

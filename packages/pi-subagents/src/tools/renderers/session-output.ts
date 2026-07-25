@@ -1,71 +1,193 @@
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
-import type { SubagentRunView, SubagentSessionEvent } from "../../run/model.ts";
+import {
+  Container,
+  Markdown,
+  Spacer,
+  Text,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+  type Component,
+} from "@earendil-works/pi-tui";
+import {
+  isActiveRunState,
+  type SubagentRunView,
+  type SubagentSessionEvent,
+} from "../../run/model.ts";
 import { sanitizeTerminalLine } from "../../ui/sanitize.ts";
+
+export interface SessionOutputRenderOptions {
+  readonly now?: number;
+  readonly showTechnicalDetails?: boolean;
+}
+
+type ToolEvent = Extract<SubagentSessionEvent, { readonly type: "tool" }>;
+type NoticeEvent = Extract<SubagentSessionEvent, { readonly type: "notice" }>;
+type ActivityItem =
+  | { readonly type: "tools"; readonly events: ReadonlyArray<ToolEvent> }
+  | { readonly type: "notice"; readonly event: NoticeEvent };
 
 const compactNumber = (value: number): string =>
   new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 
-const duration = (startedAt: number, endedAt: number): string => {
-  const milliseconds = Math.max(0, endedAt - startedAt);
-  if (milliseconds < 1_000) return `${milliseconds}ms`;
-  const seconds = Math.round(milliseconds / 1_000);
+const formatDuration = (milliseconds: number): string => {
+  const safe = Math.max(0, milliseconds);
+  if (safe < 1_000) return `${safe}ms`;
+  const seconds = Math.round(safe / 1_000);
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${seconds % 60}s`;
 };
 
+const runDuration = (run: SubagentRunView, now: number): string => {
+  const active = isActiveRunState(run.state);
+  const end = run.endedAt ?? (active ? now : run.lastActivityAt);
+  const elapsed = formatDuration(end - run.startedAt);
+  if (run.state === "paused") return `paused after ${elapsed}`;
+  if (run.state === "waiting_for_parent") return `waiting · ${elapsed}`;
+  return active ? `running for ${elapsed}` : elapsed;
+};
+
 const stateLabel = (run: SubagentRunView, theme: Theme): string => {
-  const label = run.state.toUpperCase();
+  const label = run.state;
   switch (run.state) {
     case "completed":
-      return theme.fg("success", label);
+      return theme.fg("success", `✓ ${label}`);
     case "failed":
+      return theme.fg("error", `× ${label}`);
     case "stopped":
-      return theme.fg("error", label);
+      return theme.fg("error", `■ ${label}`);
     case "waiting_for_parent":
+      return theme.fg("warning", `? ${label}`);
     case "paused":
-      return theme.fg("warning", label);
+      return theme.fg("warning", `Ⅱ ${label}`);
     default:
-      return theme.fg("accent", label);
+      return theme.fg("accent", `● ${label}`);
   }
 };
 
-const toolLine = (
-  event: Extract<SubagentSessionEvent, { readonly type: "tool" }>,
-  theme: Theme,
-) => {
-  const glyph = event.state === "running" ? "●" : event.state === "failed" ? "×" : "✓";
+class HangingText implements Component {
+  private readonly prefix: string;
+  private readonly text: string;
+  private readonly paddingX: number;
+
+  constructor(prefix: string, text: string, paddingX = 2) {
+    this.prefix = prefix;
+    this.text = text;
+    this.paddingX = paddingX;
+  }
+
+  render(width: number): string[] {
+    const safeWidth = Math.max(1, width);
+    const padding = Math.min(this.paddingX, Math.max(0, Math.floor((safeWidth - 1) / 2)));
+    const contentWidth = Math.max(1, safeWidth - padding * 2);
+    const prefix = truncateToWidth(this.prefix, Math.max(0, contentWidth - 1), "");
+    const prefixWidth = visibleWidth(prefix);
+    const bodyWidth = Math.max(1, contentWidth - prefixWidth);
+    const rows = wrapTextWithAnsi(this.text, bodyWidth);
+    const margin = " ".repeat(padding);
+    const continuation = " ".repeat(prefixWidth);
+    return rows.map((row, index) => `${margin}${index === 0 ? prefix : continuation}${row}`);
+  }
+
+  invalidate(): void {}
+}
+
+const activityItems = (
+  events: ReadonlyArray<SubagentSessionEvent>,
+): ReadonlyArray<ActivityItem> => {
+  const items: ActivityItem[] = [];
+  for (const event of events) {
+    if (event.type === "assistant" || (event.type === "notice" && event.kind === "progress"))
+      continue;
+    if (event.type === "notice") {
+      items.push({ type: "notice", event });
+      continue;
+    }
+    const previous = items.at(-1);
+    if (
+      previous?.type === "tools" &&
+      previous.events.at(-1)?.toolName === event.toolName &&
+      previous.events.at(-1)?.state === event.state
+    ) {
+      items[items.length - 1] = { type: "tools", events: [...previous.events, event] };
+    } else {
+      items.push({ type: "tools", events: [event] });
+    }
+  }
+  return items;
+};
+
+const toolDuration = (events: ReadonlyArray<ToolEvent>): string => {
+  const elapsed = events.reduce(
+    (total, event) =>
+      total + (event.endedAt === undefined ? 0 : Math.max(0, event.endedAt - event.startedAt)),
+    0,
+  );
+  return elapsed > 0 ? formatDuration(elapsed) : "";
+};
+
+function addToolGroup(container: Container, events: ReadonlyArray<ToolEvent>, theme: Theme): void {
+  const first = events[0];
+  if (!first) return;
+  const glyph = first.state === "running" ? "●" : first.state === "failed" ? "×" : "✓";
   const color =
-    event.state === "running" ? "accent" : event.state === "failed" ? "error" : "success";
-  const elapsed = event.endedAt === undefined ? "" : ` ${duration(event.startedAt, event.endedAt)}`;
-  const target = event.target ? `  ${theme.fg("dim", sanitizeTerminalLine(event.target))}` : "";
-  return `${theme.fg(color, glyph)} ${theme.fg("toolTitle", event.toolName)}${target}${theme.fg("dim", elapsed)}`;
-};
+    first.state === "running" ? "accent" : first.state === "failed" ? "error" : "success";
+  const count = events.length > 1 ? ` ×${events.length}` : "";
+  const target =
+    events.length === 1 && first.target ? `  ${sanitizeTerminalLine(first.target)}` : "";
+  const elapsed = toolDuration(events);
+  const body = `${theme.fg("toolTitle", first.toolName)}${theme.fg("muted", count)}${theme.fg("dim", target)}${elapsed ? theme.fg("dim", `  ${elapsed}`) : ""}`;
+  container.addChild(new HangingText(`${theme.fg(color, glyph)} `, body));
+}
 
-function addSessionEvent(container: Container, event: SubagentSessionEvent, theme: Theme): void {
-  if (event.type === "assistant") return;
-  if (event.type === "tool") {
-    container.addChild(new Text(toolLine(event, theme), 2, 0));
-    return;
-  }
-  if (event.kind === "progress") return;
+function addNotice(container: Container, event: NoticeEvent, theme: Theme): void {
   const glyph = event.kind === "parent" ? "←" : event.kind === "question" ? "?" : "!";
   const color = event.kind === "parent" ? "muted" : event.kind === "question" ? "warning" : "error";
   container.addChild(
-    new Text(
-      `${theme.fg(color, glyph)} ${theme.fg(color, sanitizeTerminalLine(event.text))}`,
-      2,
-      0,
+    new HangingText(
+      `${theme.fg(color, glyph)} `,
+      theme.fg(color, sanitizeTerminalLine(event.text)),
     ),
   );
 }
 
-export function renderSubagentSessionOutput(run: SubagentRunView, theme: Theme): Component {
+function addTechnicalDetails(container: Container, run: SubagentRunView, theme: Theme): void {
+  container.addChild(new Spacer(1));
+  container.addChild(new Text(theme.fg("muted", theme.bold("Technical details")), 0, 0));
+  const process = [run.id, run.execution, run.pid ? `pid ${run.pid}` : undefined]
+    .filter((value): value is string => value !== undefined)
+    .join(" · ");
+  container.addChild(new Text(theme.fg("dim", process), 2, 0));
+  container.addChild(
+    new HangingText(theme.fg("dim", "cwd  "), theme.fg("dim", sanitizeTerminalLine(run.cwd))),
+  );
+  if (run.sessionFile) {
+    container.addChild(
+      new HangingText(
+        theme.fg("dim", "session  "),
+        theme.fg("dim", sanitizeTerminalLine(run.sessionFile)),
+      ),
+    );
+  }
+}
+
+export function renderSubagentSessionOutput(
+  run: SubagentRunView,
+  theme: Theme,
+  options: SessionOutputRenderOptions = {},
+): Component {
+  const now = options.now ?? run.lastActivityAt;
   const container = new Container();
   container.addChild(
+    new Text(`${theme.fg("toolTitle", theme.bold(run.name))}  ${stateLabel(run, theme)}`, 0, 0),
+  );
+  container.addChild(
     new Text(
-      `${theme.fg("toolTitle", theme.bold(run.name))} ${theme.fg("dim", run.id)}  ${stateLabel(run, theme)}`,
+      theme.fg(
+        "dim",
+        `${run.writeIntent} · ${run.context} · ${run.model}:${run.effort} · ${runDuration(run, now)}`,
+      ),
       0,
       0,
     ),
@@ -78,41 +200,61 @@ export function renderSubagentSessionOutput(run: SubagentRunView, theme: Theme):
     }),
   );
   container.addChild(new Spacer(1));
-  container.addChild(new Text(theme.fg("muted", theme.bold("Session output")), 0, 0));
-  const activity = run.sessionEvents.filter((event) => event.type !== "assistant");
-  for (const event of activity) addSessionEvent(container, event, theme);
+  container.addChild(new Text(theme.fg("muted", theme.bold("Activity")), 0, 0));
+
+  const items = activityItems(run.sessionEvents);
+  for (const item of items) {
+    if (item.type === "tools") addToolGroup(container, item.events, theme);
+    else addNotice(container, item.event, theme);
+  }
   const noticeKinds = new Set(
-    activity.flatMap((event) => (event.type === "notice" ? [event.kind] : [])),
+    items.flatMap((item) => (item.type === "notice" ? [item.event.kind] : [])),
   );
   if (run.question && !noticeKinds.has("question")) {
     container.addChild(
-      new Text(theme.fg("warning", `? ${sanitizeTerminalLine(run.question.message)}`), 2, 0),
+      new HangingText(
+        `${theme.fg("warning", "?")} `,
+        theme.fg("warning", sanitizeTerminalLine(run.question.message)),
+      ),
     );
   }
   if (run.warning && !noticeKinds.has("warning")) {
     container.addChild(
-      new Text(theme.fg("warning", `! ${sanitizeTerminalLine(run.warning)}`), 2, 0),
+      new HangingText(
+        `${theme.fg("warning", "!")} `,
+        theme.fg("warning", sanitizeTerminalLine(run.warning)),
+      ),
     );
   }
   if (run.progress) {
     container.addChild(
-      new Text(theme.fg("muted", `… ${sanitizeTerminalLine(run.progress)}`), 2, 0),
+      new HangingText(
+        `${theme.fg("muted", "…")} `,
+        theme.fg("muted", sanitizeTerminalLine(run.progress)),
+      ),
     );
   }
   if (
-    activity.length === 0 &&
+    items.length === 0 &&
     run.question === undefined &&
     run.warning === undefined &&
     run.progress === undefined
   ) {
     container.addChild(new Text(theme.fg("dim", "No child activity yet."), 2, 0));
   }
+
   const assistantOutput =
     run.finalText ??
     [...run.sessionEvents].reverse().find((event) => event.type === "assistant")?.text;
   if (assistantOutput) {
     container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("accent", theme.bold("Assistant")), 0, 0));
+    container.addChild(
+      new Text(
+        `${theme.fg("accent", theme.bold("Final report"))}  ${theme.fg("dim", "sent to parent")}`,
+        0,
+        0,
+      ),
+    );
     container.addChild(
       new Markdown(assistantOutput, 2, 0, getMarkdownTheme(), {
         color: (text) => theme.fg("toolOutput", text),
@@ -123,20 +265,10 @@ export function renderSubagentSessionOutput(run: SubagentRunView, theme: Theme):
     container.addChild(new Spacer(1));
     container.addChild(new Text(theme.fg("error", `Error: ${run.error}`), 0, 0));
   }
+
   container.addChild(new Spacer(1));
-  const endedAt = run.endedAt ?? run.lastActivityAt;
   const usage = `${compactNumber(run.usage.totalTokens)} tokens · $${run.usage.cost.toFixed(4)}`;
-  container.addChild(
-    new Text(
-      theme.fg(
-        "dim",
-        `${run.context} · ${run.writeIntent} · ${run.model}:${run.effort} · ${duration(run.startedAt, endedAt)} · ${usage}`,
-      ),
-      0,
-      0,
-    ),
-  );
-  if (run.sessionFile)
-    container.addChild(new Text(theme.fg("dim", `session ${run.sessionFile}`), 0, 0));
+  container.addChild(new Text(theme.fg("dim", usage), 0, 0));
+  if (options.showTechnicalDetails) addTechnicalDetails(container, run, theme);
   return container;
 }

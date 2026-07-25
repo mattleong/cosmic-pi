@@ -135,6 +135,65 @@ describe("subagent tool", () => {
     });
   });
 
+  it("returns structured activity and one final report without raw transcript duplication", async () => {
+    const completed = view({
+      state: "completed",
+      endedAt: 2,
+      finalText: "Viewport report.",
+      transcript: ["Viewport report."],
+      sessionEvents: [
+        {
+          type: "tool",
+          toolCallId: "tool-1",
+          toolName: "read",
+          target: "README.md",
+          state: "completed",
+          startedAt: 1,
+          endedAt: 2,
+        },
+        { type: "assistant", text: "Viewport report.", createdAt: 2 },
+      ],
+    });
+    const service: SubagentServiceShape = {
+      start: () => Effect.succeed(completed),
+      waitForForeground: () => Effect.succeed(completed),
+      list: Effect.succeed([completed]),
+      status: () => Effect.succeed(completed),
+      send: () => Effect.succeed(completed),
+      reply: () => Effect.succeed(completed),
+      interrupt: () => Effect.succeed(completed),
+      resume: () => Effect.succeed(completed),
+      rename: () => Effect.succeed(completed),
+      stop: () => Effect.succeed(completed),
+      projection: Effect.succeed({ revision: 1, runs: [completed] }),
+    };
+    let tool: CapturedTool | undefined;
+    const pi = {
+      registerTool: (definition: unknown) => {
+        tool = definition as CapturedTool;
+      },
+      getThinkingLevel: () => "high",
+      getActiveTools: () => ["read"],
+    } as unknown as ExtensionAPI;
+    registerSubagentTool(pi, {
+      run: (effect) =>
+        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
+    });
+
+    const result = await tool?.execute(
+      "call",
+      { action: "status", runId: "agent-1" },
+      undefined,
+      undefined,
+      context,
+    );
+    const text = result?.content[0]?.text ?? "";
+    expect(text).toContain("Activity:\n✓ read  README.md");
+    expect(text).toContain("Final report:\nViewport report.");
+    expect(text).not.toContain("Recent transcript");
+    expect(text.match(/Viewport report\./g)).toHaveLength(1);
+  });
+
   it("requires write intent and lists authenticated models without a runtime", async () => {
     let tool: CapturedTool | undefined;
     const pi = {

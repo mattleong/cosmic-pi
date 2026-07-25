@@ -75,6 +75,11 @@ export class SubagentFleetComponent implements Component {
   private selected = 0;
   private selectedId: string | undefined;
   private details = false;
+  private detailScroll = 0;
+  private detailMaxScroll = 0;
+  private detailLineCount = 0;
+  private showTechnicalDetails = false;
+  private alternateHelp = false;
   private pendingStop: string | undefined;
   private readonly options: FleetOptions;
 
@@ -83,10 +88,12 @@ export class SubagentFleetComponent implements Component {
   }
 
   private reconcile(runs: ReadonlyArray<SubagentRunView>): void {
+    const previousId = this.selectedId;
     const existing = this.selectedId ? runs.findIndex((run) => run.id === this.selectedId) : -1;
     this.selected =
       existing >= 0 ? existing : Math.min(this.selected, Math.max(0, runs.length - 1));
     this.selectedId = runs[this.selected]?.id;
+    if (previousId !== undefined && previousId !== this.selectedId) this.detailScroll = 0;
   }
 
   handleInput(data: string): void {
@@ -102,14 +109,26 @@ export class SubagentFleetComponent implements Component {
       this.options.close();
       return;
     }
-    if (matchesKey(data, Key.up) || data === "k") {
+    if (matchesKey(data, Key.ctrl("k"))) {
+      this.detailScroll = Math.min(this.detailMaxScroll, this.detailScroll + 1);
+    } else if (matchesKey(data, Key.ctrl("j"))) {
+      this.detailScroll = Math.max(0, this.detailScroll - 1);
+    } else if (matchesKey(data, Key.up) || data === "k") {
       this.selected = Math.max(0, this.selected - 1);
       this.selectedId = runs[this.selected]?.id;
+      this.detailScroll = 0;
     } else if (matchesKey(data, Key.down) || data === "j") {
       this.selected = Math.min(Math.max(0, runs.length - 1), this.selected + 1);
       this.selectedId = runs[this.selected]?.id;
+      this.detailScroll = 0;
     } else if (matchesKey(data, Key.enter)) {
       this.details = !this.details;
+      this.detailScroll = 0;
+    } else if (data === "t") {
+      this.showTechnicalDetails = !this.showTechnicalDetails;
+      this.detailScroll = 0;
+    } else if (data === "?") {
+      this.alternateHelp = !this.alternateHelp;
     } else if (data === "x" && selected) {
       if (this.pendingStop === selected.id) {
         this.pendingStop = undefined;
@@ -147,10 +166,9 @@ export class SubagentFleetComponent implements Component {
     const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
     const title = ` /subagents · ${active} active${waiting ? ` · ${waiting} waiting` : ""} `;
     const top = `╭${title}${"─".repeat(Math.max(0, safeWidth - visibleWidth(title) - 2))}╮`;
-    const help = this.pendingStop
-      ? ` press x again to stop ${this.pendingStop} · esc cancel `
-      : " ↑↓/jk select  enter details  m message  i interrupt  r resume  n rename  x stop  esc close ";
-    const bottom = `╰${"─".repeat(Math.max(0, safeWidth - visibleWidth(help) - 2))}${help}╯`;
+    const help = this.helpText(safeWidth);
+    const safeHelp = truncateToWidth(help, Math.max(0, safeWidth - 2), "");
+    const bottom = `╰${"─".repeat(Math.max(0, safeWidth - visibleWidth(safeHelp) - 2))}${safeHelp}╯`;
     if (height === 1) return [truncateToWidth(top, safeWidth, "")];
     if (safeWidth === 1) return Array.from({ length: height }, () => " ");
     const bodyHeight = height - 2;
@@ -185,9 +203,47 @@ export class SubagentFleetComponent implements Component {
     return runs.slice(start, start + size).map((run, offset) => ({ run, index: start + offset }));
   }
 
+  private helpText(width: number): string {
+    if (this.pendingStop) return ` x confirm stop ${this.pendingStop} · esc cancel `;
+    if (width >= 100)
+      return " ↑↓/jk select · ^J/^K scroll · enter details · t technical · m message · i interrupt · r resume · n rename · x stop · esc close ";
+    if (width >= 60)
+      return " jk select · ^J/^K scroll · enter details · t tech · ? keys · esc close ";
+    return this.alternateHelp
+      ? " m msg · i int · r res · n name · x/esc "
+      : " jk · ^J/^K scroll · t tech · ? help ";
+  }
+
   private detailLines(run: SubagentRunView | undefined, width: number): string[] {
     if (!run) return [this.options.theme.fg("dim", "No subagents in this parent session.")];
-    return renderSubagentSessionOutput(run, this.options.theme).render(Math.max(1, width));
+    return renderSubagentSessionOutput(run, this.options.theme, {
+      now: run.lastActivityAt,
+      showTechnicalDetails: this.showTechnicalDetails,
+    }).render(Math.max(1, width));
+  }
+
+  private detailWindow(lines: string[], height: number, width: number): string[] {
+    if (height <= 0) {
+      this.detailMaxScroll = 0;
+      return [];
+    }
+    const hasOverflow = lines.length > height;
+    const bodyHeight = hasOverflow && height > 1 ? height - 1 : height;
+    if (this.detailScroll > 0 && lines.length > this.detailLineCount) {
+      this.detailScroll += lines.length - this.detailLineCount;
+    }
+    this.detailLineCount = lines.length;
+    this.detailMaxScroll = Math.max(0, lines.length - bodyHeight);
+    this.detailScroll = Math.min(this.detailScroll, this.detailMaxScroll);
+    const start = Math.max(0, lines.length - bodyHeight - this.detailScroll);
+    const visible = lines.slice(start, start + bodyHeight);
+    if (!hasOverflow) return visible;
+    const end = Math.min(lines.length, start + bodyHeight);
+    const position = this.options.theme.fg(
+      "dim",
+      ` ${start + 1}–${end} of ${lines.length} · ^K up · ^J down `,
+    );
+    return [pad(position, width), ...visible];
   }
 
   private renderWide(
@@ -205,12 +261,11 @@ export class SubagentFleetComponent implements Component {
         this.runLine(run, index, leftWidth),
       ),
     ];
-    const detail = this.detailLines(selected, rightWidth);
-    const start = Math.max(0, detail.length - height);
+    const detail = this.detailWindow(this.detailLines(selected, rightWidth), height, rightWidth);
     return Array.from(
       { length: height },
       (_, index) =>
-        `│${pad(left[index] ?? "", leftWidth)}│${pad(detail[start + index] ?? "", rightWidth)}│`,
+        `│${pad(left[index] ?? "", leftWidth)}│${pad(detail[index] ?? "", rightWidth)}│`,
     );
   }
 
@@ -230,12 +285,11 @@ export class SubagentFleetComponent implements Component {
     ];
     const divider = this.options.theme.fg("borderMuted", `├${"─".repeat(inner)}┤`);
     const remaining = Math.max(0, height - list.length - 1);
-    const detail = this.detailLines(selected, inner);
-    const start = Math.max(0, detail.length - remaining);
+    const detail = this.detailWindow(this.detailLines(selected, inner), remaining, inner);
     const lines = [
       ...list.map((line) => `│${pad(line, inner)}│`),
       divider,
-      ...detail.slice(start, start + remaining).map((line) => `│${pad(line, inner)}│`),
+      ...detail.map((line) => `│${pad(line, inner)}│`),
     ];
     while (lines.length < height) lines.push(`│${" ".repeat(inner)}│`);
     return lines.slice(0, height);
@@ -250,12 +304,15 @@ export class SubagentFleetComponent implements Component {
     const inner = width - 2;
     const lines =
       this.details && selected
-        ? this.detailLines(selected, inner)
+        ? this.detailWindow(this.detailLines(selected, inner), height, inner)
         : runs.length
           ? this.visibleRuns(runs, height).map(({ run, index }) => this.runLine(run, index, inner))
           : [this.options.theme.fg("dim", "No subagents.")];
-    const start = Math.max(0, lines.length - height);
-    const rendered = lines.slice(start, start + height).map((line) => `│${pad(line, inner)}│`);
+    if (!this.details) {
+      this.detailMaxScroll = 0;
+      this.detailLineCount = 0;
+    }
+    const rendered = lines.slice(0, height).map((line) => `│${pad(line, inner)}│`);
     while (rendered.length < height) rendered.push(`│${" ".repeat(inner)}│`);
     return rendered;
   }

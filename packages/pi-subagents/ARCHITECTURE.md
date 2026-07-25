@@ -14,9 +14,9 @@
 - `src/boundary/host-ui.ts` — synchronous immutable fleet projection bridge.
 - `src/run/` — run model, protocol decoding, errors, bounded text and structured child-session timelines, projection, and scoped fleet owner.
 - `src/tools/subagent.ts` — the single agent-facing management tool, with cooperative `pi-code-previews` shell rendering.
-- `src/tools/renderers/session-output.ts` — pure expanded child-session presentation with Markdown assistant output and structured tool activity.
+- `src/tools/renderers/session-output.ts` — shared width-aware child-session presentation for tool results and fleet details, with grouped activity, Markdown final reports, and optional technical metadata.
 - `src/settings/controller.ts` — `/subagents` command registration.
-- `src/ui/` — pure responsive fleet presentation and terminal-text sanitization.
+- `src/ui/` — pure responsive fleet presentation, scroll projection, and terminal-text sanitization.
 
 ## Ownership
 

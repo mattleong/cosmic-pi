@@ -183,6 +183,19 @@ function resolveStart(
   });
 }
 
+const formatActivity = (run: SubagentRunView): string | undefined => {
+  const lines = run.sessionEvents
+    .flatMap((event) => {
+      if (event.type === "assistant" || (event.type === "notice" && event.kind === "progress"))
+        return [];
+      if (event.type === "notice") return [`${event.kind}: ${event.text}`];
+      const glyph = event.state === "running" ? "▶" : event.state === "failed" ? "×" : "✓";
+      return [`${glyph} ${event.toolName}${event.target ? `  ${event.target}` : ""}`];
+    })
+    .slice(-12);
+  return lines.length > 0 ? `Activity:\n${lines.join("\n")}` : undefined;
+};
+
 const formatRun = (run: SubagentRunView, detailed = false): string => {
   const header = `${run.id} ${run.name} · ${run.state} · ${run.writeIntent} · ${run.model}:${run.effort}`;
   if (!detailed) return header;
@@ -196,10 +209,8 @@ const formatRun = (run: SubagentRunView, detailed = false): string => {
     run.question ? `question=${run.question.message}` : undefined,
     run.error ? `error=${run.error}` : undefined,
     `usage=${run.usage.totalTokens} tokens · $${run.usage.cost.toFixed(4)}`,
-    run.finalText ? `\n${run.finalText}` : undefined,
-    run.transcript.length
-      ? `\nRecent transcript:\n${run.transcript.slice(-30).join("\n")}`
-      : undefined,
+    formatActivity(run),
+    run.finalText ? `Final report:\n${run.finalText}` : undefined,
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
@@ -227,7 +238,7 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
     name: "subagent",
     label: "Subagent",
     description:
-      "Start and manage session-scoped foreground or background subagents. Output is bounded; inspect status for current progress and transcript.",
+      "Start and manage session-scoped foreground or background subagents. Output is bounded; inspect status for current activity and final report.",
     promptSnippet:
       "Start and manage named foreground/background subagents with explicit model, effort, context, and write intent",
     promptGuidelines: [
@@ -320,7 +331,7 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
       const details = result.details as SubagentToolDetails | undefined;
       if (expanded && !isPartial && details?.action !== "list" && details?.runs?.length === 1) {
         const run = details.runs[0];
-        if (run) return renderSubagentSessionOutput(run, theme);
+        if (run) return renderSubagentSessionOutput(run, theme, { now: run.lastActivityAt });
       }
       let text = sanitizeTerminalText(
         result.content
