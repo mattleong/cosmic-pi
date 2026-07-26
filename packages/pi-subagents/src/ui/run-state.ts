@@ -21,6 +21,12 @@ export const runStateGlyph = (state: SubagentRunState): string => {
   }
 };
 
+export const animatedRunStateGlyph = (state: SubagentRunState, frame: number): string => {
+  if (state === "starting") return ["◌", "◔", "◑", "◕"][Math.abs(frame) % 4] ?? "◌";
+  if (state === "running") return ["·", "•", "●", "•"][Math.abs(frame) % 4] ?? "●";
+  return runStateGlyph(state);
+};
+
 export const runStateLabel = (state: SubagentRunState): string => {
   switch (state) {
     case "starting":

@@ -8,11 +8,20 @@ import {
   type ExtensionContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
+import {
+  Container,
+  Markdown,
+  Spacer,
+  Text,
+  truncateToWidth,
+  visibleWidth,
+  type Component,
+} from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { withCodePreviewShell } from "pi-code-previews";
 import { Type, type Static } from "typebox";
+import { synchronousNow } from "../boundary/native-clock.ts";
 import { piToolsForWriteIntent } from "../run/coordination.ts";
 import { InvalidSubagentRequestError, type SubagentError } from "../run/errors.ts";
 import {
@@ -29,7 +38,12 @@ import {
   type SubagentRunObservation,
 } from "../run/service.ts";
 import { MAX_TASK_CHARS, safeTextPrefix } from "../run/state.ts";
-import { runStateColor, runStateGlyph, runStateLabel } from "../ui/run-state.ts";
+import {
+  animatedRunStateGlyph,
+  runStateColor,
+  runStateGlyph,
+  runStateLabel,
+} from "../ui/run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 
 const ACTIONS = [
@@ -145,6 +159,7 @@ export interface SubagentToolDetails {
   readonly models?: ReadonlyArray<SubagentModelView>;
   readonly awaitUntil?: SubagentAwaitUntil;
   readonly timedOut?: boolean;
+  readonly cancelled?: boolean;
 }
 
 export interface SubagentToolRuntime {
@@ -527,19 +542,100 @@ const formatAwaitProgress = (
     ),
   ].join("\n");
 
+const awaitHeaderColor = (
+  runs: ReadonlyArray<SubagentRunView>,
+): "warning" | "success" | "error" => {
+  if (runs.some((run) => run.state === "failed")) return "error";
+  return runs.length > 0 && runs.every((run) => isTerminalRunState(run.state))
+    ? "success"
+    : "warning";
+};
+
+const padVisible = (value: string, width: number): string =>
+  `${value}${" ".repeat(Math.max(0, width - visibleWidth(value)))}`;
+
 export const renderAwaitProgress = (
   runs: ReadonlyArray<SubagentRunView>,
   until: SubagentAwaitUntil,
   theme: Theme,
-): string =>
-  [
-    theme.fg("warning", awaitProgressHeader(runs, until)),
-    ...runs.map((run) => {
-      const name = sanitizeTerminalLine(run.name);
-      const id = sanitizeTerminalLine(run.id);
-      return `${theme.fg(runStateColor(run.state), `${runStateGlyph(run.state)} ${name}`)} ${theme.fg("dim", `(${id})`)} · ${theme.fg("toolOutput", awaitRunStatus(run))}`;
-    }),
+  frame?: number,
+): string => {
+  const names = runs.map((run) => {
+    const glyph =
+      frame === undefined ? runStateGlyph(run.state) : animatedRunStateGlyph(run.state, frame);
+    return theme.fg(runStateColor(run.state), `${glyph} ${sanitizeTerminalLine(run.name)}`);
+  });
+  const nameWidth = names.reduce((width, name) => Math.max(width, visibleWidth(name)), 0);
+  return [
+    theme.fg(awaitHeaderColor(runs), awaitProgressHeader(runs, until)),
+    ...runs.map(
+      (run, index) =>
+        `${padVisible(names[index] ?? "", nameWidth)} · ${theme.fg("toolOutput", awaitRunStatus(run))}`,
+    ),
   ].join("\n");
+};
+
+class AwaitProgressComponent implements Component {
+  private readonly runs: ReadonlyArray<SubagentRunView>;
+  private readonly until: SubagentAwaitUntil;
+  private readonly theme: Theme;
+
+  constructor(runs: ReadonlyArray<SubagentRunView>, until: SubagentAwaitUntil, theme: Theme) {
+    this.runs = runs;
+    this.until = until;
+    this.theme = theme;
+  }
+
+  render(width: number): string[] {
+    const safeWidth = Math.max(1, width);
+    const frame = Math.floor(synchronousNow() / 160);
+    const rendered = renderAwaitProgress(this.runs, this.until, this.theme, frame).split("\n");
+    const header = truncateToWidth(rendered[0] ?? "", safeWidth);
+    return [
+      header,
+      ...rendered.slice(1).flatMap((line) => {
+        if (visibleWidth(line) <= safeWidth) return [line];
+        const separator = line.indexOf(" · ");
+        if (separator < 0) return [truncateToWidth(line, safeWidth)];
+        const name = line.slice(0, separator);
+        const status = line.slice(separator + 3);
+        return [truncateToWidth(name, safeWidth), truncateToWidth(`  ${status}`, safeWidth)];
+      }),
+    ];
+  }
+
+  invalidate(): void {
+    // Rendering is derived from the current clock frame.
+  }
+}
+
+const effortColor = (
+  effort: SubagentEffort,
+):
+  | "thinkingOff"
+  | "thinkingMinimal"
+  | "thinkingLow"
+  | "thinkingMedium"
+  | "thinkingHigh"
+  | "thinkingXhigh"
+  | "thinkingMax" => {
+  switch (effort) {
+    case "off":
+      return "thinkingOff";
+    case "minimal":
+      return "thinkingMinimal";
+    case "low":
+      return "thinkingLow";
+    case "medium":
+      return "thinkingMedium";
+    case "high":
+      return "thinkingHigh";
+    case "xhigh":
+      return "thinkingXhigh";
+    case "max":
+      return "thinkingMax";
+  }
+};
 
 const renderCompactRunSummaries = (runs: ReadonlyArray<SubagentRunView>, theme: Theme): string =>
   runs
@@ -549,7 +645,7 @@ const renderCompactRunSummaries = (runs: ReadonlyArray<SubagentRunView>, theme: 
       const model = sanitizeTerminalLine(run.model);
       const effort = sanitizeTerminalLine(run.effort);
       const state = sanitizeTerminalLine(runStateLabel(run.state));
-      return `${theme.fg(color, `${runStateGlyph(run.state)} ${name}`)} · ${theme.fg("toolOutput", model)} · ${theme.fg("dim", `effort: ${effort}`)} · ${theme.fg(color, state)}`;
+      return `${theme.fg(color, `${runStateGlyph(run.state)} ${name}`)} · ${theme.fg("toolOutput", model)} · ${theme.fg(effortColor(run.effort), `effort: ${effort}`)} · ${theme.fg(color, state)}`;
     })
     .join("\n");
 
@@ -604,23 +700,126 @@ const renderStartFailures = (
     })
     .join("\n");
 
+export interface OutcomeBanner {
+  readonly color: "warning" | "success" | "error" | "accent";
+  readonly text: string;
+}
+
 const renderStartAwaitOverview = (
   runs: ReadonlyArray<SubagentRunView>,
   failures: ReadonlyArray<SubagentStartFailure>,
   expanded: boolean,
   theme: Theme,
+  banner?: OutcomeBanner,
 ): string =>
-  [renderCompactRunSummaries(runs, theme), renderStartFailures(failures, expanded, theme)]
+  [
+    banner ? theme.fg(banner.color, banner.text) : "",
+    renderCompactRunSummaries(runs, theme),
+    renderStartFailures(failures, expanded, theme),
+  ]
     .filter(Boolean)
     .join("\n");
+
+const renderResponsiveRunRows = (
+  runs: ReadonlyArray<SubagentRunView>,
+  width: number,
+  theme: Theme,
+): string[] => {
+  const safeWidth = Math.max(1, width);
+  const names = runs.map((run) => `${runStateGlyph(run.state)} ${sanitizeTerminalLine(run.name)}`);
+  const efforts = runs.map((run) => `effort: ${sanitizeTerminalLine(run.effort)}`);
+  const states = runs.map((run) => sanitizeTerminalLine(runStateLabel(run.state)));
+  const nameWidth = names.reduce((max, name) => Math.max(max, visibleWidth(name)), 0);
+  const effortWidth = efforts.reduce((max, effort) => Math.max(max, visibleWidth(effort)), 0);
+  const stateWidth = states.reduce((max, state) => Math.max(max, visibleWidth(state)), 0);
+  const modelWidth = safeWidth - nameWidth - effortWidth - stateWidth - 9;
+  if (safeWidth >= 64 && modelWidth >= 8)
+    return runs.map((run, index) => {
+      const name = theme.fg(runStateColor(run.state), names[index] ?? "");
+      const model = truncateToWidth(sanitizeTerminalLine(run.model), modelWidth);
+      const effort = efforts[index] ?? "";
+      const state = theme.fg(runStateColor(run.state), states[index] ?? "");
+      return `${padVisible(name, nameWidth)} · ${padVisible(theme.fg("toolOutput", model), modelWidth)} · ${padVisible(theme.fg(effortColor(run.effort), effort), effortWidth)} · ${padVisible(state, stateWidth)}`;
+    });
+  return runs.flatMap((run, index) => {
+    const color = runStateColor(run.state);
+    const name = theme.fg(color, names[index] ?? "");
+    const state = theme.fg(color, states[index] ?? "");
+    const primary = `${name} · ${state}`;
+    const effort = efforts[index] ?? "";
+    const modelWidth = Math.max(1, safeWidth - visibleWidth(effort) - 3);
+    const model = theme.fg(
+      "toolOutput",
+      truncateToWidth(sanitizeTerminalLine(run.model), modelWidth),
+    );
+    return [
+      ...(visibleWidth(primary) <= safeWidth
+        ? [primary]
+        : [truncateToWidth(name, safeWidth), truncateToWidth(`  ${state}`, safeWidth)]),
+      truncateToWidth(`${model} · ${theme.fg(effortColor(run.effort), effort)}`, safeWidth),
+    ];
+  });
+};
+
+class RunOverviewComponent implements Component {
+  private readonly runs: ReadonlyArray<SubagentRunView>;
+  private readonly failures: ReadonlyArray<SubagentStartFailure>;
+  private readonly expanded: boolean;
+  private readonly theme: Theme;
+  private readonly reportCount: number;
+  private readonly banner: OutcomeBanner | undefined;
+
+  constructor(
+    runs: ReadonlyArray<SubagentRunView>,
+    failures: ReadonlyArray<SubagentStartFailure>,
+    expanded: boolean,
+    theme: Theme,
+    reportCount: number,
+    banner?: OutcomeBanner,
+  ) {
+    this.runs = runs;
+    this.failures = failures;
+    this.expanded = expanded;
+    this.theme = theme;
+    this.reportCount = reportCount;
+    this.banner = banner;
+  }
+
+  render(width: number): string[] {
+    const safeWidth = Math.max(1, width);
+    return [
+      ...(this.banner
+        ? [truncateToWidth(this.theme.fg(this.banner.color, this.banner.text), safeWidth)]
+        : []),
+      ...renderResponsiveRunRows(this.runs, safeWidth, this.theme),
+      ...renderStartFailures(this.failures, this.expanded, this.theme)
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => truncateToWidth(line, safeWidth)),
+      ...(this.reportCount > 0
+        ? [
+            truncateToWidth(
+              reportAffordance(this.reportCount, this.expanded, this.theme),
+              safeWidth,
+            ),
+          ]
+        : []),
+    ];
+  }
+
+  invalidate(): void {
+    // Rendering is a pure projection of immutable result details.
+  }
+}
 
 export const renderStartAwaitResult = (
   runs: ReadonlyArray<SubagentRunView>,
   expanded: boolean,
   theme: Theme,
   failures: ReadonlyArray<SubagentStartFailure> = [],
+  banner?: OutcomeBanner,
 ): string => {
-  const overview = renderStartAwaitOverview(runs, failures, expanded, theme);
+  const overview = renderStartAwaitOverview(runs, failures, expanded, theme, banner);
   const sections = expandedRunReportSections(runs);
   if (sections.length === 0) return overview;
   const affordance = reportAffordance(sections.length, expanded, theme);
@@ -638,12 +837,14 @@ export const renderExpandedStartAwaitResult = (
   runs: ReadonlyArray<SubagentRunView>,
   theme: Theme,
   failures: ReadonlyArray<SubagentStartFailure> = [],
+  banner?: OutcomeBanner,
 ): Component => {
   const container = new Container();
-  container.addChild(new Text(renderStartAwaitOverview(runs, failures, true, theme), 0, 0));
   const sections = expandedRunReportSections(runs);
+  container.addChild(
+    new RunOverviewComponent(runs, failures, true, theme, sections.length, banner),
+  );
   if (sections.length === 0) return container;
-  container.addChild(new Text(reportAffordance(sections.length, true, theme), 0, 0));
   for (const section of sections) {
     container.addChild(new Spacer(1));
     const heading = section.kind === "report" ? "Final report" : "Failure";
@@ -663,6 +864,35 @@ export const renderExpandedStartAwaitResult = (
     else container.addChild(new Text(theme.fg("error", section.text), 2, 0));
   }
   return container;
+};
+
+export const awaitResultBanner = (details: SubagentToolDetails): OutcomeBanner | undefined => {
+  const runs = details.runs ?? [];
+  const unfinished = runs.filter((run) => !isTerminalRunState(run.state));
+  if (details.cancelled)
+    return {
+      color: "warning",
+      text:
+        runs.length === 0
+          ? "Await cancelled · subagents continue running"
+          : `Await cancelled · ${unfinished.length} agent${unfinished.length === 1 ? " continues" : "s continue"} running`,
+    };
+  if (details.timedOut)
+    return {
+      color: "warning",
+      text: `Await timed out · ${unfinished.length} agent${unfinished.length === 1 ? "" : "s"} still running`,
+    };
+  if (details.awaitUntil !== "any_finished") return undefined;
+  const first = runs
+    .filter((run) => isTerminalRunState(run.state))
+    .sort((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity))[0];
+  if (!first) return undefined;
+  const name = sanitizeTerminalLine(first.name);
+  const outcome = runStateLabel(first.state);
+  return {
+    color: first.state === "failed" ? "error" : "accent",
+    text: `${name} ${outcome} first${unfinished.length > 0 ? ` · ${unfinished.length} agent${unfinished.length === 1 ? " continues" : "s continue"} running` : ""}`,
+  };
 };
 
 const managementAcknowledgement = (
@@ -728,6 +958,9 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
         };
       }
 
+      let latestAwaitRuns: ReadonlyArray<SubagentRunView> = [];
+      const requestedAwaitUntil =
+        input.action === "await" ? (input.until ?? "all_finished") : undefined;
       const effect = Effect.gen(function* () {
         const service = yield* SubagentService;
         const observeStatus = (id: string) =>
@@ -805,9 +1038,10 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
             return yield* finishStatus(yield* requiredTargetIds(input), false);
           case "await": {
             const ids = yield* requiredTargetIds(input);
-            const until = input.until ?? "all_finished";
+            const until = requestedAwaitUntil ?? "all_finished";
             let lastUpdate = "";
             const updateAwait = (runs: ReadonlyArray<SubagentRunView>) => {
+              latestAwaitRuns = runs;
               const text = formatAwaitProgress(runs, until);
               if (text === lastUpdate) return;
               lastUpdate = text;
@@ -894,12 +1128,31 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
             return { runs: [], timedOut: false };
         }
       });
-      const executionResult: {
+      const cancelAwait = () => {
+        if (input.action !== "await" || !requestedAwaitUntil) return;
+        onUpdate?.({
+          content: [{ type: "text", text: "Await cancelled; subagents continue running." }],
+          details: {
+            action: "await",
+            runs: latestAwaitRuns,
+            awaitUntil: requestedAwaitUntil,
+            cancelled: true,
+          } satisfies SubagentToolDetails,
+        });
+      };
+      if (signal?.aborted) cancelAwait();
+      else signal?.addEventListener("abort", cancelAwait, { once: true });
+      let executionResult: {
         readonly runs: ReadonlyArray<SubagentRunView>;
         readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
         readonly timedOut: boolean;
         readonly text?: string;
-      } = await runtime.run(effect, signal);
+      };
+      try {
+        executionResult = await runtime.run(effect, signal);
+      } finally {
+        signal?.removeEventListener("abort", cancelAwait);
+      }
       const { runs, timedOut, text: formattedText } = executionResult;
       const startFailures = executionResult.startFailures ?? [];
       const details: SubagentToolDetails =
@@ -910,7 +1163,12 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
               ...(startFailures.length > 0 ? { startFailures } : {}),
             }
           : input.action === "await"
-            ? { action: input.action, runs, ...(timedOut ? { timedOut: true } : {}) }
+            ? {
+                action: input.action,
+                runs,
+                awaitUntil: requestedAwaitUntil ?? "all_finished",
+                ...(timedOut ? { timedOut: true } : {}),
+              }
             : { action: input.action, ...(timedOut ? { timedOut: true } : {}) };
       const text =
         input.action === "start"
@@ -948,17 +1206,34 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
     },
     renderResult(result, { isPartial, expanded }, theme) {
       const details = result.details as SubagentToolDetails | undefined;
-      if (isPartial && details?.action === "await" && details.runs && details.awaitUntil)
-        return new Text(renderAwaitProgress(details.runs, details.awaitUntil, theme), 0, 0);
+      if (isPartial && details?.action === "await" && details.runs && details.awaitUntil) {
+        if (details.cancelled)
+          return new RunOverviewComponent(
+            details.runs,
+            [],
+            false,
+            theme,
+            0,
+            awaitResultBanner(details),
+          );
+        return new AwaitProgressComponent(details.runs, details.awaitUntil, theme);
+      }
       if (
         !isPartial &&
         (details?.action === "start" || details?.action === "await") &&
         details.runs
       ) {
         const failures = details.startFailures ?? [];
-        return expanded
-          ? renderExpandedStartAwaitResult(details.runs, theme, failures)
-          : new Text(renderStartAwaitResult(details.runs, false, theme, failures), 0, 0);
+        const banner = details.action === "await" ? awaitResultBanner(details) : undefined;
+        if (expanded) return renderExpandedStartAwaitResult(details.runs, theme, failures, banner);
+        return new RunOverviewComponent(
+          details.runs,
+          failures,
+          false,
+          theme,
+          expandedRunReportSections(details.runs).length,
+          banner,
+        );
       }
       let text = sanitizeTerminalText(
         result.content

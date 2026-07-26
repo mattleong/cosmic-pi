@@ -6,6 +6,7 @@ import {
   type ExtensionContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, it } from "vitest";
 import { piToolsForWriteIntent } from "../src/run/coordination.ts";
@@ -13,6 +14,7 @@ import { SubagentProcessError } from "../src/run/errors.ts";
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
 import { SubagentService, type SubagentServiceShape } from "../src/run/service.ts";
 import {
+  awaitResultBanner,
   registerSubagentTool,
   renderAwaitProgress,
   renderExpandedStartAwaitResult,
@@ -137,7 +139,7 @@ describe("subagent tool", () => {
     );
 
     expect(rendered).toContain(
-      "<warning>Waiting for all agents · 2 of 4 finished · 1 running · 1 waiting for you</warning>",
+      "<error>Waiting for all agents · 2 of 4 finished · 1 running · 1 waiting for you</error>",
     );
     expect(rendered).toContain("<success>● running-agent</success>");
     expect(rendered).toContain("<warning>? waiting-agent</warning>");
@@ -147,6 +149,43 @@ describe("subagent tool", () => {
     expect(renderAwaitProgress([view({ state: "running" })], "any_finished", theme)).toContain(
       "Waiting for first agent · 0 of 1 finished · 1 running",
     );
+    expect(renderAwaitProgress([view({ state: "completed" })], "all_finished", theme)).toContain(
+      "<success>1 agent finished</success>",
+    );
+    expect(renderAwaitProgress([view({ state: "running" })], "all_finished", theme, 0)).toContain(
+      "<success>· auth-review</success>",
+    );
+    expect(renderAwaitProgress([view({ state: "running" })], "all_finished", theme, 2)).toContain(
+      "<success>● auth-review</success>",
+    );
+  });
+
+  it("projects timeout, cancellation, and first-finished await outcomes", () => {
+    const running = view({ name: "still-working", state: "running" });
+    const completed = view({
+      id: "agent-2",
+      name: "first-agent",
+      state: "completed",
+      endedAt: 10,
+    });
+    expect(awaitResultBanner({ action: "await", runs: [running], timedOut: true })).toEqual({
+      color: "warning",
+      text: "Await timed out · 1 agent still running",
+    });
+    expect(awaitResultBanner({ action: "await", runs: [running], cancelled: true })).toEqual({
+      color: "warning",
+      text: "Await cancelled · 1 agent continues running",
+    });
+    expect(
+      awaitResultBanner({
+        action: "await",
+        runs: [running, completed],
+        awaitUntil: "any_finished",
+      }),
+    ).toEqual({
+      color: "accent",
+      text: "first-agent finished first · 1 agent continues running",
+    });
   });
 
   it("keeps completed start and await cards compact until expanded", () => {
@@ -164,7 +203,7 @@ describe("subagent tool", () => {
 
     const compact = renderStartAwaitResult([run], false, theme);
     expect(compact).toBe(
-      "<success>✓ review-agent</success> · <toolOutput>openai-codex/gpt-5.6-sol</toolOutput> · <dim>effort: high</dim> · <success>finished</success>\n<dim>▸ final report · expand to view</dim>",
+      "<success>✓ review-agent</success> · <toolOutput>openai-codex/gpt-5.6-sol</toolOutput> · <thinkingHigh>effort: high</thinkingHigh> · <success>finished</success>\n<dim>▸ final report · expand to view</dim>",
     );
 
     const expanded = renderStartAwaitResult([run], true, theme);
@@ -176,6 +215,28 @@ describe("subagent tool", () => {
     const markdown = renderExpandedStartAwaitResult([run], theme).render(80).join("\n");
     expect(markdown).toContain("Findings");
     expect(markdown).not.toContain("## Findings");
+  });
+
+  it("aligns wide summary columns and truncates models first on narrow terminals", () => {
+    const theme = {
+      fg: (_color: string, text: string) => text,
+    } as unknown as Theme;
+    const first = view({ name: "a", model: "short-model", state: "completed" });
+    const second = view({
+      id: "agent-2",
+      name: "longer-agent-name",
+      model: "a-very-long-provider/model-identifier-that-needs-truncation",
+      state: "completed",
+    });
+    const wide = renderExpandedStartAwaitResult([first, second], theme).render(110);
+    expect(wide[0]?.indexOf("short-model")).toBe(wide[1]?.indexOf("a-very-long"));
+
+    const narrow = renderExpandedStartAwaitResult([second], theme).render(36);
+    expect(narrow[0]).toContain("longer-agent-name");
+    expect(narrow[0]).toContain("finished");
+    expect(narrow[1]).toContain("effort: high");
+    expect(narrow.join("\n")).not.toContain(second.model);
+    expect(narrow.every((line) => visibleWidth(line) <= 36)).toBe(true);
   });
 
   it("keeps partial batch-start failures compact", () => {
