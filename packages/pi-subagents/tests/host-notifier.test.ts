@@ -26,7 +26,7 @@ describe("subagent host notifier", () => {
     expect(options).toEqual({ deliverAs: "followUp", triggerTurn: true });
   });
 
-  it("delivers only explicitly triggering progress and warnings as new turns", () => {
+  it("steers non-triggering warnings instead of deferring them to the next user prompt", () => {
     const sendMessage = vi.fn();
     const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
 
@@ -50,7 +50,7 @@ describe("subagent host notifier", () => {
       triggerTurn: true,
     });
     expect(sendMessage.mock.calls[1]?.[1]).toEqual({
-      deliverAs: "nextTurn",
+      deliverAs: "steer",
       triggerTurn: false,
     });
   });

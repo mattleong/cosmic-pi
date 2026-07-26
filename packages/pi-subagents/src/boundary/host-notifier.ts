@@ -50,7 +50,7 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
         },
         {
           deliverAs:
-            notification.type === "question" ? "steer" : triggerTurn ? "followUp" : "nextTurn",
+            notification.type === "question" ? "steer" : triggerTurn ? "followUp" : "steer",
           triggerTurn,
         },
       );
