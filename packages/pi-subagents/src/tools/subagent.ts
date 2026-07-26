@@ -55,13 +55,21 @@ const SubagentToolParameters = Type.Object({
       description: "Child context; defaults to fresh.",
     }),
   ),
+  backend: Type.Optional(
+    StringEnum(["pi", "claude-cli"] as const, {
+      description: "Execution backend; defaults to pi.",
+    }),
+  ),
   writeIntent: Type.Optional(
     StringEnum(["writer", "read-only"] as const, {
       description: "Required for start. Only one shared-cwd writer may be active.",
     }),
   ),
   model: Type.Optional(
-    Type.String({ description: "Canonical provider/model. Omit to inherit the parent model." }),
+    Type.String({
+      description:
+        "Pi provider/model, or Claude alias/full ID. Pi inherits the parent; Claude defaults to sonnet.",
+    }),
   ),
   effort: Type.Optional(
     StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, {
@@ -119,7 +127,7 @@ function stableParentLeaf(ctx: ExtensionContext): string | undefined {
   return leaf.id;
 }
 
-function resolveModel(
+function resolvePiModel(
   input: SubagentToolInput,
   ctx: ExtensionContext,
 ): Effect.Effect<
@@ -176,7 +184,28 @@ function resolveStart(
       return yield* new InvalidSubagentRequestError({
         message: "action=start requires writeIntent=writer or read-only.",
       });
-    const resolved = yield* resolveModel(input, ctx);
+    const backend = input.backend ?? "pi";
+    if (backend === "claude-cli" && !ctx.isProjectTrusted())
+      return yield* new InvalidSubagentRequestError({
+        message:
+          "Claude CLI subagents require a trusted project because claude -p skips its trust dialog.",
+      });
+    if (backend === "claude-cli" && input.context === "fork")
+      return yield* new InvalidSubagentRequestError({
+        message: "Claude CLI does not support forked Pi context yet; use context=fresh.",
+      });
+    if (
+      backend === "claude-cli" &&
+      input.effort !== undefined &&
+      (input.effort === "off" || input.effort === "minimal")
+    )
+      return yield* new InvalidSubagentRequestError({
+        message: `Claude CLI does not support effort ${input.effort}.`,
+      });
+    const resolved =
+      backend === "pi"
+        ? yield* resolvePiModel(input, ctx)
+        : { model: input.model?.trim() || "sonnet" };
     const parentSessionFile = ctx.sessionManager.getSessionFile();
     const parentLeafId = stableParentLeaf(ctx);
     if (input.context === "fork" && (!parentSessionFile || !parentLeafId))
@@ -192,6 +221,7 @@ function resolveStart(
     ]);
     return {
       ...(input.name?.trim() ? { name: input.name.trim() } : {}),
+      backend,
       task,
       cwd: ctx.cwd,
       execution: input.execution ?? "background",
@@ -199,9 +229,13 @@ function resolveStart(
       writeIntent: input.writeIntent,
       model: resolved.model,
       ...(resolved.runtimeApiKey ? { runtimeApiKey: resolved.runtimeApiKey } : {}),
-      effort: input.effort ?? (pi.getThinkingLevel() as SubagentEffort),
+      effort:
+        input.effort ??
+        (backend === "claude-cli" && ["off", "minimal"].includes(pi.getThinkingLevel())
+          ? "low"
+          : (pi.getThinkingLevel() as SubagentEffort)),
       effortWasExplicit: input.effort !== undefined,
-      activeTools: pi.getActiveTools().filter((name) => !blocked.has(name)),
+      activeTools: backend === "pi" ? pi.getActiveTools().filter((name) => !blocked.has(name)) : [],
       projectTrusted: ctx.isProjectTrusted(),
       parentSessionId: ctx.sessionManager.getSessionId(),
       ...(parentSessionFile ? { parentSessionFile } : {}),
@@ -211,7 +245,7 @@ function resolveStart(
 }
 
 const formatRun = (run: SubagentRunView, detailed = false): string => {
-  const header = `${run.id} ${run.name} · ${run.state} · ${run.writeIntent} · ${run.model}:${run.effort}`;
+  const header = `${run.id} ${run.name} · ${run.state} · ${run.writeIntent} · ${run.backend}/${run.model}:${run.effort}`;
   if (!detailed) return header;
   const field = (label: string, value: string): string => `  ${label.padEnd(10)} ${value}`;
   const formatted = [
@@ -219,7 +253,7 @@ const formatRun = (run: SubagentRunView, detailed = false): string => {
     field("Name", run.name),
     field("ID", run.id),
     field("State", run.state),
-    field("Model", `${run.model} · ${run.effort}`),
+    field("Model", `${run.backend}/${run.model} · ${run.effort}`),
     field("Mode", `${run.execution} · ${run.context}`),
     field("Intent", run.writeIntent),
     run.pid ? field("Process", `pid ${run.pid}`) : undefined,
@@ -241,14 +275,27 @@ function availableModels(
   ctx: ExtensionContext,
 ): ReadonlyArray<SubagentModelView> {
   const query = input.query?.trim().toLowerCase();
-  return ctx.modelRegistry
+  const piModels: ReadonlyArray<SubagentModelView> = ctx.modelRegistry
     .getAvailable()
     .map((model) => ({
+      backend: "pi" as const,
       id: `${model.provider}/${model.id}`,
       name: model.name,
       reasoning: model.reasoning,
-    }))
-    .filter((model) => !query || `${model.id} ${model.name}`.toLowerCase().includes(query))
+    }));
+  const claudeModels: ReadonlyArray<SubagentModelView> = [
+    { backend: "claude-cli", id: "sonnet", name: "Claude Sonnet", reasoning: true },
+    { backend: "claude-cli", id: "opus", name: "Claude Opus", reasoning: true },
+    { backend: "claude-cli", id: "haiku", name: "Claude Haiku", reasoning: true },
+  ];
+  return [
+    ...(input.backend === "claude-cli" ? [] : piModels),
+    ...(input.backend === "pi" ? [] : claudeModels),
+  ]
+    .filter(
+      (model) =>
+        !query || `${model.backend} ${model.id} ${model.name}`.toLowerCase().includes(query),
+    )
     .slice(0, 100);
 }
 
@@ -280,10 +327,10 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
                   ? models
                       .map(
                         (model) =>
-                          `${model.id} · ${model.reasoning ? "reasoning" : "no reasoning"}`,
+                          `${model.backend}/${model.id} · ${model.reasoning ? "reasoning" : "no reasoning"}`,
                       )
                       .join("\n")
-                  : "No matching authenticated models.",
+                  : "No matching models.",
             },
           ],
           details: { action: input.action, models } satisfies SubagentToolDetails,

@@ -153,6 +153,7 @@ const EffortSchema = Schema.Union([
 ]);
 const RpcStateDataSchema = Schema.Struct({
   thinkingLevel: EffortSchema,
+  model: Schema.optional(Schema.String),
   sessionFile: Schema.optional(Schema.String),
   sessionId: Schema.String,
 });

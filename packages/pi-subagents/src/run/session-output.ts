@@ -25,9 +25,10 @@ const stringField = (
 
 export function summarizeToolArguments(toolName: string, args: unknown): string | undefined {
   const input = asRecord(args);
-  const path = stringField(input, "path") ?? stringField(input, "cwd");
+  const path =
+    stringField(input, "path") ?? stringField(input, "file_path") ?? stringField(input, "cwd");
   let summary: string | undefined;
-  switch (toolName) {
+  switch (toolName.toLowerCase()) {
     case "bash":
       summary = stringField(input, "command");
       break;

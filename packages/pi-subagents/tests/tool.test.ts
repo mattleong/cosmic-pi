@@ -34,6 +34,16 @@ const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   execution: "background",
   context: "fresh",
   writeIntent: "read-only",
+  backend: "pi",
+  capabilities: [
+    "steer",
+    "interrupt",
+    "resume",
+    "rename-display",
+    "parent-contact",
+    "peer-notice",
+    "native-fork",
+  ],
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
   startedAt: 1,
@@ -128,6 +138,7 @@ describe("subagent tool", () => {
     expect(tool?.promptGuidelines?.join(" ")).toContain("one writer");
     expect(result?.content[0]?.text).toContain("agent-1");
     expect(request).toMatchObject({
+      backend: "pi",
       execution: "background",
       context: "fresh",
       model: "openai-codex/gpt-5.6-sol",
@@ -136,6 +147,67 @@ describe("subagent tool", () => {
       parentLeafId: "user-1",
       activeTools: ["read", "edit"],
     });
+  });
+
+  it("resolves Claude aliases without Pi model-registry authentication", async () => {
+    let request: StartSubagentRequest | undefined;
+    const service = {
+      start: (input: StartSubagentRequest) =>
+        Effect.sync(
+          () => (
+            (request = input),
+            view({
+              backend: "claude-cli",
+              capabilities: ["resume", "rename-display"],
+              model: input.model,
+            })
+          ),
+        ),
+      waitForForeground: () => Effect.succeed(view()),
+      list: Effect.succeed([]),
+      status: () => Effect.succeed(view()),
+      send: () => Effect.succeed(view()),
+      reply: () => Effect.succeed(view()),
+      interrupt: () => Effect.succeed(view()),
+      resume: () => Effect.succeed(view()),
+      rename: () => Effect.succeed(view()),
+      stop: () => Effect.succeed(view()),
+      projection: Effect.succeed({ revision: 0, runs: [] }),
+    } satisfies SubagentServiceShape;
+    let tool: CapturedTool | undefined;
+    const pi = {
+      registerTool: (definition: unknown) => {
+        tool = definition as CapturedTool;
+      },
+      getThinkingLevel: () => "high",
+      getActiveTools: () => ["read", "edit"],
+    } as unknown as ExtensionAPI;
+    registerSubagentTool(pi, {
+      run: (effect) =>
+        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
+    });
+
+    const result = await tool?.execute(
+      "call",
+      {
+        action: "start",
+        backend: "claude-cli",
+        model: "opus",
+        task: "Review auth",
+        writeIntent: "read-only",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(request).toMatchObject({
+      backend: "claude-cli",
+      model: "opus",
+      context: "fresh",
+      activeTools: [],
+    });
+    expect(result?.content[0]?.text).toContain("claude-cli/opus");
   });
 
   it("transfers runtime-only authentication without exposing it in the model id", async () => {
@@ -242,7 +314,7 @@ describe("subagent tool", () => {
     expect(text).toContain("Subagent status");
     expect(text).toContain("Name       auth-review");
     expect(text).toContain("ID         agent-1");
-    expect(text).toContain("Model      openai-codex/gpt-5.6-sol · high");
+    expect(text).toContain("Model      pi/openai-codex/gpt-5.6-sol · high");
     expect(text).toContain("Final report\nViewport report.");
     expect(text).not.toContain("Activity:");
     expect(text.match(/Viewport report\./g)).toHaveLength(1);

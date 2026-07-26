@@ -11,7 +11,35 @@ export type SubagentRunState =
 export type SubagentExecution = "foreground" | "background";
 export type SubagentContextMode = "fresh" | "fork";
 export type SubagentWriteIntent = "writer" | "read-only";
+export type SubagentBackend = "pi" | "claude-cli";
+export type SubagentCapability =
+  | "steer"
+  | "interrupt"
+  | "resume"
+  | "rename-display"
+  | "parent-contact"
+  | "peer-notice"
+  | "native-fork";
 export type SubagentEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export const PI_SUBAGENT_CAPABILITIES = [
+  "steer",
+  "interrupt",
+  "resume",
+  "rename-display",
+  "parent-contact",
+  "peer-notice",
+  "native-fork",
+] as const satisfies ReadonlyArray<SubagentCapability>;
+
+export const CLAUDE_CLI_SUBAGENT_CAPABILITIES = [
+  "resume",
+  "rename-display",
+] as const satisfies ReadonlyArray<SubagentCapability>;
+
+const CLAUDE_MODEL_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+
+export const isClaudeModelSelector = (value: string): boolean => CLAUDE_MODEL_SELECTOR.test(value);
 
 export interface SubagentUsage {
   readonly input: number;
@@ -59,9 +87,12 @@ export interface SubagentRunView {
   readonly execution: SubagentExecution;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
+  readonly backend: SubagentBackend;
+  readonly capabilities: ReadonlyArray<SubagentCapability>;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly pid?: number | undefined;
+  readonly sessionId?: string | undefined;
   readonly sessionFile?: string | undefined;
   readonly startedAt: number;
   readonly endedAt?: number | undefined;
@@ -84,6 +115,7 @@ export interface SubagentProjection {
 
 export interface StartSubagentRequest {
   readonly name?: string | undefined;
+  readonly backend: SubagentBackend;
   readonly task: string;
   readonly cwd: string;
   readonly execution: SubagentExecution;
@@ -101,10 +133,16 @@ export interface StartSubagentRequest {
 }
 
 export interface SubagentModelView {
+  readonly backend: SubagentBackend;
   readonly id: string;
   readonly name: string;
   readonly reasoning: boolean;
 }
+
+export const hasSubagentCapability = (
+  run: Pick<SubagentRunView, "capabilities">,
+  capability: SubagentCapability,
+): boolean => run.capabilities.includes(capability);
 
 export const ACTIVE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
   "starting",

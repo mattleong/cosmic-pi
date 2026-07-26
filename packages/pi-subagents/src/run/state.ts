@@ -18,6 +18,7 @@ export const sanitizeName = (value: string): string => {
 export const snapshotView = (view: SubagentRunView): SubagentRunView =>
   freezeSnapshot({
     ...view,
+    capabilities: [...view.capabilities],
     transcript: [...view.transcript],
     sessionEvents: view.sessionEvents.map((event) => ({ ...event })),
     usage: { ...view.usage },

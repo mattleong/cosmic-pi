@@ -26,6 +26,7 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import { SubagentProcessError } from "../run/errors.ts";
+import { acquireClaudeChild } from "./claude-process.ts";
 import type { ParentReply, PeerNotice, RpcCommand } from "../run/protocol.ts";
 import type { SubagentContextMode, SubagentEffort } from "../run/model.ts";
 
@@ -47,8 +48,10 @@ const BLOCKED_ENV_KEYS = new Set([
 export interface ChildLaunchRequest {
   readonly runId: string;
   readonly name: string;
+  readonly backend: import("../run/model.ts").SubagentBackend;
   readonly cwd: string;
   readonly context: SubagentContextMode;
+  readonly writeIntent: import("../run/model.ts").SubagentWriteIntent;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly runtimeApiKey?: string | undefined;
@@ -63,6 +66,7 @@ export interface ChildLaunchRequest {
 export type ChildWireEvent =
   | { readonly type: "rpc_message"; readonly value: unknown }
   | { readonly type: "ipc_message"; readonly value: unknown }
+  | { readonly type: "claude_message"; readonly value: unknown }
   | { readonly type: "protocol_error"; readonly message: string }
   | {
       readonly type: "exit";
@@ -501,13 +505,19 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
   );
 });
 
+export const acquirePiChild = acquireChild;
+
 export class ChildProcess extends Context.Service<ChildProcess, ChildProcessShape>()(
   "pi-subagents/boundary/child-process/ChildProcess",
 ) {
   static readonly layer = Layer.succeed(this, {
     spawn: (request) =>
-      Effect.acquireRelease(acquireChild(request), (handle) => handle.release).pipe(
-        Effect.map(({ release: _release, ...handle }) => handle),
-      ),
+      request.backend === "claude-cli"
+        ? Effect.acquireRelease(acquireClaudeChild(request), (handle) => handle.release).pipe(
+            Effect.map(({ release: _release, ...handle }) => handle),
+          )
+        : Effect.acquireRelease(acquireChild(request), (handle) => handle.release).pipe(
+            Effect.map(({ release: _release, ...handle }) => handle),
+          ),
   });
 }

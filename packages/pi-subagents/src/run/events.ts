@@ -2,6 +2,11 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type { ChildWireEvent } from "../boundary/child-process.ts";
+import {
+  claudeEnvelopeToAgentEvents,
+  decodeClaudeStreamEnvelope,
+} from "../boundary/claude-protocol.ts";
+import type { ChildAgentEvent } from "./child-agent.ts";
 import type { SubagentNotification } from "../boundary/host-notifier.ts";
 import type { SubagentError } from "./errors.ts";
 import { SubagentProcessError, SubagentProtocolError } from "./errors.ts";
@@ -328,13 +333,91 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       }),
     );
 
+  const handleAgentEvent = (
+    record: RunRecord,
+    event: ChildAgentEvent,
+  ): Effect.Effect<void, SubagentError> => {
+    switch (event.type) {
+      case "assistant":
+        return handleRpcEnvelope(record, {
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: event.text }] },
+        });
+      case "tool_started":
+        return handleRpcEnvelope(record, {
+          type: "tool_execution_start",
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          args: event.args,
+        });
+      case "tool_finished":
+        return handleRpcEnvelope(record, {
+          type: "tool_execution_end",
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          result: {},
+          isError: event.isError,
+        });
+      case "failed":
+        return failRun(record, event.message).pipe(Effect.asVoid);
+      case "settled":
+        return Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          const finalText = event.finalText
+            ? sanitizeOutputText(event.finalText, MAX_FINAL_TEXT_CHARS)
+            : undefined;
+          const duplicatesLatestAssistant =
+            finalText !== undefined && finalText === record.latestAssistantText;
+          if (finalText) record.latestAssistantText = finalText;
+          yield* mutateView(record, (current) => ({
+            ...current,
+            lastActivityAt: now,
+            ...(event.usage ? { usage: addUsage(current.usage, event.usage) } : {}),
+            ...(finalText && !duplicatesLatestAssistant
+              ? {
+                  transcript: appendTranscript(current.transcript, finalText),
+                  sessionEvents: appendAssistantSessionEvent(current.sessionEvents, finalText, now),
+                }
+              : {}),
+          }));
+          yield* settle(record, "completed");
+        });
+    }
+  };
+
+  const handleClaudeEnvelope = (
+    record: RunRecord,
+    value: unknown,
+  ): Effect.Effect<void, SubagentError> =>
+    decodeClaudeStreamEnvelope(value).pipe(
+      Effect.mapError(() => protocolError("Claude emitted an invalid stream event.")),
+      Effect.flatMap((envelope) =>
+        Effect.forEach(
+          claudeEnvelopeToAgentEvents(envelope, { tools: record.activeTools }),
+          (event) => handleAgentEvent(record, event),
+          { discard: true },
+        ),
+      ),
+    );
+
   const handleIpcEnvelope = (record: RunRecord, value: unknown) =>
     decodeContactParentEnvelope(value).pipe(
       Effect.mapError(() => protocolError("Subagent emitted an invalid parent-contact event.")),
       Effect.flatMap((envelope) => handleContact(record, envelope)),
     );
 
-  return (record: RunRecord, event: ChildWireEvent) => {
+  return (record: RunRecord, event: ChildWireEvent): Effect.Effect<void, SubagentError> => {
+    if (event.type === "claude_message") {
+      if (
+        record.stoppedByParent ||
+        record.view.state === "stopping" ||
+        record.view.state === "completed" ||
+        record.view.state === "failed" ||
+        record.view.state === "stopped"
+      )
+        return Effect.void;
+      return handleClaudeEnvelope(record, event.value);
+    }
     if (event.type === "rpc_message") {
       if (
         !isRawRpcResponse(event.value) &&

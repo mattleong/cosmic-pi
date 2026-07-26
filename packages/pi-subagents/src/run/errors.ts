@@ -35,6 +35,11 @@ export class SubagentRuntimeClosedError extends Schema.TaggedErrorClass<Subagent
   { message: Schema.String },
 ) {}
 
+export class UnsupportedSubagentCapabilityError extends Schema.TaggedErrorClass<UnsupportedSubagentCapabilityError>()(
+  "UnsupportedSubagentCapabilityError",
+  { backend: Schema.String, capability: Schema.String, message: Schema.String },
+) {}
+
 export type SubagentError =
   | InvalidSubagentRequestError
   | SubagentNotFoundError
@@ -42,4 +47,5 @@ export type SubagentError =
   | SubagentWriterConflictError
   | SubagentProcessError
   | SubagentProtocolError
-  | SubagentRuntimeClosedError;
+  | SubagentRuntimeClosedError
+  | UnsupportedSubagentCapabilityError;

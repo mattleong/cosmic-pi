@@ -4,17 +4,19 @@ Session-scoped foreground and background subagents for pi.
 
 ## Features
 
-- Fresh or forked child sessions, with fresh context as the default.
-- Per-run model and thinking-effort selection with parent-session inheritance.
-- Full parent tool access except recursive subagent orchestration tools.
+- Pi RPC and Claude Code CLI execution backends; Pi remains the default.
+- Fresh or forked Pi child sessions, with fresh context as the default; Claude currently supports fresh context.
+- Per-run model and thinking-effort selection with parent-session inheritance for Pi and Claude aliases/full model IDs for `claude-cli`.
+- Pi children inherit parent tools except recursive orchestration tools; Claude children use explicit native read-only or writer tool policies.
 - Optional human-readable names and immutable run IDs.
-- Immediate child-to-parent completions, blocking questions, and the first progress/warning signal per run; later updates remain visible in fleet state without triggering turn floods.
-- Parent steering, replies, interruption, resumption, renaming, and stopping.
+- Immediate completions for every backend; Pi additionally supports blocking questions and bounded progress/warning signals.
+- Capability-aware management: Pi supports steering, replies, interruption, resumption, renaming, and stopping; unsupported Claude controls fail explicitly.
 - A full-screen `/subagents` fleet inspector.
 - Tool calls rendered through the configurable `pi-code-previews` shell, with expanded structured child-session output and Markdown reports.
 - One declared writer per shared working directory, retained until failed-process cleanup completes.
 - Bounded management messages and compact persisted list/status details.
-- Runtime-only parent API-key forwarding through an ephemeral child environment bootstrap.
+- Runtime-only parent API-key forwarding through an ephemeral Pi-child environment bootstrap; Claude uses the installed CLI's own authentication.
+- Explicit backend capabilities: unsupported controls fail clearly instead of silently changing semantics.
 - Exact session ownership: every child process stops when the parent session ends, and successful `/tree` navigation resets the fleet before work continues from the selected branch.
 
 ## Commands
@@ -31,4 +33,6 @@ Fleet controls:
 - `m`, `i`, `r`, `n`, and `x` message, interrupt, resume, rename, and stop the selected run.
 - `Esc` closes the inspector.
 
-Structured session output groups adjacent repeated tools while retaining compact target summaries, wraps long targets and paths, shows state-specific idle messages and completion age, and labels the child's delivered response as **Final report — sent to parent**. `subagent status` returns a compact labeled metadata summary without activity history; full activity remains in `/subagents`. Background completions are delivered to the parent immediately. The main agent operates the fleet through the `subagent` tool.
+Structured session output groups adjacent repeated tools while retaining compact target summaries, wraps long targets and paths, shows state-specific idle messages and completion age, and labels the child's delivered response as **Final report — sent to parent**. `subagent status` returns a compact labeled metadata summary without activity history; full activity remains in `/subagents`. Background completions are delivered to the parent immediately. The main agent operates the fleet through the `subagent` tool. Set `backend: "claude-cli"` to launch the installed `claude -p`; omitting `backend` preserves the Pi backend. Claude model values may be `sonnet`, `opus`, `haiku`, or a full Claude model ID. Claude runs require a trusted project because print mode skips Claude's workspace trust dialog. Claude read-only intent prevents local mutation and shell access, but its allowlist still permits `WebFetch` and `WebSearch`, so it does not prohibit outbound network access.
+
+Phase 1 Claude runs intentionally do not expose `contact_parent`, mid-turn steering, interruption, or Pi-session forks. Those operations return typed unsupported-capability failures. Parent contact is reserved for a later authenticated MCP bridge.

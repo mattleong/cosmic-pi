@@ -26,6 +26,16 @@ const runView = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => (
   execution: "background",
   context: "fresh",
   writeIntent: "read-only",
+  backend: "pi",
+  capabilities: [
+    "steer",
+    "interrupt",
+    "resume",
+    "rename-display",
+    "parent-contact",
+    "peer-notice",
+    "native-fork",
+  ],
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
   startedAt: 1_000,
@@ -151,7 +161,7 @@ describe("structured subagent session output", () => {
     expect(rendered).toContain("src/one.ts · src/two.ts");
     expect(rendered).toContain("300ms");
     expect(rendered).toContain("Technical details");
-    expect(rendered).toContain("agent-1 · background · pid 42");
+    expect(rendered).toContain("agent-1 · pi · background · pid 42");
     expect(rendered).toContain("session  /tmp/session.jsonl");
   });
 

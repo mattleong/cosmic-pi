@@ -203,13 +203,21 @@ const emptyActivityLabel = (run: SubagentRunView): string => {
 function addTechnicalDetails(container: Container, run: SubagentRunView, theme: Theme): void {
   container.addChild(new Spacer(1));
   container.addChild(new Text(theme.fg("muted", theme.bold("Technical details")), 0, 0));
-  const process = [run.id, run.execution, run.pid ? `pid ${run.pid}` : undefined]
+  const process = [run.id, run.backend, run.execution, run.pid ? `pid ${run.pid}` : undefined]
     .filter((value): value is string => value !== undefined)
     .join(" · ");
   container.addChild(new Text(theme.fg("dim", process), 2, 0));
   container.addChild(
     new HangingText(theme.fg("dim", "cwd  "), theme.fg("dim", sanitizeTerminalLine(run.cwd))),
   );
+  if (run.sessionId) {
+    container.addChild(
+      new HangingText(
+        theme.fg("dim", "session id  "),
+        theme.fg("dim", sanitizeTerminalLine(run.sessionId)),
+      ),
+    );
+  }
   if (run.sessionFile) {
     container.addChild(
       new HangingText(

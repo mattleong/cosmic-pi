@@ -22,15 +22,21 @@ import {
   SubagentProtocolError,
   SubagentRuntimeClosedError,
   SubagentWriterConflictError,
+  UnsupportedSubagentCapabilityError,
 } from "./errors.ts";
 import { childSystemPrompt, peerNoticeText, taskPrompt } from "./coordination.ts";
 import { makeRunEventHandler } from "./events.ts";
 import type { RunRecord } from "./internal.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import {
+  CLAUDE_CLI_SUBAGENT_CAPABILITIES,
   emptyUsage,
+  hasSubagentCapability,
   isActiveRunState,
+  isClaudeModelSelector,
+  PI_SUBAGENT_CAPABILITIES,
   type StartSubagentRequest,
+  type SubagentCapability,
   type SubagentProjection,
   type SubagentRunView,
 } from "./model.ts";
@@ -103,6 +109,21 @@ export interface SubagentServiceShape {
 const protocolError = (message: string) => new SubagentProtocolError({ message });
 const notFound = (id: string) =>
   new SubagentNotFoundError({ id, message: `Subagent run not found: ${id}` });
+const capabilitiesFor = (request: StartSubagentRequest) =>
+  request.backend === "claude-cli" ? CLAUDE_CLI_SUBAGENT_CAPABILITIES : PI_SUBAGENT_CAPABILITIES;
+const requireCapability = (
+  record: RunRecord,
+  capability: SubagentCapability,
+): Effect.Effect<void, UnsupportedSubagentCapabilityError> =>
+  hasSubagentCapability(record.view, capability)
+    ? Effect.void
+    : Effect.fail(
+        new UnsupportedSubagentCapabilityError({
+          backend: record.view.backend,
+          capability,
+          message: `${record.view.backend} subagents do not support ${capability}.`,
+        }),
+      );
 
 const makeService = Effect.fn("SubagentService.make")(function* (options: SubagentServiceOptions) {
   const childProcesses = yield* ChildProcess;
@@ -262,7 +283,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const sendPeerNotices = (changedId: string) =>
     Effect.forEach(
       [...records.values()].filter(
-        (record) => record.process && isActiveRunState(record.view.state),
+        (record) =>
+          record.process &&
+          isActiveRunState(record.view.state) &&
+          hasSubagentCapability(record.view, "peer-notice"),
       ),
       (record) => {
         const message: PeerNotice = {
@@ -396,6 +420,26 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       Effect.gen(function* () {
         if (!request.task.trim())
           return yield* new InvalidSubagentRequestError({ message: "Subagent task is required." });
+        if (request.backend === "claude-cli" && !request.projectTrusted)
+          return yield* new InvalidSubagentRequestError({
+            message: "Claude CLI subagents require a trusted project.",
+          });
+        if (request.backend === "claude-cli" && request.context === "fork")
+          return yield* new InvalidSubagentRequestError({
+            message: "Claude CLI does not support forked Pi context yet.",
+          });
+        if (request.backend === "claude-cli" && !isClaudeModelSelector(request.model))
+          return yield* new InvalidSubagentRequestError({
+            message: "Claude model must be an alias or full model ID of at most 128 characters.",
+          });
+        if (
+          request.backend === "claude-cli" &&
+          request.effortWasExplicit &&
+          (request.effort === "off" || request.effort === "minimal")
+        )
+          return yield* new InvalidSubagentRequestError({
+            message: `Claude CLI does not support effort ${request.effort}.`,
+          });
         if (request.task.length > MAX_TASK_CHARS)
           return yield* new InvalidSubagentRequestError({ message: "Subagent task is too large." });
         const name = sanitizeName(request.name ?? "") || `subagent-${nextRunId}`;
@@ -434,6 +478,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               execution: request.execution,
               context: request.context,
               writeIntent: request.writeIntent,
+              backend: request.backend,
+              capabilities: capabilitiesFor(request),
               model: request.model,
               effort: request.effort,
               startedAt: now,
@@ -467,8 +513,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         const launch: ChildLaunchRequest = {
           runId: reserved.view.id,
           name: reserved.view.name,
+          backend: request.backend,
           cwd: request.cwd,
           context: request.context,
+          writeIntent: request.writeIntent,
           model: request.model,
           effort: request.effort,
           ...(request.runtimeApiKey ? { runtimeApiKey: request.runtimeApiKey } : {}),
@@ -480,6 +528,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           systemPrompt: childSystemPrompt(request),
         };
 
+        const initialPrompt = taskPrompt(request, peerNotice);
         const initialize = Effect.gen(function* () {
           const process = yield* childProcesses
             .spawn(launch)
@@ -531,11 +580,17 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             Effect.catch((error) => failRun(reserved, error.message).pipe(Effect.asVoid)),
             Effect.forkIn(scope, { startImmediately: true }),
           );
+          if (request.backend === "claude-cli")
+            yield* rpc(reserved, { type: "prompt", message: initialPrompt });
           const stateResponse = yield* rpc(reserved, { type: "get_state" });
           const state = yield* decodeRpcStateData(stateResponse.data).pipe(
             Effect.mapError(() => protocolError("Subagent returned invalid startup state.")),
           );
-          if (request.effortWasExplicit && state.thinkingLevel !== request.effort)
+          if (
+            request.backend === "pi" &&
+            request.effortWasExplicit &&
+            state.thinkingLevel !== request.effort
+          )
             return yield* new InvalidSubagentRequestError({
               message: `Model ${request.model} does not support requested effort ${request.effort}; effective level was ${state.thinkingLevel}.`,
             });
@@ -547,25 +602,39 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 reserved.view.state === "stopping" ||
                 reserved.view.state === "stopped"
               )
-                return false;
+                return undefined;
+              if (isTerminalState(reserved.view.state)) {
+                reserved.view = {
+                  ...reserved.view,
+                  effort: state.thinkingLevel as StartSubagentRequest["effort"],
+                  model: state.model ?? reserved.view.model,
+                  sessionId: state.sessionId,
+                  ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
+                };
+                publish();
+                return snapshotView(reserved.view);
+              }
               reserved.view = {
                 ...reserved.view,
                 state: "running",
                 effort: state.thinkingLevel as StartSubagentRequest["effort"],
+                model: state.model ?? reserved.view.model,
                 lastActivityAt: startedAt,
+                sessionId: state.sessionId,
                 ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
               };
               publish();
-              return true;
+              return snapshotView(reserved.view);
             }),
           );
           if (!activated)
             return yield* new InvalidSubagentRequestError({
               message: `Subagent ${reserved.view.id} was stopped during startup.`,
             });
-          yield* rpc(reserved, { type: "prompt", message: taskPrompt(request, peerNotice) });
+          if (request.backend === "pi")
+            yield* rpc(reserved, { type: "prompt", message: initialPrompt });
           yield* sendPeerNotices(reserved.view.id);
-          return snapshotView(reserved.view);
+          return activated;
         });
 
         return yield* restore(initialize).pipe(
@@ -607,6 +676,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       const record = yield* withLock(
         Effect.gen(function* () {
           const selected = yield* requireRecord(id);
+          yield* requireCapability(selected, "steer");
           if (selected.view.state === "waiting_for_parent")
             return yield* new InvalidSubagentRequestError({
               message: `Subagent ${id} is waiting for a reply; use action=reply.`,
@@ -657,6 +727,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       const claimed = yield* withLock(
         Effect.gen(function* () {
           const record = yield* requireRecord(id);
+          yield* requireCapability(record, "parent-contact");
           const question = record.view.question;
           if (record.view.state !== "waiting_for_parent" || !question)
             return yield* new InvalidSubagentRequestError({
@@ -738,6 +809,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       const record = yield* withLock(
         Effect.gen(function* () {
           const selected = yield* requireRecord(id);
+          yield* requireCapability(selected, "interrupt");
           if (selected.view.state !== "running" && selected.view.state !== "waiting_for_parent")
             return yield* new InvalidSubagentRequestError({
               message: `Subagent ${id} cannot be interrupted while ${selected.view.state}.`,
@@ -806,6 +878,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       const record = yield* withLock(
         Effect.gen(function* () {
           const selected = yield* requireRecord(id);
+          yield* requireCapability(selected, "resume");
           if (selected.view.state !== "paused" && selected.view.state !== "completed")
             return yield* new InvalidSubagentRequestError({
               message: `Subagent ${id} cannot resume while ${selected.view.state}.`,
@@ -876,6 +949,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       if (!name)
         return yield* new InvalidSubagentRequestError({ message: "Subagent name is required." });
       const record = yield* requireRecord(id);
+      yield* requireCapability(record, "rename-display");
       if (
         record.view.state === "starting" ||
         record.view.state === "stopping" ||
@@ -885,7 +959,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         return yield* new InvalidSubagentRequestError({
           message: `Subagent ${id} cannot be renamed while ${record.view.state}.`,
         });
-      yield* rpc(record, { type: "set_session_name", name });
+      if (record.view.backend === "pi") yield* rpc(record, { type: "set_session_name", name });
       const view = yield* withLock(
         Effect.gen(function* () {
           if (record.view.state === "stopping" || isTerminalState(record.view.state))

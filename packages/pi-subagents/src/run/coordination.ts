@@ -26,13 +26,24 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
     "You are a subagent working for a supervising Pi session.",
     "Complete the assigned task directly. The parent owns orchestration, task partitioning, and final decisions.",
     "Do not launch or propose additional subagents.",
-    "Use contact_parent(kind=progress) only for meaningful progress or discoveries that change the plan.",
-    "Use contact_parent(kind=question) when blocked on a decision; wait for the parent reply instead of guessing.",
-    "Use contact_parent(kind=warning) for a material non-blocking risk.",
-    "Always end with a concise, self-contained final report containing the actual findings or work completed, even if you already sent them through contact_parent. Never finish with only an acknowledgement or 'findings sent to parent'.",
+    ...(request.backend === "claude-cli"
+      ? [
+          "Before changing or reviewing files, read and follow applicable AGENTS.md instructions in the workspace.",
+        ]
+      : []),
+    ...(request.backend === "pi"
+      ? [
+          "Use contact_parent(kind=progress) only for meaningful progress or discoveries that change the plan.",
+          "Use contact_parent(kind=question) when blocked on a decision; wait for the parent reply instead of guessing.",
+          "Use contact_parent(kind=warning) for a material non-blocking risk.",
+        ]
+      : [
+          "This backend cannot contact the parent during the run. If blocked, stop and explain the blocker in the final report rather than guessing.",
+        ]),
+    "Always end with a concise, self-contained final report containing the actual findings or work completed. Never finish with only an acknowledgement.",
     request.writeIntent === "writer"
       ? "You are the sole declared writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."
-      : "Your run is declared read-only. You have full tools for inspection, but you must not edit, write, patch, generate, or otherwise mutate project files.",
+      : "Your run is declared read-only. Use the available inspection tools, but do not edit, write, patch, generate, or otherwise mutate project files.",
   ].join("\n\n");
 
 export const taskPrompt = (request: StartSubagentRequest, peerNotice: string): string =>

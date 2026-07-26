@@ -6,7 +6,12 @@ import {
   visibleWidth,
   type Component,
 } from "@earendil-works/pi-tui";
-import { isActiveRunState, type SubagentProjection, type SubagentRunView } from "../run/model.ts";
+import {
+  hasSubagentCapability,
+  isActiveRunState,
+  type SubagentProjection,
+  type SubagentRunView,
+} from "../run/model.ts";
 import {
   formatRelativeAge,
   renderSubagentSessionOutput,
@@ -141,24 +146,29 @@ export class SubagentFleetComponent implements Component {
     } else if (
       data === "i" &&
       selected &&
+      hasSubagentCapability(selected, "interrupt") &&
       (selected.state === "running" || selected.state === "waiting_for_parent")
     ) {
       this.options.actions.interrupt(selected.id);
     } else if (
       data === "r" &&
       selected &&
+      hasSubagentCapability(selected, "resume") &&
       (selected.state === "paused" || selected.state === "completed")
     ) {
       this.options.actions.resume(selected.id);
     } else if (
       data === "m" &&
       selected &&
-      (selected.state === "running" || selected.state === "waiting_for_parent")
+      ((selected.state === "running" && hasSubagentCapability(selected, "steer")) ||
+        (selected.state === "waiting_for_parent" &&
+          hasSubagentCapability(selected, "parent-contact")))
     ) {
       this.options.actions.message(selected.id, selected.state === "waiting_for_parent");
     } else if (
       data === "n" &&
       selected &&
+      hasSubagentCapability(selected, "rename-display") &&
       selected.state !== "starting" &&
       selected.state !== "stopping" &&
       selected.state !== "stopped" &&

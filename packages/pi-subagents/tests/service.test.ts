@@ -32,13 +32,14 @@ interface FakeChildControl {
   readonly beforeNextResponse: (type: RpcCommand["type"], value: unknown) => void;
   readonly offer: (value: unknown) => void;
   readonly offerIpc: (value: unknown) => void;
+  readonly offerClaude: (value: unknown) => void;
   readonly exit: (exitCode?: number | null) => void;
 }
 
 function fakeChildLayer(beforeSpawn: Effect.Effect<void, never, never> = Effect.void) {
   const controls: FakeChildControl[] = [];
   const layer = Layer.succeed(ChildProcess, {
-    spawn: () =>
+    spawn: (launch) =>
       Effect.acquireRelease(
         Effect.gen(function* () {
           yield* beforeSpawn;
@@ -82,6 +83,8 @@ function fakeChildLayer(beforeSpawn: Effect.Effect<void, never, never> = Effect.
             Queue.offerUnsafe(events, { type: "rpc_message", value });
           const offerIpc = (value: unknown) =>
             Queue.offerUnsafe(events, { type: "ipc_message", value });
+          const offerClaude = (value: unknown) =>
+            Queue.offerUnsafe(events, { type: "claude_message", value });
           const exit = (exitCode: number | null = 0) => {
             Queue.endUnsafe(events);
             Deferred.doneUnsafe(exited, Effect.succeed({ type: "exit", exitCode, stderr: "" }));
@@ -131,6 +134,9 @@ function fakeChildLayer(beforeSpawn: Effect.Effect<void, never, never> = Effect.
                                 sessionId: "child-session",
                                 sessionFile: "/tmp/child-session.jsonl",
                                 thinkingLevel: "high",
+                                ...(launch.backend === "claude-cli"
+                                  ? { model: "claude-sonnet-resolved" }
+                                  : {}),
                               }
                             : undefined,
                       },
@@ -157,6 +163,7 @@ function fakeChildLayer(beforeSpawn: Effect.Effect<void, never, never> = Effect.
             beforeNextResponse,
             offer,
             offerIpc,
+            offerClaude,
             exit,
           });
           return {
@@ -175,6 +182,7 @@ function fakeChildLayer(beforeSpawn: Effect.Effect<void, never, never> = Effect.
 }
 
 const request = (overrides: Partial<StartSubagentRequest> = {}): StartSubagentRequest => ({
+  backend: "pi",
   task: "Inspect authentication",
   cwd: "/project",
   execution: "background",
@@ -253,6 +261,134 @@ describe("SubagentService", () => {
         { type: "tool", toolName: "read", target: "src/auth.ts", state: "completed" },
         { type: "assistant", text: "Review complete." },
       ]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("exposes backend capabilities and rejects unsupported Claude controls", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const untrusted = yield* Effect.flip(
+        service.start(request({ backend: "claude-cli", model: "sonnet", projectTrusted: false })),
+      );
+      expect(untrusted).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        message: "Claude CLI subagents require a trusted project.",
+      });
+      expect(fake.controls).toHaveLength(0);
+
+      const invalidModel = yield* Effect.flip(
+        service.start(request({ backend: "claude-cli", model: "--permission-mode" })),
+      );
+      expect(invalidModel).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        message: "Claude model must be an alias or full model ID of at most 128 characters.",
+      });
+      expect(fake.controls).toHaveLength(0);
+
+      const run = yield* service.start(
+        request({ backend: "claude-cli", model: "sonnet", name: "claude-reader" }),
+      );
+      expect(run.backend).toBe("claude-cli");
+      expect(run.model).toBe("claude-sonnet-resolved");
+      expect(run.capabilities).toEqual(["resume", "rename-display"]);
+      expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual([
+        "prompt",
+        "get_state",
+      ]);
+
+      const renamed = yield* service.rename(run.id, "claude-local-name");
+      expect(renamed.name).toBe("claude-local-name");
+      expect(
+        fake.controls[0]?.commands.some((command) => command.type === "set_session_name"),
+      ).toBe(false);
+
+      const steering = yield* Effect.flip(service.send(run.id, "Check tests too."));
+      expect(steering).toMatchObject({
+        _tag: "UnsupportedSubagentCapabilityError",
+        backend: "claude-cli",
+        capability: "steer",
+      });
+      const interrupting = yield* Effect.flip(service.interrupt(run.id));
+      expect(interrupting).toMatchObject({
+        _tag: "UnsupportedSubagentCapabilityError",
+        capability: "interrupt",
+      });
+      expect(fake.controls[0]?.commands.some((command) => command.type === "steer")).toBe(false);
+      expect(fake.controls[0]?.commands.some((command) => command.type === "abort")).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("maps Claude stream events into the shared run projection", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({ backend: "claude-cli", model: "sonnet", name: "claude-stream" }),
+      );
+      fake.controls[0]?.offerClaude({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "Reading authentication." },
+            {
+              type: "tool_use",
+              id: "tool-claude",
+              name: "Read",
+              input: { file_path: "src/auth.ts" },
+            },
+          ],
+        },
+      });
+      fake.controls[0]?.offerClaude({
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "tool-claude", content: "source" }],
+        },
+      });
+      const finalReport = "Claude review\ncomplete.";
+      fake.controls[0]?.offerClaude({
+        type: "assistant",
+        message: { content: [{ type: "text", text: finalReport }] },
+      });
+      fake.controls[0]?.offerClaude({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: finalReport,
+        total_cost_usd: 0.02,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+
+      const completed = yield* service.status(run.id);
+      expect(completed.finalText).toBe(finalReport);
+      expect(completed.usage).toMatchObject({ input: 10, output: 5, totalTokens: 15, cost: 0.02 });
+      expect(completed.sessionEvents).toMatchObject([
+        { type: "assistant", text: "Reading authentication." },
+        { type: "tool", toolName: "Read", target: "src/auth.ts", state: "completed" },
+        { type: "assistant", text: finalReport },
+      ]);
+      expect(
+        completed.sessionEvents.filter(
+          (event) => event.type === "assistant" && event.text === finalReport,
+        ),
+      ).toHaveLength(1);
+
+      const resumed = yield* service.resume(run.id, "Check one more thing.");
+      expect(resumed.state).toBe("running");
+      expect(fake.controls[0]?.commands.at(-1)).toMatchObject({
+        type: "prompt",
+        message: "Check one more thing.",
+      });
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
