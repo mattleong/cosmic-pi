@@ -3,9 +3,9 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
-import { spawn } from "node:child_process";
-import { once } from "node:events";
-import { describe, expect, it } from "vitest";
+import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
+import { EventEmitter, once } from "node:events";
+import { describe, expect, it, vi } from "vitest";
 import { terminateProcessTree } from "../src/boundary/process-tree.ts";
 
 const processExists = (pid: number): boolean => {
@@ -28,6 +28,48 @@ const waitForExit = async (pid: number): Promise<void> => {
 };
 
 describe("subagent process-tree boundary", () => {
+  it("does not target an already-exited Windows PID", async () => {
+    const spawnTaskkill = vi.fn();
+    const child = { pid: 42, exitCode: 0, signalCode: null } as NodeChildProcess;
+    await terminateProcessTree(child, "force", { platform: "win32", spawnTaskkill });
+    expect(spawnTaskkill).not.toHaveBeenCalled();
+  });
+
+  it("bounds a hanging Windows taskkill helper", async () => {
+    const killer = new EventEmitter() as NodeChildProcess;
+    const kill = vi.fn(() => true);
+    const unref = vi.fn(() => killer);
+    killer.kill = kill;
+    killer.unref = unref;
+    const child = { pid: 43, exitCode: null, signalCode: null } as NodeChildProcess;
+    await expect(
+      terminateProcessTree(child, "force", {
+        platform: "win32",
+        taskkillTimeoutMillis: 5,
+        spawnTaskkill: () => killer,
+      }),
+    ).rejects.toThrow("taskkill timed out after 5 ms");
+    expect(kill).toHaveBeenCalledOnce();
+    expect(unref).toHaveBeenCalledOnce();
+  });
+
+  it("passes live Windows trees to bounded taskkill", async () => {
+    const killer = new EventEmitter() as NodeChildProcess;
+    killer.kill = vi.fn(() => true);
+    const modes: string[] = [];
+    const child = { pid: 44, exitCode: null, signalCode: null } as NodeChildProcess;
+    const pending = terminateProcessTree(child, "force", {
+      platform: "win32",
+      spawnTaskkill: (_pid, mode) => {
+        modes.push(mode);
+        return killer;
+      },
+    });
+    killer.emit("close", 0);
+    await pending;
+    expect(modes).toEqual(["force"]);
+  });
+
   it.skipIf(process.platform === "win32")(
     "kills descendants in the detached process group after its leader exits",
     async () => {

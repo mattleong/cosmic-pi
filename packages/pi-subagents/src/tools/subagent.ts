@@ -12,22 +12,20 @@ import * as Option from "effect/Option";
 import { withCodePreviewShell } from "pi-code-previews";
 import { Type, type Static } from "typebox";
 import { piToolsForWriteIntent } from "../run/coordination.ts";
-import { InvalidSubagentRequestError } from "../run/errors.ts";
-import type {
-  StartSubagentRequest,
-  SubagentEffort,
-  SubagentModelView,
-  SubagentRunView,
+import { InvalidSubagentRequestError, type SubagentError } from "../run/errors.ts";
+import {
+  isTerminalRunState,
+  type StartSubagentRequest,
+  type SubagentEffort,
+  type SubagentModelView,
+  type SubagentRunView,
 } from "../run/model.ts";
 import { synchronousNow } from "../boundary/native-clock.ts";
-import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
-import { SubagentService } from "../run/service.ts";
-import { MAX_TASK_CHARS } from "../run/state.ts";
+import { MAX_PARENT_MESSAGE_CHARS, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
+import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
+import { MAX_TASK_CHARS, safeTextPrefix } from "../run/state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 import { renderSubagentSessionOutput } from "./renderers/session-output.ts";
-
-const MAX_TARGET_RUNS = 8;
-const MAX_TOOL_OUTPUT_CHARS = 48_000;
 
 const ACTIONS = [
   "start",
@@ -326,28 +324,57 @@ const formatRun = (run: SubagentRunView, detailed = false): string => {
     run.warning ? field("Warning", run.warning) : undefined,
     run.question ? field("Question", run.question.message) : undefined,
     run.error ? field("Error", run.error) : undefined,
-    run.finalText ? `\nFinal report\n${run.finalText}` : undefined,
+    run.finalText
+      ? `\nFinal report\n${run.finalText}`
+      : run.state === "completed"
+        ? "\nFinal report\nCompleted without a final report."
+        : undefined,
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
 };
 
-const formatDetailedRuns = (runs: ReadonlyArray<SubagentRunView>, prefix = ""): string => {
-  if (runs.length === 0) return prefix || "No subagent runs.";
+interface DetailedRunsFormat {
+  readonly text: string;
+  readonly fullyRenderedIds: ReadonlySet<string>;
+}
+
+const formatDetailedRuns = (
+  runs: ReadonlyArray<SubagentRunView>,
+  prefix = "",
+): DetailedRunsFormat => {
+  if (runs.length === 0)
+    return { text: prefix || "No subagent runs.", fullyRenderedIds: new Set() };
   const separatorLength = Math.max(0, runs.length - 1) * 2;
   const available = Math.max(0, MAX_TOOL_OUTPUT_CHARS - prefix.length - separatorLength);
   const perRun = Math.max(256, Math.floor(available / runs.length));
+  const fullyRenderedIds = new Set<string>();
   const formatted = runs.map((run) => {
     const value = formatRun(run, true);
-    if (value.length <= perRun) return value;
+    if (value.length <= perRun) {
+      fullyRenderedIds.add(run.id);
+      return value;
+    }
     const marker = "\n… [run output truncated]";
-    return `${value.slice(0, Math.max(0, perRun - marker.length))}${marker}`;
+    return `${safeTextPrefix(value, Math.max(0, perRun - marker.length))}${marker}`;
   });
   const output = `${prefix}${formatted.join("\n\n")}`;
-  return output.length <= MAX_TOOL_OUTPUT_CHARS
-    ? output
-    : `${output.slice(0, MAX_TOOL_OUTPUT_CHARS - 1)}…`;
+  if (output.length <= MAX_TOOL_OUTPUT_CHARS) return { text: output, fullyRenderedIds };
+  return {
+    text: `${safeTextPrefix(output, MAX_TOOL_OUTPUT_CHARS - 1)}…`,
+    fullyRenderedIds: new Set(),
+  };
 };
+
+const renderedCompletionReceipts = (
+  observations: ReadonlyArray<SubagentRunObservation>,
+  fullyRenderedIds: ReadonlySet<string>,
+) =>
+  observations.flatMap((observation) =>
+    observation.completionReceipt && fullyRenderedIds.has(observation.run.id)
+      ? [observation.completionReceipt]
+      : [],
+  );
 
 function availableModels(
   input: SubagentToolInput,
@@ -378,16 +405,13 @@ function availableModels(
     .slice(0, 100);
 }
 
-const isTerminal = (run: SubagentRunView): boolean =>
-  run.state === "completed" || run.state === "failed" || run.state === "stopped";
-
 const formatAwaitProgress = (
   runs: ReadonlyArray<SubagentRunView>,
   until: "all_terminal" | "any_terminal",
 ): string => {
-  const terminal = runs.filter(isTerminal).length;
+  const terminal = runs.filter((run) => isTerminalRunState(run.state)).length;
   const remaining = runs
-    .filter((run) => !isTerminal(run))
+    .filter((run) => !isTerminalRunState(run.state))
     .map((run) => `${run.id} ${run.state}${run.currentTool ? ` (${run.currentTool})` : ""}`)
     .join(" · ");
   return `Awaiting subagents · ${terminal}/${runs.length} terminal · ${until}${remaining ? `\n${remaining}` : ""}`;
@@ -457,6 +481,38 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
 
       const effect = Effect.gen(function* () {
         const service = yield* SubagentService;
+        const observeStatus = (id: string) =>
+          service.observeStatus
+            ? service.observeStatus(id)
+            : service.status(id).pipe(Effect.map((run) => ({ run })));
+        const consumeCompletions = (
+          observations: ReadonlyArray<SubagentRunObservation>,
+          fullyRenderedIds: ReadonlySet<string>,
+        ) =>
+          service.consumeCompletions
+            ? service.consumeCompletions(renderedCompletionReceipts(observations, fullyRenderedIds))
+            : Effect.void;
+        const finishObservations = (
+          observations: ReadonlyArray<SubagentRunObservation>,
+          timedOut: boolean,
+        ) =>
+          Effect.gen(function* () {
+            const runs = observations.map((observation) => observation.run);
+            const formatted = formatDetailedRuns(
+              runs,
+              timedOut ? "Await timed out; subagents continue running.\n\n" : "",
+            );
+            yield* consumeCompletions(observations, formatted.fullyRenderedIds);
+            return { runs, timedOut, text: formatted.text };
+          });
+        const finishStatus = (ids: ReadonlyArray<string>, timedOut: boolean) =>
+          service.withStatusObservations
+            ? service.withStatusObservations(ids, (observations) =>
+                finishObservations(observations, timedOut),
+              )
+            : Effect.forEach(ids, observeStatus, { concurrency: 8 }).pipe(
+                Effect.flatMap((observations) => finishObservations(observations, timedOut)),
+              );
         switch (input.action) {
           case "start": {
             const request = yield* resolveStart(pi, input, ctx);
@@ -469,16 +525,13 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
           }
           case "list":
             return { runs: yield* service.list, timedOut: false };
-          case "status": {
-            const ids = yield* requiredTargetIds(input);
-            const runs = yield* Effect.forEach(ids, (id) => service.status(id), { concurrency: 8 });
-            return { runs, timedOut: false };
-          }
+          case "status":
+            return yield* finishStatus(yield* requiredTargetIds(input), false);
           case "await": {
             const ids = yield* requiredTargetIds(input);
             const until = input.until ?? "all_terminal";
             let lastUpdate = "";
-            const waiting = service.awaitTerminal(ids, until, (runs) => {
+            const updateAwait = (runs: ReadonlyArray<SubagentRunView>) => {
               const text = formatAwaitProgress(runs, until);
               if (text === lastUpdate) return;
               lastUpdate = text;
@@ -486,15 +539,41 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
                 content: [{ type: "text", text }],
                 details: { action: "await" } satisfies SubagentToolDetails,
               });
-            });
-            if (input.timeoutSeconds === undefined)
-              return { runs: yield* waiting, timedOut: false };
+            };
+            let waiting: Effect.Effect<
+              {
+                readonly runs: ReadonlyArray<SubagentRunView>;
+                readonly timedOut: boolean;
+                readonly text: string;
+              },
+              SubagentError
+            >;
+            if (service.withAwaitTerminalObservations)
+              waiting = service.withAwaitTerminalObservations(
+                ids,
+                until,
+                updateAwait,
+                (observations) => finishObservations(observations, false),
+              );
+            else {
+              const observed: Effect.Effect<
+                ReadonlyArray<SubagentRunObservation>,
+                SubagentError
+              > = service.awaitTerminalObserved
+                ? service.awaitTerminalObserved(ids, until, updateAwait)
+                : service
+                    .awaitTerminal(ids, until, updateAwait)
+                    .pipe(Effect.map((runs) => runs.map((run) => ({ run }))));
+              waiting = observed.pipe(
+                Effect.flatMap((observations) => finishObservations(observations, false)),
+              );
+            }
+            if (input.timeoutSeconds === undefined) return yield* waiting;
             const outcome = yield* waiting.pipe(
               Effect.timeoutOption(`${input.timeoutSeconds} seconds`),
             );
-            if (Option.isSome(outcome)) return { runs: outcome.value, timedOut: false };
-            const runs = yield* Effect.forEach(ids, (id) => service.status(id), { concurrency: 8 });
-            return { runs, timedOut: true };
+            if (Option.isSome(outcome)) return outcome.value;
+            return yield* finishStatus(ids, true);
           }
           case "send": {
             const ids = yield* requiredTargetIds(input);
@@ -535,7 +614,12 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
             return { runs: [], timedOut: false };
         }
       });
-      const { runs, timedOut } = await runtime.run(effect, signal);
+      const executionResult: {
+        readonly runs: ReadonlyArray<SubagentRunView>;
+        readonly timedOut: boolean;
+        readonly text?: string;
+      } = await runtime.run(effect, signal);
+      const { runs, timedOut, text: formattedText } = executionResult;
       const details: SubagentToolDetails =
         input.action === "start"
           ? { action: input.action, runs }
@@ -546,12 +630,9 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
           : input.action === "list"
             ? runs.map((run) => formatRun(run)).join("\n")
             : input.action === "status" || input.action === "await"
-              ? formatDetailedRuns(
-                  runs,
-                  timedOut ? "Await timed out; subagents continue running.\n\n" : "",
-                )
+              ? (formattedText ?? formatDetailedRuns(runs).text)
               : input.action === "start"
-                ? formatDetailedRuns(runs)
+                ? formatDetailedRuns(runs).text
                 : managementAcknowledgement(input.action, runs);
       return {
         content: [{ type: "text", text }],
@@ -568,9 +649,10 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
           args.query ??
           args.message ??
           "",
-      ).slice(0, 160);
+      );
+      const clippedTarget = safeTextPrefix(target, 160);
       return new Text(
-        `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("muted", action)}${target ? ` ${theme.fg("dim", target)}` : ""}`,
+        `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("muted", action)}${clippedTarget ? ` ${theme.fg("dim", clippedTarget)}` : ""}`,
         0,
         0,
       );

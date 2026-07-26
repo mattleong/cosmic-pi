@@ -3,7 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
-import type { SubagentCapability, SubagentRunView } from "./model.ts";
+import { isTerminalRunState, type SubagentCapability, type SubagentRunView } from "./model.ts";
 import type { RunRecord } from "./internal.ts";
 import type { ParentReply, RpcCommand, RpcResponse } from "./protocol.ts";
 import {
@@ -40,7 +40,6 @@ export interface RunControlDependencies {
     state: "completed" | "failed" | "stopped",
     error?: string,
   ) => Effect.Effect<SubagentRunView>;
-  readonly isTerminalState: (state: SubagentRunView["state"]) => boolean;
 }
 
 const validateParentMessage = (
@@ -71,7 +70,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
     failPendingResponses,
     closeRecordScope,
     settle,
-    isTerminalState,
   } = dependencies;
 
   const send = (id: string, message: string): Effect.Effect<SubagentRunView, SubagentError> =>
@@ -325,7 +323,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         Effect.gen(function* () {
           if (
             selected.record.view.state === "stopping" ||
-            isTerminalState(selected.record.view.state)
+            isTerminalRunState(selected.record.view.state)
           )
             return yield* new InvalidSubagentRequestError({
               message: `Subagent ${id} stopped before rename completed.`,
@@ -342,10 +340,14 @@ export function makeRunControls(dependencies: RunControlDependencies) {
   const stop = (id: string): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
+        const stopError = new SubagentProcessError({
+          operation: "stop",
+          message: `Subagent ${id} was stopped.`,
+        });
         const claim = yield* withLock(
           Effect.gen(function* () {
             const selected = yield* requireRecord(id);
-            if (isTerminalState(selected.view.state) || selected.view.state === "stopping")
+            if (isTerminalRunState(selected.view.state) || selected.view.state === "stopping")
               return { record: selected, cleanupRequired: false as const };
             selected.stoppedByParent = true;
             selected.cleanupPending = true;
@@ -356,16 +358,13 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               question: undefined,
               currentTool: undefined,
             };
+            failPendingResponses(selected, stopError);
             publish();
             return { record: selected, cleanupRequired: true as const };
           }),
         );
         const record = claim.record;
         if (!claim.cleanupRequired) return snapshotView(record.view);
-        failPendingResponses(
-          record,
-          new SubagentProcessError({ operation: "stop", message: `Subagent ${id} was stopped.` }),
-        );
         const cleanup = closeRecordScope(record).pipe(Effect.andThen(settle(record, "stopped")));
         const cleanupFiber = yield* cleanup.pipe(
           Effect.forkIn(ownerScope, { startImmediately: true }),

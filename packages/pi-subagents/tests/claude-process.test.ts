@@ -70,6 +70,40 @@ describe("Claude process boundary", () => {
     }
   });
 
+  it("fails promptly when system/init contains an empty session ID", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-subagents-claude-init-"));
+    const fixture = join(directory, "fake-claude-init.mjs");
+    await writeFile(
+      fixture,
+      `process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:"",model:"claude-fixture",tools:["Read","Glob","Grep","WebFetch","WebSearch"]})+"\\n");
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+    await chmod(fixture, 0o700);
+
+    try {
+      const error = await Effect.runPromise(
+        Effect.acquireRelease(
+          acquireClaudeChild(request, { command: process.execPath, commandArgs: [fixture] }),
+          (handle) => handle.release,
+        ).pipe(
+          Effect.flatMap((handle) =>
+            Effect.flip(handle.send({ type: "get_state", id: "state-empty-init" })),
+          ),
+          Effect.scoped,
+        ),
+      );
+      expect(error).toMatchObject({
+        _tag: "SubagentProcessError",
+        operation: "validate Claude initialization",
+      });
+      expect(error.message).toContain("session_id must be a non-empty string");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when a read-only child reports an unexpected tool", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-subagents-claude-policy-"));
     const fixture = join(directory, "fake-claude-policy.mjs");

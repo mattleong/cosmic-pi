@@ -1,3 +1,5 @@
+import { safeTextPrefix } from "./state.ts";
+
 const MAX_TRANSCRIPT_LINES = 500;
 const MAX_TRANSCRIPT_BYTES = 128 * 1024;
 const MAX_SINGLE_LINE_CHARS = 4_000;
@@ -5,7 +7,7 @@ const MAX_SINGLE_LINE_CHARS = 4_000;
 const bytes = (value: string): number => Buffer.byteLength(value, "utf8");
 
 const clipLine = (line: string): string =>
-  line.length <= MAX_SINGLE_LINE_CHARS ? line : `${line.slice(0, MAX_SINGLE_LINE_CHARS)}…`;
+  line.length <= MAX_SINGLE_LINE_CHARS ? line : `${safeTextPrefix(line, MAX_SINGLE_LINE_CHARS)}…`;
 
 export function appendTranscript(
   current: ReadonlyArray<string>,

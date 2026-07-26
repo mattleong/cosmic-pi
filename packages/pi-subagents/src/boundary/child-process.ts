@@ -460,10 +460,12 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
         Effect.andThen(waitForExit),
         Effect.flatMap((gracefulExit) =>
           gracefulExit._tag === "Some"
-            ? Effect.sleep("100 millis").pipe(
-                // The leader may have exited while descendants remain in its process group.
-                Effect.andThen(terminate("force").pipe(Effect.catch(() => Effect.void))),
-              )
+            ? process.platform === "win32"
+              ? Effect.void
+              : Effect.sleep("100 millis").pipe(
+                  // POSIX descendants remain owned by the detached process group.
+                  Effect.andThen(terminate("force").pipe(Effect.catch(() => Effect.void))),
+                )
             : terminate("force").pipe(
                 Effect.catch(() => Effect.void),
                 Effect.andThen(waitForExit),

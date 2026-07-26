@@ -10,7 +10,10 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot } from "pi-cosmic-core";
 import { ChildProcess, type ChildLaunchRequest } from "../boundary/child-process.ts";
-import type { SubagentNotification } from "../boundary/host-notifier.ts";
+import type {
+  SubagentNotification,
+  SubagentNotificationDelivery,
+} from "../boundary/host-notifier.ts";
 import type { ChildRateLimitEvent } from "./child-agent.ts";
 import {
   InvalidSubagentRequestError,
@@ -33,13 +36,20 @@ import { childSystemPrompt, peerNoticeText, taskPrompt } from "./coordination.ts
 import { makeRunEventHandler } from "./events.ts";
 import type { RunRecord } from "./internal.ts";
 import { makeRunProcessLifecycle } from "./process-lifecycle.ts";
-import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
+import {
+  COMPLETION_RETRY_INITIAL_MILLIS,
+  COMPLETION_RETRY_MAX_MILLIS,
+  MAX_CONCURRENT_RUNS,
+  MAX_PARENT_MESSAGE_CHARS,
+  MAX_RETAINED_RUNS,
+} from "./limits.ts";
 import {
   CLAUDE_CLI_SUBAGENT_CAPABILITIES,
   emptyUsage,
   hasSubagentCapability,
   isActiveRunState,
   isClaudeModelSelector,
+  isTerminalRunState,
   PI_SUBAGENT_CAPABILITIES,
   type StartSubagentRequest,
   type SubagentCapability,
@@ -64,12 +74,7 @@ import {
 } from "./state.ts";
 import { appendTranscript } from "./transcript.ts";
 
-const MAX_RUNS = 8;
-const MAX_RETAINED = 50;
 const CLAUDE_RATE_LIMIT_RESULT_GRACE = "2 seconds";
-const COMPLETION_NOTIFICATION_DEBOUNCE = "100 millis";
-const isTerminalState = (state: SubagentRunView["state"]): boolean =>
-  state === "completed" || state === "failed" || state === "stopped";
 
 const ownsProcessSlot = (record: RunRecord): boolean =>
   record.cleanupPending || record.process !== undefined || record.view.state === "starting";
@@ -93,12 +98,26 @@ const validateParentMessage = (
   return Effect.succeed(normalized);
 };
 
+export type SubagentNotificationCallback =
+  | ((notification: SubagentNotification) => SubagentNotificationDelivery | undefined)
+  | ((notification: SubagentNotification) => void);
+
 export interface SubagentServiceOptions {
   readonly publish?: (projection: SubagentProjection) => void;
-  readonly notify?: (notification: SubagentNotification) => unknown;
+  readonly notify?: SubagentNotificationCallback;
 }
 
 export type SubagentAwaitUntil = "all_terminal" | "any_terminal";
+
+export interface SubagentCompletionReceipt {
+  readonly id: string;
+  readonly generation: number;
+}
+
+export interface SubagentRunObservation {
+  readonly run: SubagentRunView;
+  readonly completionReceipt?: SubagentCompletionReceipt | undefined;
+}
 
 export interface SubagentServiceShape {
   readonly start: (request: StartSubagentRequest) => Effect.Effect<SubagentRunView, SubagentError>;
@@ -107,9 +126,30 @@ export interface SubagentServiceShape {
     ids: ReadonlyArray<string>,
     until: SubagentAwaitUntil,
     onUpdate?: (runs: ReadonlyArray<SubagentRunView>) => void,
-  ) => Effect.Effect<ReadonlyArray<SubagentRunView>, SubagentNotFoundError>;
+  ) => Effect.Effect<ReadonlyArray<SubagentRunView>, SubagentError>;
+  readonly awaitTerminalObserved?: (
+    ids: ReadonlyArray<string>,
+    until: SubagentAwaitUntil,
+    onUpdate?: (runs: ReadonlyArray<SubagentRunView>) => void,
+  ) => Effect.Effect<ReadonlyArray<SubagentRunObservation>, SubagentError>;
+  readonly withAwaitTerminalObservations?: <A, E, R>(
+    ids: ReadonlyArray<string>,
+    until: SubagentAwaitUntil,
+    onUpdate: ((runs: ReadonlyArray<SubagentRunView>) => void) | undefined,
+    use: (observations: ReadonlyArray<SubagentRunObservation>) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, SubagentError | E, R>;
   readonly list: Effect.Effect<ReadonlyArray<SubagentRunView>>;
   readonly status: (id: string) => Effect.Effect<SubagentRunView, SubagentNotFoundError>;
+  readonly observeStatus?: (
+    id: string,
+  ) => Effect.Effect<SubagentRunObservation, SubagentNotFoundError>;
+  readonly withStatusObservations?: <A, E, R>(
+    ids: ReadonlyArray<string>,
+    use: (observations: ReadonlyArray<SubagentRunObservation>) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, SubagentNotFoundError | E, R>;
+  readonly consumeCompletions?: (
+    receipts: ReadonlyArray<SubagentCompletionReceipt>,
+  ) => Effect.Effect<void>;
   readonly send: (id: string, message: string) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly reply: (id: string, message: string) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly interrupt: (id: string) => Effect.Effect<SubagentRunView, SubagentError>;
@@ -141,15 +181,18 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const childProcesses = yield* ChildProcess;
   const ownerScope = yield* Effect.scope;
   const lock = yield* Semaphore.make(1);
+  const completionGate = yield* Semaphore.make(1);
   const records = new Map<string, RunRecord>();
   const revisionWaiters = new Set<Deferred.Deferred<void>>();
   const pendingCompletions = new Map<string, number>();
   let completionFlushScheduled = false;
+  let completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
   let nextRunId = 1;
   let revision = 0;
   let closed = false;
 
   const withLock = lock.withPermits(1);
+  const withCompletionGate = completionGate.withPermits(1);
   const currentProjection = (): SubagentProjection => ({
     revision,
     runs: sortRuns([...records.values()].map((record) => snapshotView(record.view))),
@@ -164,9 +207,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       // Host projection delivery cannot own the fleet lifecycle.
     }
   };
-  const notify = (notification: SubagentNotification): unknown => {
+  const notify = (notification: SubagentNotification): SubagentNotificationDelivery | undefined => {
     try {
-      return options.notify?.(notification);
+      const delivery = options.notify?.(notification);
+      return typeof delivery === "object" && delivery !== null ? delivery : undefined;
     } catch {
       // Host transcript delivery is best effort.
       return notification.type === "completed" ? { deliveredCompletionKeys: [] } : undefined;
@@ -179,34 +223,50 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     });
 
   let scheduleCompletionFlush: Effect.Effect<void> = Effect.void;
-  const flushPendingCompletions = Effect.sleep(COMPLETION_NOTIFICATION_DEBOUNCE).pipe(
-    Effect.andThen(
-      withLock(
-        Effect.sync(() => {
-          completionFlushScheduled = false;
-          return collectPendingCompletionNotifications(records, pendingCompletions);
-        }),
-      ),
-    ),
-    Effect.flatMap((runs) => {
-      if (runs.length === 0) return Effect.void;
-      return Effect.sync(() => notify({ type: "completed", runs })).pipe(
-        Effect.flatMap((delivery) =>
+  const flushPendingCompletions = Effect.suspend(() =>
+    Effect.sleep(completionRetryDelayMillis).pipe(
+      Effect.andThen(
+        withCompletionGate(
           withLock(
-            Effect.sync(() =>
-              acknowledgePendingCompletions(
-                records,
-                pendingCompletions,
-                runs,
-                deliveredCompletionKeys(delivery, runs),
-              ),
+            Effect.sync(() => collectPendingCompletionNotifications(records, pendingCompletions)),
+          ).pipe(
+            Effect.flatMap((runs) =>
+              runs.length === 0
+                ? withLock(
+                    Effect.sync(() => {
+                      completionFlushScheduled = false;
+                      completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
+                    }),
+                  )
+                : Effect.sync(() => notify({ type: "completed", runs })).pipe(
+                    Effect.flatMap((delivery) =>
+                      withLock(
+                        Effect.sync(() => {
+                          const acknowledged = acknowledgePendingCompletions(
+                            records,
+                            pendingCompletions,
+                            runs,
+                            deliveredCompletionKeys(delivery, runs),
+                          );
+                          completionFlushScheduled = false;
+                          completionRetryDelayMillis =
+                            pendingCompletions.size === 0 || acknowledged > 0
+                              ? COMPLETION_RETRY_INITIAL_MILLIS
+                              : Math.min(
+                                  COMPLETION_RETRY_MAX_MILLIS,
+                                  completionRetryDelayMillis * 2,
+                                );
+                        }),
+                      ),
+                    ),
+                  ),
             ),
           ),
         ),
-        Effect.andThen(scheduleCompletionFlush),
-      );
-    }),
-    Effect.asVoid,
+      ),
+      Effect.andThen(scheduleCompletionFlush),
+      Effect.asVoid,
+    ),
   );
 
   scheduleCompletionFlush = withLock(
@@ -240,7 +300,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         if (
           record.stoppedByParent ||
           record.view.state === "stopping" ||
-          isTerminalState(record.view.state)
+          isTerminalRunState(record.view.state)
         )
           return undefined;
         const next = update(record.view);
@@ -263,7 +323,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           !record.pauseRequested ||
           record.stoppedByParent ||
           record.view.state === "stopping" ||
-          isTerminalState(record.view.state)
+          isTerminalRunState(record.view.state)
         )
           return undefined;
         record.activeTools.clear();
@@ -343,7 +403,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       const result = yield* withLock(
         Effect.sync(() => {
           if (
-            isTerminalState(record.view.state) ||
+            isTerminalRunState(record.view.state) ||
             (state !== "stopped" && (record.stoppedByParent || record.view.state === "stopping"))
           )
             return { transitioned: false as const, view: snapshotView(record.view) };
@@ -387,7 +447,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       const deliveredToForeground = deliverForeground(record, view);
       const evicted = yield* withLock(
         Effect.sync(() => {
-          if (records.size <= MAX_RETAINED) return [] as RunRecord[];
+          if (records.size <= MAX_RETAINED_RUNS) return [] as RunRecord[];
           const candidates = [...records.values()]
             .filter(
               (candidate) =>
@@ -404,7 +464,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 (right.view.endedAt ?? right.view.startedAt),
             );
           const removed: RunRecord[] = [];
-          while (records.size > MAX_RETAINED && candidates.length > 0) {
+          while (records.size > MAX_RETAINED_RUNS && candidates.length > 0) {
             const candidate = candidates.shift();
             if (!candidate) break;
             records.delete(candidate.view.id);
@@ -450,15 +510,34 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       return view;
     });
 
-  const failRun = (record: RunRecord, message: string) =>
-    markCleanupPending(record).pipe(
-      Effect.andThen(
-        record.process
-          ? record.process.terminate("force").pipe(Effect.catch(() => Effect.void))
-          : Effect.void,
-      ),
-      Effect.andThen(settle(record, "failed", sanitizeDiagnosticText(message, MAX_ERROR_CHARS))),
+  const failRun = (record: RunRecord, message: string, pendingError?: SubagentError) => {
+    const diagnostic = sanitizeDiagnosticText(message, MAX_ERROR_CHARS);
+    return withLock(
+      Effect.sync(() => {
+        if (
+          record.stoppedByParent ||
+          record.view.state === "stopping" ||
+          isTerminalRunState(record.view.state)
+        )
+          return false;
+        record.cleanupPending = true;
+        failPendingResponses(
+          record,
+          pendingError ?? new SubagentProcessError({ operation: "run", message: diagnostic }),
+        );
+        return true;
+      }),
+    ).pipe(
+      Effect.flatMap((shouldFail) => {
+        if (!shouldFail) return Effect.succeed(snapshotView(record.view));
+        return (
+          record.process
+            ? record.process.terminate("force").pipe(Effect.catch(() => Effect.void))
+            : Effect.void
+        ).pipe(Effect.andThen(settle(record, "failed", diagnostic)));
+      }),
     );
+  };
 
   const handleRateLimit = (record: RunRecord, event: ChildRateLimitEvent) =>
     Effect.gen(function* () {
@@ -472,7 +551,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           if (
             record.stoppedByParent ||
             record.view.state === "stopping" ||
-            isTerminalState(record.view.state)
+            isTerminalRunState(record.view.state)
           )
             return { generation, notifyParent: false };
 
@@ -540,7 +619,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 record.rateLimitGeneration === update.generation &&
                 !record.stoppedByParent &&
                 record.view.state !== "stopping" &&
-                !isTerminalState(record.view.state),
+                !isTerminalRunState(record.view.state),
             ),
           ),
         ),
@@ -573,7 +652,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     markCleanupPending,
     closeRecordScope,
     closeExitedScope,
-    failPendingResponses,
     failRun,
   }));
 
@@ -616,10 +694,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 message: "The subagent session runtime is closed.",
               });
             const retainedProcesses = [...records.values()].filter(ownsProcessSlot).length;
-            if (retainedProcesses >= MAX_RUNS)
+            if (retainedProcesses >= MAX_CONCURRENT_RUNS)
               return yield* new SubagentCapacityError({
-                limit: MAX_RUNS,
-                message: `Subagent capacity reached (${MAX_RUNS}). Stop an existing run first.`,
+                limit: MAX_CONCURRENT_RUNS,
+                message: `Subagent capacity reached (${MAX_CONCURRENT_RUNS}). Stop an existing run first.`,
               });
             if (request.writeIntent === "writer") {
               const activeWriter = [...records.values()].find(ownsWriterSlot);
@@ -682,7 +760,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               pauseRequested: false,
               stoppedByParent: false,
               cleanupPending: false,
-              progressTurnTriggered: false,
               warningTurnTriggered: false,
               completionGeneration: 0,
               completionConsumedGeneration: 0,
@@ -725,7 +802,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 reserved.view.state === "stopped"
               )
                 return undefined;
-              if (isTerminalState(reserved.view.state)) {
+              if (isTerminalRunState(reserved.view.state)) {
                 reserved.view = {
                   ...reserved.view,
                   effort: state.thinkingLevel as StartSubagentRequest["effort"],
@@ -762,9 +839,18 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         return yield* restore(initialize).pipe(
           Effect.onError((cause) =>
             Effect.gen(function* () {
-              const message = sanitizeDiagnosticText(Cause.pretty(cause), MAX_ERROR_CHARS);
+              const interruptedOnly =
+                cause.reasons.length > 0 && cause.reasons.every(Cause.isInterruptReason);
               yield* markCleanupPending(reserved);
-              if (!reserved.stoppedByParent) yield* settle(reserved, "failed", message);
+              if (!reserved.stoppedByParent) {
+                if (interruptedOnly) yield* settle(reserved, "stopped");
+                else
+                  yield* settle(
+                    reserved,
+                    "failed",
+                    sanitizeDiagnosticText(Cause.pretty(cause), MAX_ERROR_CHARS),
+                  );
+              }
               yield* closeRecordScope(reserved);
             }),
           ),
@@ -782,110 +868,170 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         ),
       ),
     );
-  const awaitTerminal: SubagentServiceShape["awaitTerminal"] = (ids, until, onUpdate) =>
-    Effect.gen(function* () {
-      const selected = yield* withLock(
+  const observeRecord = (record: RunRecord): SubagentRunObservation => ({
+    run: snapshotView(record.view),
+    ...(record.view.state === "completed"
+      ? {
+          completionReceipt: {
+            id: record.view.id,
+            generation: record.completionGeneration,
+          },
+        }
+      : {}),
+  });
+
+  const consumeCompletions: NonNullable<SubagentServiceShape["consumeCompletions"]> = (receipts) =>
+    withLock(
+      Effect.sync(() => {
+        for (const receipt of receipts) {
+          const record = records.get(receipt.id);
+          if (
+            !record ||
+            record.view.state !== "completed" ||
+            record.completionGeneration !== receipt.generation
+          )
+            continue;
+          record.completionConsumedGeneration = Math.max(
+            record.completionConsumedGeneration,
+            receipt.generation,
+          );
+          if (pendingCompletions.get(record.view.id) === receipt.generation)
+            pendingCompletions.delete(record.view.id);
+        }
+      }),
+    );
+
+  interface CompletionClaim {
+    readonly selected: ReadonlyArray<RunRecord>;
+    readonly claimed: ReadonlyArray<RunRecord>;
+  }
+  const acquireCompletionClaims = (ids: ReadonlyArray<string>, claimAll: boolean) =>
+    withCompletionGate(
+      withLock(
         Effect.forEach(ids, (id) => requireRecord(id)).pipe(
-          Effect.tap((claimed) =>
-            Effect.sync(() => {
-              for (const record of claimed) {
-                record.completionClaims += 1;
-                pendingCompletions.delete(record.view.id);
-              }
-            }),
-          ),
+          Effect.map((selected): CompletionClaim => {
+            const claimed = claimAll
+              ? selected
+              : selected.filter((record) => record.view.state === "completed");
+            for (const record of claimed) {
+              record.completionClaims += 1;
+              pendingCompletions.delete(record.view.id);
+            }
+            return { selected, claimed };
+          }),
         ),
-      );
-      const emitUpdate = (runs: ReadonlyArray<SubagentRunView>) =>
-        Effect.sync(() => {
-          try {
-            onUpdate?.(runs);
-          } catch {
-            // Pi partial-result delivery is best effort and cannot own the waiter.
-          }
-        });
-      const waitLoop = (): Effect.Effect<ReadonlyArray<SubagentRunView>> =>
-        Effect.suspend(() =>
-          withLock(
-            Effect.gen(function* () {
-              const runs = selected.map((record) => snapshotView(record.view));
-              const terminalCount = runs.filter((run) => isTerminalState(run.state)).length;
-              const done =
-                until === "any_terminal" ? terminalCount > 0 : terminalCount === runs.length;
-              if (done) return { done: true as const, runs };
-              const wake = yield* Deferred.make<void>();
-              revisionWaiters.add(wake);
-              return { done: false as const, runs, wake };
-            }),
-          ).pipe(
-            Effect.tap(({ runs }) => emitUpdate(runs)),
-            Effect.flatMap((step) =>
-              step.done
-                ? Effect.succeed(step.runs)
-                : Deferred.await(step.wake).pipe(
-                    Effect.ensuring(
-                      Effect.sync(() => {
-                        revisionWaiters.delete(step.wake);
-                      }),
-                    ),
-                    Effect.andThen(waitLoop()),
+      ),
+    );
+  const releaseCompletionClaims = (claim: CompletionClaim) =>
+    withLock(
+      Effect.sync(() => {
+        for (const record of claim.claimed) {
+          record.completionClaims = Math.max(0, record.completionClaims - 1);
+          queuePendingCompletion(pendingCompletions, record, record.completionGeneration);
+        }
+      }),
+    ).pipe(Effect.andThen(scheduleCompletionFlush));
+  const waitForTerminalObservations = (
+    selected: ReadonlyArray<RunRecord>,
+    until: SubagentAwaitUntil,
+    onUpdate?: (runs: ReadonlyArray<SubagentRunView>) => void,
+  ): Effect.Effect<ReadonlyArray<SubagentRunObservation>> => {
+    const emitUpdate = (runs: ReadonlyArray<SubagentRunView>) =>
+      Effect.sync(() => {
+        try {
+          onUpdate?.(runs);
+        } catch {
+          // Pi partial-result delivery is best effort and cannot own the waiter.
+        }
+      });
+    const waitLoop = (): Effect.Effect<ReadonlyArray<SubagentRunObservation>> =>
+      Effect.suspend(() =>
+        withLock(
+          Effect.gen(function* () {
+            const observations = selected.map(observeRecord);
+            const runs = observations.map((observation) => observation.run);
+            const terminalCount = runs.filter((run) => isTerminalRunState(run.state)).length;
+            const done =
+              until === "any_terminal" ? terminalCount > 0 : terminalCount === runs.length;
+            if (done) return { done: true as const, runs, observations };
+            const wake = yield* Deferred.make<void>();
+            revisionWaiters.add(wake);
+            return { done: false as const, runs, wake };
+          }),
+        ).pipe(
+          Effect.tap(({ runs }) => emitUpdate(runs)),
+          Effect.flatMap((step) =>
+            step.done
+              ? Effect.succeed(step.observations)
+              : Deferred.await(step.wake).pipe(
+                  Effect.ensuring(
+                    Effect.sync(() => {
+                      revisionWaiters.delete(step.wake);
+                    }),
                   ),
-            ),
+                  Effect.andThen(waitLoop()),
+                ),
           ),
-        );
-      return yield* waitLoop().pipe(
-        Effect.tap((runs) =>
-          withLock(
-            Effect.sync(() => {
-              for (const run of runs) {
-                if (!isTerminalState(run.state)) continue;
-                const record = records.get(run.id);
-                if (!record) continue;
-                record.completionConsumedGeneration = Math.max(
-                  record.completionConsumedGeneration,
-                  record.completionGeneration,
-                );
-                pendingCompletions.delete(record.view.id);
-              }
-            }),
-          ),
-        ),
-        Effect.ensuring(
-          withLock(
-            Effect.sync(() => {
-              for (const record of selected) {
-                record.completionClaims = Math.max(0, record.completionClaims - 1);
-                if (
-                  record.view.state === "completed" &&
-                  record.completionClaims === 0 &&
-                  record.completionConsumedGeneration < record.completionGeneration &&
-                  record.completionNotifiedGeneration < record.completionGeneration
-                )
-                  pendingCompletions.set(record.view.id, record.completionGeneration);
-              }
-            }),
-          ).pipe(Effect.andThen(scheduleCompletionFlush)),
         ),
       );
-    });
+    return waitLoop();
+  };
+  const withAwaitTerminalObservations: NonNullable<
+    SubagentServiceShape["withAwaitTerminalObservations"]
+  > = (ids, until, onUpdate, use) => {
+    if (ids.length === 0)
+      return Effect.fail(
+        new InvalidSubagentRequestError({
+          message: "Await requires at least one subagent run ID.",
+        }),
+      );
+    return Effect.acquireUseRelease(
+      acquireCompletionClaims(ids, true),
+      (claim) =>
+        waitForTerminalObservations(claim.selected, until, onUpdate).pipe(Effect.flatMap(use)),
+      releaseCompletionClaims,
+    );
+  };
+  const awaitTerminalObserved: NonNullable<SubagentServiceShape["awaitTerminalObserved"]> = (
+    ids,
+    until,
+    onUpdate,
+  ) => withAwaitTerminalObservations(ids, until, onUpdate, Effect.succeed);
+  const withStatusObservations: NonNullable<SubagentServiceShape["withStatusObservations"]> = (
+    ids,
+    use,
+  ) =>
+    Effect.acquireUseRelease(
+      acquireCompletionClaims(ids, false),
+      (claim) => use(claim.selected.map(observeRecord)),
+      releaseCompletionClaims,
+    );
+
+  const awaitTerminal: SubagentServiceShape["awaitTerminal"] = (ids, until, onUpdate) =>
+    awaitTerminalObserved(ids, until, onUpdate).pipe(
+      Effect.tap((observations) =>
+        consumeCompletions(
+          observations.flatMap((observation) =>
+            observation.completionReceipt ? [observation.completionReceipt] : [],
+          ),
+        ),
+      ),
+      Effect.map((observations) => observations.map((observation) => observation.run)),
+    );
 
   const list = withLock(
     Effect.sync(() => sortRuns([...records.values()].map((record) => snapshotView(record.view)))),
   );
+  const observeStatus: NonNullable<SubagentServiceShape["observeStatus"]> = (id) =>
+    withLock(Effect.map(requireRecord(id), observeRecord));
   const status: SubagentServiceShape["status"] = (id) =>
-    withLock(
-      Effect.flatMap(requireRecord(id), (record) =>
-        Effect.sync(() => {
-          if (record.view.state === "completed") {
-            record.completionConsumedGeneration = Math.max(
-              record.completionConsumedGeneration,
-              record.completionGeneration,
-            );
-            pendingCompletions.delete(record.view.id);
-          }
-          return snapshotView(record.view);
-        }),
+    observeStatus(id).pipe(
+      Effect.tap((observation) =>
+        observation.completionReceipt
+          ? consumeCompletions([observation.completionReceipt])
+          : Effect.void,
       ),
+      Effect.map((observation) => observation.run),
     );
 
   const waitForRunCleanup: (id: string) => Effect.Effect<void, SubagentNotFoundError> = (id) =>
@@ -936,10 +1082,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                   const retainedProcesses = [...records.values()].filter(
                     (candidate) => candidate !== selected && ownsProcessSlot(candidate),
                   ).length;
-                  if (retainedProcesses >= MAX_RUNS)
+                  if (retainedProcesses >= MAX_CONCURRENT_RUNS)
                     return yield* new SubagentCapacityError({
-                      limit: MAX_RUNS,
-                      message: `Subagent capacity reached (${MAX_RUNS}). Stop an existing run first.`,
+                      limit: MAX_CONCURRENT_RUNS,
+                      message: `Subagent capacity reached (${MAX_CONCURRENT_RUNS}). Stop an existing run first.`,
                     });
                   if (selected.view.backend === "pi" && !selected.view.sessionFile)
                     return yield* new InvalidSubagentRequestError({
@@ -954,7 +1100,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 selected.pauseRequested = false;
                 selected.pauseOutcome = undefined;
                 selected.activeTools.clear();
-                selected.progressTurnTriggered = false;
                 selected.warningTurnTriggered = false;
                 selected.view = {
                   ...selected.view,
@@ -1087,7 +1232,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     failPendingResponses,
     closeRecordScope,
     settle,
-    isTerminalState,
   });
 
   const projection = withLock(Effect.sync(() => freezeSnapshot(currentProjection())));
@@ -1096,8 +1240,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     start,
     waitForForeground,
     awaitTerminal,
+    awaitTerminalObserved,
+    withAwaitTerminalObservations,
     list,
     status,
+    observeStatus,
+    withStatusObservations,
+    consumeCompletions,
     send,
     reply,
     interrupt,

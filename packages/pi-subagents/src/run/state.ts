@@ -7,13 +7,42 @@ export const MAX_TASK_CHARS = 128 * 1024;
 export const MAX_FINAL_TEXT_CHARS = 32 * 1024;
 export const MAX_ERROR_CHARS = 8 * 1024;
 
+export const safeTextPrefix = (value: string, maximumCodeUnits: number): string => {
+  let end = Math.max(0, Math.min(value.length, Math.floor(maximumCodeUnits)));
+  if (
+    end > 0 &&
+    end < value.length &&
+    value.charCodeAt(end - 1) >= 0xd800 &&
+    value.charCodeAt(end - 1) <= 0xdbff &&
+    value.charCodeAt(end) >= 0xdc00 &&
+    value.charCodeAt(end) <= 0xdfff
+  )
+    end -= 1;
+  return value.slice(0, end);
+};
+
+export const clipUtf8Text = (value: string, maximumBytes: number): string => {
+  if (Buffer.byteLength(value, "utf8") <= maximumBytes) return value;
+  const marker = "…";
+  const contentBudget = Math.max(0, maximumBytes - Buffer.byteLength(marker, "utf8"));
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const prefix = safeTextPrefix(value, middle);
+    if (Buffer.byteLength(prefix, "utf8") <= contentBudget) low = middle;
+    else high = middle - 1;
+  }
+  return `${safeTextPrefix(value, low)}${marker}`;
+};
+
 export const sanitizeName = (value: string): string => {
   let sanitized = "";
   for (const character of value) {
     const code = character.charCodeAt(0);
     sanitized += code < 32 || (code >= 127 && code <= 159) ? " " : character;
   }
-  return sanitized.replace(/\s+/g, " ").trim().slice(0, MAX_NAME_CHARS);
+  return safeTextPrefix(sanitized.replace(/\s+/g, " ").trim(), MAX_NAME_CHARS);
 };
 
 export const snapshotView = (view: SubagentRunView): SubagentRunView =>
@@ -26,10 +55,13 @@ export const snapshotView = (view: SubagentRunView): SubagentRunView =>
   });
 
 export const clipText = (value: string, limit: number): string =>
-  value.length <= limit ? value : `${value.slice(0, limit)}…`;
+  value.length <= limit ? value : `${safeTextPrefix(value, limit)}…`;
 
-export const sanitizeDiagnosticText = (value: string, limit: number): string =>
-  sanitizeDiagnosticError(value, { maximumLength: limit });
+export const sanitizeDiagnosticText = (value: string, limit: number): string => {
+  const sanitized = sanitizeDiagnosticError(value, { maximumLength: limit + 2 });
+  if (sanitized.length <= limit) return sanitized;
+  return `${safeTextPrefix(sanitized, Math.max(0, limit - 1)).trimEnd()}…`;
+};
 
 export const sanitizeOutputText = (value: string, limit: number): string =>
   clipText(stripTerminalControls(value), limit);

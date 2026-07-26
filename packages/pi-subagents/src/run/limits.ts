@@ -1,2 +1,8 @@
+export const MAX_CONCURRENT_RUNS = 8;
+export const MAX_RETAINED_RUNS = 50;
+export const MAX_TARGET_RUNS = 8;
+export const MAX_TOOL_OUTPUT_CHARS = 48_000;
 export const MAX_PARENT_MESSAGE_CHARS = 64 * 1024;
 export const MAX_PROTOCOL_ID_CHARS = 1_024;
+export const COMPLETION_RETRY_INITIAL_MILLIS = 100;
+export const COMPLETION_RETRY_MAX_MILLIS = 30_000;

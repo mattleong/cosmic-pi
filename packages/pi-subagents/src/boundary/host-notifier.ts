@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { safeTextPrefix } from "../run/state.ts";
 
 export interface SubagentCompletionNotification {
   readonly id: string;
@@ -21,7 +22,7 @@ export type SubagentNotification =
       readonly message: string;
     }
   | {
-      readonly type: "progress" | "warning";
+      readonly type: "warning";
       readonly id: string;
       readonly name: string;
       readonly message: string;
@@ -51,8 +52,11 @@ const remember = <A>(map: Map<string, A>, key: string, value: A): void => {
   map.set(key, value);
 };
 
-const clip = (value: string, maximumLength = MAX_NOTIFICATION_CHARS): string =>
-  sanitizeDiagnosticContent(value, { maximumLength }).trim();
+const clip = (value: string, maximumLength = MAX_NOTIFICATION_CHARS): string => {
+  const sanitized = sanitizeDiagnosticContent(value, { maximumLength: maximumLength + 2 }).trim();
+  if (sanitized.length <= maximumLength) return sanitized;
+  return `${safeTextPrefix(sanitized, Math.max(0, maximumLength - 1)).trimEnd()}…`;
+};
 
 interface CompletionChunk {
   readonly content: string;
@@ -84,31 +88,49 @@ const completionChunks = (
           `## Final report (${run.id})\n\n`,
           "",
         )
-      : undefined;
-    const content = report ? `${prefix}\n\n${report}` : prefix;
+      : "Completed without a final report.";
+    const content = `${prefix}\n\n${report}`;
     return [{ content: clip(content), runs: [run] }];
   }
 
   const chunks: CompletionChunk[] = [];
   let chunkRuns: SubagentCompletionNotification[] = [];
   let sections: string[] = [];
+  const headerFor = (chunkIndex: number): string => {
+    const continuation = chunkIndex === 0 ? "" : ` (continued ${chunkIndex + 1})`;
+    return `${runs.length} background subagents completed${continuation}.`;
+  };
   const flush = () => {
     if (chunkRuns.length === 0) return;
-    const continuation = chunks.length === 0 ? "" : ` (continued ${chunks.length + 1})`;
-    const header = `${runs.length} background subagents completed${continuation}.`;
-    chunks.push({ content: clip(`${header}\n\n${sections.join("\n\n")}`), runs: chunkRuns });
+    const header = headerFor(chunks.length);
+    chunks.push({ content: `${header}\n\n${sections.join("\n\n")}`, runs: chunkRuns });
     chunkRuns = [];
     sections = [];
   };
 
   for (const run of runs) {
-    const baseHeader = `${runs.length} background subagents completed.`;
-    const maximumSectionLength = Math.max(256, MAX_NOTIFICATION_CHARS - baseHeader.length - 2);
-    const section = boundedCompletionSection(run, maximumSectionLength);
-    const candidate = `${baseHeader}\n\n${[...sections, section].join("\n\n")}`;
-    if (sections.length > 0 && candidate.length > MAX_NOTIFICATION_CHARS) flush();
+    let header = headerFor(chunks.length);
+    const unboundedSection = completionSection(run);
+    const occupied = header.length + 2 + sections.join("\n\n").length;
+    const separator = sections.length > 0 ? 2 : 0;
+    if (
+      sections.length > 0 &&
+      occupied + separator + unboundedSection.length > MAX_NOTIFICATION_CHARS
+    ) {
+      flush();
+      header = headerFor(chunks.length);
+    }
+    const currentSectionsLength = sections.join("\n\n").length;
+    const maximumSectionLength = Math.max(
+      0,
+      MAX_NOTIFICATION_CHARS -
+        header.length -
+        2 -
+        currentSectionsLength -
+        (sections.length ? 2 : 0),
+    );
     chunkRuns.push(run);
-    sections.push(section);
+    sections.push(boundedCompletionSection(run, maximumSectionLength));
   }
   flush();
   return chunks;
@@ -119,10 +141,6 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
   const deliveredQuestions = new Map<string, string>();
 
   const notify: SubagentNotifier = (notification) => {
-    // Routine progress is already projected into the footer and /subagents fleet.
-    // Keeping it out of model context prevents stale queued progress turns.
-    if (notification.type === "progress") return undefined;
-
     if (notification.type === "completed") {
       const fresh = notification.runs.filter(
         (run) => (deliveredCompletions.get(run.id) ?? 0) < run.generation,

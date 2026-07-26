@@ -221,7 +221,27 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
       const onLine = (line: string) => {
         try {
           const value = JSON.parse(line) as unknown;
+          const isInitEnvelope =
+            typeof value === "object" &&
+            value !== null &&
+            "type" in value &&
+            value.type === "system" &&
+            "subtype" in value &&
+            value.subtype === "init";
           const init = decodeClaudeInitOption(value);
+          if (isInitEnvelope && !init) {
+            Deferred.doneUnsafe(
+              initialized,
+              Effect.fail(
+                processError(
+                  "validate Claude initialization",
+                  "Claude emitted invalid system/init data; session_id must be a non-empty string.",
+                ),
+              ),
+            );
+            void terminateProcessTree(child, "force").catch(() => {});
+            return;
+          }
           if (init) {
             const policyError = resolvedToolPolicyError(request.writeIntent, init.tools);
             if (policyError) {
@@ -444,10 +464,12 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
         Effect.andThen(waitForExit),
         Effect.flatMap((gracefulExit) =>
           gracefulExit._tag === "Some"
-            ? Effect.sleep("100 millis").pipe(
-                // The leader may have exited while descendants remain in its process group.
-                Effect.andThen(terminate("force").pipe(Effect.catch(() => Effect.void))),
-              )
+            ? process.platform === "win32"
+              ? Effect.void
+              : Effect.sleep("100 millis").pipe(
+                  // POSIX descendants remain owned by the detached process group.
+                  Effect.andThen(terminate("force").pipe(Effect.catch(() => Effect.void))),
+                )
             : terminate("force").pipe(
                 Effect.catch(() => Effect.void),
                 Effect.andThen(waitForExit),

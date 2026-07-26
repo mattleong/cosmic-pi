@@ -23,7 +23,6 @@ export interface RunRecord {
   stoppedByParent: boolean;
   cleanupPending: boolean;
   replyPendingRequestId?: string | undefined;
-  progressTurnTriggered: boolean;
   warningTurnTriggered: boolean;
   completionGeneration: number;
   completionConsumedGeneration: number;

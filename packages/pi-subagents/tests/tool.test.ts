@@ -439,12 +439,22 @@ describe("subagent tool", () => {
         finalText: "x".repeat(32 * 1024),
       }),
     );
+    const consumed: Array<{ readonly id: string; readonly generation: number }> = [];
     const service: SubagentServiceShape = {
       start: () => Effect.succeed(runs[0]!),
       waitForForeground: () => Effect.succeed(runs[0]!),
       awaitTerminal: (ids) => Effect.succeed(ids.map((id) => runs.find((run) => run.id === id)!)),
       list: Effect.succeed(runs),
       status: (id) => Effect.succeed(runs.find((run) => run.id === id)!),
+      observeStatus: (id) =>
+        Effect.succeed({
+          run: runs.find((run) => run.id === id)!,
+          completionReceipt: { id, generation: 1 },
+        }),
+      consumeCompletions: (receipts) =>
+        Effect.sync(() => {
+          consumed.push(...receipts);
+        }),
       send: () => Effect.succeed(runs[0]!),
       reply: () => Effect.succeed(runs[0]!),
       interrupt: () => Effect.succeed(runs[0]!),
@@ -491,6 +501,16 @@ describe("subagent tool", () => {
     expect(text.length).toBeLessThanOrEqual(48_000);
     for (const run of runs.slice(0, 8)) expect(text).toContain(run.id);
     expect(text).toContain("[run output truncated]");
+    expect(consumed).toEqual([]);
+
+    await tool?.execute(
+      "call",
+      { action: "status", runId: "agent-1" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(consumed).toEqual([{ id: "agent-1", generation: 1 }]);
   });
 
   it("requires write intent and backend and lists authenticated models without a runtime", async () => {

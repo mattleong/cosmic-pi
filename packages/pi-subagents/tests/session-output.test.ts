@@ -79,6 +79,9 @@ describe("structured subagent session output", () => {
     expect(summarizeToolArguments("bash", { command: "echo token=secret-value" })).toBe(
       "echo token=[REDACTED]",
     );
+    expect(summarizeToolArguments("Glob", { pattern: "**/*.test.ts", path: "src" })).toBe(
+      "**/*.test.ts · src",
+    );
   });
 
   it("clips oversized tool identifiers without erasing prior activity", () => {
@@ -221,14 +224,37 @@ describe("structured subagent session output", () => {
       runView({
         task: `Inspect ${"nested/path/".repeat(20)}file.ts`,
         finalText: `## Findings\n\n${"A long viewport-safe report sentence. ".repeat(20)}`,
+        cwd: `/project/${"deep-cwd/".repeat(20)}`,
+        sessionId: `session-${"identifier".repeat(20)}`,
         sessionFile: `/tmp/${"deep-session-path/".repeat(20)}session.jsonl`,
       }),
       theme,
+      { showTechnicalDetails: true },
     );
 
     const width = 60;
     const rows = component.render(width);
     expect(rows.length).toBeGreaterThan(10);
+    expect(rows.join("\n")).toContain("Technical details");
+    expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+  });
+
+  it("wraps long progress, warning, question, and error rows", () => {
+    const width = 44;
+    const long = "diagnostic detail ".repeat(30);
+    const rows = renderSubagentSessionOutput(
+      runView({
+        state: "failed",
+        endedAt: 5_000,
+        progress: long,
+        warning: long,
+        question: { requestId: "q-1", message: long, createdAt: 4_000 },
+        error: long,
+      }),
+      theme,
+      { now: 6_000 },
+    ).render(width);
+    expect(rows.join("\n")).toContain("diagnostic detail");
     expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
   });
 });

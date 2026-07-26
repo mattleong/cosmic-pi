@@ -9,23 +9,14 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Type } from "typebox";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS } from "../run/limits.ts";
+import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
 
 const ProtocolIdSchema = Schema.String.check(Schema.isMaxLength(MAX_PROTOCOL_ID_CHARS));
 const ParentMessageSchema = Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS));
 const MAX_TOOL_REPLY_BYTES = 48 * 1024;
 let nextRequest = 1;
 
-function clipToolReply(value: string): string {
-  if (Buffer.byteLength(value, "utf8") <= MAX_TOOL_REPLY_BYTES) return value;
-  let low = 0;
-  let high = value.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (Buffer.byteLength(value.slice(0, middle), "utf8") <= MAX_TOOL_REPLY_BYTES - 3) low = middle;
-    else high = middle - 1;
-  }
-  return `${value.slice(0, low)}…`;
-}
+const clipToolReply = (value: string): string => clipUtf8Text(value, MAX_TOOL_REPLY_BYTES);
 
 interface PendingReply {
   readonly resolve: (message: string) => void;
@@ -138,7 +129,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
         type: "contact_parent" as const,
         requestId,
         kind: params.kind,
-        message: params.message.slice(0, MAX_PARENT_MESSAGE_CHARS),
+        message: safeTextPrefix(params.message, MAX_PARENT_MESSAGE_CHARS),
       };
       if (params.kind !== "question") {
         await sendIpc(envelope);

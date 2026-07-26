@@ -1,7 +1,10 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
 import { ChildProcess } from "./boundary/child-process.ts";
-import type { SubagentNotification } from "./boundary/host-notifier.ts";
+import type {
+  SubagentNotification,
+  SubagentNotificationDelivery,
+} from "./boundary/host-notifier.ts";
 import type { SubagentProjection } from "./run/model.ts";
 import { SubagentService } from "./run/service.ts";
 
@@ -13,7 +16,7 @@ export interface SubagentSessionInput {
 
 export interface SubagentLayerOptions {
   readonly publish: (projection: SubagentProjection) => void;
-  readonly notify: (notification: SubagentNotification) => void;
+  readonly notify: (notification: SubagentNotification) => SubagentNotificationDelivery | undefined;
 }
 
 export const makeSubagentLayer = (_input: SubagentSessionInput, options: SubagentLayerOptions) =>

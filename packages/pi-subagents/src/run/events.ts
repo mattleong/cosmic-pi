@@ -50,7 +50,11 @@ export interface RunEventDependencies {
   ) => Effect.Effect<SubagentRunView>;
   readonly notify: (notification: SubagentNotification) => void;
   readonly failPendingResponses: (record: RunRecord, error: SubagentError) => void;
-  readonly failRun: (record: RunRecord, message: string) => Effect.Effect<SubagentRunView>;
+  readonly failRun: (
+    record: RunRecord,
+    message: string,
+    pendingError?: SubagentError,
+  ) => Effect.Effect<SubagentRunView>;
   readonly deliverForeground: (record: RunRecord, view: SubagentRunView) => boolean;
   readonly pauseFromEvent: (
     record: RunRecord,
@@ -101,9 +105,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
               },
         );
         if (!view || duplicate) return;
-        if (record.progressTurnTriggered) return;
-        record.progressTurnTriggered = true;
-        notify({ type: "progress", id: view.id, name: view.name, message, triggerTurn: true });
         return;
       }
       if (envelope.kind === "warning") {
@@ -478,8 +479,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       )
         return Effect.void;
       const error = protocolError(event.message);
-      failPendingResponses(record, error);
-      return failRun(record, error.message).pipe(Effect.asVoid);
+      return failRun(record, error.message, error).pipe(Effect.asVoid);
     }
     const processFailure = new SubagentProcessError({
       operation: "run",

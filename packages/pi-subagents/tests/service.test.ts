@@ -1298,6 +1298,144 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("rejects empty awaits at the service boundary", () => {
+    const fake = fakeChildLayer();
+    const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      for (const until of ["all_terminal", "any_terminal"] as const) {
+        const error = yield* Effect.flip(service.awaitTerminal([], until));
+        expect(error._tag).toBe("InvalidSubagentRequestError");
+      }
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("supports any-terminal awaits without consuming running peers", () => {
+    const fake = fakeChildLayer();
+    const updates: SubagentProjection["runs"][] = [];
+    const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const first = yield* service.start(request({ name: "any-one" }));
+      const second = yield* service.start(request({ name: "any-two" }));
+      const waiting = yield* service
+        .awaitTerminal([first.id, second.id], "any_terminal", (runs) => updates.push(runs))
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(() => updates.length > 0);
+      fake.controls[1]?.offer({ type: "agent_settled" });
+      const runs = yield* Fiber.join(waiting);
+      expect(runs.map((run) => run.state)).toEqual(["running", "completed"]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("releases await claims when the waiting fiber is interrupted", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const updates: SubagentProjection["runs"][] = [];
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      notify: (notification) => notifications.push(notification),
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "cancelled-await" }));
+      const waiting = yield* service
+        .awaitTerminal([run.id], "all_terminal", (runs) => updates.push(runs))
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(() => updates.length > 0);
+      yield* Fiber.interrupt(waiting);
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.length === 1);
+      expect(notifications[0]).toMatchObject({
+        type: "completed",
+        runs: [{ id: run.id }],
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("keeps unconsumed observations notification-eligible", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const updates: SubagentProjection["runs"][] = [];
+    const layer = SubagentService.layer({
+      notify: (notification) => notifications.push(notification),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "observed-report" }));
+      const waiting = yield* service.awaitTerminalObserved!([run.id], "all_terminal", (runs) =>
+        updates.push(runs),
+      ).pipe(Effect.forkScoped);
+      yield* yieldUntil(() => updates.length > 0);
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      const observations = yield* Fiber.join(waiting);
+      expect(observations[0]?.completionReceipt).toEqual({ id: run.id, generation: 1 });
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.length === 1);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("holds a completion claim through observation formatting and consumption", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      notify: (notification) => notifications.push(notification),
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "leased-observation" }));
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+
+      const acquired = yield* Deferred.make<void>();
+      const releaseUse = yield* Deferred.make<void>();
+      const observing = yield* service.withStatusObservations!([run.id], (observations) =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(acquired, undefined);
+          yield* Deferred.await(releaseUse);
+          const receipt = observations[0]?.completionReceipt;
+          if (receipt) yield* service.consumeCompletions!([receipt]);
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(acquired);
+      yield* TestClock.adjust("100 millis");
+      expect(notifications).toEqual([]);
+      yield* Deferred.succeed(releaseUse, undefined);
+      yield* Fiber.join(observing);
+      yield* TestClock.adjust("1 second");
+      expect(notifications).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("settles interrupted startup as stopped without a warning", () => {
+    const fake = fakeChildLayer(Effect.void, { dropInitialState: true });
+    const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      notify: (notification) => notifications.push(notification),
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const starting = yield* service
+        .start(request({ name: "cancelled-start" }))
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () => fake.controls[0]?.commands.some((command) => command.type === "get_state") ?? false,
+      );
+      yield* Fiber.interrupt(starting);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopped");
+      expect(notifications).toEqual([]);
+      expect(fake.controls[0]?.released()).toBe(1);
+      expect((yield* service.status("agent-1")).error).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("coalesces unclaimed fleet completions into one notification", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
@@ -1353,11 +1491,38 @@ describe("SubagentService", () => {
 
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => attempts === 1);
-      yield* TestClock.adjust("100 millis");
+      yield* TestClock.adjust("200 millis");
       yield* yieldUntil(() => attempts === 2);
       yield* TestClock.adjust("500 millis");
       expect(attempts).toBe(2);
       expect(notifications).toHaveLength(2);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("caps persistent completion retry backoff at thirty seconds", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    let attempts = 0;
+    const layer = SubagentService.layer({
+      notify: (notification) => {
+        if (notification.type !== "completed") return undefined;
+        attempts += 1;
+        return { deliveredCompletionKeys: [] };
+      },
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      yield* service.start(request({ name: "persistent-retry" }));
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      for (const [index, delay] of [
+        100, 200, 400, 800, 1_600, 3_200, 6_400, 12_800, 25_600, 30_000, 30_000,
+      ].entries()) {
+        yield* TestClock.adjust(`${delay} millis`);
+        yield* yieldUntil(() => attempts === index + 1);
+      }
+      expect(attempts).toBe(11);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -1662,6 +1827,46 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("fails an in-flight RPC promptly when stop sweeps its registration", () => {
+    const fake = fakeChildLayer();
+    const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "stop-rpc" }));
+      const sendGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextSend("steer", sendGate);
+      const sending = yield* service.send(run.id, "Continue").pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () => fake.controls[0]?.commands.some((command) => command.type === "steer") ?? false,
+      );
+      expect((yield* service.stop(run.id)).state).toBe("stopped");
+      const error = yield* Fiber.join(sending).pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "SubagentProcessError", operation: "stop" });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("fails an in-flight RPC promptly when the run protocol fails", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "failed-rpc" }));
+      const sendGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextSend("steer", sendGate);
+      const sending = yield* service.send(run.id, "Continue").pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () => fake.controls[0]?.commands.some((command) => command.type === "steer") ?? false,
+      );
+      fake.controls[0]?.offer({ type: "tool_execution_start" });
+      const error = yield* Fiber.join(sending).pipe(Effect.flip);
+      expect(error._tag).toBe("SubagentProtocolError");
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("finishes stop cleanup after the requesting fiber is interrupted", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
@@ -1855,9 +2060,8 @@ describe("SubagentService", () => {
           kind,
           message,
         });
-      yield* yieldUntil(() => notifications.length === 3);
+      yield* yieldUntil(() => notifications.length === 2);
       expect(notifications).toMatchObject([
-        { type: "progress", message: "First progress", triggerTurn: true },
         { type: "warning", message: "First warning", triggerTurn: true },
         { type: "warning", message: "Second warning", triggerTurn: false },
       ]);
@@ -1866,9 +2070,9 @@ describe("SubagentService", () => {
         type: "extension_error",
         error: "Extension bridge failed token=secret-value",
       });
-      yield* yieldUntil(() => notifications.length === 4);
-      expect(notifications[3]).toMatchObject({ type: "warning", triggerTurn: false });
-      const extensionWarning = notifications[3];
+      yield* yieldUntil(() => notifications.length === 3);
+      expect(notifications[2]).toMatchObject({ type: "warning", triggerTurn: false });
+      const extensionWarning = notifications[2];
       expect(extensionWarning?.type).toBe("warning");
       if (extensionWarning?.type === "warning")
         expect(extensionWarning.message).not.toContain("secret-value");

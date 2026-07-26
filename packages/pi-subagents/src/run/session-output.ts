@@ -44,6 +44,7 @@ export function summarizeToolArguments(toolName: string, args: unknown): string 
       break;
     }
     case "find":
+    case "glob":
       summary = [stringField(input, "pattern"), path].filter(Boolean).join(" · ");
       break;
     case "contact_parent":

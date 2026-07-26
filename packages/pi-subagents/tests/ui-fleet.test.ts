@@ -109,6 +109,12 @@ describe("/subagents fleet UI", () => {
     expect(lines.join("\n")).toContain("completed 18s ago");
   });
 
+  it.each(["\r", "\n", "\u001b[13u"])("toggles narrow details with each Enter encoding", (key) => {
+    const { component } = makeComponent(42, 24, completedProjection);
+    component.handleInput(key);
+    expect(component.render(42).join("\n")).toContain("Final report");
+  });
+
   it("wraps structured narrow details without showing raw transcript duplicates", () => {
     const { component } = makeComponent(42, 24, completedProjection);
     component.handleInput("\r");
@@ -122,20 +128,20 @@ describe("/subagents fleet UI", () => {
     expect(lines.every((line) => visibleWidth(line) <= 42)).toBe(true);
   });
 
-  it("scrolls detail output with ctrl+k and ctrl+j", () => {
+  it("scrolls detail output with ctrl+u and ctrl+d", () => {
     const { component } = makeComponent(42, 12, completedProjection);
     component.handleInput("\r");
     const bottom = component.render(42).join("\n");
     expect(bottom).toContain("of");
-    expect(bottom).toContain("C-k up · C-j down");
+    expect(bottom).toContain("C-u up · C-d down");
     expect(bottom).toContain("Final report");
 
-    for (let index = 0; index < 40; index += 1) component.handleInput("\u000b");
+    for (let index = 0; index < 40; index += 1) component.handleInput("\u0015");
     const top = component.render(42).join("\n");
     expect(top).toContain("Task");
     expect(top).not.toBe(bottom);
 
-    component.handleInput("\n");
+    component.handleInput("\u0004");
     expect(component.render(42).join("\n")).not.toBe(top);
   });
 
@@ -147,7 +153,65 @@ describe("/subagents fleet UI", () => {
     expect(component.render(42).join("\n")).toContain("Technical details");
     expect(component.render(42).at(-1)).toContain("? help");
     component.handleInput("?");
-    expect(component.render(42).at(-1)).toContain("m msg");
+    expect(component.render(42).at(-1)).toContain("m reply");
+  });
+
+  it.each([120, 80])("does not reset detail scrolling with Enter at width %s", (width) => {
+    const { component } = makeComponent(width, 12, completedProjection);
+    for (let index = 0; index < 20; index += 1) component.handleInput("\u0015");
+    const before = component.render(width).join("\n");
+    component.handleInput("\r");
+    expect(component.render(width).join("\n")).toBe(before);
+  });
+
+  it("clears pending stop confirmation when selection changes", () => {
+    const twoRuns: SubagentProjection = {
+      revision: 4,
+      runs: [projection.runs[0]!, { ...projection.runs[0]!, id: "agent-2", name: "second-reader" }],
+    };
+    const { actions, component } = makeComponent(80, 18, twoRuns);
+    component.handleInput("x");
+    expect(component.render(80).at(-1)).toContain("confirm stop agent-1");
+    component.handleInput("j");
+    expect(component.render(80).at(-1)).not.toContain("confirm stop agent-1");
+    component.handleInput("x");
+    expect(actions.stop).not.toHaveBeenCalled();
+    expect(component.render(80).at(-1)).toContain("confirm stop agent-2");
+  });
+
+  it("shows only supported actions for Claude runs", () => {
+    const claudeRunning: SubagentProjection = {
+      revision: 5,
+      runs: [
+        {
+          ...projection.runs[0]!,
+          backend: "claude-cli",
+          model: "opus",
+          capabilities: ["resume", "rename-display"],
+          state: "running",
+          question: undefined,
+        },
+      ],
+    };
+    const running = makeComponent(120, 18, claudeRunning);
+    const runningHelp = running.component.render(120).at(-1) ?? "";
+    expect(runningHelp).toContain("n rename");
+    expect(runningHelp).toContain("x stop");
+    expect(runningHelp).not.toContain("m message");
+    expect(runningHelp).not.toContain("i interrupt");
+    running.component.handleInput("m");
+    running.component.handleInput("i");
+    expect(running.actions.message).not.toHaveBeenCalled();
+    expect(running.actions.interrupt).not.toHaveBeenCalled();
+
+    const completed = makeComponent(120, 18, {
+      revision: 6,
+      runs: [{ ...claudeRunning.runs[0]!, state: "completed", endedAt: 2_000 }],
+    });
+    const completedHelp = completed.component.render(120).at(-1) ?? "";
+    expect(completedHelp).toContain("r resume");
+    expect(completedHelp).toContain("n rename");
+    expect(completedHelp).not.toContain("x stop");
   });
 
   it.each(["paused", "stopping"] as const)(

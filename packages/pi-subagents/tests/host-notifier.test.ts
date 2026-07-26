@@ -31,17 +31,10 @@ describe("subagent host notifier", () => {
     expect(options).toEqual({ deliverAs: "steer", triggerTurn: true });
   });
 
-  it("keeps routine progress out of model context and steers warnings", () => {
+  it("steers warnings without triggering a turn when requested", () => {
     const sendMessage = vi.fn();
     const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
 
-    notify({
-      type: "progress",
-      id: "agent-1",
-      name: "reader",
-      message: "Found the boundary.",
-      triggerTurn: true,
-    });
     notify({
       type: "warning",
       id: "agent-1",
@@ -55,6 +48,18 @@ describe("subagent host notifier", () => {
       deliverAs: "steer",
       triggerTurn: false,
     });
+  });
+
+  it("explains a single completion without a final report", () => {
+    const sendMessage = vi.fn();
+    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+
+    notify({
+      type: "completed",
+      runs: [{ id: "agent-1", name: "reader", generation: 1 }],
+    });
+
+    expect(sendMessage.mock.calls[0]?.[0].content).toContain("Completed without a final report.");
   });
 
   it("coalesces completion rendering and deduplicates generations", () => {
@@ -92,6 +97,10 @@ describe("subagent host notifier", () => {
     expect(sendMessage.mock.calls[1]?.[0].content.length).toBeLessThanOrEqual(32 * 1024);
     expect(sendMessage.mock.calls[0]?.[0].content).toContain("agent-1");
     expect(sendMessage.mock.calls[1]?.[0].content).toContain("agent-2");
+    expect(sendMessage.mock.calls[1]?.[0].content).toContain("(continued 2)");
+    expect(sendMessage.mock.calls[1]?.[0].content).toContain(
+      "[Report truncated; use subagent status or await for agent-2.]",
+    );
     expect(delivery?.deliveredCompletionKeys).toEqual(["agent-1:1", "agent-2:1"]);
   });
 

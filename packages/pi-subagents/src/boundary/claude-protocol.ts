@@ -7,9 +7,14 @@ import { MAX_PROTOCOL_ID_CHARS } from "../run/limits.ts";
 const MAX_NAME_CHARS = 256;
 const MAX_TEXT_CHARS = 1024 * 1024;
 const ProtocolIdSchema = Schema.String.check(Schema.isMaxLength(MAX_PROTOCOL_ID_CHARS));
+const NonEmptyProtocolIdSchema = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_PROTOCOL_ID_CHARS),
+);
 const NameSchema = Schema.String.check(Schema.isMaxLength(MAX_NAME_CHARS));
 const TextSchema = Schema.String.check(Schema.isMaxLength(MAX_TEXT_CHARS));
-const MessageContentSchema = Schema.Union([TextSchema, Schema.Array(Schema.Unknown)]);
+const AssistantContentSchema = Schema.Union([Schema.String, Schema.Array(Schema.Unknown)]);
+const UserContentSchema = Schema.Union([TextSchema, Schema.Array(Schema.Unknown)]);
 
 const DiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.String) });
 const SystemSchema = Schema.Struct({
@@ -21,17 +26,17 @@ const SystemSchema = Schema.Struct({
 const InitSchema = Schema.Struct({
   type: Schema.Literal("system"),
   subtype: Schema.Literal("init"),
-  session_id: ProtocolIdSchema,
+  session_id: NonEmptyProtocolIdSchema,
   model: Schema.optional(NameSchema),
   tools: Schema.optional(Schema.Array(NameSchema)),
 });
 const AssistantSchema = Schema.Struct({
   type: Schema.Literal("assistant"),
-  message: Schema.Struct({ content: MessageContentSchema }),
+  message: Schema.Struct({ content: AssistantContentSchema }),
 });
 const UserSchema = Schema.Struct({
   type: Schema.Literal("user"),
-  message: Schema.Struct({ content: MessageContentSchema }),
+  message: Schema.Struct({ content: UserContentSchema }),
 });
 const UsageTokenSchema = Schema.Number.check(
   Schema.isFinite(),
@@ -75,7 +80,7 @@ const RateLimitSchema = Schema.Struct({
 });
 const IgnoredSchema = Schema.Struct({ type: Schema.String });
 
-const TextBlockSchema = Schema.Struct({ type: Schema.Literal("text"), text: TextSchema });
+const TextBlockSchema = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 const ToolUseBlockSchema = Schema.Struct({
   type: Schema.Literal("tool_use"),
   id: ProtocolIdSchema,

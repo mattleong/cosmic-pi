@@ -1,5 +1,6 @@
 import { isActiveRunState, type StartSubagentRequest, type SubagentWriteIntent } from "./model.ts";
 import type { RunRecord } from "./internal.ts";
+import { safeTextPrefix } from "./state.ts";
 
 const PI_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "read",
@@ -24,7 +25,7 @@ const activePeerLines = (records: Iterable<RunRecord>, selfId?: string): string[
     .filter((record) => record.view.id !== selfId && isActiveRunState(record.view.state))
     .map(
       (record) =>
-        `- ${record.view.name} (${record.view.id}): ${record.view.writeIntent}; ${record.view.state}; task: ${record.view.task.slice(0, 160)}`,
+        `- ${record.view.name} (${record.view.id}): ${record.view.writeIntent}; ${record.view.state}; task: ${safeTextPrefix(record.view.task, 160)}`,
     );
 
 export const peerNoticeText = (records: Iterable<RunRecord>, selfId: string): string => {

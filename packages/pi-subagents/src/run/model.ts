@@ -154,6 +154,15 @@ export const ACTIVE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
 
 export const isActiveRunState = (state: SubagentRunState): boolean => ACTIVE_RUN_STATES.has(state);
 
+export const TERMINAL_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
+  "completed",
+  "failed",
+  "stopped",
+]);
+
+export const isTerminalRunState = (state: SubagentRunState): boolean =>
+  TERMINAL_RUN_STATES.has(state);
+
 export const emptyUsage = (): SubagentUsage => ({
   input: 0,
   output: 0,

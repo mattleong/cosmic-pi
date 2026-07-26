@@ -7,7 +7,7 @@ import type { RunRecord } from "./internal.ts";
 export const completionNotificationKey = (id: string, generation: number): string =>
   `${id}:${generation}`;
 
-const isEligible = (record: RunRecord, generation: number): boolean =>
+export const isCompletionEligible = (record: RunRecord, generation: number): boolean =>
   record.view.state === "completed" &&
   record.completionGeneration === generation &&
   record.completionClaims === 0 &&
@@ -20,7 +20,7 @@ export function collectPendingCompletionNotifications(
 ): ReadonlyArray<SubagentCompletionNotification> {
   const completed = [...pending.entries()].flatMap(([id, generation]) => {
     const record = records.get(id);
-    if (!record || !isEligible(record, generation)) {
+    if (!record || !isCompletionEligible(record, generation)) {
       pending.delete(id);
       return [];
     }
@@ -39,19 +39,15 @@ export function collectPendingCompletionNotifications(
 }
 
 export function deliveredCompletionKeys(
-  delivery: unknown,
+  delivery: SubagentNotificationDelivery | undefined,
   runs: ReadonlyArray<SubagentCompletionNotification>,
 ): ReadonlySet<string> {
-  if (
-    typeof delivery === "object" &&
-    delivery !== null &&
-    "deliveredCompletionKeys" in delivery &&
-    Array.isArray((delivery as SubagentNotificationDelivery).deliveredCompletionKeys)
-  )
-    return new Set((delivery as SubagentNotificationDelivery).deliveredCompletionKeys);
   // Existing embedders use void callbacks. A callback that returns normally is a
   // successful synchronous delivery unless it explicitly reports partial delivery.
-  return new Set(runs.map((run) => completionNotificationKey(run.id, run.generation)));
+  return new Set(
+    delivery?.deliveredCompletionKeys ??
+      runs.map((run) => completionNotificationKey(run.id, run.generation)),
+  );
 }
 
 export function acknowledgePendingCompletions(
@@ -59,7 +55,8 @@ export function acknowledgePendingCompletions(
   pending: Map<string, number>,
   runs: ReadonlyArray<SubagentCompletionNotification>,
   delivered: ReadonlySet<string>,
-): void {
+): number {
+  let acknowledged = 0;
   for (const run of runs) {
     if (!delivered.has(completionNotificationKey(run.id, run.generation))) continue;
     const record = records.get(run.id);
@@ -69,7 +66,9 @@ export function acknowledgePendingCompletions(
         run.generation,
       );
     if (pending.get(run.id) === run.generation) pending.delete(run.id);
+    acknowledged += 1;
   }
+  return acknowledged;
 }
 
 export function queuePendingCompletion(
@@ -77,5 +76,5 @@ export function queuePendingCompletion(
   record: RunRecord,
   generation: number,
 ): void {
-  if (isEligible(record, generation)) pending.set(record.view.id, generation);
+  if (isCompletionEligible(record, generation)) pending.set(record.view.id, generation);
 }

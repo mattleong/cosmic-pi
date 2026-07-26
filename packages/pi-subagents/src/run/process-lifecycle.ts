@@ -13,7 +13,7 @@ import {
   SubagentProcessError,
   SubagentProtocolError,
 } from "./errors.ts";
-import { isActiveRunState, hasSubagentCapability } from "./model.ts";
+import { hasSubagentCapability, isActiveRunState, isTerminalRunState } from "./model.ts";
 import { peerNoticeText } from "./coordination.ts";
 import {
   decodeRpcStateData,
@@ -41,8 +41,11 @@ export interface RunProcessLifecycleDependencies {
   readonly markCleanupPending: (record: RunRecord) => Effect.Effect<void>;
   readonly closeRecordScope: (record: RunRecord, scope?: Scope.Closeable) => Effect.Effect<void>;
   readonly closeExitedScope: (record: RunRecord, scope: Scope.Closeable) => Effect.Effect<void>;
-  readonly failPendingResponses: (record: RunRecord, error: SubagentError) => void;
-  readonly failRun: (record: RunRecord, message: string) => Effect.Effect<unknown>;
+  readonly failRun: (
+    record: RunRecord,
+    message: string,
+    pendingError?: SubagentError,
+  ) => Effect.Effect<unknown>;
 }
 
 const protocolError = (message: string) => new SubagentProtocolError({ message });
@@ -58,33 +61,55 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
     markCleanupPending,
     closeRecordScope,
     closeExitedScope,
-    failPendingResponses,
     failRun,
   } = dependencies;
 
   const rpc = <A extends RpcCommand>(record: RunRecord, command: A) =>
     Effect.gen(function* () {
-      const process = record.process;
-      if (!process)
-        return yield* new SubagentProcessError({
-          operation: "send RPC command to",
-          message: `Subagent ${record.view.id} has no active process.`,
-        });
-      const id = `${record.view.id}-rpc-${record.nextRpcId++}`;
       const response = yield* Deferred.make<RpcResponse, SubagentError>();
-      record.responses.set(id, response);
-      const timeout =
-        record.view.backend === "claude-cli" && command.type === "get_state"
-          ? CLAUDE_INITIALIZATION_TIMEOUT
-          : RPC_TIMEOUT;
-      const outcome = yield* process.send({ ...command, id }).pipe(
-        Effect.andThen(Deferred.await(response)),
-        Effect.timeoutOption(timeout),
-        Effect.ensuring(
-          Effect.sync(() => {
-            record.responses.delete(id);
-          }),
-        ),
+      const acquireRegistration = withLock(
+        Effect.gen(function* () {
+          const process = record.process;
+          if (
+            !process ||
+            record.stoppedByParent ||
+            record.cleanupPending ||
+            record.view.state === "stopping" ||
+            isTerminalRunState(record.view.state)
+          )
+            return yield* new SubagentProcessError({
+              operation: "send RPC command to",
+              message: `Subagent ${record.view.id} has no active process.`,
+            });
+          const id = `${record.view.id}-rpc-${record.nextRpcId++}`;
+          record.responses.set(id, response);
+          const transport = yield* process
+            .send({ ...command, id })
+            .pipe(Effect.forkIn(ownerScope, { startImmediately: true }));
+          return { id, transport };
+        }),
+      );
+      const outcome = yield* Effect.acquireUseRelease(
+        acquireRegistration,
+        (registration) => {
+          const timeout =
+            record.view.backend === "claude-cli" && command.type === "get_state"
+              ? CLAUDE_INITIALIZATION_TIMEOUT
+              : RPC_TIMEOUT;
+          const sendAndAwait = Fiber.join(registration.transport).pipe(
+            Effect.onInterrupt(() => Fiber.interrupt(registration.transport).pipe(Effect.asVoid)),
+            Effect.andThen(Deferred.await(response)),
+          );
+          return Effect.raceFirst(sendAndAwait, Deferred.await(response)).pipe(
+            Effect.timeoutOption(timeout),
+          );
+        },
+        (registration) =>
+          withLock(
+            Effect.sync(() => {
+              record.responses.delete(registration.id);
+            }),
+          ).pipe(Effect.andThen(Fiber.interrupt(registration.transport)), Effect.asVoid),
       );
       if (Option.isNone(outcome))
         return yield* new SubagentProcessError({
@@ -163,10 +188,9 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
             Effect.flatMap((isCurrent) =>
               isCurrent
                 ? handleWireEvent(record, event).pipe(
-                    Effect.catch((error) => {
-                      failPendingResponses(record, error);
-                      return failRun(record, error.message).pipe(Effect.asVoid);
-                    }),
+                    Effect.catch((error) =>
+                      failRun(record, error.message, error).pipe(Effect.asVoid),
+                    ),
                   )
                 : Effect.void,
             ),

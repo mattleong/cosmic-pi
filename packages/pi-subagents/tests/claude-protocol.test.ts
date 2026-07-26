@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
 import {
   claudeEnvelopeToAgentEvents,
+  decodeClaudeInitOption,
   decodeClaudeStreamEnvelope,
 } from "../src/boundary/claude-protocol.ts";
 
@@ -23,6 +24,27 @@ describe("Claude stream protocol", () => {
       type: "ignored",
       eventType: "stream_event",
     });
+  });
+
+  it("rejects an empty initialization session ID", () => {
+    expect(
+      decodeClaudeInitOption({ type: "system", subtype: "init", session_id: "" }),
+    ).toBeUndefined();
+  });
+
+  it("accepts transport-bounded oversized assistant text for later projection clipping", async () => {
+    const text = "x".repeat(1024 * 1024 + 1);
+    const stringEnvelope = await decode({ type: "assistant", message: { content: text } });
+    expect(claudeEnvelopeToAgentEvents(stringEnvelope, { tools: new Map() })).toEqual([
+      { type: "assistant", text },
+    ]);
+    const blockEnvelope = await decode({
+      type: "assistant",
+      message: { content: [{ type: "text", text }] },
+    });
+    expect(claudeEnvelopeToAgentEvents(blockEnvelope, { tools: new Map() })).toEqual([
+      { type: "assistant", text },
+    ]);
   });
 
   it("normalizes assistant text and tool lifecycle blocks", async () => {

@@ -75,6 +75,38 @@ const stateColor = (run: SubagentRunView) => {
   }
 };
 
+const canMessage = (run: SubagentRunView | undefined): boolean =>
+  Boolean(
+    run &&
+    ((run.state === "running" && hasSubagentCapability(run, "steer")) ||
+      (run.state === "waiting_for_parent" && hasSubagentCapability(run, "parent-contact"))),
+  );
+const canInterrupt = (run: SubagentRunView | undefined): boolean =>
+  Boolean(
+    run &&
+    hasSubagentCapability(run, "interrupt") &&
+    (run.state === "running" || run.state === "waiting_for_parent"),
+  );
+const canResume = (run: SubagentRunView | undefined): boolean =>
+  Boolean(
+    run &&
+    hasSubagentCapability(run, "resume") &&
+    (run.state === "paused" || run.state === "completed"),
+  );
+const canRename = (run: SubagentRunView | undefined): boolean =>
+  Boolean(
+    run &&
+    hasSubagentCapability(run, "rename-display") &&
+    run.state !== "starting" &&
+    run.state !== "stopping" &&
+    run.state !== "stopped" &&
+    run.state !== "failed",
+  );
+const canStop = (run: SubagentRunView | undefined): boolean =>
+  Boolean(run && isActiveRunState(run.state));
+
+type FleetLayout = "wide" | "stacked" | "narrow";
+
 const pad = (text: string, width: number): string => {
   const clipped = truncateToWidth(text, Math.max(0, width), "");
   return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
@@ -90,19 +122,29 @@ export class SubagentFleetComponent implements Component {
   private showTechnicalDetails = false;
   private alternateHelp = false;
   private pendingStop: string | undefined;
+  private layout: FleetLayout = "narrow";
   private readonly options: FleetOptions;
 
   constructor(options: FleetOptions) {
     this.options = options;
   }
 
-  private reconcile(runs: ReadonlyArray<SubagentRunView>): void {
+  private select(index: number, runs: ReadonlyArray<SubagentRunView>): void {
     const previousId = this.selectedId;
-    const existing = this.selectedId ? runs.findIndex((run) => run.id === this.selectedId) : -1;
-    this.selected =
-      existing >= 0 ? existing : Math.min(this.selected, Math.max(0, runs.length - 1));
+    this.selected = Math.max(0, Math.min(Math.max(0, runs.length - 1), index));
     this.selectedId = runs[this.selected]?.id;
-    if (previousId !== undefined && previousId !== this.selectedId) this.detailScroll = 0;
+    if (previousId !== this.selectedId) {
+      this.detailScroll = 0;
+      this.pendingStop = undefined;
+    }
+  }
+
+  private reconcile(runs: ReadonlyArray<SubagentRunView>): void {
+    const existing = this.selectedId ? runs.findIndex((run) => run.id === this.selectedId) : -1;
+    this.select(existing >= 0 ? existing : this.selected, runs);
+    const selected = runs[this.selected];
+    if (this.pendingStop && (this.pendingStop !== selected?.id || !canStop(selected)))
+      this.pendingStop = undefined;
   }
 
   handleInput(data: string): void {
@@ -118,19 +160,15 @@ export class SubagentFleetComponent implements Component {
       this.options.close();
       return;
     }
-    if (matchesKey(data, Key.ctrl("k"))) {
+    if (matchesKey(data, Key.ctrl("u"))) {
       this.detailScroll = Math.min(this.detailMaxScroll, this.detailScroll + 1);
-    } else if (matchesKey(data, Key.ctrl("j"))) {
+    } else if (matchesKey(data, Key.ctrl("d"))) {
       this.detailScroll = Math.max(0, this.detailScroll - 1);
     } else if (matchesKey(data, Key.up) || data === "k") {
-      this.selected = Math.max(0, this.selected - 1);
-      this.selectedId = runs[this.selected]?.id;
-      this.detailScroll = 0;
+      this.select(this.selected - 1, runs);
     } else if (matchesKey(data, Key.down) || data === "j") {
-      this.selected = Math.min(Math.max(0, runs.length - 1), this.selected + 1);
-      this.selectedId = runs[this.selected]?.id;
-      this.detailScroll = 0;
-    } else if (matchesKey(data, Key.enter)) {
+      this.select(this.selected + 1, runs);
+    } else if (matchesKey(data, Key.enter) && this.layout === "narrow") {
       this.details = !this.details;
       this.detailScroll = 0;
     } else if (data === "t") {
@@ -138,42 +176,18 @@ export class SubagentFleetComponent implements Component {
       this.detailScroll = 0;
     } else if (data === "?") {
       this.alternateHelp = !this.alternateHelp;
-    } else if (data === "x" && selected && isActiveRunState(selected.state)) {
+    } else if (data === "x" && selected && canStop(selected)) {
       if (this.pendingStop === selected.id) {
         this.pendingStop = undefined;
         this.options.actions.stop(selected.id);
       } else this.pendingStop = selected.id;
-    } else if (
-      data === "i" &&
-      selected &&
-      hasSubagentCapability(selected, "interrupt") &&
-      (selected.state === "running" || selected.state === "waiting_for_parent")
-    ) {
+    } else if (data === "i" && selected && canInterrupt(selected)) {
       this.options.actions.interrupt(selected.id);
-    } else if (
-      data === "r" &&
-      selected &&
-      hasSubagentCapability(selected, "resume") &&
-      (selected.state === "paused" || selected.state === "completed")
-    ) {
+    } else if (data === "r" && selected && canResume(selected)) {
       this.options.actions.resume(selected.id);
-    } else if (
-      data === "m" &&
-      selected &&
-      ((selected.state === "running" && hasSubagentCapability(selected, "steer")) ||
-        (selected.state === "waiting_for_parent" &&
-          hasSubagentCapability(selected, "parent-contact")))
-    ) {
+    } else if (data === "m" && selected && canMessage(selected)) {
       this.options.actions.message(selected.id, selected.state === "waiting_for_parent");
-    } else if (
-      data === "n" &&
-      selected &&
-      hasSubagentCapability(selected, "rename-display") &&
-      selected.state !== "starting" &&
-      selected.state !== "stopping" &&
-      selected.state !== "stopped" &&
-      selected.state !== "failed"
-    ) {
+    } else if (data === "n" && selected && canRename(selected)) {
       this.options.actions.rename(selected.id);
     }
     this.options.requestRender();
@@ -183,6 +197,7 @@ export class SubagentFleetComponent implements Component {
     const safeWidth = Math.max(0, Math.floor(width));
     const height = Math.max(0, Math.floor(this.options.getHeight()));
     if (safeWidth === 0 || height === 0) return [];
+    this.layout = safeWidth >= 100 ? "wide" : safeWidth >= 60 ? "stacked" : "narrow";
     const projection = this.options.getProjection();
     const runs = projection.runs;
     this.reconcile(runs);
@@ -191,7 +206,7 @@ export class SubagentFleetComponent implements Component {
     const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
     const title = ` /subagents · ${active} active${waiting ? ` · ${waiting} waiting` : ""} `;
     const top = `╭${title}${"─".repeat(Math.max(0, safeWidth - visibleWidth(title) - 2))}╮`;
-    const help = this.helpText(safeWidth);
+    const help = this.helpText(safeWidth, selected);
     const safeHelp = truncateToWidth(help, Math.max(0, safeWidth - 2), "");
     const bottom = `╰${"─".repeat(Math.max(0, safeWidth - visibleWidth(safeHelp) - 2))}${safeHelp}╯`;
     if (height === 1) return [truncateToWidth(top, safeWidth, "")];
@@ -230,15 +245,39 @@ export class SubagentFleetComponent implements Component {
     return runs.slice(start, start + size).map((run, offset) => ({ run, index: start + offset }));
   }
 
-  private helpText(width: number): string {
+  private helpText(width: number, selected: SubagentRunView | undefined): string {
     if (this.pendingStop) return ` x confirm stop ${this.pendingStop} · esc cancel `;
+    const actions = [
+      canMessage(selected)
+        ? selected?.state === "waiting_for_parent"
+          ? "m reply"
+          : "m message"
+        : undefined,
+      canInterrupt(selected) ? "i interrupt" : undefined,
+      canResume(selected) ? "r resume" : undefined,
+      canRename(selected) ? "n rename" : undefined,
+      canStop(selected) ? "x stop" : undefined,
+    ].filter((item): item is string => item !== undefined);
     if (width >= 100)
-      return " ↑↓/jk select · C-j/C-k scroll · enter details · t technical · m message · i interrupt · r resume · n rename · x stop · esc close ";
+      return ` ↑↓/jk select · C-u/C-d scroll · t technical${actions.length ? ` · ${actions.join(" · ")}` : ""} · esc close `;
     if (width >= 60)
-      return " jk select · C-j/C-k scroll · enter details · t tech · ? keys · esc close ";
+      return this.alternateHelp
+        ? ` ${actions.length ? actions.join(" · ") : "no actions"} · ? keys · esc close `
+        : " jk select · C-u/C-d scroll · t tech · ? actions · esc close ";
+    const compactActions = [
+      canMessage(selected)
+        ? selected?.state === "waiting_for_parent"
+          ? "m reply"
+          : "m msg"
+        : undefined,
+      canInterrupt(selected) ? "i int" : undefined,
+      canResume(selected) ? "r res" : undefined,
+      canRename(selected) ? "n name" : undefined,
+      canStop(selected) ? "x stop" : undefined,
+    ].filter((item): item is string => item !== undefined);
     return this.alternateHelp
-      ? " m msg · i int · r res · n name · x/esc "
-      : " jk · C-j/C-k scroll · t · ? help ";
+      ? ` ${compactActions.length ? compactActions.join(" · ") : "no actions"} · ? keys `
+      : " jk · enter · C-u/C-d · t · ? help ";
   }
 
   private detailLines(run: SubagentRunView | undefined, width: number): string[] {
@@ -268,7 +307,7 @@ export class SubagentFleetComponent implements Component {
     const end = Math.min(lines.length, start + bodyHeight);
     const position = this.options.theme.fg(
       "dim",
-      ` ${start + 1}–${end} of ${lines.length} · C-k up · C-j down `,
+      ` ${start + 1}–${end} of ${lines.length} · C-u up · C-d down `,
     );
     return [pad(position, width), ...visible];
   }
