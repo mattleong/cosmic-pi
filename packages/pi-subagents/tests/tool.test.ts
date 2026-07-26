@@ -125,7 +125,7 @@ describe("subagent tool", () => {
 
     const result = await tool?.execute(
       "call",
-      { action: "start", task: "Review auth", writeIntent: "read-only" },
+      { action: "start", backend: "pi", task: "Review auth", writeIntent: "read-only" },
       undefined,
       undefined,
       context,
@@ -248,7 +248,12 @@ describe("subagent tool", () => {
 
     await tool?.execute(
       "call",
-      { action: "start", task: "Review auth", writeIntent: "read-only" },
+      {
+        action: "start",
+        backend: "pi",
+        task: "Review auth",
+        writeIntent: "read-only",
+      },
       undefined,
       undefined,
       runtimeContext,
@@ -324,7 +329,7 @@ describe("subagent tool", () => {
     expect(listed?.details).toEqual({ action: "list" });
   });
 
-  it("requires write intent and lists authenticated models without a runtime", async () => {
+  it("requires write intent and backend and lists authenticated models without a runtime", async () => {
     let tool: CapturedTool | undefined;
     const pi = {
       registerTool: (definition: unknown) => {
@@ -350,7 +355,23 @@ describe("subagent tool", () => {
     expect(models?.content[0]?.text).toContain("openai-codex/gpt-5.6-sol");
 
     await expect(
-      tool?.execute("call", { action: "start", task: "Do work" }, undefined, undefined, context),
+      tool?.execute(
+        "call",
+        { action: "start", backend: "pi", task: "Do work" },
+        undefined,
+        undefined,
+        context,
+      ),
     ).rejects.toThrow("writeIntent");
+
+    await expect(
+      tool?.execute(
+        "call",
+        { action: "start", task: "Do work", writeIntent: "read-only" },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow("backend=pi or claude-cli");
   });
 });

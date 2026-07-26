@@ -57,7 +57,7 @@ const SubagentToolParameters = Type.Object({
   ),
   backend: Type.Optional(
     StringEnum(["pi", "claude-cli"] as const, {
-      description: "Execution backend; defaults to pi.",
+      description: "Execution backend; required for action=start.",
     }),
   ),
   writeIntent: Type.Optional(
@@ -184,7 +184,11 @@ function resolveStart(
       return yield* new InvalidSubagentRequestError({
         message: "action=start requires writeIntent=writer or read-only.",
       });
-    const backend = input.backend ?? "pi";
+    if (!input.backend)
+      return yield* new InvalidSubagentRequestError({
+        message: "action=start requires backend=pi or claude-cli.",
+      });
+    const backend = input.backend;
     if (backend === "claude-cli" && !ctx.isProjectTrusted())
       return yield* new InvalidSubagentRequestError({
         message:
