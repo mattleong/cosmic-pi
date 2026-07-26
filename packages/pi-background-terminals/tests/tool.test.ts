@@ -86,7 +86,11 @@ describe("background_terminal tool", () => {
     });
     expect(tool?.name).toBe("background_terminal");
     expect(tool?.renderShell).toBe("default");
-    expect(tool?.promptGuidelines?.join(" ")).toContain("use bash");
+    const guidelines = tool?.promptGuidelines?.join(" ") ?? "";
+    expect(guidelines).toContain("use bash");
+    expect(guidelines).toContain("do not repeatedly poll status or logs");
+    expect(guidelines).toContain("small tailLines");
+    expect(guidelines).toContain("tailLines does not apply when afterCursor is set");
 
     const context = { cwd: "/project" } as ExtensionContext;
     const execute = (input: BackgroundTerminalToolInput) =>

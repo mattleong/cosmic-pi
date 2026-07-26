@@ -116,8 +116,9 @@ export function registerBackgroundTerminalTool(
       "Start and manage session-scoped local background commands. Actions: start, list, status, logs, stop, stop_all, clear. Output is bounded; jobs are terminated when the Pi session closes.",
     promptSnippet: "Start and manage long-running local commands without blocking the current turn",
     promptGuidelines: [
-      "The main agent should use background_terminal when a server, watcher, long test suite, or other command can run independently; use bash when the next step immediately depends on completion.",
-      "Use background_terminal log cursors and waitSeconds instead of repeatedly polling at fixed intervals.",
+      "Use background_terminal only when a server, watcher, long test suite, or other command can run independently; use bash when validation or the next step must finish before responding.",
+      "After starting a background job, continue independent work. When completion becomes actionable, check status once; do not repeatedly poll status or logs merely to watch progress.",
+      "Use logs only when output is needed for a decision, the job fails, or the user asks. For one bounded snapshot, omit afterCursor and set a small tailLines value. For incremental reads, set afterCursor to the previous nextCursor and optionally waitSeconds; tailLines does not apply when afterCursor is set.",
       "Stop background_terminal jobs when they are no longer needed; every job is terminated when the Pi session is replaced or shut down.",
     ],
     parameters,
