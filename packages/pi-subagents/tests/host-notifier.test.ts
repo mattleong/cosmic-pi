@@ -74,6 +74,47 @@ describe("subagent host notifier", () => {
     expect(sendMessage.mock.calls[0]?.[0].content).toContain("## tester (agent-2)");
   });
 
+  it("chunks large completion batches without losing later run IDs", () => {
+    const sendMessage = vi.fn();
+    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    const report = "x".repeat(32 * 1024);
+
+    const delivery = notify({
+      type: "completed",
+      runs: [
+        { id: "agent-1", name: "reader", generation: 1, finalText: report },
+        { id: "agent-2", name: "tester", generation: 1, finalText: report },
+      ],
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[0]?.[0].content.length).toBeLessThanOrEqual(32 * 1024);
+    expect(sendMessage.mock.calls[1]?.[0].content.length).toBeLessThanOrEqual(32 * 1024);
+    expect(sendMessage.mock.calls[0]?.[0].content).toContain("agent-1");
+    expect(sendMessage.mock.calls[1]?.[0].content).toContain("agent-2");
+    expect(delivery?.deliveredCompletionKeys).toEqual(["agent-1:1", "agent-2:1"]);
+  });
+
+  it("acknowledges only successful completion chunks and can retry after reset", () => {
+    let fail = true;
+    const sendMessage = vi.fn((): void => {
+      if (fail) throw new Error("stale session");
+    });
+    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    const completion = {
+      type: "completed" as const,
+      runs: [{ id: "agent-1", name: "reader", generation: 1, finalText: "Done." }],
+    };
+
+    expect(notify(completion)?.deliveredCompletionKeys).toEqual([]);
+    fail = false;
+    expect(notify(completion)?.deliveredCompletionKeys).toEqual(["agent-1:1"]);
+    expect(notify(completion)?.deliveredCompletionKeys).toEqual([]);
+
+    notify.reset();
+    expect(notify(completion)?.deliveredCompletionKeys).toEqual(["agent-1:1"]);
+  });
+
   it("does not retain raw report secrets in custom-message metadata", () => {
     const sendMessage = vi.fn();
     const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);

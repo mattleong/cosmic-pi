@@ -5,7 +5,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import * as Cause from "effect/Cause";
@@ -21,6 +21,7 @@ import {
 import { sanitizeDiagnosticText } from "../run/state.ts";
 import type { ChildLaunchRequest, ChildProcessHandle, ChildWireEvent } from "./child-process.ts";
 import { decodeClaudeInitOption } from "./claude-protocol.ts";
+import { terminateProcessTree } from "./process-tree.ts";
 
 const MAX_STREAM_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_STDERR_BYTES = 128 * 1024;
@@ -35,7 +36,6 @@ const CLAUDE_DISALLOWED_TOOLS = {
   "read-only": ["Agent", "Task", "Workflow", "Edit", "Write", "Bash", "NotebookEdit", "MultiEdit"],
   writer: ["Agent", "Task", "Workflow"],
 } as const satisfies Record<SubagentWriteIntent, ReadonlyArray<string>>;
-const CLAUDE_READ_ONLY_TOOLS: ReadonlySet<string> = new Set(CLAUDE_TOOLS["read-only"]);
 const BLOCKED_ENV_KEYS = new Set([
   "NODE_OPTIONS",
   "NODE_PATH",
@@ -97,6 +97,32 @@ export function buildClaudeCliArgs(
   ];
 }
 
+function resolvedToolPolicyError(
+  writeIntent: SubagentWriteIntent,
+  reportedTools: ReadonlyArray<string> | undefined,
+): SubagentProcessError | undefined {
+  if (reportedTools === undefined)
+    return processError(
+      "verify Claude tool policy",
+      `Claude did not report its resolved tool set for a ${writeIntent} run.`,
+    );
+  const expected = new Set<string>(CLAUDE_TOOLS[writeIntent]);
+  const reported = new Set(reportedTools);
+  const missing = [...expected].filter((tool) => !reported.has(tool));
+  const unexpected = [...reported].filter((tool) => !expected.has(tool));
+  if (missing.length === 0 && unexpected.length === 0) return undefined;
+  const details = [
+    ...(missing.length > 0 ? [`missing: ${missing.slice(0, 16).join(", ")}`] : []),
+    ...(unexpected.length > 0
+      ? [`unexpected: ${unexpected.slice(0, 16).join(", ")}${unexpected.length > 16 ? ", …" : ""}`]
+      : []),
+  ].join("; ");
+  return processError(
+    "verify Claude tool policy",
+    `Claude resolved an invalid ${writeIntent} tool set (${details}).`,
+  );
+}
+
 function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
   return {
     ...Object.fromEntries(
@@ -108,33 +134,6 @@ function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
     PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
     PI_SUBAGENT_RUN_ID: request.runId,
   };
-}
-
-async function terminateTree(child: NodeChildProcess, force: boolean): Promise<void> {
-  const pid = child.pid;
-  if (!pid || child.exitCode !== null || child.signalCode !== null) return;
-  if (process.platform === "win32") {
-    await new Promise<void>((resolve, reject) => {
-      const killer = spawn("taskkill", ["/pid", String(pid), "/T", ...(force ? ["/F"] : [])], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      killer.once("error", reject);
-      killer.once("close", (code) =>
-        code === 0 || child.exitCode !== null
-          ? resolve()
-          : reject(new Error(`taskkill exited ${code}`)),
-      );
-    });
-    return;
-  }
-  const signal = force ? "SIGKILL" : "SIGTERM";
-  try {
-    process.kill(-pid, signal);
-  } catch (error) {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    if (!child.kill(signal)) throw error;
-  }
 }
 
 function appendLineParser(
@@ -217,41 +216,17 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
         if (Queue.offerUnsafe(events, event) || overflowed) return;
         overflowed = true;
         stderr = `${stderr}\nClaude event queue exceeded ${EVENT_CAPACITY} pending events.`;
-        void terminateTree(child, true).catch(() => {});
+        void terminateProcessTree(child, "force").catch(() => {});
       };
       const onLine = (line: string) => {
         try {
           const value = JSON.parse(line) as unknown;
           const init = decodeClaudeInitOption(value);
           if (init) {
-            if (request.writeIntent === "read-only") {
-              const unexpectedTools = init.tools?.filter(
-                (tool) => !CLAUDE_READ_ONLY_TOOLS.has(tool),
-              );
-              const policyError =
-                init.tools === undefined
-                  ? processError(
-                      "verify Claude tool policy",
-                      "Claude did not report its resolved tool set for a read-only run.",
-                    )
-                  : unexpectedTools && unexpectedTools.length > 0
-                    ? processError(
-                        "verify Claude tool policy",
-                        `Claude enabled unexpected read-only tools: ${unexpectedTools.slice(0, 16).join(", ")}${unexpectedTools.length > 16 ? ", …" : ""}.`,
-                      )
-                    : undefined;
-              if (policyError) {
-                Deferred.doneUnsafe(initialized, Effect.fail(policyError));
-                void terminateTree(child, true).catch(() => {});
-              } else {
-                Deferred.doneUnsafe(
-                  initialized,
-                  Effect.succeed({
-                    sessionId: init.session_id,
-                    ...(init.model ? { model: init.model } : {}),
-                  }),
-                );
-              }
+            const policyError = resolvedToolPolicyError(request.writeIntent, init.tools);
+            if (policyError) {
+              Deferred.doneUnsafe(initialized, Effect.fail(policyError));
+              void terminateProcessTree(child, "force").catch(() => {});
             } else {
               Deferred.doneUnsafe(
                 initialized,
@@ -271,7 +246,7 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
                 processError("initialize stream", "Claude emitted malformed stream JSON."),
               ),
             );
-            void terminateTree(child, true).catch(() => {});
+            void terminateProcessTree(child, "force").catch(() => {});
             return;
           }
           offer({ type: "protocol_error", message: "Claude emitted malformed stream JSON." });
@@ -285,7 +260,7 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
               processError("initialize stream", "Claude stream JSON line exceeded 4 MiB."),
             ),
           );
-          void terminateTree(child, true).catch(() => {});
+          void terminateProcessTree(child, "force").catch(() => {});
           return;
         }
         offer({ type: "protocol_error", message: "Claude stream JSON line exceeded 4 MiB." });
@@ -456,14 +431,10 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
       const sendIpc: ChildProcessHandle["sendIpc"] = () =>
         Effect.fail(processError("send IPC to", "Claude CLI parent contact is not enabled."));
       const terminate: ChildProcessHandle["terminate"] = (mode) =>
-        Effect.suspend(() =>
-          settled
-            ? Effect.void
-            : Effect.tryPromise({
-                try: () => terminateTree(child, mode === "force"),
-                catch: (error) => processError("terminate", error),
-              }),
-        );
+        Effect.tryPromise({
+          try: () => terminateProcessTree(child, mode),
+          catch: (error) => processError("terminate", error),
+        });
       const waitForExit = Deferred.await(exited).pipe(
         Effect.interruptible,
         Effect.timeoutOption("2 seconds"),
@@ -473,7 +444,10 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
         Effect.andThen(waitForExit),
         Effect.flatMap((gracefulExit) =>
           gracefulExit._tag === "Some"
-            ? Effect.void
+            ? Effect.sleep("100 millis").pipe(
+                // The leader may have exited while descendants remain in its process group.
+                Effect.andThen(terminate("force").pipe(Effect.catch(() => Effect.void))),
+              )
             : terminate("force").pipe(
                 Effect.catch(() => Effect.void),
                 Effect.andThen(waitForExit),
@@ -487,9 +461,7 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
               ),
         ),
       );
-      const release = Effect.suspend(() => (settled ? Effect.void : releaseActive)).pipe(
-        Effect.ensuring(Effect.sync(cleanup)),
-      );
+      const release = releaseActive.pipe(Effect.ensuring(Effect.sync(cleanup)));
 
       return {
         pid,

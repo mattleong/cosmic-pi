@@ -104,6 +104,43 @@ setInterval(() => {}, 1000);
     }
   });
 
+  it("fails closed when a writer child reports recursive agent capabilities", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-subagents-claude-writer-policy-"));
+    const fixture = join(directory, "fake-claude-writer-policy.mjs");
+    await writeFile(
+      fixture,
+      `process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:"550e8400-e29b-41d4-a716-446655440000",model:"claude-fixture",tools:["Read","Glob","Grep","Edit","Write","Bash","WebFetch","WebSearch","Agent"]})+"\\n");
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+    await chmod(fixture, 0o700);
+
+    try {
+      const error = await Effect.runPromise(
+        Effect.acquireRelease(
+          acquireClaudeChild(
+            { ...request, writeIntent: "writer" },
+            { command: process.execPath, commandArgs: [fixture] },
+          ),
+          (handle) => handle.release,
+        ).pipe(
+          Effect.flatMap((handle) =>
+            Effect.flip(handle.send({ type: "get_state", id: "state-writer-policy" })),
+          ),
+          Effect.scoped,
+        ),
+      );
+      expect(error).toMatchObject({
+        _tag: "SubagentProcessError",
+        operation: "verify Claude tool policy",
+      });
+      expect(error.message).toContain("Agent");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("writes the first prompt before awaiting initialization and streams subsequent results", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-subagents-claude-"));
     const fixture = join(directory, "fake-claude.mjs");

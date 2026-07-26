@@ -231,5 +231,19 @@ describe("Claude stream protocol", () => {
         usage: { input: 0, output: 0, totalTokens: 0, cost: 0 },
       },
     ]);
+
+    const invalidNumbers = await decode({
+      type: "result",
+      subtype: "success",
+      result: "done",
+      usage: { input_tokens: -1, output_tokens: 1.5 },
+      total_cost_usd: Number.POSITIVE_INFINITY,
+    });
+    expect(claudeEnvelopeToAgentEvents(invalidNumbers, { tools: new Map() })).toMatchObject([
+      {
+        type: "settled",
+        usage: { input: 0, output: 0, totalTokens: 0, cost: 0 },
+      },
+    ]);
   });
 });

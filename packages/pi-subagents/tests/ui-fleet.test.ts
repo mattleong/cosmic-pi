@@ -163,6 +163,15 @@ describe("/subagents fleet UI", () => {
     },
   );
 
+  it("allows completed rename but does not offer terminal stop", () => {
+    const { actions, component } = makeComponent(80, 18, completedProjection);
+    component.handleInput("n");
+    expect(actions.rename).toHaveBeenCalledWith("agent-1");
+    component.handleInput("x");
+    component.handleInput("x");
+    expect(actions.stop).not.toHaveBeenCalled();
+  });
+
   it("routes message, interrupt, rename, and confirmed stop controls", () => {
     const { actions, component } = makeComponent(80, 18);
     component.handleInput("m");

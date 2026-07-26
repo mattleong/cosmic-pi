@@ -63,6 +63,7 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
     },
     onDeactivated: () => {
       currentContext = undefined;
+      notify.reset();
       bridge.clear();
     },
   });

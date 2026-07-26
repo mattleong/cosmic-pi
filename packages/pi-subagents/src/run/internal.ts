@@ -4,6 +4,7 @@ import type { ChildLaunchRequest, ChildProcessHandle } from "../boundary/child-p
 import type { SubagentError } from "./errors.ts";
 import type { SubagentRunView } from "./model.ts";
 import type { RpcResponse } from "./protocol.ts";
+import type { RateLimitNoticeState } from "./rate-limit.ts";
 
 export interface RunRecord {
   view: SubagentRunView;
@@ -32,13 +33,5 @@ export interface RunRecord {
   rateLimitRejected: boolean;
   rateLimitRejectionNotified: boolean;
   rateLimitWarning?: string | undefined;
-  readonly rateLimitNotices: Map<
-    string,
-    {
-      resetsAt?: number | undefined;
-      highestThreshold: number;
-      overageNotified: boolean;
-      rejectionNotified: boolean;
-    }
-  >;
+  readonly rateLimitNotices: Map<string, RateLimitNoticeState>;
 }

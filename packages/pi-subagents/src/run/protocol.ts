@@ -155,11 +155,17 @@ const RpcStateModelSchema = Schema.Struct({
   provider: ProtocolNameSchema,
   id: ProtocolNameSchema,
 });
+const RpcStateModelIdSchema = Schema.String.check(Schema.isMaxLength(512));
+const RpcStateSessionIdSchema = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(MAX_PROTOCOL_ID_CHARS),
+);
+const RpcStateSessionFileSchema = Schema.String.check(Schema.isMaxLength(64 * 1024));
 const RpcStateDataSchema = Schema.Struct({
   thinkingLevel: EffortSchema,
-  model: Schema.optional(Schema.Union([Schema.String, RpcStateModelSchema])),
-  sessionFile: Schema.optional(Schema.String),
-  sessionId: Schema.String,
+  model: Schema.optional(Schema.Union([RpcStateModelIdSchema, RpcStateModelSchema])),
+  sessionFile: Schema.optional(RpcStateSessionFileSchema),
+  sessionId: RpcStateSessionIdSchema,
 });
 
 export type RpcStateData = Schema.Schema.Type<typeof RpcStateDataSchema>;
@@ -170,22 +176,35 @@ export const decodeRpcStateData = (value: unknown) =>
 export const rpcStateModelId = (model: RpcStateData["model"]): string | undefined =>
   typeof model === "string" ? model : model ? `${model.provider}/${model.id}` : undefined;
 
+const UsageTokenSchema = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
+const UsageCostSchema = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0));
 const UsageSchema = Schema.Struct({
-  input: Schema.optional(Schema.Number),
-  output: Schema.optional(Schema.Number),
-  cacheRead: Schema.optional(Schema.Number),
-  cacheWrite: Schema.optional(Schema.Number),
-  totalTokens: Schema.optional(Schema.Number),
+  input: Schema.optional(UsageTokenSchema),
+  output: Schema.optional(UsageTokenSchema),
+  cacheRead: Schema.optional(UsageTokenSchema),
+  cacheWrite: Schema.optional(UsageTokenSchema),
+  totalTokens: Schema.optional(UsageTokenSchema),
   cost: Schema.optional(
     Schema.Struct({
-      total: Schema.optional(Schema.Number),
+      total: Schema.optional(UsageCostSchema),
     }),
   ),
 });
+export type RpcUsage = Schema.Schema.Type<typeof UsageSchema>;
+export const decodeRpcUsageOption = (value: unknown): RpcUsage | undefined => {
+  const decoded = Schema.decodeUnknownOption(UsageSchema)(value);
+  return decoded._tag === "Some" ? decoded.value : undefined;
+};
 const AssistantMessageSchema = Schema.Struct({
   role: Schema.Literal("assistant"),
   content: Schema.Array(Schema.Unknown),
-  usage: Schema.optional(UsageSchema),
+  // Usage is decoded independently so malformed accounting cannot discard an
+  // otherwise valid assistant message or fail the run.
+  usage: Schema.optional(Schema.Unknown),
 });
 const MessageDiscriminantSchema = Schema.Struct({ role: Schema.optional(Schema.String) });
 

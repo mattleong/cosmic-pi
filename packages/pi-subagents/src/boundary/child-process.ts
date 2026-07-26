@@ -6,7 +6,7 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
-import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -28,6 +28,7 @@ import type * as Scope from "effect/Scope";
 import { piToolsForWriteIntent } from "../run/coordination.ts";
 import { SubagentProcessError } from "../run/errors.ts";
 import { acquireClaudeChild } from "./claude-process.ts";
+import { terminateProcessTree } from "./process-tree.ts";
 import type { ParentReply, PeerNotice, RpcCommand } from "../run/protocol.ts";
 import type { SubagentContextMode, SubagentEffort } from "../run/model.ts";
 
@@ -138,37 +139,6 @@ function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
         }
       : {}),
   };
-}
-
-async function terminateTree(child: NodeChildProcess, mode: "graceful" | "force"): Promise<void> {
-  const pid = child.pid;
-  if (!pid || child.exitCode !== null || child.signalCode !== null) return;
-  if (process.platform === "win32") {
-    await new Promise<void>((resolve, reject) => {
-      const killer = spawn(
-        "taskkill",
-        ["/pid", String(pid), "/T", ...(mode === "force" ? ["/F"] : [])],
-        { stdio: "ignore", windowsHide: true },
-      );
-      killer.once("error", reject);
-      killer.once("close", (code) => {
-        if (code === 0 || child.exitCode !== null || child.signalCode !== null) resolve();
-        else reject(new Error(`taskkill exited with code ${code ?? "unknown"}.`));
-      });
-    });
-    return;
-  }
-  const signal = mode === "force" ? "SIGKILL" : "SIGTERM";
-  try {
-    process.kill(-pid, signal);
-  } catch (error) {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    try {
-      if (!child.kill(signal)) throw error;
-    } catch {
-      throw error;
-    }
-  }
 }
 
 const cloneEntry = (entry: SessionEntry, parentId: string | null): SessionEntry => {
@@ -326,7 +296,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
         if (Queue.offerUnsafe(events, event) || overflowed) return;
         overflowed = true;
         stderr = `${stderr}\nSubagent event queue exceeded ${EVENT_CAPACITY} pending events.`;
-        void terminateTree(child, "force").catch(() => {});
+        void terminateProcessTree(child, "force").catch(() => {});
       };
       const onLine = (line: string) => {
         try {
@@ -476,14 +446,10 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
           "send IPC message to",
         );
       const terminate = (mode: "graceful" | "force") =>
-        Effect.suspend(() =>
-          settled
-            ? Effect.void
-            : Effect.tryPromise({
-                try: () => terminateTree(child, mode),
-                catch: (error) => processError("terminate", error),
-              }),
-        );
+        Effect.tryPromise({
+          try: () => terminateProcessTree(child, mode),
+          catch: (error) => processError("terminate", error),
+        });
       const waitForExit = Deferred.await(exited).pipe(
         Effect.interruptible,
         Effect.timeoutOption("2 seconds"),
@@ -494,7 +460,10 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
         Effect.andThen(waitForExit),
         Effect.flatMap((gracefulExit) =>
           gracefulExit._tag === "Some"
-            ? Effect.void
+            ? Effect.sleep("100 millis").pipe(
+                // The leader may have exited while descendants remain in its process group.
+                Effect.andThen(terminate("force").pipe(Effect.catch(() => Effect.void))),
+              )
             : terminate("force").pipe(
                 Effect.catch(() => Effect.void),
                 Effect.andThen(waitForExit),
@@ -508,9 +477,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
               ),
         ),
       );
-      const release = Effect.suspend(() => (settled ? Effect.void : releaseActive)).pipe(
-        Effect.ensuring(Effect.sync(cleanup)),
-      );
+      const release = releaseActive.pipe(Effect.ensuring(Effect.sync(cleanup)));
 
       return {
         pid,

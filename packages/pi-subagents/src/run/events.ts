@@ -16,6 +16,7 @@ import {
   assistantText,
   decodeAssistantMessage,
   decodeContactParentEnvelope,
+  decodeRpcUsageOption,
   decodeRpcEnvelope,
   type ContactParentEnvelope,
 } from "./protocol.ts";
@@ -124,9 +125,9 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
               },
         );
         if (!view || duplicate) return;
-        if (record.warningTurnTriggered) return;
+        const triggerTurn = !record.warningTurnTriggered;
         record.warningTurnTriggered = true;
-        notify({ type: "warning", id: view.id, name: view.name, message, triggerTurn: true });
+        notify({ type: "warning", id: view.id, name: view.name, message, triggerTurn });
         return;
       }
       const view = yield* mutateView(record, (current) =>
@@ -252,7 +253,10 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                             ),
                           }
                         : {}),
-                      usage: addUsage(current.usage, usageFromMessage(message.usage)),
+                      usage: addUsage(
+                        current.usage,
+                        usageFromMessage(decodeRpcUsageOption(message.usage)),
+                      ),
                     })),
                   ),
                   Effect.asVoid,
@@ -303,26 +307,27 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
               Effect.asVoid,
             );
           case "extension_error":
-            return Clock.currentTimeMillis.pipe(
-              Effect.flatMap((now) =>
-                mutateView(record, (current) => ({
-                  ...current,
-                  warning: sanitizeDiagnosticText(envelope.error, MAX_ERROR_CHARS),
-                  lastActivityAt: now,
-                  transcript: appendTranscript(
-                    current.transcript,
-                    `extension error: ${sanitizeDiagnosticText(envelope.error, MAX_ERROR_CHARS)}`,
-                  ),
-                  sessionEvents: appendNoticeSessionEvent(
-                    current.sessionEvents,
-                    "warning",
-                    `Extension error: ${envelope.error}`,
-                    now,
-                  ),
-                })),
-              ),
-              Effect.asVoid,
-            );
+            return Effect.gen(function* () {
+              const now = yield* Clock.currentTimeMillis;
+              const message = sanitizeDiagnosticText(envelope.error, MAX_ERROR_CHARS);
+              const duplicate = record.view.warning === message;
+              const view = yield* mutateView(record, (current) => ({
+                ...current,
+                warning: message,
+                lastActivityAt: now,
+                transcript: appendTranscript(current.transcript, `extension error: ${message}`),
+                sessionEvents: appendNoticeSessionEvent(
+                  current.sessionEvents,
+                  "warning",
+                  `Extension error: ${message}`,
+                  now,
+                ),
+              }));
+              if (!view || duplicate) return;
+              const triggerTurn = !record.warningTurnTriggered;
+              record.warningTurnTriggered = true;
+              notify({ type: "warning", id: view.id, name: view.name, message, triggerTurn });
+            });
           case "extension_ui_request": {
             const dialog = new Set(["select", "confirm", "input", "editor"]).has(envelope.method);
             return dialog && record.process

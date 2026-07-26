@@ -26,6 +26,9 @@ import { MAX_TASK_CHARS } from "../run/state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 import { renderSubagentSessionOutput } from "./renderers/session-output.ts";
 
+const MAX_TARGET_RUNS = 8;
+const MAX_TOOL_OUTPUT_CHARS = 48_000;
+
 const ACTIONS = [
   "start",
   "list",
@@ -150,6 +153,12 @@ const requiredTargetIds = (
   if (unique.length !== ids.length)
     return Effect.fail(
       new InvalidSubagentRequestError({ message: "Subagent target IDs must be unique." }),
+    );
+  if (unique.length > MAX_TARGET_RUNS)
+    return Effect.fail(
+      new InvalidSubagentRequestError({
+        message: `Subagent actions accept at most ${MAX_TARGET_RUNS} targets.`,
+      }),
     );
   return Effect.succeed(unique);
 };
@@ -302,7 +311,7 @@ const formatRun = (run: SubagentRunView, detailed = false): string => {
   const header = `${run.id} ${run.name} · ${run.state} · ${run.writeIntent} · ${run.backend}/${run.model}:${run.effort}`;
   if (!detailed) return header;
   const field = (label: string, value: string): string => `  ${label.padEnd(10)} ${value}`;
-  const formatted = [
+  return [
     "Subagent status",
     field("Name", run.name),
     field("ID", run.id),
@@ -321,7 +330,23 @@ const formatRun = (run: SubagentRunView, detailed = false): string => {
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
-  return formatted.length <= 45_000 ? formatted : `${formatted.slice(0, 45_000)}…`;
+};
+
+const formatDetailedRuns = (runs: ReadonlyArray<SubagentRunView>, prefix = ""): string => {
+  if (runs.length === 0) return prefix || "No subagent runs.";
+  const separatorLength = Math.max(0, runs.length - 1) * 2;
+  const available = Math.max(0, MAX_TOOL_OUTPUT_CHARS - prefix.length - separatorLength);
+  const perRun = Math.max(256, Math.floor(available / runs.length));
+  const formatted = runs.map((run) => {
+    const value = formatRun(run, true);
+    if (value.length <= perRun) return value;
+    const marker = "\n… [run output truncated]";
+    return `${value.slice(0, Math.max(0, perRun - marker.length))}${marker}`;
+  });
+  const output = `${prefix}${formatted.join("\n\n")}`;
+  return output.length <= MAX_TOOL_OUTPUT_CHARS
+    ? output
+    : `${output.slice(0, MAX_TOOL_OUTPUT_CHARS - 1)}…`;
 };
 
 function availableModels(
@@ -521,9 +546,12 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
           : input.action === "list"
             ? runs.map((run) => formatRun(run)).join("\n")
             : input.action === "status" || input.action === "await"
-              ? `${timedOut ? "Await timed out; subagents continue running.\n\n" : ""}${runs.map((run) => formatRun(run, true)).join("\n\n")}`
+              ? formatDetailedRuns(
+                  runs,
+                  timedOut ? "Await timed out; subagents continue running.\n\n" : "",
+                )
               : input.action === "start"
-                ? runs.map((run) => formatRun(run, true)).join("\n\n")
+                ? formatDetailedRuns(runs)
                 : managementAcknowledgement(input.action, runs);
       return {
         content: [{ type: "text", text }],

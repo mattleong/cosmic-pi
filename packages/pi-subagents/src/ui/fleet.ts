@@ -138,7 +138,7 @@ export class SubagentFleetComponent implements Component {
       this.detailScroll = 0;
     } else if (data === "?") {
       this.alternateHelp = !this.alternateHelp;
-    } else if (data === "x" && selected) {
+    } else if (data === "x" && selected && isActiveRunState(selected.state)) {
       if (this.pendingStop === selected.id) {
         this.pendingStop = undefined;
         this.options.actions.stop(selected.id);

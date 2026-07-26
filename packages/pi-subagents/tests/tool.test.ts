@@ -430,6 +430,69 @@ describe("subagent tool", () => {
     expect(sentResult?.content[0]?.text).not.toContain("Subagent status");
   });
 
+  it("enforces the combined target count and aggregate detailed-output budget", async () => {
+    const runs = Array.from({ length: 9 }, (_, index) =>
+      view({
+        id: `agent-${index + 1}`,
+        name: `review-${index + 1}`,
+        state: "completed",
+        finalText: "x".repeat(32 * 1024),
+      }),
+    );
+    const service: SubagentServiceShape = {
+      start: () => Effect.succeed(runs[0]!),
+      waitForForeground: () => Effect.succeed(runs[0]!),
+      awaitTerminal: (ids) => Effect.succeed(ids.map((id) => runs.find((run) => run.id === id)!)),
+      list: Effect.succeed(runs),
+      status: (id) => Effect.succeed(runs.find((run) => run.id === id)!),
+      send: () => Effect.succeed(runs[0]!),
+      reply: () => Effect.succeed(runs[0]!),
+      interrupt: () => Effect.succeed(runs[0]!),
+      resume: () => Effect.succeed(runs[0]!),
+      rename: () => Effect.succeed(runs[0]!),
+      stop: () => Effect.succeed(runs[0]!),
+      projection: Effect.succeed({ revision: 0, runs }),
+    };
+    let tool: CapturedTool | undefined;
+    const pi = {
+      registerTool: (definition: unknown) => {
+        tool = definition as CapturedTool;
+      },
+      getThinkingLevel: () => "high",
+      getActiveTools: () => ["read"],
+    } as unknown as ExtensionAPI;
+    registerSubagentTool(pi, {
+      run: (effect) =>
+        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
+    });
+
+    await expect(
+      tool?.execute(
+        "call",
+        {
+          action: "status",
+          runId: "agent-1",
+          runIds: runs.slice(1).map((run) => run.id),
+        },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow("at most 8 targets");
+
+    const result = await tool?.execute(
+      "call",
+      { action: "status", runIds: runs.slice(0, 8).map((run) => run.id) },
+      undefined,
+      undefined,
+      context,
+    );
+    const text = result?.content[0]?.text ?? "";
+    expect(text.length).toBeLessThanOrEqual(48_000);
+    for (const run of runs.slice(0, 8)) expect(text).toContain(run.id);
+    expect(text).toContain("[run output truncated]");
+  });
+
   it("requires write intent and backend and lists authenticated models without a runtime", async () => {
     let tool: CapturedTool | undefined;
     const pi = {

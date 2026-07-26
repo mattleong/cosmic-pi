@@ -1,5 +1,6 @@
 import { freezeSnapshot, sanitizeDiagnosticError, stripTerminalControls } from "pi-cosmic-core";
 import type { SubagentRunView, SubagentUsage } from "./model.ts";
+import type { RpcUsage } from "./protocol.ts";
 
 export const MAX_NAME_CHARS = 80;
 export const MAX_TASK_CHARS = 128 * 1024;
@@ -33,18 +34,7 @@ export const sanitizeDiagnosticText = (value: string, limit: number): string =>
 export const sanitizeOutputText = (value: string, limit: number): string =>
   clipText(stripTerminalControls(value), limit);
 
-export const usageFromMessage = (
-  usage:
-    | {
-        readonly input?: number | undefined;
-        readonly output?: number | undefined;
-        readonly cacheRead?: number | undefined;
-        readonly cacheWrite?: number | undefined;
-        readonly totalTokens?: number | undefined;
-        readonly cost?: { readonly total?: number | undefined } | undefined;
-      }
-    | undefined,
-): SubagentUsage => ({
+export const usageFromMessage = (usage: RpcUsage | undefined): SubagentUsage => ({
   input: usage?.input ?? 0,
   output: usage?.output ?? 0,
   cacheRead: usage?.cacheRead ?? 0,
@@ -53,11 +43,22 @@ export const usageFromMessage = (
   cost: usage?.cost?.total ?? 0,
 });
 
-export const addUsage = (left: SubagentUsage, right: SubagentUsage): SubagentUsage => ({
-  input: left.input + right.input,
-  output: left.output + right.output,
-  cacheRead: left.cacheRead + right.cacheRead,
-  cacheWrite: left.cacheWrite + right.cacheWrite,
-  totalTokens: left.totalTokens + right.totalTokens,
-  cost: left.cost + right.cost,
-});
+const isValidUsage = (usage: SubagentUsage): boolean =>
+  [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens].every(
+    (value) => Number.isSafeInteger(value) && value >= 0,
+  ) &&
+  Number.isFinite(usage.cost) &&
+  usage.cost >= 0;
+
+export const addUsage = (left: SubagentUsage, right: SubagentUsage): SubagentUsage => {
+  if (!isValidUsage(right)) return left;
+  const combined: SubagentUsage = {
+    input: left.input + right.input,
+    output: left.output + right.output,
+    cacheRead: left.cacheRead + right.cacheRead,
+    cacheWrite: left.cacheWrite + right.cacheWrite,
+    totalTokens: left.totalTokens + right.totalTokens,
+    cost: left.cost + right.cost,
+  };
+  return isValidUsage(combined) ? combined : left;
+};

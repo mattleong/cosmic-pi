@@ -180,9 +180,11 @@ function fakeChildLayer(
               }),
             sendIpc: (message) =>
               Effect.gen(function* () {
+                // Model Node child.send handing the envelope to the child before
+                // its acknowledgement callback settles.
+                ipc.push(message);
                 const gate = ipcGates.shift();
                 if (gate) yield* Deferred.await(gate);
-                ipc.push(message);
               }),
             terminate: (mode) => Effect.sync(() => void terminations.push(mode)),
           };
@@ -1326,6 +1328,83 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("retries an unacknowledged completion generation", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
+    let attempts = 0;
+    const layer = SubagentService.layer({
+      notify: (notification) => {
+        notifications.push(notification);
+        if (notification.type !== "completed") return undefined;
+        attempts += 1;
+        return {
+          deliveredCompletionKeys:
+            attempts === 1 ? [] : notification.runs.map((run) => `${run.id}:${run.generation}`),
+        };
+      },
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      yield* service.start(request({ name: "retry-notification" }));
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => attempts === 1);
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => attempts === 2);
+      yield* TestClock.adjust("500 millis");
+      expect(attempts).toBe(2);
+      expect(notifications).toHaveLength(2);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("preserves terminal state, completion delivery, and local completed rename", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      notify: (notification) => notifications.push(notification),
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const completedRun = yield* service.start(request({ name: "completed-name" }));
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      const before = projections.at(-1)?.runs.find((run) => run.id === completedRun.id);
+
+      const renamed = yield* service.rename(completedRun.id, "retained-name");
+      expect(renamed).toMatchObject({ state: "completed", name: "retained-name" });
+      expect(
+        fake.controls[0]?.commands.some((command) => command.type === "set_session_name"),
+      ).toBe(false);
+      const stoppedCompleted = yield* service.stop(completedRun.id);
+      expect(stoppedCompleted.state).toBe("completed");
+      expect(stoppedCompleted.endedAt).toBe(before?.endedAt);
+
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.some((item) => item.type === "completed"));
+      expect(notifications).toMatchObject([
+        { type: "completed", runs: [{ id: completedRun.id, name: "retained-name" }] },
+      ]);
+
+      const failedRun = yield* service.start(request({ name: "failed-name" }));
+      fake.controls[1]?.offer({ type: "tool_execution_start" });
+      yield* yieldUntil(() =>
+        Boolean(
+          projections.at(-1)?.runs.some((run) => run.id === failedRun.id && run.state === "failed"),
+        ),
+      );
+      const failedBeforeStop = yield* service.status(failedRun.id);
+      const stoppedFailed = yield* service.stop(failedRun.id);
+      expect(stoppedFailed.state).toBe("failed");
+      expect(stoppedFailed.endedAt).toBe(failedBeforeStop.endedAt);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("emits only one completion for repeated terminal events", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
@@ -1663,6 +1742,52 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("finishes a delivered parent reply after the requesting fiber is interrupted", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "cancel-safe-reply" }));
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "question-1",
+        kind: "question",
+        message: "Which answer?",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      const ipcGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextIpc(ipcGate);
+      const replying = yield* service.reply(run.id, "First").pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () => fake.controls[0]?.ipc.some((message) => message.type === "parent_reply") ?? false,
+      );
+
+      yield* Fiber.interrupt(replying);
+      const claimed = yield* service.status(run.id);
+      expect(claimed.state).toBe("running");
+      expect(claimed.question).toBeUndefined();
+      expect((yield* Effect.flip(service.reply(run.id, "Second")))._tag).toBe(
+        "InvalidSubagentRequestError",
+      );
+
+      yield* Deferred.succeed(ipcGate, undefined);
+      yield* yieldUntil(() =>
+        Boolean(
+          projections
+            .at(-1)
+            ?.runs[0]?.transcript.some((line) => line.includes("parent reply: First")),
+        ),
+      );
+      expect(
+        fake.controls[0]?.ipc.filter((message) => message.type === "parent_reply"),
+      ).toHaveLength(1);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("rejects guidance that a parent reply claimed mid-transport", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
@@ -1708,7 +1833,7 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.effect("notifies only the first progress and warning in a run", () => {
+  it.effect("delivers distinct warnings while triggering only the first warning turn", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
     const layer = SubagentService.layer({
@@ -1730,14 +1855,27 @@ describe("SubagentService", () => {
           kind,
           message,
         });
-      yield* yieldUntil(() => notifications.length === 2);
+      yield* yieldUntil(() => notifications.length === 3);
       expect(notifications).toMatchObject([
         { type: "progress", message: "First progress", triggerTurn: true },
         { type: "warning", message: "First warning", triggerTurn: true },
+        { type: "warning", message: "Second warning", triggerTurn: false },
       ]);
+
+      fake.controls[0]?.offer({
+        type: "extension_error",
+        error: "Extension bridge failed token=secret-value",
+      });
+      yield* yieldUntil(() => notifications.length === 4);
+      expect(notifications[3]).toMatchObject({ type: "warning", triggerTurn: false });
+      const extensionWarning = notifications[3];
+      expect(extensionWarning?.type).toBe("warning");
+      if (extensionWarning?.type === "warning")
+        expect(extensionWarning.message).not.toContain("secret-value");
       const status = yield* service.status("agent-1");
       expect(status.progress).toBe("Second progress");
-      expect(status.warning).toBe("Second warning");
+      expect(status.warning).toContain("Extension bridge failed");
+      expect(status.warning).not.toContain("secret-value");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

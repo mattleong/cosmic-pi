@@ -33,11 +33,17 @@ const UserSchema = Schema.Struct({
   type: Schema.Literal("user"),
   message: Schema.Struct({ content: MessageContentSchema }),
 });
+const UsageTokenSchema = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
+const UsageCostSchema = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0));
 const ResultUsageSchema = Schema.Struct({
-  input_tokens: Schema.optional(Schema.Number),
-  output_tokens: Schema.optional(Schema.Number),
-  cache_read_input_tokens: Schema.optional(Schema.Number),
-  cache_creation_input_tokens: Schema.optional(Schema.Number),
+  input_tokens: Schema.optional(UsageTokenSchema),
+  output_tokens: Schema.optional(UsageTokenSchema),
+  cache_read_input_tokens: Schema.optional(UsageTokenSchema),
+  cache_creation_input_tokens: Schema.optional(UsageTokenSchema),
 });
 const ResultSchema = Schema.Struct({
   type: Schema.Literal("result"),
@@ -159,7 +165,7 @@ export interface ClaudeProtocolState {
 const resultUsage = (envelope: Schema.Schema.Type<typeof ResultSchema>): SubagentUsage => {
   const decodedUsage = Schema.decodeUnknownOption(ResultUsageSchema)(envelope.usage);
   const usage = decodedUsage._tag === "Some" ? decodedUsage.value : undefined;
-  const decodedCost = Schema.decodeUnknownOption(Schema.Number)(envelope.total_cost_usd);
+  const decodedCost = Schema.decodeUnknownOption(UsageCostSchema)(envelope.total_cost_usd);
   const input = usage?.input_tokens ?? 0;
   const output = usage?.output_tokens ?? 0;
   const cacheRead = usage?.cache_read_input_tokens ?? 0;

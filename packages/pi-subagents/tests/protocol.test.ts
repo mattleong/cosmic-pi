@@ -9,6 +9,7 @@ import {
   decodeContactParentEnvelope,
   decodeRpcEnvelope,
   decodeRpcStateData,
+  decodeRpcUsageOption,
   rpcStateModelId,
 } from "../src/run/protocol.ts";
 
@@ -102,6 +103,26 @@ describe("child protocol", () => {
       }),
     );
     expect(message && assistantText(message)).toBe("Finished work.");
+  });
+
+  it("bounds retained startup identifiers and ignores malformed usage accounting", async () => {
+    for (const state of [
+      { sessionId: "", thinkingLevel: "high" },
+      { sessionId: "x".repeat(1_025), thinkingLevel: "high" },
+      { sessionId: "child", model: "x".repeat(513), thinkingLevel: "high" },
+      { sessionId: "child", sessionFile: "x".repeat(64 * 1024 + 1), thinkingLevel: "high" },
+    ])
+      await expect(Effect.runPromise(decodeRpcStateData(state))).rejects.toBeDefined();
+
+    expect(decodeRpcUsageOption({ input: 1, totalTokens: 1, cost: { total: 0.1 } })).toEqual({
+      input: 1,
+      totalTokens: 1,
+      cost: { total: 0.1 },
+    });
+    expect(decodeRpcUsageOption({ input: -1 })).toBeUndefined();
+    expect(decodeRpcUsageOption({ output: 1.5 })).toBeUndefined();
+    expect(decodeRpcUsageOption({ totalTokens: Number.POSITIVE_INFINITY })).toBeUndefined();
+    expect(decodeRpcUsageOption({ cost: { total: Number.NaN } })).toBeUndefined();
   });
 
   it("rejects malformed or oversized known events", async () => {
