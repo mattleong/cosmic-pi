@@ -21,6 +21,27 @@ export const runStateGlyph = (state: SubagentRunState): string => {
   }
 };
 
+export const runStateLabel = (state: SubagentRunState): string => {
+  switch (state) {
+    case "starting":
+      return "starting…";
+    case "running":
+      return "running";
+    case "waiting_for_parent":
+      return "waiting for you";
+    case "paused":
+      return "paused";
+    case "completed":
+      return "finished";
+    case "failed":
+      return "failed";
+    case "stopping":
+      return "stopping…";
+    case "stopped":
+      return "stopped";
+  }
+};
+
 export const runStateColor = (
   state: SubagentRunState,
 ): "accent" | "success" | "warning" | "error" | "muted" => {

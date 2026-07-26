@@ -3,11 +3,12 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   defineTool,
+  getMarkdownTheme,
   type ExtensionAPI,
   type ExtensionContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { withCodePreviewShell } from "pi-code-previews";
@@ -28,7 +29,7 @@ import {
   type SubagentRunObservation,
 } from "../run/service.ts";
 import { MAX_TASK_CHARS, safeTextPrefix } from "../run/state.ts";
-import { runStateColor, runStateGlyph } from "../ui/run-state.ts";
+import { runStateColor, runStateGlyph, runStateLabel } from "../ui/run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 
 const ACTIONS = [
@@ -490,11 +491,29 @@ const awaitProgressHeader = (
   until: SubagentAwaitUntil,
 ): string => {
   const finished = runs.filter((run) => isTerminalRunState(run.state)).length;
-  return `Awaiting subagents · ${finished}/${runs.length} finished · ${until}`;
+  const condition = until === "all_finished" ? "Waiting for all agents" : "Waiting for first agent";
+  const unfinishedStates = [
+    "starting",
+    "running",
+    "waiting_for_parent",
+    "paused",
+    "stopping",
+  ] as const;
+  const activeSummary = unfinishedStates
+    .flatMap((state) => {
+      const count = runs.filter((run) => run.state === state).length;
+      return count > 0 ? [`${count} ${runStateLabel(state)}`] : [];
+    })
+    .join(" · ");
+  if (finished === runs.length)
+    return `${runs.length} agent${runs.length === 1 ? "" : "s"} finished`;
+  return `${condition} · ${finished} of ${runs.length} finished${activeSummary ? ` · ${activeSummary}` : ""}`;
 };
 
 const awaitRunStatus = (run: SubagentRunView): string =>
-  sanitizeTerminalLine(`${run.state}${run.currentTool ? ` (${run.currentTool})` : ""}`);
+  sanitizeTerminalLine(
+    `${runStateLabel(run.state)}${run.currentTool ? ` (${run.currentTool})` : ""}`,
+  );
 
 const formatAwaitProgress = (
   runs: ReadonlyArray<SubagentRunView>,
@@ -529,34 +548,121 @@ const renderCompactRunSummaries = (runs: ReadonlyArray<SubagentRunView>, theme: 
       const name = sanitizeTerminalLine(run.name);
       const model = sanitizeTerminalLine(run.model);
       const effort = sanitizeTerminalLine(run.effort);
-      const state = sanitizeTerminalLine(run.state);
+      const state = sanitizeTerminalLine(runStateLabel(run.state));
       return `${theme.fg(color, `${runStateGlyph(run.state)} ${name}`)} · ${theme.fg("toolOutput", model)} · ${theme.fg("dim", `effort: ${effort}`)} · ${theme.fg(color, state)}`;
     })
     .join("\n");
 
-const expandedRunReports = (runs: ReadonlyArray<SubagentRunView>): string => {
-  const sections = runs.flatMap((run) => {
+interface RunReportSection {
+  readonly name: string;
+  readonly kind: "report" | "failure";
+  readonly text: string;
+}
+
+const expandedRunReportSections = (
+  runs: ReadonlyArray<SubagentRunView>,
+): ReadonlyArray<RunReportSection> => {
+  const candidates = runs.flatMap((run): ReadonlyArray<RunReportSection> => {
     const name = sanitizeTerminalLine(run.name);
-    if (run.finalText) return [`Final report — ${name}\n${sanitizeTerminalText(run.finalText)}`];
-    if (run.error) return [`Failure — ${name}\n${sanitizeTerminalText(run.error)}`];
+    if (run.finalText) return [{ name, kind: "report", text: sanitizeTerminalText(run.finalText) }];
+    if (run.error) return [{ name, kind: "failure", text: sanitizeTerminalText(run.error) }];
     return [];
   });
-  if (sections.length === 0) return "";
-  const text = sections.join("\n\n");
-  if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
-  const marker = "\n… [final reports truncated]";
-  return `${safeTextPrefix(text, MAX_TOOL_OUTPUT_CHARS - marker.length)}${marker}`;
+  if (candidates.length === 0) return [];
+  const headingBudget = candidates.reduce((total, section) => total + section.name.length + 24, 0);
+  const perSection = Math.max(
+    256,
+    Math.floor((MAX_TOOL_OUTPUT_CHARS - headingBudget) / candidates.length),
+  );
+  return candidates.map((section) => {
+    if (section.text.length <= perSection) return section;
+    const marker = "\n… [report truncated]";
+    return {
+      ...section,
+      text: `${safeTextPrefix(section.text, perSection - marker.length)}${marker}`,
+    };
+  });
 };
+
+const reportAffordance = (count: number, expanded: boolean, theme: Theme): string =>
+  theme.fg(
+    "dim",
+    `${expanded ? "▾" : "▸"} final report${count === 1 ? "" : "s"}${expanded ? "" : " · expand to view"}`,
+  );
+
+const renderStartFailures = (
+  failures: ReadonlyArray<SubagentStartFailure>,
+  expanded: boolean,
+  theme: Theme,
+): string =>
+  failures
+    .map((failure) => {
+      const name = sanitizeTerminalLine(failure.name ?? `start #${failure.index + 1}`);
+      const summary = `${theme.fg("error", `× ${name}`)} · ${theme.fg("error", "failed to start")}`;
+      if (!expanded) return summary;
+      return `${summary}\n${theme.fg("dim", safeTextPrefix(sanitizeTerminalLine(failure.message), 320))}`;
+    })
+    .join("\n");
+
+const renderStartAwaitOverview = (
+  runs: ReadonlyArray<SubagentRunView>,
+  failures: ReadonlyArray<SubagentStartFailure>,
+  expanded: boolean,
+  theme: Theme,
+): string =>
+  [renderCompactRunSummaries(runs, theme), renderStartFailures(failures, expanded, theme)]
+    .filter(Boolean)
+    .join("\n");
 
 export const renderStartAwaitResult = (
   runs: ReadonlyArray<SubagentRunView>,
   expanded: boolean,
   theme: Theme,
+  failures: ReadonlyArray<SubagentStartFailure> = [],
 ): string => {
-  const summaries = renderCompactRunSummaries(runs, theme);
-  if (!expanded) return summaries;
-  const reports = expandedRunReports(runs);
-  return reports ? `${summaries}\n\n${theme.fg("toolOutput", reports)}` : summaries;
+  const overview = renderStartAwaitOverview(runs, failures, expanded, theme);
+  const sections = expandedRunReportSections(runs);
+  if (sections.length === 0) return overview;
+  const affordance = reportAffordance(sections.length, expanded, theme);
+  if (!expanded) return `${overview}\n${affordance}`;
+  const reports = sections
+    .map((section) => {
+      const heading = section.kind === "report" ? "Final report" : "Failure";
+      return `${heading} — ${section.name}\n${section.text}`;
+    })
+    .join("\n\n");
+  return `${overview}\n${affordance}\n\n${theme.fg("toolOutput", reports)}`;
+};
+
+export const renderExpandedStartAwaitResult = (
+  runs: ReadonlyArray<SubagentRunView>,
+  theme: Theme,
+  failures: ReadonlyArray<SubagentStartFailure> = [],
+): Component => {
+  const container = new Container();
+  container.addChild(new Text(renderStartAwaitOverview(runs, failures, true, theme), 0, 0));
+  const sections = expandedRunReportSections(runs);
+  if (sections.length === 0) return container;
+  container.addChild(new Text(reportAffordance(sections.length, true, theme), 0, 0));
+  for (const section of sections) {
+    container.addChild(new Spacer(1));
+    const heading = section.kind === "report" ? "Final report" : "Failure";
+    container.addChild(
+      new Text(
+        theme.fg(section.kind === "report" ? "accent" : "error", `${heading} — ${section.name}`),
+        0,
+        0,
+      ),
+    );
+    if (section.kind === "report")
+      container.addChild(
+        new Markdown(section.text, 2, 0, getMarkdownTheme(), {
+          color: (text) => theme.fg("toolOutput", text),
+        }),
+      );
+    else container.addChild(new Text(theme.fg("error", section.text), 2, 0));
+  }
+  return container;
 };
 
 const managementAcknowledgement = (
@@ -847,10 +953,13 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
       if (
         !isPartial &&
         (details?.action === "start" || details?.action === "await") &&
-        details.runs?.length &&
-        !details.startFailures?.length
-      )
-        return new Text(renderStartAwaitResult(details.runs, expanded, theme), 0, 0);
+        details.runs
+      ) {
+        const failures = details.startFailures ?? [];
+        return expanded
+          ? renderExpandedStartAwaitResult(details.runs, theme, failures)
+          : new Text(renderStartAwaitResult(details.runs, false, theme, failures), 0, 0);
+      }
       let text = sanitizeTerminalText(
         result.content
           .filter((part) => part.type === "text")

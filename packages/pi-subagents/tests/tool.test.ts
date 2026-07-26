@@ -1,8 +1,13 @@
 // Promise assertions are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import {
+  initTheme,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { piToolsForWriteIntent } from "../src/run/coordination.ts";
 import { SubagentProcessError } from "../src/run/errors.ts";
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
@@ -10,6 +15,7 @@ import { SubagentService, type SubagentServiceShape } from "../src/run/service.t
 import {
   registerSubagentTool,
   renderAwaitProgress,
+  renderExpandedStartAwaitResult,
   renderStartAwaitResult,
   type SubagentToolInput,
 } from "../src/tools/subagent.ts";
@@ -107,6 +113,8 @@ const context = {
 } as unknown as ExtensionContext;
 
 describe("subagent tool", () => {
+  beforeAll(() => initTheme("dark", false));
+
   it("enforces the Pi read-only tool policy", () => {
     const tools = ["read", "grep", "edit", "write", "bash", "mcp"];
     expect(piToolsForWriteIntent(tools, "read-only")).toEqual(["read", "grep"]);
@@ -128,10 +136,17 @@ describe("subagent tool", () => {
       theme,
     );
 
+    expect(rendered).toContain(
+      "<warning>Waiting for all agents · 2 of 4 finished · 1 running · 1 waiting for you</warning>",
+    );
     expect(rendered).toContain("<success>● running-agent</success>");
     expect(rendered).toContain("<warning>? waiting-agent</warning>");
+    expect(rendered).toContain("<toolOutput>waiting for you</toolOutput>");
     expect(rendered).toContain("<error>× failed-agent</error>");
     expect(rendered).toContain("<muted>■ stopped-agent</muted>");
+    expect(renderAwaitProgress([view({ state: "running" })], "any_finished", theme)).toContain(
+      "Waiting for first agent · 0 of 1 finished · 1 running",
+    );
   });
 
   it("keeps completed start and await cards compact until expanded", () => {
@@ -149,13 +164,32 @@ describe("subagent tool", () => {
 
     const compact = renderStartAwaitResult([run], false, theme);
     expect(compact).toBe(
-      "<success>✓ review-agent</success> · <toolOutput>openai-codex/gpt-5.6-sol</toolOutput> · <dim>effort: high</dim> · <success>completed</success>",
+      "<success>✓ review-agent</success> · <toolOutput>openai-codex/gpt-5.6-sol</toolOutput> · <dim>effort: high</dim> · <success>finished</success>\n<dim>▸ final report · expand to view</dim>",
     );
 
     const expanded = renderStartAwaitResult([run], true, theme);
+    expect(expanded).toContain("<dim>▾ final report</dim>");
     expect(expanded).toContain("Final report — review-agent");
     expect(expanded).toContain("## Findings\nEverything passed.");
     expect(expanded).not.toContain("agent-secret-id");
+
+    const markdown = renderExpandedStartAwaitResult([run], theme).render(80).join("\n");
+    expect(markdown).toContain("Findings");
+    expect(markdown).not.toContain("## Findings");
+  });
+
+  it("keeps partial batch-start failures compact", () => {
+    const theme = {
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+    } as unknown as Theme;
+    const failures = [{ index: 1, name: "broken-agent", message: "spawn failed" }];
+    const compact = renderStartAwaitResult([view({ name: "good-agent" })], false, theme, failures);
+    expect(compact).toContain("<success>● good-agent</success>");
+    expect(compact).toContain("<error>× broken-agent</error> · <error>failed to start</error>");
+    expect(compact).not.toContain("spawn failed");
+
+    const expanded = renderStartAwaitResult([view({ name: "good-agent" })], true, theme, failures);
+    expect(expanded).toContain("spawn failed");
   });
 
   it("uses fresh/background defaults, inherits model effort, and strips recursive tools", async () => {
@@ -667,7 +701,7 @@ describe("subagent tool", () => {
       context,
     );
     expect(updates).toEqual([
-      "Awaiting subagents · 0/2 finished · all_finished\n● auth-review (agent-1) · running\n● test-review (agent-2) · running",
+      "Waiting for all agents · 0 of 2 finished · 2 running\n● auth-review (agent-1) · running\n● test-review (agent-2) · running",
     ]);
     expect(awaited?.content[0]?.text).toContain("First report.");
     expect(awaited?.content[0]?.text).toContain("Second report.");

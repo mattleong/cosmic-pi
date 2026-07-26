@@ -106,7 +106,7 @@ describe("/subagents fleet UI", () => {
 
   it("shows completion age in fleet rows", () => {
     const { lines } = makeComponent(80, 18, completedProjection);
-    expect(lines.join("\n")).toContain("completed 18s ago");
+    expect(lines.join("\n")).toContain("finished 18s ago");
   });
 
   it.each(["\r", "\n", "\u001b[13u"])("toggles narrow details with each Enter encoding", (key) => {

@@ -16,7 +16,7 @@ import {
   formatRelativeAge,
   renderSubagentSessionOutput,
 } from "../tools/renderers/session-output.ts";
-import { runStateColor, runStateGlyph } from "./run-state.ts";
+import { runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
 import { sanitizeTerminalLine } from "./sanitize.ts";
 
 export interface FleetActions {
@@ -189,8 +189,8 @@ export class SubagentFleetComponent implements Component {
     const glyph = this.options.theme.fg(runStateColor(run.state), runStateGlyph(run.state));
     const state =
       run.state === "completed"
-        ? `completed ${formatRelativeAge(this.options.getNow() - (run.endedAt ?? run.lastActivityAt))}`
-        : run.state;
+        ? `finished ${formatRelativeAge(this.options.getNow() - (run.endedAt ?? run.lastActivityAt))}`
+        : runStateLabel(run.state);
     const label = sanitizeTerminalLine(`${run.name} · ${state} · ${run.writeIntent} · ${run.id}`);
     return pad(
       `${prefix} ${glyph} ${selected ? this.options.theme.fg("accent", label) : label}`,

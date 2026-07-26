@@ -46,7 +46,7 @@ The service owns revision-driven fleet waiters, completion claims, acknowledgeme
 
 ### UI and projection ownership
 
-The UI and host notifications consume immutable projections. Await progress and completed start/await cards carry immutable run snapshots in tool details. The renderer uses the fleet state palette, projects collapsed cards to name/model/effort/status, and reveals bounded final reports only when expanded; model-facing tool content retains the full report for completion acknowledgement. They never own child sessions or processes. Session startup activates no runtime when cooperative tool registration throws; it shuts down the slot and emits one bounded host error notification instead of exposing a partially active command/UI-only extension.
+The UI and host notifications consume immutable projections. Await progress and completed start/await cards carry immutable run snapshots in tool details. The renderer uses shared humanized state labels and the fleet state palette, projects collapsed cards and partial launch failures compactly, summarizes await conditions in user language, and advertises expandable reports explicitly. Expanded bounded reports use the host Markdown component; model-facing tool content independently retains the full report for completion acknowledgement. They never own child sessions or processes. Session startup activates no runtime when cooperative tool registration throws; it shuts down the slot and emits one bounded host error notification instead of exposing a partially active command/UI-only extension.
 
 ## Write coordination
 
