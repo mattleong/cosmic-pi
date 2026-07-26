@@ -18,7 +18,12 @@ interface CapturedTool {
     id: string,
     input: SubagentToolInput,
     signal: AbortSignal | undefined,
-    update: undefined,
+    update:
+      | ((result: {
+          readonly content: ReadonlyArray<{ readonly type: string; readonly text: string }>;
+          readonly details?: unknown;
+        }) => void)
+      | undefined,
     ctx: ExtensionContext,
   ) => Promise<{
     readonly content: ReadonlyArray<{ readonly type: string; readonly text: string }>;
@@ -107,6 +112,7 @@ describe("subagent tool", () => {
     const service: SubagentServiceShape = {
       start: (input) => Effect.sync(() => ((request = input), view())),
       waitForForeground: () => Effect.succeed(view()),
+      awaitTerminal: () => Effect.succeed([view()]),
       list: Effect.succeed([]),
       status: () => Effect.succeed(view()),
       send: () => Effect.succeed(view()),
@@ -181,6 +187,7 @@ describe("subagent tool", () => {
           ),
         ),
       waitForForeground: () => Effect.succeed(view()),
+      awaitTerminal: () => Effect.succeed([view()]),
       list: Effect.succeed([]),
       status: () => Effect.succeed(view()),
       send: () => Effect.succeed(view()),
@@ -232,6 +239,7 @@ describe("subagent tool", () => {
     const service = {
       start: (input: StartSubagentRequest) => Effect.sync(() => ((request = input), view())),
       waitForForeground: () => Effect.succeed(view()),
+      awaitTerminal: () => Effect.succeed([view()]),
       list: Effect.succeed([]),
       status: () => Effect.succeed(view()),
       send: () => Effect.succeed(view()),
@@ -302,6 +310,7 @@ describe("subagent tool", () => {
     const service: SubagentServiceShape = {
       start: () => Effect.succeed(completed),
       waitForForeground: () => Effect.succeed(completed),
+      awaitTerminal: () => Effect.succeed([completed]),
       list: Effect.succeed([completed]),
       status: () => Effect.succeed(completed),
       send: () => Effect.succeed(completed),
@@ -344,6 +353,81 @@ describe("subagent tool", () => {
 
     const listed = await tool?.execute("call", { action: "list" }, undefined, undefined, context);
     expect(listed?.details).toEqual({ action: "list" });
+  });
+
+  it("awaits a fleet in one live card and batches compact guidance acknowledgements", async () => {
+    const completedOne = view({
+      id: "agent-1",
+      state: "completed",
+      endedAt: 2,
+      finalText: "First report.",
+    });
+    const completedTwo = view({
+      id: "agent-2",
+      name: "test-review",
+      state: "completed",
+      endedAt: 2,
+      finalText: "Second report.",
+    });
+    const sent: string[] = [];
+    const service: SubagentServiceShape = {
+      start: () => Effect.succeed(view()),
+      waitForForeground: () => Effect.succeed(view()),
+      awaitTerminal: (_ids, _until, onUpdate) =>
+        Effect.sync(() => {
+          onUpdate?.([view(), view({ id: "agent-2", name: "test-review" })]);
+          return [completedOne, completedTwo];
+        }),
+      list: Effect.succeed([]),
+      status: (id) => Effect.succeed(id === "agent-1" ? completedOne : completedTwo),
+      send: (id) => Effect.sync(() => (sent.push(id), id === "agent-1" ? view() : view({ id }))),
+      reply: () => Effect.succeed(view()),
+      interrupt: () => Effect.succeed(view()),
+      resume: () => Effect.succeed(view()),
+      rename: () => Effect.succeed(view()),
+      stop: () => Effect.succeed(view()),
+      projection: Effect.succeed({ revision: 0, runs: [] }),
+    };
+    let tool: CapturedTool | undefined;
+    const pi = {
+      registerTool: (definition: unknown) => {
+        tool = definition as CapturedTool;
+      },
+      getThinkingLevel: () => "high",
+      getActiveTools: () => ["read"],
+    } as unknown as ExtensionAPI;
+    registerSubagentTool(pi, {
+      run: (effect) =>
+        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
+    });
+
+    const updates: string[] = [];
+    const awaited = await tool?.execute(
+      "call",
+      { action: "await", runIds: ["agent-1", "agent-2"] },
+      undefined,
+      (result) => updates.push(result.content[0]?.text ?? ""),
+      context,
+    );
+    expect(updates).toEqual([
+      "Awaiting subagents · 0/2 terminal · all_terminal\nagent-1 running · agent-2 running",
+    ]);
+    expect(awaited?.content[0]?.text).toContain("First report.");
+    expect(awaited?.content[0]?.text).toContain("Second report.");
+    expect(awaited?.details).toEqual({ action: "await" });
+
+    const sentResult = await tool?.execute(
+      "call",
+      { action: "send", runIds: ["agent-1", "agent-2"], message: "Conclude now." },
+      undefined,
+      undefined,
+      context,
+    );
+    expect([...sent].sort()).toEqual(["agent-1", "agent-2"]);
+    expect(sentResult?.content[0]?.text).toBe(
+      "Guidance delivered to 2 subagents: agent-1, agent-2.",
+    );
+    expect(sentResult?.content[0]?.text).not.toContain("Subagent status");
   });
 
   it("requires write intent and backend and lists authenticated models without a runtime", async () => {

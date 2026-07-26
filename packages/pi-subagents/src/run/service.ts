@@ -67,6 +67,7 @@ const RPC_TIMEOUT = "10 seconds";
 const CLAUDE_INITIALIZATION_TIMEOUT = "60 seconds";
 const CLAUDE_RATE_LIMIT_RESULT_GRACE = "2 seconds";
 const CLAUDE_INITIALIZATION_RETRY_DELAY = "250 millis";
+const COMPLETION_NOTIFICATION_DEBOUNCE = "100 millis";
 const RATE_LIMIT_NOTIFICATION_THRESHOLDS = [0.8, 0.9, 0.95] as const;
 
 const isTerminalState = (state: SubagentRunView["state"]): boolean =>
@@ -138,9 +139,16 @@ export interface SubagentServiceOptions {
   readonly notify?: (notification: SubagentNotification) => void;
 }
 
+export type SubagentAwaitUntil = "all_terminal" | "any_terminal";
+
 export interface SubagentServiceShape {
   readonly start: (request: StartSubagentRequest) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly waitForForeground: (id: string) => Effect.Effect<SubagentRunView, SubagentNotFoundError>;
+  readonly awaitTerminal: (
+    ids: ReadonlyArray<string>,
+    until: SubagentAwaitUntil,
+    onUpdate?: (runs: ReadonlyArray<SubagentRunView>) => void,
+  ) => Effect.Effect<ReadonlyArray<SubagentRunView>, SubagentNotFoundError>;
   readonly list: Effect.Effect<ReadonlyArray<SubagentRunView>>;
   readonly status: (id: string) => Effect.Effect<SubagentRunView, SubagentNotFoundError>;
   readonly send: (id: string, message: string) => Effect.Effect<SubagentRunView, SubagentError>;
@@ -176,6 +184,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const ownerScope = yield* Effect.scope;
   const lock = yield* Semaphore.make(1);
   const records = new Map<string, RunRecord>();
+  const revisionWaiters = new Set<Deferred.Deferred<void>>();
+  const pendingCompletions = new Map<string, number>();
+  let completionFlushScheduled = false;
   let nextRunId = 1;
   let revision = 0;
   let closed = false;
@@ -187,6 +198,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   });
   const publish = () => {
     revision += 1;
+    for (const waiter of revisionWaiters) Deferred.doneUnsafe(waiter, Effect.void);
+    revisionWaiters.clear();
     try {
       options.publish?.(freezeSnapshot(currentProjection()));
     } catch {
@@ -205,6 +218,78 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       const record = records.get(id);
       return record ? Effect.succeed(record) : Effect.fail(notFound(id));
     });
+
+  const flushPendingCompletions = Effect.sleep(COMPLETION_NOTIFICATION_DEBOUNCE).pipe(
+    Effect.andThen(
+      withLock(
+        Effect.sync(() => {
+          const completed = [...pendingCompletions.entries()].flatMap(([id, generation]) => {
+            pendingCompletions.delete(id);
+            const record = records.get(id);
+            if (
+              !record ||
+              record.view.state !== "completed" ||
+              record.completionGeneration !== generation ||
+              record.completionClaims > 0 ||
+              record.completionConsumedGeneration >= generation ||
+              record.completionNotifiedGeneration >= generation
+            )
+              return [];
+            record.completionNotifiedGeneration = generation;
+            return [
+              {
+                id: record.view.id,
+                name: record.view.name,
+                generation,
+                ...(record.view.finalText ? { finalText: record.view.finalText } : {}),
+              },
+            ];
+          });
+          completionFlushScheduled = false;
+          return completed.sort((left, right) =>
+            left.id.localeCompare(right.id, undefined, { numeric: true }),
+          );
+        }),
+      ),
+    ),
+    Effect.tap((runs) =>
+      runs.length > 0 ? Effect.sync(() => notify({ type: "completed", runs })) : Effect.void,
+    ),
+    Effect.asVoid,
+  );
+
+  const scheduleCompletionFlush = withLock(
+    Effect.sync(() => {
+      if (completionFlushScheduled || pendingCompletions.size === 0) return false;
+      completionFlushScheduled = true;
+      return true;
+    }),
+  ).pipe(
+    Effect.flatMap((shouldSchedule) =>
+      shouldSchedule
+        ? flushPendingCompletions.pipe(
+            Effect.forkIn(ownerScope, { startImmediately: true }),
+            Effect.asVoid,
+          )
+        : Effect.void,
+    ),
+  );
+
+  const queueCompletion = (record: RunRecord, generation: number) =>
+    withLock(
+      Effect.sync(() => {
+        if (
+          record.view.state !== "completed" ||
+          record.completionGeneration !== generation ||
+          record.completionClaims > 0 ||
+          record.completionConsumedGeneration >= generation ||
+          record.completionNotifiedGeneration >= generation
+        )
+          return;
+        pendingCompletions.set(record.view.id, generation);
+      }),
+    ).pipe(Effect.andThen(scheduleCompletionFlush));
+
   const mutateEventView = (
     record: RunRecord,
     update: (view: SubagentRunView) => SubagentRunView | undefined,
@@ -385,6 +470,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           record.pauseOutcome = undefined;
           record.pauseRequested = false;
           record.activeTools.clear();
+          const completionGeneration =
+            state === "completed" ? ++record.completionGeneration : record.completionGeneration;
           record.view = {
             ...record.view,
             state,
@@ -404,6 +491,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             settlement,
             pauseOutcome,
             completedScope,
+            completionGeneration,
           };
         }),
       );
@@ -420,7 +508,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               (candidate) =>
                 candidate !== record &&
                 !candidate.cleanupPending &&
-                (candidate.view.state === "stopped" || candidate.view.state === "failed"),
+                candidate.completionClaims === 0 &&
+                (candidate.view.state === "completed" ||
+                  candidate.view.state === "stopped" ||
+                  candidate.view.state === "failed"),
             )
             .sort(
               (left, right) =>
@@ -442,26 +533,29 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         concurrency: 8,
         discard: true,
       });
-      if (!deliveredToForeground) {
-        if (state === "completed")
-          notify({
-            type: "completed",
-            id: view.id,
-            name: view.name,
-            ...(view.finalText ? { finalText: view.finalText } : {}),
-          });
-        else if (
-          state === "failed" &&
-          !(record.rateLimitRejected && record.rateLimitRejectionNotified)
-        )
-          notify({
-            type: "warning",
-            id: view.id,
-            name: view.name,
-            message: error ?? "Run failed.",
-            triggerTurn: true,
-          });
-      }
+      if (state === "completed") {
+        if (deliveredToForeground)
+          yield* withLock(
+            Effect.sync(() => {
+              record.completionConsumedGeneration = Math.max(
+                record.completionConsumedGeneration,
+                result.completionGeneration,
+              );
+            }),
+          );
+        else yield* queueCompletion(record, result.completionGeneration);
+      } else if (
+        !deliveredToForeground &&
+        state === "failed" &&
+        !(record.rateLimitRejected && record.rateLimitRejectionNotified)
+      )
+        notify({
+          type: "warning",
+          id: view.id,
+          name: view.name,
+          message: error ?? "Run failed.",
+          triggerTurn: true,
+        });
       yield* sendPeerNotices(record.view.id);
       if (result.completedScope)
         yield* closeRecordScope(record, result.completedScope).pipe(
@@ -868,6 +962,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               cleanupPending: false,
               progressTurnTriggered: false,
               warningTurnTriggered: false,
+              completionGeneration: 0,
+              completionConsumedGeneration: 0,
+              completionNotifiedGeneration: 0,
+              completionClaims: 0,
               rateLimitGeneration: 0,
               rateLimitRejected: false,
               rateLimitRejectionNotified: false,
@@ -962,12 +1060,110 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         ),
       ),
     );
+  const awaitTerminal: SubagentServiceShape["awaitTerminal"] = (ids, until, onUpdate) =>
+    Effect.gen(function* () {
+      const selected = yield* withLock(
+        Effect.forEach(ids, (id) => requireRecord(id)).pipe(
+          Effect.tap((claimed) =>
+            Effect.sync(() => {
+              for (const record of claimed) {
+                record.completionClaims += 1;
+                pendingCompletions.delete(record.view.id);
+              }
+            }),
+          ),
+        ),
+      );
+      const emitUpdate = (runs: ReadonlyArray<SubagentRunView>) =>
+        Effect.sync(() => {
+          try {
+            onUpdate?.(runs);
+          } catch {
+            // Pi partial-result delivery is best effort and cannot own the waiter.
+          }
+        });
+      const waitLoop = (): Effect.Effect<ReadonlyArray<SubagentRunView>> =>
+        Effect.suspend(() =>
+          withLock(
+            Effect.gen(function* () {
+              const runs = selected.map((record) => snapshotView(record.view));
+              const terminalCount = runs.filter((run) => isTerminalState(run.state)).length;
+              const done =
+                until === "any_terminal" ? terminalCount > 0 : terminalCount === runs.length;
+              if (done) return { done: true as const, runs };
+              const wake = yield* Deferred.make<void>();
+              revisionWaiters.add(wake);
+              return { done: false as const, runs, wake };
+            }),
+          ).pipe(
+            Effect.tap(({ runs }) => emitUpdate(runs)),
+            Effect.flatMap((step) =>
+              step.done
+                ? Effect.succeed(step.runs)
+                : Deferred.await(step.wake).pipe(
+                    Effect.ensuring(
+                      Effect.sync(() => {
+                        revisionWaiters.delete(step.wake);
+                      }),
+                    ),
+                    Effect.andThen(waitLoop()),
+                  ),
+            ),
+          ),
+        );
+      return yield* waitLoop().pipe(
+        Effect.tap((runs) =>
+          withLock(
+            Effect.sync(() => {
+              for (const run of runs) {
+                if (!isTerminalState(run.state)) continue;
+                const record = records.get(run.id);
+                if (!record) continue;
+                record.completionConsumedGeneration = Math.max(
+                  record.completionConsumedGeneration,
+                  record.completionGeneration,
+                );
+                pendingCompletions.delete(record.view.id);
+              }
+            }),
+          ),
+        ),
+        Effect.ensuring(
+          withLock(
+            Effect.sync(() => {
+              for (const record of selected) {
+                record.completionClaims = Math.max(0, record.completionClaims - 1);
+                if (
+                  record.view.state === "completed" &&
+                  record.completionClaims === 0 &&
+                  record.completionConsumedGeneration < record.completionGeneration &&
+                  record.completionNotifiedGeneration < record.completionGeneration
+                )
+                  pendingCompletions.set(record.view.id, record.completionGeneration);
+              }
+            }),
+          ).pipe(Effect.andThen(scheduleCompletionFlush)),
+        ),
+      );
+    });
+
   const list = withLock(
     Effect.sync(() => sortRuns([...records.values()].map((record) => snapshotView(record.view)))),
   );
   const status: SubagentServiceShape["status"] = (id) =>
     withLock(
-      Effect.flatMap(requireRecord(id), (record) => Effect.succeed(snapshotView(record.view))),
+      Effect.flatMap(requireRecord(id), (record) =>
+        Effect.sync(() => {
+          if (record.view.state === "completed") {
+            record.completionConsumedGeneration = Math.max(
+              record.completionConsumedGeneration,
+              record.completionGeneration,
+            );
+            pendingCompletions.delete(record.view.id);
+          }
+          return snapshotView(record.view);
+        }),
+      ),
     );
 
   const send: SubagentServiceShape["send"] = (id, message) =>
@@ -1434,6 +1630,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const service: SubagentServiceShape = {
     start,
     waitForForeground,
+    awaitTerminal,
     list,
     status,
     send,

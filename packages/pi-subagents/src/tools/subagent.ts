@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { withCodePreviewShell } from "pi-code-previews";
 import { Type, type Static } from "typebox";
 import { piToolsForWriteIntent } from "../run/coordination.ts";
@@ -29,6 +30,7 @@ const ACTIONS = [
   "start",
   "list",
   "status",
+  "await",
   "models",
   "send",
   "reply",
@@ -78,6 +80,25 @@ const SubagentToolParameters = Type.Object({
     }),
   ),
   runId: Type.Optional(Type.String({ description: "Target run ID for management actions." })),
+  runIds: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Target run IDs for await, batch status, or batch send.",
+      minItems: 1,
+      maxItems: 8,
+    }),
+  ),
+  until: Type.Optional(
+    StringEnum(["all_terminal", "any_terminal"] as const, {
+      description: "Await condition; defaults to all_terminal.",
+    }),
+  ),
+  timeoutSeconds: Type.Optional(
+    Type.Number({
+      description: "Optional await timeout; children continue running after timeout.",
+      minimum: 1,
+      maximum: 3600,
+    }),
+  ),
   message: Type.Optional(
     Type.String({
       description: "Guidance, reply, or resume message.",
@@ -93,6 +114,7 @@ export interface SubagentToolDetails {
   readonly action: (typeof ACTIONS)[number];
   readonly runs?: ReadonlyArray<SubagentRunView>;
   readonly models?: ReadonlyArray<SubagentModelView>;
+  readonly timedOut?: boolean;
 }
 
 export interface SubagentToolRuntime {
@@ -110,6 +132,27 @@ const requiredRunId = (
     : Effect.fail(
         new InvalidSubagentRequestError({ message: `action=${input.action} requires runId.` }),
       );
+
+const requiredTargetIds = (
+  input: SubagentToolInput,
+): Effect.Effect<ReadonlyArray<string>, InvalidSubagentRequestError> => {
+  const ids = [
+    ...(input.runId?.trim() ? [input.runId.trim()] : []),
+    ...(input.runIds ?? []).map((id) => id.trim()).filter(Boolean),
+  ];
+  const unique = [...new Set(ids)];
+  if (unique.length === 0)
+    return Effect.fail(
+      new InvalidSubagentRequestError({
+        message: `action=${input.action} requires runId or runIds.`,
+      }),
+    );
+  if (unique.length !== ids.length)
+    return Effect.fail(
+      new InvalidSubagentRequestError({ message: "Subagent target IDs must be unique." }),
+    );
+  return Effect.succeed(unique);
+};
 
 const requiredMessage = (
   input: SubagentToolInput,
@@ -310,12 +353,50 @@ function availableModels(
     .slice(0, 100);
 }
 
+const isTerminal = (run: SubagentRunView): boolean =>
+  run.state === "completed" || run.state === "failed" || run.state === "stopped";
+
+const formatAwaitProgress = (
+  runs: ReadonlyArray<SubagentRunView>,
+  until: "all_terminal" | "any_terminal",
+): string => {
+  const terminal = runs.filter(isTerminal).length;
+  const remaining = runs
+    .filter((run) => !isTerminal(run))
+    .map((run) => `${run.id} ${run.state}${run.currentTool ? ` (${run.currentTool})` : ""}`)
+    .join(" · ");
+  return `Awaiting subagents · ${terminal}/${runs.length} terminal · ${until}${remaining ? `\n${remaining}` : ""}`;
+};
+
+const managementAcknowledgement = (
+  action: SubagentToolInput["action"],
+  runs: ReadonlyArray<SubagentRunView>,
+): string => {
+  const ids = runs.map((run) => run.id).join(", ");
+  switch (action) {
+    case "send":
+      return `Guidance delivered to ${runs.length} subagent${runs.length === 1 ? "" : "s"}: ${ids}.`;
+    case "reply":
+      return `Reply delivered to ${ids}.`;
+    case "interrupt":
+      return `Paused ${ids}.`;
+    case "resume":
+      return `Resumed ${ids}.`;
+    case "rename":
+      return `Renamed ${ids}.`;
+    case "stop":
+      return `Stopped ${ids}.`;
+    default:
+      return runs.map((run) => formatRun(run, true)).join("\n\n");
+  }
+};
+
 export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRuntime): void {
   const tool = defineTool({
     name: "subagent",
     label: "Subagent",
     description:
-      "Start and manage session-scoped foreground or background subagents. Output is bounded; inspect status for current activity and final report.",
+      "Start and manage session-scoped foreground or background subagents. Use await to collect background results without polling.",
     promptSnippet:
       "Start and manage named foreground/background subagents with explicit model, effort, context, and write intent",
     promptGuidelines: [
@@ -323,10 +404,11 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
       "Every subagent start must explicitly declare writeIntent as writer or read-only.",
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
       "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",
-      "Use subagent status before assigning new write work, and use reply when a child is waiting for the parent.",
+      "Do not poll subagent status. After independent work, call subagent await once to collect background results; use status only for troubleshooting or a user-requested snapshot.",
+      "Subagent interrupt pauses work and must never be used merely to inspect progress. Use send to steer a running child and reply when a child is waiting for the parent.",
     ],
     parameters: SubagentToolParameters,
-    async execute(_toolCallId, input, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, input, signal, onUpdate, ctx) {
       if (input.action === "models") {
         const models = availableModels(input, ctx);
         return {
@@ -354,53 +436,110 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
           case "start": {
             const request = yield* resolveStart(pi, input, ctx);
             const started = yield* service.start(request);
-            return request.execution === "foreground"
-              ? yield* service.waitForForeground(started.id)
-              : started;
+            const run =
+              request.execution === "foreground"
+                ? yield* service.waitForForeground(started.id)
+                : started;
+            return { runs: [run], timedOut: false };
           }
           case "list":
-            return yield* service.list;
-          case "status":
-            return yield* service.status(yield* requiredRunId(input));
-          case "send":
-            return yield* service.send(yield* requiredRunId(input), yield* requiredMessage(input));
+            return { runs: yield* service.list, timedOut: false };
+          case "status": {
+            const ids = yield* requiredTargetIds(input);
+            const runs = yield* Effect.forEach(ids, (id) => service.status(id), { concurrency: 8 });
+            return { runs, timedOut: false };
+          }
+          case "await": {
+            const ids = yield* requiredTargetIds(input);
+            const until = input.until ?? "all_terminal";
+            let lastUpdate = "";
+            const waiting = service.awaitTerminal(ids, until, (runs) => {
+              const text = formatAwaitProgress(runs, until);
+              if (text === lastUpdate) return;
+              lastUpdate = text;
+              onUpdate?.({
+                content: [{ type: "text", text }],
+                details: { action: "await" } satisfies SubagentToolDetails,
+              });
+            });
+            if (input.timeoutSeconds === undefined)
+              return { runs: yield* waiting, timedOut: false };
+            const outcome = yield* waiting.pipe(
+              Effect.timeoutOption(`${input.timeoutSeconds} seconds`),
+            );
+            if (Option.isSome(outcome)) return { runs: outcome.value, timedOut: false };
+            const runs = yield* Effect.forEach(ids, (id) => service.status(id), { concurrency: 8 });
+            return { runs, timedOut: true };
+          }
+          case "send": {
+            const ids = yield* requiredTargetIds(input);
+            const message = yield* requiredMessage(input);
+            const runs = yield* Effect.forEach(ids, (id) => service.send(id, message), {
+              concurrency: 8,
+            });
+            return { runs, timedOut: false };
+          }
           case "reply":
-            return yield* service.reply(yield* requiredRunId(input), yield* requiredMessage(input));
+            return {
+              runs: [
+                yield* service.reply(yield* requiredRunId(input), yield* requiredMessage(input)),
+              ],
+              timedOut: false,
+            };
           case "interrupt":
-            return yield* service.interrupt(yield* requiredRunId(input));
+            return {
+              runs: [yield* service.interrupt(yield* requiredRunId(input))],
+              timedOut: false,
+            };
           case "resume":
-            return yield* service.resume(yield* requiredRunId(input), input.message);
+            return {
+              runs: [yield* service.resume(yield* requiredRunId(input), input.message)],
+              timedOut: false,
+            };
           case "rename":
-            return yield* service.rename(yield* requiredRunId(input), input.name?.trim() ?? "");
+            return {
+              runs: [yield* service.rename(yield* requiredRunId(input), input.name?.trim() ?? "")],
+              timedOut: false,
+            };
           case "stop":
-            return yield* service.stop(yield* requiredRunId(input));
+            return {
+              runs: [yield* service.stop(yield* requiredRunId(input))],
+              timedOut: false,
+            };
           case "models":
-            return [];
+            return { runs: [], timedOut: false };
         }
       });
-      const result = await runtime.run(effect, signal);
-      const runs = Array.isArray(result) ? result : [result];
+      const { runs, timedOut } = await runtime.run(effect, signal);
       const details: SubagentToolDetails =
-        input.action === "list" || input.action === "status"
-          ? { action: input.action }
-          : { action: input.action, runs };
+        input.action === "start"
+          ? { action: input.action, runs }
+          : { action: input.action, ...(timedOut ? { timedOut: true } : {}) };
+      const text =
+        runs.length === 0
+          ? "No subagent runs."
+          : input.action === "list"
+            ? runs.map((run) => formatRun(run)).join("\n")
+            : input.action === "status" || input.action === "await"
+              ? `${timedOut ? "Await timed out; subagents continue running.\n\n" : ""}${runs.map((run) => formatRun(run, true)).join("\n\n")}`
+              : input.action === "start"
+                ? runs.map((run) => formatRun(run, true)).join("\n\n")
+                : managementAcknowledgement(input.action, runs);
       return {
-        content: [
-          {
-            type: "text",
-            text:
-              runs.length > 0
-                ? runs.map((run) => formatRun(run, input.action !== "list")).join("\n\n")
-                : "No subagent runs.",
-          },
-        ],
+        content: [{ type: "text", text }],
         details,
       };
     },
     renderCall(args, theme) {
       const action = args.action ?? "...";
       const target = sanitizeTerminalLine(
-        args.runId ?? args.name ?? args.task ?? args.query ?? args.message ?? "",
+        args.runIds?.join(",") ??
+          args.runId ??
+          args.name ??
+          args.task ??
+          args.query ??
+          args.message ??
+          "",
       ).slice(0, 160);
       return new Text(
         `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("muted", action)}${target ? ` ${theme.fg("dim", target)}` : ""}`,
@@ -410,13 +549,7 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
     },
     renderResult(result, { isPartial, expanded }, theme) {
       const details = result.details as SubagentToolDetails | undefined;
-      if (
-        expanded &&
-        !isPartial &&
-        details?.action !== "list" &&
-        details?.action !== "status" &&
-        details?.runs?.length === 1
-      ) {
+      if (expanded && !isPartial && details?.action === "start" && details.runs?.length === 1) {
         const run = details.runs[0];
         if (run) return renderSubagentSessionOutput(run, theme, { now: synchronousNow() });
       }

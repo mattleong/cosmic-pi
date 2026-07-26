@@ -1059,8 +1059,10 @@ describe("SubagentService", () => {
   it.effect("notifies after a foreground waiter returns on a blocking question", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
     const layer = SubagentService.layer({
       notify: (notification) => notifications.push(notification),
+      publish: (projection) => projections.push(projection),
     }).pipe(Layer.provide(fake.layer));
 
     return Effect.gen(function* () {
@@ -1101,10 +1103,12 @@ describe("SubagentService", () => {
         },
       });
       fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => notifications.length === 2);
       expect(notifications[1]).toMatchObject({
         type: "completed",
-        finalText: "Foreground report.",
+        runs: [{ id: run.id, finalText: "Foreground report." }],
       });
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
@@ -1263,17 +1267,80 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("awaits a fleet without polling and consumes its completion notifications", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const updates: SubagentProjection["runs"][] = [];
+    const layer = SubagentService.layer({
+      notify: (notification) => notifications.push(notification),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const first = yield* service.start(request({ name: "await-one" }));
+      const second = yield* service.start(request({ name: "await-two" }));
+      const waiting = yield* service
+        .awaitTerminal([first.id, second.id], "all_terminal", (runs) => updates.push(runs))
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(() => updates.length > 0);
+
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => updates.at(-1)?.[0]?.state === "completed");
+      expect(updates.at(-1)?.[1]?.state).toBe("running");
+      fake.controls[1]?.offer({ type: "agent_settled" });
+
+      const completed = yield* Fiber.join(waiting);
+      expect(completed.map((run) => run.state)).toEqual(["completed", "completed"]);
+      yield* TestClock.adjust("100 millis");
+      expect(notifications).toEqual([]);
+      expect(updates.at(-1)?.every((run) => run.state === "completed")).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("coalesces unclaimed fleet completions into one notification", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      notify: (notification) => notifications.push(notification),
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      yield* service.start(request({ name: "notify-one" }));
+      yield* service.start(request({ name: "notify-two" }));
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      fake.controls[1]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() =>
+        Boolean(projections.at(-1)?.runs.every((run) => run.state === "completed")),
+      );
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.length === 1);
+
+      expect(notifications[0]).toMatchObject({
+        type: "completed",
+        runs: [
+          { id: "agent-1", name: "notify-one", generation: 1 },
+          { id: "agent-2", name: "notify-two", generation: 1 },
+        ],
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("emits only one completion for repeated terminal events", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
     const layer = SubagentService.layer({
       notify: (notification) => notifications.push(notification),
+      publish: (projection) => projections.push(projection),
     }).pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "single-settlement" }));
       fake.controls[0]?.offer({ type: "agent_settled" });
       fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => notifications.length > 0);
       yield* Effect.yieldNow;
       expect((yield* service.status(run.id)).state).toBe("completed");
