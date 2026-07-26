@@ -6,7 +6,7 @@ import {
   claudeEnvelopeToAgentEvents,
   decodeClaudeStreamEnvelope,
 } from "../boundary/claude-protocol.ts";
-import type { ChildAgentEvent } from "./child-agent.ts";
+import type { ChildAgentEvent, ChildRateLimitEvent } from "./child-agent.ts";
 import type { SubagentNotification } from "../boundary/host-notifier.ts";
 import type { SubagentError } from "./errors.ts";
 import { SubagentProcessError, SubagentProtocolError } from "./errors.ts";
@@ -53,6 +53,7 @@ export interface RunEventDependencies {
     record: RunRecord,
     now: number,
   ) => Effect.Effect<SubagentRunView | undefined>;
+  readonly handleRateLimit: (record: RunRecord, event: ChildRateLimitEvent) => Effect.Effect<void>;
 }
 
 const protocolError = (message: string) => new SubagentProtocolError({ message });
@@ -71,6 +72,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     failRun,
     deliverForeground,
     pauseFromEvent,
+    handleRateLimit,
   } = dependencies;
 
   const handleContact = (record: RunRecord, envelope: ContactParentEnvelope) =>
@@ -358,6 +360,8 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           result: {},
           isError: event.isError,
         });
+      case "rate_limit":
+        return handleRateLimit(record, event);
       case "failed":
         return Effect.gen(function* () {
           const usage = event.usage;
@@ -366,7 +370,11 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
               ...current,
               usage: addUsage(current.usage, usage),
             }));
-          yield* failRun(record, event.message);
+          const message =
+            event.fallbackMessage && record.rateLimitRejected && record.rateLimitWarning
+              ? record.rateLimitWarning
+              : event.message;
+          yield* failRun(record, message);
         }).pipe(Effect.asVoid);
       case "settled":
         return Effect.gen(function* () {

@@ -66,6 +66,56 @@ describe("Claude stream protocol", () => {
     expect(claudeEnvelopeToAgentEvents(stringUser, { tools })).toEqual([]);
   });
 
+  it("normalizes rate-limit status without confusing rejected overage with rejection", async () => {
+    const allowed = await decode({
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "allowed",
+        rateLimitType: "five_hour",
+        resetsAt: 1_700_003_600,
+        overageStatus: "rejected",
+        overageDisabledReason: "org_level_disabled",
+        isUsingOverage: false,
+      },
+    });
+    expect(claudeEnvelopeToAgentEvents(allowed, { tools: new Map() })).toEqual([
+      {
+        type: "rate_limit",
+        status: "allowed",
+        rateLimitType: "five_hour",
+        resetsAt: 1_700_003_600,
+        overageStatus: "rejected",
+        overageDisabledReason: "org_level_disabled",
+        isUsingOverage: false,
+      },
+    ]);
+
+    const rejected = await decode({
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "rejected",
+        rateLimitType: "seven_day_opus",
+        utilization: 1,
+        resetsAt: 1_700_003_600,
+      },
+    });
+    expect(claudeEnvelopeToAgentEvents(rejected, { tools: new Map() })).toEqual([
+      {
+        type: "rate_limit",
+        status: "rejected",
+        rateLimitType: "seven_day_opus",
+        utilization: 1,
+        resetsAt: 1_700_003_600,
+      },
+    ]);
+
+    const futureStatus = await decode({
+      type: "rate_limit_event",
+      rate_limit_info: { status: "future_status" },
+    });
+    expect(claudeEnvelopeToAgentEvents(futureStatus, { tools: new Map() })).toEqual([]);
+  });
+
   it("normalizes terminal result usage and failures", async () => {
     const success = await decode({
       type: "result",
@@ -127,6 +177,27 @@ describe("Claude stream protocol", () => {
       {
         type: "failed",
         message: "Claude Code ended with error_max_turns.",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: 0,
+        },
+      },
+    ]);
+
+    const emptyApiError = await decode({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+    });
+    expect(claudeEnvelopeToAgentEvents(emptyApiError, { tools: new Map() })).toEqual([
+      {
+        type: "failed",
+        message: "Claude Code ended with an error.",
+        fallbackMessage: true,
         usage: {
           input: 0,
           output: 0,

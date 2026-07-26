@@ -13,6 +13,7 @@ import * as Stream from "effect/Stream";
 import { freezeSnapshot } from "pi-cosmic-core";
 import { ChildProcess, type ChildLaunchRequest } from "../boundary/child-process.ts";
 import type { SubagentNotification } from "../boundary/host-notifier.ts";
+import type { ChildRateLimitEvent } from "./child-agent.ts";
 import {
   InvalidSubagentRequestError,
   SubagentCapacityError,
@@ -62,6 +63,7 @@ const MAX_RUNS = 8;
 const MAX_RETAINED = 50;
 const RPC_TIMEOUT = "10 seconds";
 const CLAUDE_INITIALIZATION_TIMEOUT = "60 seconds";
+const CLAUDE_RATE_LIMIT_RESULT_GRACE = "2 seconds";
 
 const isTerminalState = (state: SubagentRunView["state"]): boolean =>
   state === "completed" || state === "failed" || state === "stopped";
@@ -72,6 +74,34 @@ const ownsProcessSlot = (record: RunRecord): boolean =>
 const ownsWriterSlot = (record: RunRecord): boolean =>
   record.view.writeIntent === "writer" &&
   (record.cleanupPending || isActiveRunState(record.view.state));
+
+const rateLimitLabel = (value: string | undefined): string =>
+  value ? `${value.replaceAll("_", " ")} limit` : "usage limit";
+
+const rateLimitResetText = (resetsAt: number | undefined, now: number): string => {
+  if (resetsAt === undefined || !Number.isFinite(resetsAt)) return "";
+  const remainingMinutes = Math.max(0, Math.ceil((resetsAt * 1_000 - now) / 60_000));
+  if (remainingMinutes < 60) return `; resets in ${remainingMinutes}m`;
+  const hours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+  return `; resets in ${hours}h${minutes ? ` ${minutes}m` : ""}`;
+};
+
+const rateLimitMessage = (event: ChildRateLimitEvent, now: number): string => {
+  const utilization =
+    event.utilization !== undefined && Number.isFinite(event.utilization)
+      ? ` (${Math.max(0, Math.round(event.utilization * 100))}% used)`
+      : "";
+  const reset = rateLimitResetText(event.resetsAt, now);
+  const overage = event.isUsingOverage
+    ? "; using paid overage"
+    : event.overageStatus === "rejected"
+      ? `; paid overage unavailable${event.overageDisabledReason ? ` (${event.overageDisabledReason.replaceAll("_", " ")})` : ""}`
+      : "";
+  return event.status === "allowed_warning"
+    ? `Claude is approaching its ${rateLimitLabel(event.rateLimitType)}${utilization}${reset}${overage}.`
+    : `Claude request was rejected by its ${rateLimitLabel(event.rateLimitType)}${utilization}${reset}${overage}.`;
+};
 
 const validateParentMessage = (
   message: string,
@@ -406,6 +436,77 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       Effect.andThen(settle(record, "failed", sanitizeDiagnosticText(message, MAX_ERROR_CHARS))),
     );
 
+  const handleRateLimit = (record: RunRecord, event: ChildRateLimitEvent) =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const message = event.status === "allowed" ? undefined : rateLimitMessage(event, now);
+      const update = yield* withLock(
+        Effect.sync(() => {
+          const generation = ++record.rateLimitGeneration;
+          record.rateLimitRejected = event.status === "rejected";
+          if (
+            record.stoppedByParent ||
+            record.view.state === "stopping" ||
+            isTerminalState(record.view.state)
+          )
+            return { generation, duplicate: true };
+          if (!message) {
+            if (record.rateLimitWarning && record.view.warning === record.rateLimitWarning) {
+              record.view = { ...record.view, warning: undefined };
+              publish();
+            }
+            record.rateLimitWarning = undefined;
+            return { generation, duplicate: true };
+          }
+          const duplicate = record.view.warning === message;
+          record.rateLimitWarning = message;
+          record.view = {
+            ...record.view,
+            warning: message,
+            lastActivityAt: now,
+            transcript: duplicate
+              ? record.view.transcript
+              : appendTranscript(record.view.transcript, `warning: ${message}`),
+            sessionEvents: duplicate
+              ? record.view.sessionEvents
+              : appendNoticeSessionEvent(record.view.sessionEvents, "warning", message, now),
+          };
+          publish();
+          return { generation, duplicate };
+        }),
+      );
+      if (event.status === "allowed" || !message) return;
+      if (event.status === "allowed_warning") {
+        if (!update.duplicate)
+          notify({
+            type: "warning",
+            id: record.view.id,
+            name: record.view.name,
+            message,
+            triggerTurn: false,
+          });
+        return;
+      }
+      yield* Effect.sleep(CLAUDE_RATE_LIMIT_RESULT_GRACE).pipe(
+        Effect.andThen(
+          withLock(
+            Effect.sync(
+              () =>
+                record.rateLimitGeneration === update.generation &&
+                !record.stoppedByParent &&
+                record.view.state !== "stopping" &&
+                !isTerminalState(record.view.state),
+            ),
+          ),
+        ),
+        Effect.flatMap((stillRejected) =>
+          stillRejected ? failRun(record, message).pipe(Effect.asVoid) : Effect.void,
+        ),
+        Effect.forkIn(record.scope, { startImmediately: true }),
+        Effect.asVoid,
+      );
+    });
+
   const handleWireEvent = makeRunEventHandler({
     mutateView: mutateEventView,
     settle,
@@ -414,6 +515,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     failRun,
     deliverForeground,
     pauseFromEvent,
+    handleRateLimit,
   });
 
   const start: SubagentServiceShape["start"] = (request) =>
@@ -503,6 +605,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               cleanupPending: false,
               progressTurnTriggered: false,
               warningTurnTriggered: false,
+              rateLimitGeneration: 0,
+              rateLimitRejected: false,
             };
             records.set(id, record);
             publish();

@@ -23,4 +23,7 @@ export interface RunRecord {
   replyPendingRequestId?: string | undefined;
   progressTurnTriggered: boolean;
   warningTurnTriggered: boolean;
+  rateLimitGeneration: number;
+  rateLimitRejected: boolean;
+  rateLimitWarning?: string | undefined;
 }

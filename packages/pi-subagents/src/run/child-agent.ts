@@ -1,5 +1,17 @@
 import type { SubagentUsage } from "./model.ts";
 
+export interface ChildRateLimitEvent {
+  readonly type: "rate_limit";
+  readonly status: "allowed" | "allowed_warning" | "rejected";
+  readonly rateLimitType?: string | undefined;
+  readonly resetsAt?: number | undefined;
+  readonly utilization?: number | undefined;
+  readonly overageStatus?: "allowed" | "allowed_warning" | "rejected" | undefined;
+  readonly overageResetsAt?: number | undefined;
+  readonly overageDisabledReason?: string | undefined;
+  readonly isUsingOverage?: boolean | undefined;
+}
+
 /** Backend-neutral events published by child transports into the run owner. */
 export type ChildAgentEvent =
   | {
@@ -18,6 +30,7 @@ export type ChildAgentEvent =
       readonly toolName: string;
       readonly isError: boolean;
     }
+  | ChildRateLimitEvent
   | {
       readonly type: "settled";
       readonly finalText?: string | undefined;
@@ -27,4 +40,5 @@ export type ChildAgentEvent =
       readonly type: "failed";
       readonly message: string;
       readonly usage?: SubagentUsage | undefined;
+      readonly fallbackMessage?: boolean | undefined;
     };

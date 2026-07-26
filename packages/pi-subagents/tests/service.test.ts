@@ -422,6 +422,148 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect(
+    "surfaces Claude limit warnings without treating unavailable overage as rejection",
+    () => {
+      const fake = fakeChildLayer();
+      const notifications: SubagentNotification[] = [];
+      const projections: SubagentProjection[] = [];
+      const layer = SubagentService.layer({
+        publish: (projection) => projections.push(projection),
+        notify: (notification) => notifications.push(notification),
+      }).pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(
+          request({ backend: "claude-cli", model: "sonnet", name: "claude-limit-warning" }),
+        );
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed",
+            rateLimitType: "five_hour",
+            overageStatus: "rejected",
+            overageDisabledReason: "org_level_disabled",
+          },
+        });
+        yield* Effect.yieldNow;
+        expect((yield* service.status(run.id)).warning).toBeUndefined();
+
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed_warning",
+            rateLimitType: "five_hour",
+            utilization: 0.85,
+            resetsAt: 7_200,
+          },
+        });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
+        const warning = yield* service.status(run.id);
+        expect(warning.state).toBe("running");
+        expect(warning.warning).toContain(
+          "approaching its five hour limit (85% used); resets in 2h",
+        );
+        expect(notifications).toContainEqual({
+          type: "warning",
+          id: run.id,
+          name: "claude-limit-warning",
+          message: warning.warning,
+          triggerTurn: false,
+        });
+
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: { status: "rejected", rateLimitType: "five_hour" },
+        });
+        yield* yieldUntil(() =>
+          Boolean(projections.at(-1)?.runs[0]?.warning?.includes("was rejected")),
+        );
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: { status: "allowed", rateLimitType: "five_hour" },
+        });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning === undefined);
+        yield* TestClock.adjust("2 seconds");
+        expect((yield* service.status(run.id)).state).toBe("running");
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("waits briefly for a Claude result before failing a rejected limit", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({ backend: "claude-cli", model: "opus", name: "claude-limit-rejected" }),
+      );
+      fake.controls[0]?.offerClaude({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "seven_day_opus",
+          utilization: 1,
+          resetsAt: 3_600,
+          overageStatus: "rejected",
+          overageDisabledReason: "out_of_credits",
+        },
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
+      expect((yield* service.status(run.id)).state).toBe("running");
+
+      yield* TestClock.adjust("1 second");
+      fake.controls[0]?.offerClaude({
+        type: "result",
+        subtype: "error",
+        is_error: true,
+        errors: ["You've hit your Opus limit."],
+        usage: { input_tokens: 3, output_tokens: 1 },
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      yield* TestClock.adjust("2 seconds");
+
+      const failed = yield* service.status(run.id);
+      expect(failed.error).toBe("You've hit your Opus limit.");
+      expect(failed.usage).toMatchObject({ input: 3, output: 1, totalTokens: 4 });
+      expect(fake.controls[0]?.terminations).toEqual(["force"]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("fails a Claude turn whose rejected limit produces no result", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({ backend: "claude-cli", model: "opus", name: "claude-limit-hung" }),
+      );
+      fake.controls[0]?.offerClaude({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "five_hour",
+          overageStatus: "rejected",
+          overageDisabledReason: "org_level_disabled",
+        },
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
+      yield* TestClock.adjust("2 seconds");
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+
+      const failed = yield* service.status(run.id);
+      expect(failed.error).toContain("rejected by its five hour limit");
+      expect(failed.error).toContain("paid overage unavailable (org level disabled)");
+      expect(fake.controls[0]?.terminations).toEqual(["force"]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("retains Claude usage when an error result fails the run", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];

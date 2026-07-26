@@ -48,6 +48,24 @@ const ResultSchema = Schema.Struct({
   usage: Schema.optional(ResultUsageSchema),
   errors: Schema.optional(Schema.Array(TextSchema)),
 });
+const RateLimitStatusSchema = Schema.Union([
+  Schema.Literal("allowed"),
+  Schema.Literal("allowed_warning"),
+  Schema.Literal("rejected"),
+]);
+const RateLimitSchema = Schema.Struct({
+  type: Schema.Literal("rate_limit_event"),
+  rate_limit_info: Schema.Struct({
+    status: Schema.optional(Schema.String),
+    resetsAt: Schema.optional(Schema.Number),
+    rateLimitType: Schema.optional(NameSchema),
+    utilization: Schema.optional(Schema.Number),
+    overageStatus: Schema.optional(Schema.String),
+    overageResetsAt: Schema.optional(Schema.Number),
+    overageDisabledReason: Schema.optional(NameSchema),
+    isUsingOverage: Schema.optional(Schema.Boolean),
+  }),
+});
 const IgnoredSchema = Schema.Struct({ type: Schema.String });
 
 const TextBlockSchema = Schema.Struct({ type: Schema.Literal("text"), text: TextSchema });
@@ -99,6 +117,7 @@ export type ClaudeStreamEnvelope =
   | Schema.Schema.Type<typeof AssistantSchema>
   | Schema.Schema.Type<typeof UserSchema>
   | Schema.Schema.Type<typeof ResultSchema>
+  | Schema.Schema.Type<typeof RateLimitSchema>
   | { readonly type: "ignored"; readonly eventType: string };
 
 export const decodeClaudeStreamEnvelope = (
@@ -123,6 +142,8 @@ export const decodeClaudeStreamEnvelope = (
       }
       case "result":
         return yield* Schema.decodeUnknownEffect(ResultSchema)(value);
+      case "rate_limit_event":
+        return yield* Schema.decodeUnknownEffect(RateLimitSchema)(value);
       default: {
         const ignored = yield* Schema.decodeUnknownEffect(IgnoredSchema)(value);
         return { type: "ignored" as const, eventType: ignored.type };
@@ -194,13 +215,45 @@ export const claudeEnvelopeToAgentEvents = (
     }
     return events;
   }
+  if (envelope.type === "rate_limit_event") {
+    const info = envelope.rate_limit_info;
+    const status = Schema.decodeUnknownOption(RateLimitStatusSchema)(info.status);
+    if (status._tag === "None") return [];
+    const overageStatus = Schema.decodeUnknownOption(RateLimitStatusSchema)(info.overageStatus);
+    return [
+      {
+        type: "rate_limit",
+        status: status.value,
+        ...(info.rateLimitType ? { rateLimitType: info.rateLimitType } : {}),
+        ...(info.resetsAt !== undefined ? { resetsAt: info.resetsAt } : {}),
+        ...(info.utilization !== undefined ? { utilization: info.utilization } : {}),
+        ...(overageStatus._tag === "Some" ? { overageStatus: overageStatus.value } : {}),
+        ...(info.overageResetsAt !== undefined ? { overageResetsAt: info.overageResetsAt } : {}),
+        ...(info.overageDisabledReason
+          ? { overageDisabledReason: info.overageDisabledReason }
+          : {}),
+        ...(info.isUsingOverage !== undefined ? { isUsingOverage: info.isUsingOverage } : {}),
+      },
+    ];
+  }
   if (envelope.type === "result") {
     if (envelope.is_error || (envelope.subtype !== undefined && envelope.subtype !== "success")) {
-      const message =
-        envelope.errors?.filter((value) => value.trim()).join("\n") ||
-        envelope.result ||
-        `Claude Code ended with ${envelope.subtype ?? "an error"}.`;
-      return [{ type: "failed", message, usage: resultUsage(envelope) }];
+      const detail = envelope.errors?.filter((value) => value.trim()).join("\n") || envelope.result;
+      const message = detail
+        ? detail
+        : envelope.subtype && envelope.subtype !== "success"
+          ? `Claude Code ended with ${envelope.subtype}.`
+          : "Claude Code ended with an error.";
+      return [
+        {
+          type: "failed",
+          message,
+          usage: resultUsage(envelope),
+          ...(!detail && (!envelope.subtype || envelope.subtype === "success")
+            ? { fallbackMessage: true }
+            : {}),
+        },
+      ];
     }
     return [
       {
