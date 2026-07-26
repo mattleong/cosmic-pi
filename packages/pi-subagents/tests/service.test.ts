@@ -455,8 +455,8 @@ describe("SubagentService", () => {
       expect(run.model).toBe("claude-sonnet-resolved");
       expect(run.capabilities).toEqual(["resume", "rename-display"]);
       expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual([
-        "get_state",
         "prompt",
+        "get_state",
       ]);
 
       const renamed = yield* service.rename(run.id, "claude-local-name");
@@ -516,7 +516,7 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.effect("retries one transient Claude initialization failure before prompting", () => {
+  it.effect("bootstraps each transient Claude initialization attempt with the task", () => {
     const fake = fakeChildLayer(Effect.void, { dropInitialStateAttempts: 1 });
     const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
@@ -527,7 +527,10 @@ describe("SubagentService", () => {
       yield* yieldUntil(
         () => fake.controls[0]?.commands.some((command) => command.type === "get_state") ?? false,
       );
-      expect(fake.controls[0]?.commands.some((command) => command.type === "prompt")).toBe(false);
+      expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual([
+        "prompt",
+        "get_state",
+      ]);
 
       yield* TestClock.adjust("60 seconds");
       yield* TestClock.adjust("250 millis");
@@ -535,8 +538,8 @@ describe("SubagentService", () => {
       expect(started.state).toBe("running");
       expect(fake.controls).toHaveLength(2);
       expect(fake.controls[1]?.commands.map((command) => command.type)).toEqual([
-        "get_state",
         "prompt",
+        "get_state",
       ]);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
@@ -604,7 +607,11 @@ describe("SubagentService", () => {
       const resumed = yield* service.resume(run.id, "Check one more thing.");
       expect(resumed.state).toBe("running");
       expect(fake.controls[1]?.launch.resumeSessionId).toBe("child-session");
-      expect(fake.controls[1]?.commands.at(-1)).toMatchObject({
+      expect(fake.controls[1]?.commands.map((command) => command.type)).toEqual([
+        "prompt",
+        "get_state",
+      ]);
+      expect(fake.controls[1]?.commands[0]).toMatchObject({
         type: "prompt",
         message: "Check one more thing.",
       });
@@ -776,6 +783,54 @@ describe("SubagentService", () => {
       }).pipe(Effect.scoped, Effect.provide(layer));
     },
   );
+
+  it.effect("keeps paid-overage Claude requests running with clear allowance wording", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+      notify: (notification) => notifications.push(notification),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({ backend: "claude-cli", model: "sonnet", name: "claude-paid-overage" }),
+      );
+      const rateLimitEvent = {
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "five_hour",
+          utilization: 1,
+          resetsAt: 3_600,
+          overageStatus: "allowed",
+          isUsingOverage: true,
+        },
+      } as const;
+      fake.controls[0]?.offerClaude(rateLimitEvent);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
+
+      const warning = yield* service.status(run.id);
+      expect(warning.warning).toBe(
+        "Claude exhausted its five hour allowance (100% used); resets in 1h; continuing with paid overage.",
+      );
+      expect(notifications).toContainEqual({
+        type: "warning",
+        id: run.id,
+        name: "claude-paid-overage",
+        message: warning.warning,
+        triggerTurn: false,
+      });
+
+      fake.controls[0]?.offerClaude(rateLimitEvent);
+      yield* Effect.yieldNow;
+      expect(notifications.filter((value) => value.type === "warning")).toHaveLength(1);
+      yield* TestClock.adjust("2 seconds");
+      expect((yield* service.status(run.id)).state).toBe("running");
+      expect(fake.controls[0]?.terminations).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
 
   it.effect("waits briefly for a Claude result before failing a rejected limit", () => {
     const fake = fakeChildLayer();

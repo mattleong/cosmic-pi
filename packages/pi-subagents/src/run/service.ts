@@ -79,8 +79,13 @@ const ownsWriterSlot = (record: RunRecord): boolean =>
   record.view.writeIntent === "writer" &&
   (record.cleanupPending || isActiveRunState(record.view.state));
 
-const rateLimitLabel = (value: string | undefined): string =>
-  value ? `${value.replaceAll("_", " ")} limit` : "usage limit";
+const rateLimitName = (value: string | undefined): string =>
+  value ? value.replaceAll("_", " ") : "usage";
+
+const rateLimitLabel = (value: string | undefined): string => `${rateLimitName(value)} limit`;
+
+const rateLimitAllowance = (value: string | undefined): string =>
+  `${rateLimitName(value)} allowance`;
 
 const rateLimitResetText = (resetsAt: number | undefined, now: number): string => {
   if (resetsAt === undefined || !Number.isFinite(resetsAt)) return "";
@@ -97,14 +102,15 @@ const rateLimitMessage = (event: ChildRateLimitEvent, now: number): string => {
       ? ` (${Math.max(0, Math.round(event.utilization * 100))}% used)`
       : "";
   const reset = rateLimitResetText(event.resetsAt, now);
-  const overage = event.isUsingOverage
-    ? "; using paid overage"
-    : event.overageStatus === "rejected"
+  if (event.isUsingOverage)
+    return `Claude exhausted its ${rateLimitAllowance(event.rateLimitType)}${utilization}${reset}; continuing with paid overage.`;
+  const overageUnavailable =
+    event.overageStatus === "rejected"
       ? `; paid overage unavailable${event.overageDisabledReason ? ` (${event.overageDisabledReason.replaceAll("_", " ")})` : ""}`
       : "";
   return event.status === "allowed_warning"
-    ? `Claude is approaching its ${rateLimitLabel(event.rateLimitType)}${utilization}${reset}${overage}.`
-    : `Claude request was rejected by its ${rateLimitLabel(event.rateLimitType)}${utilization}${reset}${overage}.`;
+    ? `Claude is approaching its ${rateLimitLabel(event.rateLimitType)}${utilization}${reset}${overageUnavailable}.`
+    : `Claude request was rejected by its ${rateLimitLabel(event.rateLimitType)}${utilization}${reset}${overageUnavailable}.`;
 };
 
 const validateParentMessage = (
@@ -474,10 +480,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const message = event.status === "allowed" ? undefined : rateLimitMessage(event, now);
+      const rejected = event.status === "rejected" && event.isUsingOverage !== true;
       const update = yield* withLock(
         Effect.sync(() => {
           const generation = ++record.rateLimitGeneration;
-          record.rateLimitRejected = event.status === "rejected";
+          record.rateLimitRejected = rejected;
           if (
             record.stoppedByParent ||
             record.view.state === "stopping" ||
@@ -497,10 +504,14 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               : {
                   ...(event.resetsAt !== undefined ? { resetsAt: event.resetsAt } : {}),
                   highestThreshold: 0,
+                  overageNotified: false,
                   rejectionNotified: false,
                 };
           let notifyParent = false;
-          if (event.status === "rejected") {
+          if (event.isUsingOverage) {
+            notifyParent = !notice.overageNotified;
+            notice.overageNotified = true;
+          } else if (rejected) {
             notifyParent = !notice.rejectionNotified;
             notice.rejectionNotified = true;
             if (notifyParent) record.rateLimitRejectionNotified = true;
@@ -547,7 +558,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         }),
       );
       if (event.status === "allowed" || !message) return;
-      if (event.status === "allowed_warning") {
+      if (!rejected) {
         if (update.notifyParent)
           notify({
             type: "warning",
@@ -711,9 +722,19 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const initializeProcess: (
     record: RunRecord,
     retriesRemaining: number,
-  ) => Effect.Effect<RpcStateData, SubagentError> = (record, retriesRemaining) =>
+    claudeBootstrapPrompt: string | undefined,
+  ) => Effect.Effect<RpcStateData, SubagentError> = (
+    record,
+    retriesRemaining,
+    claudeBootstrapPrompt,
+  ) =>
     Effect.gen(function* () {
       yield* installProcess(record);
+      if (record.view.backend === "claude-cli") {
+        if (claudeBootstrapPrompt === undefined)
+          return yield* protocolError("Claude startup requires an initial prompt.");
+        yield* rpc(record, { type: "prompt", message: claudeBootstrapPrompt });
+      }
       const stateResponse = yield* rpc(record, { type: "get_state" });
       return yield* decodeRpcStateData(stateResponse.data).pipe(
         Effect.mapError(() => protocolError("Subagent returned invalid startup state.")),
@@ -724,7 +745,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         retriesRemaining > 0 &&
         isRetryableClaudeInitialization(error)
           ? prepareInitializationRetry(record).pipe(
-              Effect.andThen(initializeProcess(record, retriesRemaining - 1)),
+              Effect.andThen(
+                initializeProcess(record, retriesRemaining - 1, claudeBootstrapPrompt),
+              ),
             )
           : Effect.fail(error),
       ),
@@ -851,7 +874,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         const peerNotice = peerNoticeText(records.values(), reserved.view.id);
         const initialPrompt = taskPrompt(request, peerNotice);
         const initialize = Effect.gen(function* () {
-          const state = yield* initializeProcess(reserved, 1);
+          const state = yield* initializeProcess(
+            reserved,
+            1,
+            request.backend === "claude-cli" ? initialPrompt : undefined,
+          );
           if (
             request.backend === "pi" &&
             request.effortWasExplicit &&
@@ -898,7 +925,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             return yield* new InvalidSubagentRequestError({
               message: `Subagent ${reserved.view.id} was stopped during startup.`,
             });
-          yield* rpc(reserved, { type: "prompt", message: initialPrompt });
+          if (request.backend === "pi")
+            yield* rpc(reserved, { type: "prompt", message: initialPrompt });
           yield* sendPeerNotices(reserved.view.id);
           return activated;
         });
@@ -1222,6 +1250,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             );
             const commit = Effect.gen(function* () {
               const record = claimed.record;
+              let promptSubmittedDuringInitialization = false;
               if (claimed.needsRespawn) {
                 const nextScope = yield* Scope.fork(ownerScope);
                 const installed = yield* withLock(
@@ -1255,7 +1284,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                     message: `Subagent ${id} stopped before its session could be restored.`,
                   });
                 }
-                const state = yield* initializeProcess(record, 1);
+                const claudeBootstrapPrompt =
+                  record.view.backend === "claude-cli" ? prompt : undefined;
+                const state = yield* initializeProcess(record, 1, claudeBootstrapPrompt);
+                promptSubmittedDuringInitialization = claudeBootstrapPrompt !== undefined;
                 const resolvedModel = rpcStateModelId(state.model) ?? record.view.model;
                 yield* withLock(
                   Effect.sync(() => {
@@ -1271,7 +1303,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                   }),
                 );
               }
-              yield* rpc(claimed.record, { type: "prompt", message: prompt });
+              if (!promptSubmittedDuringInitialization)
+                yield* rpc(claimed.record, { type: "prompt", message: prompt });
               const view = yield* withLock(
                 Effect.sync(() => {
                   const record = claimed.record;

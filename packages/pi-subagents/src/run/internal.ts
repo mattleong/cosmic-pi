@@ -30,6 +30,11 @@ export interface RunRecord {
   rateLimitWarning?: string | undefined;
   readonly rateLimitNotices: Map<
     string,
-    { resetsAt?: number | undefined; highestThreshold: number; rejectionNotified: boolean }
+    {
+      resetsAt?: number | undefined;
+      highestThreshold: number;
+      overageNotified: boolean;
+      rejectionNotified: boolean;
+    }
   >;
 }

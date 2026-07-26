@@ -104,13 +104,13 @@ setInterval(() => {}, 1000);
     }
   });
 
-  it("waits for initialization, frames a prompt, streams a result, and releases the child", async () => {
+  it("writes the first prompt before awaiting initialization and streams subsequent results", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-subagents-claude-"));
     const fixture = join(directory, "fake-claude.mjs");
     await writeFile(
       fixture,
-      `process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:"550e8400-e29b-41d4-a716-446655440000",model:"claude-fixture",tools:["Read","Glob","Grep","WebFetch","WebSearch"]})+"\\n");
-let buffered="";
+      `let buffered="";
+let initialized=false;
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", chunk => {
   buffered += chunk;
@@ -122,6 +122,10 @@ process.stdin.on("data", chunk => {
     if (!line) continue;
     const value = JSON.parse(line);
     if (value.type !== "user") continue;
+    if (!initialized) {
+      initialized=true;
+      process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:"550e8400-e29b-41d4-a716-446655440000",model:"claude-fixture",tools:["Read","Glob","Grep","WebFetch","WebSearch"]})+"\\n");
+    }
     process.stdout.write(JSON.stringify({type:"assistant",message:{content:[{type:"text",text:"Fixture complete."}]}})+"\\n");
     process.stdout.write(JSON.stringify({type:"result",subtype:"success",is_error:false,result:"Fixture complete.",total_cost_usd:0,usage:{input_tokens:1,output_tokens:1}})+"\\n");
   }
@@ -151,8 +155,8 @@ process.stdin.on("data", chunk => {
                 ),
                 Stream.runHead,
               );
-              yield* handle.send({ type: "get_state", id: "state-1" });
               yield* handle.send({ type: "prompt", id: "prompt-1", message: "Review auth." });
+              yield* handle.send({ type: "get_state", id: "state-1" });
               const first = yield* awaitResult;
               yield* handle.send({ type: "prompt", id: "prompt-2", message: "Continue." });
               const second = yield* awaitResult;

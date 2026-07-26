@@ -436,17 +436,13 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
             );
           case "prompt": {
             const message = typeof command.message === "string" ? command.message : "";
-            return Deferred.await(initialized).pipe(
-              Effect.flatMap(() =>
-                writeLine({
-                  type: "user",
-                  message: { role: "user", content: message },
-                  parent_tool_use_id: null,
-                  session_id: sessionId,
-                }),
-              ),
-              Effect.andThen(respond(command, true)),
-            );
+            // Claude stream-json emits system/init only after its first user frame.
+            return writeLine({
+              type: "user",
+              message: { role: "user", content: message },
+              parent_tool_use_id: null,
+              session_id: sessionId,
+            }).pipe(Effect.andThen(respond(command, true)));
           }
           default:
             return respond(
