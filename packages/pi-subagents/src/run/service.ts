@@ -107,7 +107,7 @@ export interface SubagentServiceOptions {
   readonly notify?: SubagentNotificationCallback;
 }
 
-export type SubagentAwaitUntil = "all_terminal" | "any_terminal";
+export type SubagentAwaitUntil = "all_finished" | "any_finished";
 
 export interface SubagentCompletionReceipt {
   readonly id: string;
@@ -952,7 +952,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             const runs = observations.map((observation) => observation.run);
             const terminalCount = runs.filter((run) => isTerminalRunState(run.state)).length;
             const done =
-              until === "any_terminal" ? terminalCount > 0 : terminalCount === runs.length;
+              until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length;
             if (done) return { done: true as const, runs, observations };
             const wake = yield* Deferred.make<void>();
             revisionWaiters.add(wake);

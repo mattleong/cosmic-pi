@@ -16,6 +16,7 @@ import {
   formatRelativeAge,
   renderSubagentSessionOutput,
 } from "../tools/renderers/session-output.ts";
+import { runStateColor, runStateGlyph } from "./run-state.ts";
 import { sanitizeTerminalLine } from "./sanitize.ts";
 
 export interface FleetActions {
@@ -35,45 +36,6 @@ export interface FleetOptions {
   readonly close: () => void;
   readonly actions: FleetActions;
 }
-
-const stateGlyph = (run: SubagentRunView): string => {
-  switch (run.state) {
-    case "starting":
-      return "◌";
-    case "running":
-      return "●";
-    case "waiting_for_parent":
-      return "?";
-    case "paused":
-      return "Ⅱ";
-    case "completed":
-      return "✓";
-    case "failed":
-      return "×";
-    case "stopping":
-      return "◐";
-    case "stopped":
-      return "■";
-  }
-};
-
-const stateColor = (run: SubagentRunView) => {
-  switch (run.state) {
-    case "starting":
-      return "accent";
-    case "running":
-    case "completed":
-      return "success";
-    case "waiting_for_parent":
-    case "paused":
-    case "stopping":
-      return "warning";
-    case "failed":
-      return "error";
-    case "stopped":
-      return "muted";
-  }
-};
 
 const canMessage = (run: SubagentRunView | undefined): boolean =>
   Boolean(
@@ -224,7 +186,7 @@ export class SubagentFleetComponent implements Component {
   private runLine(run: SubagentRunView, index: number, width: number): string {
     const selected = index === this.selected;
     const prefix = selected ? this.options.theme.fg("accent", ">") : " ";
-    const glyph = this.options.theme.fg(stateColor(run), stateGlyph(run));
+    const glyph = this.options.theme.fg(runStateColor(run.state), runStateGlyph(run.state));
     const state =
       run.state === "completed"
         ? `completed ${formatRelativeAge(this.options.getNow() - (run.endedAt ?? run.lastActivityAt))}`

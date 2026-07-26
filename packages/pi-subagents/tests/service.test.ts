@@ -1281,7 +1281,7 @@ describe("SubagentService", () => {
       const first = yield* service.start(request({ name: "await-one" }));
       const second = yield* service.start(request({ name: "await-two" }));
       const waiting = yield* service
-        .awaitTerminal([first.id, second.id], "all_terminal", (runs) => updates.push(runs))
+        .awaitTerminal([first.id, second.id], "all_finished", (runs) => updates.push(runs))
         .pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);
 
@@ -1303,7 +1303,7 @@ describe("SubagentService", () => {
     const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
       const service = yield* SubagentService;
-      for (const until of ["all_terminal", "any_terminal"] as const) {
+      for (const until of ["all_finished", "any_finished"] as const) {
         const error = yield* Effect.flip(service.awaitTerminal([], until));
         expect(error._tag).toBe("InvalidSubagentRequestError");
       }
@@ -1319,7 +1319,7 @@ describe("SubagentService", () => {
       const first = yield* service.start(request({ name: "any-one" }));
       const second = yield* service.start(request({ name: "any-two" }));
       const waiting = yield* service
-        .awaitTerminal([first.id, second.id], "any_terminal", (runs) => updates.push(runs))
+        .awaitTerminal([first.id, second.id], "any_finished", (runs) => updates.push(runs))
         .pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);
       fake.controls[1]?.offer({ type: "agent_settled" });
@@ -1341,7 +1341,7 @@ describe("SubagentService", () => {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "cancelled-await" }));
       const waiting = yield* service
-        .awaitTerminal([run.id], "all_terminal", (runs) => updates.push(runs))
+        .awaitTerminal([run.id], "all_finished", (runs) => updates.push(runs))
         .pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);
       yield* Fiber.interrupt(waiting);
@@ -1366,7 +1366,7 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "observed-report" }));
-      const waiting = yield* service.awaitTerminalObserved!([run.id], "all_terminal", (runs) =>
+      const waiting = yield* service.awaitTerminalObserved!([run.id], "all_finished", (runs) =>
         updates.push(runs),
       ).pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);

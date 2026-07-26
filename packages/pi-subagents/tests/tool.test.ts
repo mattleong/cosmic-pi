@@ -1,12 +1,17 @@
 // Promise assertions are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
 import { piToolsForWriteIntent } from "../src/run/coordination.ts";
+import { SubagentProcessError } from "../src/run/errors.ts";
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
 import { SubagentService, type SubagentServiceShape } from "../src/run/service.ts";
-import { registerSubagentTool, type SubagentToolInput } from "../src/tools/subagent.ts";
+import {
+  registerSubagentTool,
+  renderAwaitProgress,
+  type SubagentToolInput,
+} from "../src/tools/subagent.ts";
 
 interface CapturedTool {
   readonly name: string;
@@ -107,6 +112,27 @@ describe("subagent tool", () => {
     expect(piToolsForWriteIntent(tools, "writer")).toEqual(tools);
   });
 
+  it("color-codes agent names by state while await is in progress", () => {
+    const theme = {
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+    } as unknown as Theme;
+    const rendered = renderAwaitProgress(
+      [
+        view({ id: "agent-1", name: "running-agent", state: "running" }),
+        view({ id: "agent-2", name: "waiting-agent", state: "waiting_for_parent" }),
+        view({ id: "agent-3", name: "failed-agent", state: "failed" }),
+        view({ id: "agent-4", name: "stopped-agent", state: "stopped" }),
+      ],
+      "all_finished",
+      theme,
+    );
+
+    expect(rendered).toContain("<success>● running-agent</success>");
+    expect(rendered).toContain("<warning>? waiting-agent</warning>");
+    expect(rendered).toContain("<error>× failed-agent</error>");
+    expect(rendered).toContain("<muted>■ stopped-agent</muted>");
+  });
+
   it("uses fresh/background defaults, inherits model effort, and strips recursive tools", async () => {
     let request: StartSubagentRequest | undefined;
     const service: SubagentServiceShape = {
@@ -170,6 +196,212 @@ describe("subagent tool", () => {
       parentLeafId: "user-1",
       activeTools: ["read", "grep"],
     });
+  });
+
+  it("starts a per-agent batch and keeps successful launches when one fails", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const waited: string[] = [];
+    const service: SubagentServiceShape = {
+      start: (input) =>
+        Effect.sync(() => requests.push(input)).pipe(
+          Effect.flatMap((index) =>
+            input.task === "Fail launch"
+              ? Effect.fail(
+                  new SubagentProcessError({
+                    operation: "start",
+                    message: "simulated launch failure",
+                  }),
+                )
+              : Effect.succeed(
+                  view({
+                    id: `agent-${index}`,
+                    name: input.name ?? `agent-${index}`,
+                    task: input.task,
+                    backend: input.backend,
+                    model: input.model,
+                    execution: input.execution,
+                  }),
+                ),
+          ),
+        ),
+      waitForForeground: (id) =>
+        Effect.sync(() => {
+          waited.push(id);
+          return view({ id, state: "completed" });
+        }),
+      awaitTerminal: () => Effect.succeed([]),
+      list: Effect.succeed([]),
+      status: () => Effect.succeed(view()),
+      send: () => Effect.succeed(view()),
+      reply: () => Effect.succeed(view()),
+      interrupt: () => Effect.succeed(view()),
+      resume: () => Effect.succeed(view()),
+      rename: () => Effect.succeed(view()),
+      stop: () => Effect.succeed(view()),
+      projection: Effect.succeed({ revision: 0, runs: [] }),
+    };
+    let tool: CapturedTool | undefined;
+    const pi = {
+      registerTool: (definition: unknown) => {
+        tool = definition as CapturedTool;
+      },
+      getThinkingLevel: () => "high",
+      getActiveTools: () => ["read", "grep"],
+    } as unknown as ExtensionAPI;
+    registerSubagentTool(pi, {
+      run: (effect) =>
+        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
+    });
+
+    const result = await tool?.execute(
+      "call",
+      {
+        action: "start",
+        starts: [
+          {
+            task: "Review auth",
+            name: "auth",
+            backend: "pi",
+            writeIntent: "read-only",
+          },
+          {
+            task: "Fail launch",
+            name: "broken",
+            backend: "pi",
+            writeIntent: "read-only",
+          },
+          {
+            task: "Review storage",
+            name: "storage",
+            backend: "claude-cli",
+            model: "opus",
+            execution: "foreground",
+            effort: "medium",
+            writeIntent: "read-only",
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(requests.map((request) => request.task)).toEqual([
+      "Review auth",
+      "Fail launch",
+      "Review storage",
+    ]);
+    expect(requests[2]).toMatchObject({
+      backend: "claude-cli",
+      model: "opus",
+      execution: "foreground",
+      effort: "medium",
+    });
+    expect(waited).toEqual(["agent-3"]);
+    expect(result?.content[0]?.text).toContain("Failed starts (1)");
+    expect(result?.content[0]?.text).toContain("#2 broken: simulated launch failure");
+    expect(result?.content[0]?.text).toContain("agent-1");
+    expect(result?.content[0]?.text).toContain("agent-3");
+    expect(result?.details).toMatchObject({
+      action: "start",
+      runs: [{ id: "agent-1" }, { id: "agent-3" }],
+      startFailures: [{ index: 1, name: "broken", message: "simulated launch failure" }],
+    });
+  });
+
+  it("accepts exactly eight batch starts at the runtime boundary", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const service = {
+      start: (input: StartSubagentRequest) =>
+        Effect.sync(() => {
+          requests.push(input);
+          return view({ id: `agent-${requests.length}`, task: input.task });
+        }),
+    } as unknown as SubagentServiceShape;
+    let tool: CapturedTool | undefined;
+    const pi = {
+      registerTool: (definition: unknown) => {
+        tool = definition as CapturedTool;
+      },
+      getThinkingLevel: () => "high",
+      getActiveTools: () => ["read"],
+    } as unknown as ExtensionAPI;
+    registerSubagentTool(pi, {
+      run: (effect) =>
+        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
+    });
+
+    const result = await tool?.execute(
+      "call",
+      {
+        action: "start",
+        starts: Array.from({ length: 8 }, (_, index) => ({
+          task: `Review area ${index + 1}`,
+          backend: "pi" as const,
+          writeIntent: "read-only" as const,
+        })),
+      },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(requests).toHaveLength(8);
+    const details = result?.details as
+      | { readonly runs?: ReadonlyArray<SubagentRunView> }
+      | undefined;
+    expect(details?.runs).toHaveLength(8);
+  });
+
+  it("rejects invalid batch cardinality and mixing singular start fields", async () => {
+    const service = {
+      start: () => Effect.succeed(view()),
+    } as unknown as SubagentServiceShape;
+    let tool: CapturedTool | undefined;
+    const pi = {
+      registerTool: (definition: unknown) => {
+        tool = definition as CapturedTool;
+      },
+      getThinkingLevel: () => "high",
+      getActiveTools: () => ["read"],
+    } as unknown as ExtensionAPI;
+    registerSubagentTool(pi, {
+      run: (effect) =>
+        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
+    });
+
+    await expect(
+      tool?.execute("call", { action: "start", starts: [] }, undefined, undefined, context),
+    ).rejects.toThrow("requires between 1 and 8 starts");
+    await expect(
+      tool?.execute(
+        "call",
+        {
+          action: "start",
+          starts: Array.from({ length: 9 }, (_, index) => ({
+            task: `Review area ${index + 1}`,
+            backend: "pi" as const,
+            writeIntent: "read-only" as const,
+          })),
+        },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow("requires between 1 and 8 starts");
+    await expect(
+      tool?.execute(
+        "call",
+        {
+          action: "start",
+          task: "singular",
+          starts: [{ task: "batch", backend: "pi", writeIntent: "read-only" }],
+        },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow("cannot combine starts with singular start fields");
   });
 
   it("resolves Claude aliases without Pi model-registry authentication", async () => {
@@ -410,7 +642,7 @@ describe("subagent tool", () => {
       context,
     );
     expect(updates).toEqual([
-      "Awaiting subagents · 0/2 terminal · all_terminal\nagent-1 running · agent-2 running",
+      "Awaiting subagents · 0/2 finished · all_finished\n● auth-review (agent-1) · running\n● test-review (agent-2) · running",
     ]);
     expect(awaited?.content[0]?.text).toContain("First report.");
     expect(awaited?.content[0]?.text).toContain("Second report.");

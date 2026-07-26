@@ -5,6 +5,7 @@ import {
   defineTool,
   type ExtensionAPI,
   type ExtensionContext,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
@@ -22,8 +23,13 @@ import {
 } from "../run/model.ts";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
+import {
+  SubagentService,
+  type SubagentAwaitUntil,
+  type SubagentRunObservation,
+} from "../run/service.ts";
 import { MAX_TASK_CHARS, safeTextPrefix } from "../run/state.ts";
+import { runStateColor, runStateGlyph } from "../ui/run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 import { renderSubagentSessionOutput } from "./renderers/session-output.ts";
 
@@ -41,14 +47,9 @@ const ACTIONS = [
   "stop",
 ] as const;
 
-const SubagentToolParameters = Type.Object({
-  action: StringEnum(ACTIONS),
-  task: Type.Optional(
-    Type.String({ description: "Task for action=start.", maxLength: MAX_TASK_CHARS }),
-  ),
-  name: Type.Optional(
-    Type.String({ description: "Optional display name, or new name for rename." }),
-  ),
+const StartSpecParameters = Type.Object({
+  task: Type.String({ description: "Task for this subagent.", maxLength: MAX_TASK_CHARS }),
+  name: Type.Optional(Type.String({ description: "Optional display name." })),
   execution: Type.Optional(
     StringEnum(["foreground", "background"] as const, {
       description: "Launch behavior; defaults to background.",
@@ -59,16 +60,12 @@ const SubagentToolParameters = Type.Object({
       description: "Child context; defaults to fresh.",
     }),
   ),
-  backend: Type.Optional(
-    StringEnum(["pi", "claude-cli"] as const, {
-      description: "Execution backend; required for action=start.",
-    }),
-  ),
-  writeIntent: Type.Optional(
-    StringEnum(["writer", "read-only"] as const, {
-      description: "Required for start. Only one shared-cwd writer may be active.",
-    }),
-  ),
+  backend: StringEnum(["pi", "claude-cli"] as const, {
+    description: "Execution backend.",
+  }),
+  writeIntent: StringEnum(["writer", "read-only"] as const, {
+    description: "Only one shared-cwd writer may be active.",
+  }),
   model: Type.Optional(
     Type.String({
       description:
@@ -80,6 +77,29 @@ const SubagentToolParameters = Type.Object({
       description: "Thinking effort. Omit to inherit the parent effort.",
     }),
   ),
+});
+
+const SubagentToolParameters = Type.Object({
+  action: StringEnum(ACTIONS),
+  task: Type.Optional(
+    Type.String({ description: "Task for a singular action=start.", maxLength: MAX_TASK_CHARS }),
+  ),
+  starts: Type.Optional(
+    Type.Array(StartSpecParameters, {
+      description: "Per-agent launch specifications for batch action=start.",
+      minItems: 1,
+      maxItems: MAX_TARGET_RUNS,
+    }),
+  ),
+  name: Type.Optional(
+    Type.String({ description: "Optional display name, or new name for rename." }),
+  ),
+  execution: StartSpecParameters.properties.execution,
+  context: StartSpecParameters.properties.context,
+  backend: Type.Optional(StartSpecParameters.properties.backend),
+  writeIntent: Type.Optional(StartSpecParameters.properties.writeIntent),
+  model: StartSpecParameters.properties.model,
+  effort: StartSpecParameters.properties.effort,
   runId: Type.Optional(Type.String({ description: "Target run ID for management actions." })),
   runIds: Type.Optional(
     Type.Array(Type.String(), {
@@ -89,8 +109,9 @@ const SubagentToolParameters = Type.Object({
     }),
   ),
   until: Type.Optional(
-    StringEnum(["all_terminal", "any_terminal"] as const, {
-      description: "Await condition; defaults to all_terminal.",
+    StringEnum(["all_finished", "any_finished"] as const, {
+      description:
+        "Return when all selected runs are finished, or when any selected run is finished. Finished includes completed, failed, and stopped. Defaults to all_finished.",
     }),
   ),
   timeoutSeconds: Type.Optional(
@@ -109,12 +130,21 @@ const SubagentToolParameters = Type.Object({
   query: Type.Optional(Type.String({ description: "Optional model search text." })),
 });
 
+export type SubagentStartSpec = Static<typeof StartSpecParameters>;
 export type SubagentToolInput = Static<typeof SubagentToolParameters>;
+
+export interface SubagentStartFailure {
+  readonly index: number;
+  readonly name?: string;
+  readonly message: string;
+}
 
 export interface SubagentToolDetails {
   readonly action: (typeof ACTIONS)[number];
   readonly runs?: ReadonlyArray<SubagentRunView>;
+  readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
   readonly models?: ReadonlyArray<SubagentModelView>;
+  readonly awaitUntil?: SubagentAwaitUntil;
   readonly timedOut?: boolean;
 }
 
@@ -161,6 +191,35 @@ const requiredTargetIds = (
   return Effect.succeed(unique);
 };
 
+const batchStartSpecs = (
+  input: SubagentToolInput,
+): Effect.Effect<ReadonlyArray<SubagentStartSpec>, InvalidSubagentRequestError> => {
+  if (!input.starts) return Effect.succeed([]);
+  if (input.starts.length === 0 || input.starts.length > MAX_TARGET_RUNS)
+    return Effect.fail(
+      new InvalidSubagentRequestError({
+        message: `Batch action=start requires between 1 and ${MAX_TARGET_RUNS} starts.`,
+      }),
+    );
+  const hasSingularFields = [
+    input.task,
+    input.name,
+    input.execution,
+    input.context,
+    input.backend,
+    input.writeIntent,
+    input.model,
+    input.effort,
+  ].some((value) => value !== undefined);
+  return hasSingularFields
+    ? Effect.fail(
+        new InvalidSubagentRequestError({
+          message: "Batch action=start cannot combine starts with singular start fields.",
+        }),
+      )
+    : Effect.succeed(input.starts);
+};
+
 const requiredMessage = (
   input: SubagentToolInput,
 ): Effect.Effect<string, InvalidSubagentRequestError> =>
@@ -179,7 +238,7 @@ function stableParentLeaf(ctx: ExtensionContext): string | undefined {
 }
 
 function resolvePiModel(
-  input: SubagentToolInput,
+  input: SubagentToolInput | SubagentStartSpec,
   ctx: ExtensionContext,
 ): Effect.Effect<
   { readonly model: string; readonly runtimeApiKey?: string | undefined },
@@ -224,7 +283,7 @@ function resolvePiModel(
 
 function resolveStart(
   pi: ExtensionAPI,
-  input: SubagentToolInput,
+  input: SubagentToolInput | SubagentStartSpec,
   ctx: ExtensionContext,
 ): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError> {
   return Effect.gen(function* () {
@@ -366,6 +425,29 @@ const formatDetailedRuns = (
   };
 };
 
+const formatStartFailures = (failures: ReadonlyArray<SubagentStartFailure>): string =>
+  failures.length === 0
+    ? ""
+    : [
+        `Failed starts (${failures.length})`,
+        ...failures.map((failure) => {
+          const target = failure.name ? ` ${sanitizeTerminalLine(failure.name)}` : "";
+          const message = safeTextPrefix(sanitizeTerminalLine(failure.message), 320);
+          return `  #${failure.index + 1}${target}: ${message}`;
+        }),
+      ].join("\n");
+
+const formatStartResult = (
+  runs: ReadonlyArray<SubagentRunView>,
+  failures: ReadonlyArray<SubagentStartFailure>,
+): string => {
+  const failureText = formatStartFailures(failures);
+  return formatDetailedRuns(
+    runs,
+    failureText ? `${failureText}${runs.length > 0 ? "\n\n" : ""}` : "",
+  ).text;
+};
+
 const renderedCompletionReceipts = (
   observations: ReadonlyArray<SubagentRunObservation>,
   fullyRenderedIds: ReadonlySet<string>,
@@ -405,17 +487,42 @@ function availableModels(
     .slice(0, 100);
 }
 
+const awaitProgressHeader = (
+  runs: ReadonlyArray<SubagentRunView>,
+  until: SubagentAwaitUntil,
+): string => {
+  const finished = runs.filter((run) => isTerminalRunState(run.state)).length;
+  return `Awaiting subagents · ${finished}/${runs.length} finished · ${until}`;
+};
+
+const awaitRunStatus = (run: SubagentRunView): string =>
+  sanitizeTerminalLine(`${run.state}${run.currentTool ? ` (${run.currentTool})` : ""}`);
+
 const formatAwaitProgress = (
   runs: ReadonlyArray<SubagentRunView>,
-  until: "all_terminal" | "any_terminal",
-): string => {
-  const terminal = runs.filter((run) => isTerminalRunState(run.state)).length;
-  const remaining = runs
-    .filter((run) => !isTerminalRunState(run.state))
-    .map((run) => `${run.id} ${run.state}${run.currentTool ? ` (${run.currentTool})` : ""}`)
-    .join(" · ");
-  return `Awaiting subagents · ${terminal}/${runs.length} terminal · ${until}${remaining ? `\n${remaining}` : ""}`;
-};
+  until: SubagentAwaitUntil,
+): string =>
+  [
+    awaitProgressHeader(runs, until),
+    ...runs.map(
+      (run) =>
+        `${runStateGlyph(run.state)} ${sanitizeTerminalLine(run.name)} (${sanitizeTerminalLine(run.id)}) · ${awaitRunStatus(run)}`,
+    ),
+  ].join("\n");
+
+export const renderAwaitProgress = (
+  runs: ReadonlyArray<SubagentRunView>,
+  until: SubagentAwaitUntil,
+  theme: Theme,
+): string =>
+  [
+    theme.fg("warning", awaitProgressHeader(runs, until)),
+    ...runs.map((run) => {
+      const name = sanitizeTerminalLine(run.name);
+      const id = sanitizeTerminalLine(run.id);
+      return `${theme.fg(runStateColor(run.state), `${runStateGlyph(run.state)} ${name}`)} ${theme.fg("dim", `(${id})`)} · ${theme.fg("toolOutput", awaitRunStatus(run))}`;
+    }),
+  ].join("\n");
 
 const managementAcknowledgement = (
   action: SubagentToolInput["action"],
@@ -445,11 +552,12 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
     name: "subagent",
     label: "Subagent",
     description:
-      "Start and manage session-scoped foreground or background subagents. Use await to collect background results without polling.",
+      "Start one or up to eight session-scoped subagents per call and manage foreground or background runs. Use await to collect background results without polling.",
     promptSnippet:
-      "Start and manage named foreground/background subagents with explicit model, effort, context, and write intent",
+      "Start and manage named foreground/background subagents, including per-agent batch launches, with explicit model, effort, context, and write intent",
     promptGuidelines: [
       "Use subagent for delegated work that can proceed independently; background is the default launch mode.",
+      "For parallel launch, action=start accepts a starts array of up to eight per-agent specifications; successful launches remain active if another item fails.",
       "Every subagent start must explicitly declare writeIntent as writer or read-only.",
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
       "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",
@@ -515,13 +623,40 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
               );
         switch (input.action) {
           case "start": {
-            const request = yield* resolveStart(pi, input, ctx);
-            const started = yield* service.start(request);
-            const run =
-              request.execution === "foreground"
-                ? yield* service.waitForForeground(started.id)
-                : started;
-            return { runs: [run], timedOut: false };
+            const specs = yield* batchStartSpecs(input);
+            const startOne = (startInput: SubagentToolInput | SubagentStartSpec) =>
+              Effect.gen(function* () {
+                const request = yield* resolveStart(pi, startInput, ctx);
+                const started = yield* service.start(request);
+                return request.execution === "foreground"
+                  ? yield* service.waitForForeground(started.id)
+                  : started;
+              });
+            if (specs.length === 0) return { runs: [yield* startOne(input)], timedOut: false };
+            const outcomes = yield* Effect.forEach(
+              specs,
+              (spec, index) =>
+                startOne(spec).pipe(
+                  Effect.match({
+                    onFailure: (error) => ({
+                      failure: {
+                        index,
+                        ...(spec.name?.trim() ? { name: spec.name.trim() } : {}),
+                        message: error.message,
+                      } satisfies SubagentStartFailure,
+                    }),
+                    onSuccess: (run) => ({ run }),
+                  }),
+                ),
+              { concurrency: MAX_TARGET_RUNS },
+            );
+            return {
+              runs: outcomes.flatMap((outcome) => ("run" in outcome ? [outcome.run] : [])),
+              startFailures: outcomes.flatMap((outcome) =>
+                "failure" in outcome ? [outcome.failure] : [],
+              ),
+              timedOut: false,
+            };
           }
           case "list":
             return { runs: yield* service.list, timedOut: false };
@@ -529,7 +664,7 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
             return yield* finishStatus(yield* requiredTargetIds(input), false);
           case "await": {
             const ids = yield* requiredTargetIds(input);
-            const until = input.until ?? "all_terminal";
+            const until = input.until ?? "all_finished";
             let lastUpdate = "";
             const updateAwait = (runs: ReadonlyArray<SubagentRunView>) => {
               const text = formatAwaitProgress(runs, until);
@@ -537,7 +672,11 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
               lastUpdate = text;
               onUpdate?.({
                 content: [{ type: "text", text }],
-                details: { action: "await" } satisfies SubagentToolDetails,
+                details: {
+                  action: "await",
+                  runs,
+                  awaitUntil: until,
+                } satisfies SubagentToolDetails,
               });
             };
             let waiting: Effect.Effect<
@@ -616,23 +755,29 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
       });
       const executionResult: {
         readonly runs: ReadonlyArray<SubagentRunView>;
+        readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
         readonly timedOut: boolean;
         readonly text?: string;
       } = await runtime.run(effect, signal);
       const { runs, timedOut, text: formattedText } = executionResult;
+      const startFailures = executionResult.startFailures ?? [];
       const details: SubagentToolDetails =
         input.action === "start"
-          ? { action: input.action, runs }
+          ? {
+              action: input.action,
+              runs,
+              ...(startFailures.length > 0 ? { startFailures } : {}),
+            }
           : { action: input.action, ...(timedOut ? { timedOut: true } : {}) };
       const text =
-        runs.length === 0
-          ? "No subagent runs."
-          : input.action === "list"
-            ? runs.map((run) => formatRun(run)).join("\n")
-            : input.action === "status" || input.action === "await"
-              ? (formattedText ?? formatDetailedRuns(runs).text)
-              : input.action === "start"
-                ? formatDetailedRuns(runs).text
+        input.action === "start"
+          ? formatStartResult(runs, startFailures)
+          : runs.length === 0
+            ? "No subagent runs."
+            : input.action === "list"
+              ? runs.map((run) => formatRun(run)).join("\n")
+              : input.action === "status" || input.action === "await"
+                ? (formattedText ?? formatDetailedRuns(runs).text)
                 : managementAcknowledgement(input.action, runs);
       return {
         content: [{ type: "text", text }],
@@ -642,7 +787,8 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
     renderCall(args, theme) {
       const action = args.action ?? "...";
       const target = sanitizeTerminalLine(
-        args.runIds?.join(",") ??
+        args.starts?.map((spec) => spec.name ?? spec.task).join(", ") ??
+          args.runIds?.join(",") ??
           args.runId ??
           args.name ??
           args.task ??
@@ -659,7 +805,15 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
     },
     renderResult(result, { isPartial, expanded }, theme) {
       const details = result.details as SubagentToolDetails | undefined;
-      if (expanded && !isPartial && details?.action === "start" && details.runs?.length === 1) {
+      if (isPartial && details?.action === "await" && details.runs && details.awaitUntil)
+        return new Text(renderAwaitProgress(details.runs, details.awaitUntil, theme), 0, 0);
+      if (
+        expanded &&
+        !isPartial &&
+        details?.action === "start" &&
+        details.runs?.length === 1 &&
+        !details.startFailures?.length
+      ) {
         const run = details.runs[0];
         if (run) return renderSubagentSessionOutput(run, theme, { now: synchronousNow() });
       }
