@@ -36,7 +36,10 @@ interface FakeChildControl {
   readonly exit: (exitCode?: number | null) => void;
 }
 
-function fakeChildLayer(beforeSpawn: Effect.Effect<void, never, never> = Effect.void) {
+function fakeChildLayer(
+  beforeSpawn: Effect.Effect<void, never, never> = Effect.void,
+  options: { readonly dropInitialState?: boolean } = {},
+) {
   const controls: FakeChildControl[] = [];
   const layer = Layer.succeed(ChildProcess, {
     spawn: (launch) =>
@@ -51,7 +54,7 @@ function fakeChildLayer(beforeSpawn: Effect.Effect<void, never, never> = Effect.
           let releaseCount = 0;
           let releaseGate: Deferred.Deferred<void, never> | undefined;
           const failures: Array<{ readonly type: RpcCommand["type"]; readonly error: string }> = [];
-          const dropped: RpcCommand["type"][] = [];
+          const dropped: RpcCommand["type"][] = options.dropInitialState ? ["get_state"] : [];
           const sendGates: Array<{
             readonly type: RpcCommand["type"];
             readonly gate: Deferred.Deferred<void, never>;
@@ -323,6 +326,33 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("allows a longer readiness window for Claude initialization", () => {
+    const fake = fakeChildLayer(Effect.void, { dropInitialState: true });
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const starting = yield* service
+        .start(request({ backend: "claude-cli", model: "sonnet", name: "slow-claude" }))
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () => fake.controls[0]?.commands.some((command) => command.type === "get_state") ?? false,
+      );
+
+      yield* TestClock.adjust("10 seconds");
+      expect(projections.at(-1)?.runs[0]?.state).toBe("starting");
+
+      yield* TestClock.adjust("50 seconds");
+      const failure = yield* Fiber.join(starting).pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "SubagentProcessError",
+        operation: "await RPC response from",
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("maps Claude stream events into the shared run projection", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
@@ -389,6 +419,34 @@ describe("SubagentService", () => {
         type: "prompt",
         message: "Check one more thing.",
       });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("retains Claude usage when an error result fails the run", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({ backend: "claude-cli", model: "sonnet", name: "claude-failure" }),
+      );
+      fake.controls[0]?.offerClaude({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["Claude request failed."],
+        total_cost_usd: 0.04,
+        usage: { input_tokens: 8, output_tokens: 3 },
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+
+      const failed = yield* service.status(run.id);
+      expect(failed.error).toBe("Claude request failed.");
+      expect(failed.usage).toMatchObject({ input: 8, output: 3, totalTokens: 11, cost: 0.04 });
+      expect(fake.controls[0]?.terminations).toContain("force");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -753,6 +811,13 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "resume-failure" }));
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Preserved report." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       fake.controls[0]?.failNext("prompt", "token=secret-value");
@@ -760,7 +825,9 @@ describe("SubagentService", () => {
       const failure = yield* Effect.flip(service.resume(run.id, "Continue"));
       expect(failure.message).toContain("[REDACTED]");
       expect(failure.message).not.toContain("secret-value");
-      expect((yield* service.status(run.id)).state).toBe("failed");
+      const failed = yield* service.status(run.id);
+      expect(failed.state).toBe("failed");
+      expect(failed.finalText).toBe("Preserved report.");
       expect(fake.controls[0]?.terminations).toContain("force");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });

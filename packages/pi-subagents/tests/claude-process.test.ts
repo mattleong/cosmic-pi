@@ -41,7 +41,11 @@ describe("Claude process boundary", () => {
   it("surfaces bounded stderr when Claude exits before initialization", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-subagents-claude-error-"));
     const fixture = join(directory, "fake-claude-error.mjs");
-    await writeFile(fixture, `process.stderr.write("unsupported model selector\\n");\n`, "utf8");
+    await writeFile(
+      fixture,
+      `process.stderr.write("\\u001b[31munsupported model selector token=secret-value\\u001b[0m\\n");\n`,
+      "utf8",
+    );
     await chmod(fixture, 0o700);
 
     try {
@@ -58,6 +62,9 @@ describe("Claude process boundary", () => {
       );
       expect(error).toMatchObject({ _tag: "SubagentProcessError", operation: "initialize" });
       expect(error.message).toContain("unsupported model selector");
+      expect(error.message).toContain("[REDACTED]");
+      expect(error.message).not.toContain("secret-value");
+      expect(error.message).not.toContain("\u001b");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

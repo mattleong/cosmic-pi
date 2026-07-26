@@ -100,9 +100,22 @@ describe("Claude stream protocol", () => {
       subtype: "error",
       is_error: true,
       errors: ["Authentication failed."],
+      total_cost_usd: 0.03,
+      usage: { input_tokens: 4, output_tokens: 2 },
     });
     expect(claudeEnvelopeToAgentEvents(failure, { tools: new Map() })).toEqual([
-      { type: "failed", message: "Authentication failed." },
+      {
+        type: "failed",
+        message: "Authentication failed.",
+        usage: {
+          input: 4,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 6,
+          cost: 0.03,
+        },
+      },
     ]);
 
     const maxTurns = await decode({
@@ -111,7 +124,18 @@ describe("Claude stream protocol", () => {
       is_error: false,
     });
     expect(claudeEnvelopeToAgentEvents(maxTurns, { tools: new Map() })).toEqual([
-      { type: "failed", message: "Claude Code ended with error_max_turns." },
+      {
+        type: "failed",
+        message: "Claude Code ended with error_max_turns.",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: 0,
+        },
+      },
     ]);
   });
 

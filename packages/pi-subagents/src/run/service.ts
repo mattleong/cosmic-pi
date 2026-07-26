@@ -61,6 +61,7 @@ import { appendTranscript } from "./transcript.ts";
 const MAX_RUNS = 8;
 const MAX_RETAINED = 50;
 const RPC_TIMEOUT = "10 seconds";
+const CLAUDE_INITIALIZATION_TIMEOUT = "60 seconds";
 
 const isTerminalState = (state: SubagentRunView["state"]): boolean =>
   state === "completed" || state === "failed" || state === "stopped";
@@ -159,14 +160,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       const record = records.get(id);
       return record ? Effect.succeed(record) : Effect.fail(notFound(id));
     });
-  const mutateView = (record: RunRecord, update: (view: SubagentRunView) => SubagentRunView) =>
-    withLock(
-      Effect.sync(() => {
-        record.view = update(record.view);
-        publish();
-        return snapshotView(record.view);
-      }),
-    );
   const mutateEventView = (
     record: RunRecord,
     update: (view: SubagentRunView) => SubagentRunView | undefined,
@@ -255,9 +248,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       const id = `${record.view.id}-rpc-${record.nextRpcId++}`;
       const response = yield* Deferred.make<RpcResponse, SubagentError>();
       record.responses.set(id, response);
+      const timeout =
+        record.view.backend === "claude-cli" && command.type === "get_state"
+          ? CLAUDE_INITIALIZATION_TIMEOUT
+          : RPC_TIMEOUT;
       const outcome = yield* process.send({ ...command, id }).pipe(
         Effect.andThen(Deferred.await(response)),
-        Effect.timeoutOption(RPC_TIMEOUT),
+        Effect.timeoutOption(timeout),
         Effect.ensuring(
           Effect.sync(() => {
             record.responses.delete(id);
@@ -280,21 +277,24 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       return outcome.value;
     });
 
-  const sendPeerNotices = (changedId: string) =>
-    Effect.forEach(
-      [...records.values()].filter(
-        (record) =>
-          record.process &&
-          isActiveRunState(record.view.state) &&
-          hasSubagentCapability(record.view, "peer-notice"),
-      ),
-      (record) => {
+  const sendPeerNotices = (changedId: string) => {
+    const recipients = [...records.values()].flatMap((record) => {
+      const process = record.process;
+      return process &&
+        isActiveRunState(record.view.state) &&
+        hasSubagentCapability(record.view, "peer-notice")
+        ? [{ record, process }]
+        : [];
+    });
+    return Effect.forEach(
+      recipients,
+      ({ record, process }) => {
         const message: PeerNotice = {
           channel: "pi-subagents",
           type: "peer_notice",
           message: peerNoticeText(records.values(), record.view.id),
         };
-        return record.process!.sendIpc(message).pipe(
+        return process.sendIpc(message).pipe(
           Effect.timeoutOption("1 second"),
           Effect.catch(() => Effect.void),
           Effect.asVoid,
@@ -302,6 +302,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       },
       { concurrency: 8, discard: true },
     ).pipe(Effect.annotateLogs("changedRunId", changedId), Effect.asVoid);
+  };
 
   const settle = (record: RunRecord, state: "completed" | "failed" | "stopped", error?: string) =>
     Effect.gen(function* () {
@@ -897,16 +898,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           selected.settlement = nextSettlement;
           selected.pauseRequested = false;
           selected.pauseOutcome = undefined;
-          selected.latestAssistantText = undefined;
           selected.activeTools.clear();
           selected.progressTurnTriggered = false;
           selected.warningTurnTriggered = false;
           selected.view = {
             ...selected.view,
             state: "starting",
-            endedAt: undefined,
-            error: undefined,
-            finalText: undefined,
             question: undefined,
             currentTool: undefined,
             lastActivityAt: now,
@@ -918,21 +915,28 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       yield* rpc(record, { type: "prompt", message: prompt }).pipe(
         Effect.onError((cause) => failRun(record, Cause.pretty(cause)).pipe(Effect.asVoid)),
       );
-      const view = yield* mutateView(record, (current) =>
-        current.state === "starting"
-          ? {
-              ...current,
-              state: "running",
-              lastActivityAt: now,
-              transcript: appendTranscript(current.transcript, `parent resumed: ${prompt}`),
-              sessionEvents: appendNoticeSessionEvent(
-                current.sessionEvents,
-                "parent",
-                `Resume: ${prompt}`,
-                now,
-              ),
-            }
-          : current,
+      const view = yield* withLock(
+        Effect.sync(() => {
+          if (record.view.state !== "starting") return snapshotView(record.view);
+          record.latestAssistantText = undefined;
+          record.view = {
+            ...record.view,
+            state: "running",
+            endedAt: undefined,
+            error: undefined,
+            finalText: undefined,
+            lastActivityAt: now,
+            transcript: appendTranscript(record.view.transcript, `parent resumed: ${prompt}`),
+            sessionEvents: appendNoticeSessionEvent(
+              record.view.sessionEvents,
+              "parent",
+              `Resume: ${prompt}`,
+              now,
+            ),
+          };
+          publish();
+          return snapshotView(record.view);
+        }),
       );
       if (view.state !== "running")
         return yield* new SubagentProcessError({

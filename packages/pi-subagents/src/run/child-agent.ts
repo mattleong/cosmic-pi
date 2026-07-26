@@ -26,4 +26,5 @@ export type ChildAgentEvent =
   | {
       readonly type: "failed";
       readonly message: string;
+      readonly usage?: SubagentUsage | undefined;
     };

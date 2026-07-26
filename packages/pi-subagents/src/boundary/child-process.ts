@@ -383,9 +383,12 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
       child.on("message", onMessage);
       child.once("error", onError);
       child.once("close", onClose);
-      yield* Deferred.await(ready);
+      yield* Deferred.await(ready).pipe(Effect.onError(() => Effect.sync(cleanup)));
       const pid = child.pid;
-      if (!pid) return yield* processError("spawn", "Subagent process did not expose a pid.");
+      if (!pid) {
+        cleanup();
+        return yield* processError("spawn", "Subagent process did not expose a pid.");
+      }
 
       const withWriteTimeout = (
         effect: Effect.Effect<void, SubagentProcessError>,

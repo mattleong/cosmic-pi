@@ -359,7 +359,15 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           isError: event.isError,
         });
       case "failed":
-        return failRun(record, event.message).pipe(Effect.asVoid);
+        return Effect.gen(function* () {
+          const usage = event.usage;
+          if (usage)
+            yield* mutateView(record, (current) => ({
+              ...current,
+              usage: addUsage(current.usage, usage),
+            }));
+          yield* failRun(record, event.message);
+        }).pipe(Effect.asVoid);
       case "settled":
         return Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;

@@ -18,6 +18,7 @@ import {
   type SubagentEffort,
   type SubagentWriteIntent,
 } from "../run/model.ts";
+import { sanitizeDiagnosticText } from "../run/state.ts";
 import type { ChildLaunchRequest, ChildProcessHandle, ChildWireEvent } from "./child-process.ts";
 import { decodeClaudeInitOption } from "./claude-protocol.ts";
 
@@ -244,7 +245,7 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
           stderr = Buffer.from(stderr, "utf8").subarray(-MAX_STDERR_BYTES).toString("utf8");
       };
       const withStderr = (message: string) => {
-        const detail = stderr.trim().slice(-MAX_ERROR_STDERR_CHARS);
+        const detail = sanitizeDiagnosticText(stderr.trim(), MAX_ERROR_STDERR_CHARS);
         return detail ? `${message}\n${detail}` : message;
       };
       const onStdinError = (error: Error) => {
@@ -388,10 +389,14 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
       const sendIpc: ChildProcessHandle["sendIpc"] = () =>
         Effect.fail(processError("send IPC to", "Claude CLI parent contact is not enabled."));
       const terminate: ChildProcessHandle["terminate"] = (mode) =>
-        Effect.tryPromise({
-          try: () => terminateTree(child, mode === "force"),
-          catch: (error) => processError("terminate", error),
-        });
+        Effect.suspend(() =>
+          settled
+            ? Effect.void
+            : Effect.tryPromise({
+                try: () => terminateTree(child, mode === "force"),
+                catch: (error) => processError("terminate", error),
+              }),
+        );
       const waitForExit = Deferred.await(exited).pipe(
         Effect.interruptible,
         Effect.timeoutOption("2 seconds"),

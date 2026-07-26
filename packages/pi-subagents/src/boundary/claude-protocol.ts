@@ -200,7 +200,7 @@ export const claudeEnvelopeToAgentEvents = (
         envelope.errors?.filter((value) => value.trim()).join("\n") ||
         envelope.result ||
         `Claude Code ended with ${envelope.subtype ?? "an error"}.`;
-      return [{ type: "failed", message }];
+      return [{ type: "failed", message, usage: resultUsage(envelope) }];
     }
     return [
       {
