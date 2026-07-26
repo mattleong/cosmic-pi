@@ -23,6 +23,7 @@ const InitSchema = Schema.Struct({
   subtype: Schema.Literal("init"),
   session_id: ProtocolIdSchema,
   model: Schema.optional(NameSchema),
+  tools: Schema.optional(Schema.Array(NameSchema)),
 });
 const AssistantSchema = Schema.Struct({
   type: Schema.Literal("assistant"),
@@ -40,13 +41,13 @@ const ResultUsageSchema = Schema.Struct({
 });
 const ResultSchema = Schema.Struct({
   type: Schema.Literal("result"),
-  subtype: Schema.optional(Schema.String),
-  is_error: Schema.optional(Schema.Boolean),
-  result: Schema.optional(TextSchema),
-  session_id: Schema.optional(ProtocolIdSchema),
-  total_cost_usd: Schema.optional(Schema.Number),
-  usage: Schema.optional(ResultUsageSchema),
-  errors: Schema.optional(Schema.Array(TextSchema)),
+  subtype: Schema.optional(Schema.Unknown),
+  is_error: Schema.optional(Schema.Unknown),
+  result: Schema.optional(Schema.Unknown),
+  session_id: Schema.optional(Schema.Unknown),
+  total_cost_usd: Schema.optional(Schema.Unknown),
+  usage: Schema.optional(Schema.Unknown),
+  errors: Schema.optional(Schema.Unknown),
 });
 const RateLimitStatusSchema = Schema.Union([
   Schema.Literal("allowed"),
@@ -156,17 +157,20 @@ export interface ClaudeProtocolState {
 }
 
 const resultUsage = (envelope: Schema.Schema.Type<typeof ResultSchema>): SubagentUsage => {
-  const input = envelope.usage?.input_tokens ?? 0;
-  const output = envelope.usage?.output_tokens ?? 0;
-  const cacheRead = envelope.usage?.cache_read_input_tokens ?? 0;
-  const cacheWrite = envelope.usage?.cache_creation_input_tokens ?? 0;
+  const decodedUsage = Schema.decodeUnknownOption(ResultUsageSchema)(envelope.usage);
+  const usage = decodedUsage._tag === "Some" ? decodedUsage.value : undefined;
+  const decodedCost = Schema.decodeUnknownOption(Schema.Number)(envelope.total_cost_usd);
+  const input = usage?.input_tokens ?? 0;
+  const output = usage?.output_tokens ?? 0;
+  const cacheRead = usage?.cache_read_input_tokens ?? 0;
+  const cacheWrite = usage?.cache_creation_input_tokens ?? 0;
   return {
     input,
     output,
     cacheRead,
     cacheWrite,
     totalTokens: input + output + cacheRead + cacheWrite,
-    cost: envelope.total_cost_usd ?? 0,
+    cost: decodedCost._tag === "Some" ? decodedCost.value : 0,
   };
 };
 
@@ -237,28 +241,33 @@ export const claudeEnvelopeToAgentEvents = (
     ];
   }
   if (envelope.type === "result") {
-    if (envelope.is_error || (envelope.subtype !== undefined && envelope.subtype !== "success")) {
-      const detail = envelope.errors?.filter((value) => value.trim()).join("\n") || envelope.result;
+    const subtype = typeof envelope.subtype === "string" ? envelope.subtype : undefined;
+    const result = typeof envelope.result === "string" ? envelope.result : undefined;
+    const errors = Array.isArray(envelope.errors)
+      ? envelope.errors.filter(
+          (value): value is string => typeof value === "string" && value.trim().length > 0,
+        )
+      : [];
+    if (envelope.is_error === true || (subtype !== undefined && subtype !== "success")) {
+      const detail = errors.join("\n") || result;
       const message = detail
         ? detail
-        : envelope.subtype && envelope.subtype !== "success"
-          ? `Claude Code ended with ${envelope.subtype}.`
+        : subtype && subtype !== "success"
+          ? `Claude Code ended with ${subtype}.`
           : "Claude Code ended with an error.";
       return [
         {
           type: "failed",
           message,
           usage: resultUsage(envelope),
-          ...(!detail && (!envelope.subtype || envelope.subtype === "success")
-            ? { fallbackMessage: true }
-            : {}),
+          ...(!detail && (!subtype || subtype === "success") ? { fallbackMessage: true } : {}),
         },
       ];
     }
     return [
       {
         type: "settled",
-        ...(envelope.result?.trim() ? { finalText: envelope.result } : {}),
+        ...(result?.trim() ? { finalText: result } : {}),
         usage: resultUsage(envelope),
       },
     ];

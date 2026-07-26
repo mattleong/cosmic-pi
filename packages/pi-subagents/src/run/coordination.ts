@@ -1,5 +1,23 @@
-import { isActiveRunState, type StartSubagentRequest } from "./model.ts";
+import { isActiveRunState, type StartSubagentRequest, type SubagentWriteIntent } from "./model.ts";
 import type { RunRecord } from "./internal.ts";
+
+const PI_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "web_search",
+  "fetch_content",
+  "get_search_content",
+]);
+
+export const piToolsForWriteIntent = (
+  activeTools: ReadonlyArray<string>,
+  writeIntent: SubagentWriteIntent,
+): ReadonlyArray<string> =>
+  [...new Set(activeTools)].filter(
+    (tool) => writeIntent === "writer" || PI_READ_ONLY_TOOLS.has(tool),
+  );
 
 const activePeerLines = (records: Iterable<RunRecord>, selfId?: string): string[] =>
   [...records]

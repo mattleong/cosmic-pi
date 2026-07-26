@@ -23,6 +23,15 @@ import { SubagentService } from "../run/service.ts";
 import { registerSubagentManagerCommand } from "../settings/controller.ts";
 import { registerSubagentTool } from "../tools/subagent.ts";
 
+function notifyToolRegistrationFailure(ctx: ExtensionContext): void {
+  try {
+    if (ctx.hasUI)
+      ctx.ui.notify("Subagents failed to activate because tool registration failed.", "error");
+  } catch {
+    // A stale host UI cannot turn failed activation into an unhandled callback error.
+  }
+}
+
 export function registerSubagentApplication(pi: ExtensionAPI): void {
   const bridge = makeSubagentProjectionBridge();
   const notify = makeHostNotifier(pi);
@@ -83,9 +92,14 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
     return loadCodePreviewSettings(captured.cwd, projectTrusted)
       .catch(() => undefined)
       .then(() => {
-        registerSubagentTool(pi, {
-          run: (effect, signal) => run(effect, signal),
-        });
+        try {
+          registerSubagentTool(pi, {
+            run: (effect, signal) => run(effect, signal),
+          });
+        } catch {
+          notifyToolRegistrationFailure(ctx);
+          return slot.shutdown().then(() => undefined);
+        }
         return slot.start(
           {
             ctx,

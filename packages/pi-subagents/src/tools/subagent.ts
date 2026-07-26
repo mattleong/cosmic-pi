@@ -10,6 +10,7 @@ import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import { withCodePreviewShell } from "pi-code-previews";
 import { Type, type Static } from "typebox";
+import { piToolsForWriteIntent } from "../run/coordination.ts";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import type {
   StartSubagentRequest,
@@ -239,7 +240,13 @@ function resolveStart(
           ? "low"
           : (pi.getThinkingLevel() as SubagentEffort)),
       effortWasExplicit: input.effort !== undefined,
-      activeTools: backend === "pi" ? pi.getActiveTools().filter((name) => !blocked.has(name)) : [],
+      activeTools:
+        backend === "pi"
+          ? piToolsForWriteIntent(
+              pi.getActiveTools().filter((name) => !blocked.has(name)),
+              input.writeIntent,
+            )
+          : [],
       projectTrusted: ctx.isProjectTrusted(),
       parentSessionId: ctx.sessionManager.getSessionId(),
       ...(parentSessionFile ? { parentSessionFile } : {}),

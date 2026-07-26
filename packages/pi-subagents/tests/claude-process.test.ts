@@ -70,12 +70,46 @@ describe("Claude process boundary", () => {
     }
   });
 
+  it("fails closed when a read-only child reports an unexpected tool", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-subagents-claude-policy-"));
+    const fixture = join(directory, "fake-claude-policy.mjs");
+    await writeFile(
+      fixture,
+      `process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:"550e8400-e29b-41d4-a716-446655440000",model:"claude-fixture",tools:["Read","Bash"]})+"\\n");
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+    await chmod(fixture, 0o700);
+
+    try {
+      const error = await Effect.runPromise(
+        Effect.acquireRelease(
+          acquireClaudeChild(request, { command: process.execPath, commandArgs: [fixture] }),
+          (handle) => handle.release,
+        ).pipe(
+          Effect.flatMap((handle) =>
+            Effect.flip(handle.send({ type: "get_state", id: "state-policy" })),
+          ),
+          Effect.scoped,
+        ),
+      );
+      expect(error).toMatchObject({
+        _tag: "SubagentProcessError",
+        operation: "verify Claude tool policy",
+      });
+      expect(error.message).toContain("Bash");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("waits for initialization, frames a prompt, streams a result, and releases the child", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-subagents-claude-"));
     const fixture = join(directory, "fake-claude.mjs");
     await writeFile(
       fixture,
-      `process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:"550e8400-e29b-41d4-a716-446655440000",model:"claude-fixture"})+"\\n");
+      `process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:"550e8400-e29b-41d4-a716-446655440000",model:"claude-fixture",tools:["Read","Glob","Grep","WebFetch","WebSearch"]})+"\\n");
 let buffered="";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", chunk => {

@@ -25,6 +25,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
+import { piToolsForWriteIntent } from "../run/coordination.ts";
 import { SubagentProcessError } from "../run/errors.ts";
 import { acquireClaudeChild } from "./claude-process.ts";
 import type { ParentReply, PeerNotice, RpcCommand } from "../run/protocol.ts";
@@ -60,6 +61,8 @@ export interface ChildLaunchRequest {
   readonly parentSessionId: string;
   readonly parentSessionFile?: string;
   readonly parentLeafId?: string;
+  readonly resumeSessionFile?: string | undefined;
+  readonly resumeSessionId?: string | undefined;
   readonly systemPrompt: string;
 }
 
@@ -261,7 +264,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
     catch: (error) => processError("write subagent system prompt", error),
   });
   const sessionFile =
-    request.context === "fork"
+    request.resumeSessionFile === undefined && request.context === "fork"
       ? yield* Effect.tryPromise({
           try: () => createForkedSession(request, runDir),
           catch: (error) => processError("fork parent session", error),
@@ -272,6 +275,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
   const ready = yield* Deferred.make<void, SubagentProcessError>();
   const exited = yield* Deferred.make<Extract<ChildWireEvent, { readonly type: "exit" }>>();
   const cliEntry = join(getPackageDir(), "dist", "cli.js");
+  const activeTools = piToolsForWriteIntent(request.activeTools, request.writeIntent);
   const cliArgs = [
     "--mode",
     "rpc",
@@ -280,7 +284,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
     "--thinking",
     request.effort,
     "--tools",
-    [...new Set([...request.activeTools, "contact_parent"])].join(","),
+    [...new Set([...activeTools, "contact_parent"])].join(","),
     "--exclude-tools",
     "subagent,subagent_wait,subagent_supervisor,workflow,workflow_control",
     "--append-system-prompt",
@@ -290,7 +294,11 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
     request.projectTrusted ? "--approve" : "--no-approve",
     "--extension",
     extensionPath(),
-    ...(sessionFile ? ["--session", sessionFile] : ["--session-dir", runDir]),
+    ...(request.resumeSessionFile
+      ? ["--session", request.resumeSessionFile]
+      : sessionFile
+        ? ["--session", sessionFile]
+        : ["--session-dir", runDir]),
   ];
   const args = [cliEntry, ...cliArgs];
   let stderr = "";
@@ -337,6 +345,14 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
         if (Buffer.byteLength(stderr, "utf8") > MAX_STDERR_BYTES)
           stderr = Buffer.from(stderr, "utf8").subarray(-MAX_STDERR_BYTES).toString("utf8");
       };
+      const onStdoutError = (error: Error) => {
+        onStderr(Buffer.from(`\nSubagent stdout error: ${error.message}\n`, "utf8"));
+        offer({ type: "protocol_error", message: "Subagent RPC output stream failed." });
+      };
+      const onStderrError = (error: Error) => {
+        onStderr(Buffer.from(`\nSubagent stderr error: ${error.message}\n`, "utf8"));
+        offer({ type: "protocol_error", message: "Subagent diagnostic stream failed." });
+      };
       const onStdinError = (error: Error) => {
         stdinError = error;
       };
@@ -366,7 +382,9 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
         if (cleaned) return;
         cleaned = true;
         detachStdout();
+        child.stdout?.off("error", onStdoutError);
         child.stderr?.off("data", onStderr);
+        child.stderr?.off("error", onStderrError);
         child.stdin?.off("error", onStdinError);
         child.off("spawn", onSpawn);
         child.off("message", onMessage);
@@ -377,7 +395,9 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
         child.stderr?.destroy();
       };
 
+      child.stdout?.on("error", onStdoutError);
       child.stderr?.on("data", onStderr);
+      child.stderr?.on("error", onStderrError);
       child.stdin?.on("error", onStdinError);
       child.once("spawn", onSpawn);
       child.on("message", onMessage);
@@ -481,11 +501,8 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
                 Effect.flatMap((forcedExit) =>
                   forcedExit._tag === "Some"
                     ? Effect.void
-                    : Effect.die(
-                        processError(
-                          "terminate",
-                          "Subagent process did not exit after forced termination.",
-                        ),
+                    : Effect.logWarning(
+                        "Subagent process did not report closure after forced termination.",
                       ),
                 ),
               ),

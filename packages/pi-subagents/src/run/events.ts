@@ -35,6 +35,8 @@ import {
 } from "./state.ts";
 import { appendTranscript } from "./transcript.ts";
 
+const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
+
 export interface RunEventDependencies {
   readonly mutateView: (
     record: RunRecord,
@@ -209,10 +211,14 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
             if (event.type !== "text_delta" || !event.delta) return Effect.void;
             return Clock.currentTimeMillis.pipe(
               Effect.flatMap((now) =>
-                mutateView(record, (current) => ({
-                  ...current,
-                  lastActivityAt: now,
-                })),
+                mutateView(record, (current) =>
+                  now - current.lastActivityAt < ACTIVITY_PUBLISH_INTERVAL_MILLIS
+                    ? undefined
+                    : {
+                        ...current,
+                        lastActivityAt: now,
+                      },
+                ),
               ),
               Effect.asVoid,
             );

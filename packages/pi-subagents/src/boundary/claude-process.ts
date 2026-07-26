@@ -35,6 +35,7 @@ const CLAUDE_DISALLOWED_TOOLS = {
   "read-only": ["Agent", "Task", "Workflow", "Edit", "Write", "Bash", "NotebookEdit", "MultiEdit"],
   writer: ["Agent", "Task", "Workflow"],
 } as const satisfies Record<SubagentWriteIntent, ReadonlyArray<string>>;
+const CLAUDE_READ_ONLY_TOOLS: ReadonlySet<string> = new Set(CLAUDE_TOOLS["read-only"]);
 const BLOCKED_ENV_KEYS = new Set([
   "NODE_OPTIONS",
   "NODE_PATH",
@@ -75,8 +76,9 @@ export function buildClaudeCliArgs(
     request.model,
     "--effort",
     claudeEffort(request.effort),
-    "--session-id",
-    sessionId,
+    ...(request.resumeSessionId
+      ? ["--resume", request.resumeSessionId]
+      : ["--session-id", sessionId]),
     "--name",
     request.name,
     "--safe-mode",
@@ -188,7 +190,7 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
     SubagentProcessError
   >();
   const exited = yield* Deferred.make<Extract<ChildWireEvent, { readonly type: "exit" }>>();
-  const sessionId = randomUUID();
+  const sessionId = request.resumeSessionId ?? randomUUID();
   const args = buildClaudeCliArgs(request, sessionId);
   let stderr = "";
   let spawned = false;
@@ -221,28 +223,88 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
         try {
           const value = JSON.parse(line) as unknown;
           const init = decodeClaudeInitOption(value);
-          if (init)
-            Deferred.doneUnsafe(
-              initialized,
-              Effect.succeed({
-                sessionId: init.session_id,
-                ...(init.model ? { model: init.model } : {}),
-              }),
-            );
+          if (init) {
+            if (request.writeIntent === "read-only") {
+              const unexpectedTools = init.tools?.filter(
+                (tool) => !CLAUDE_READ_ONLY_TOOLS.has(tool),
+              );
+              const policyError =
+                init.tools === undefined
+                  ? processError(
+                      "verify Claude tool policy",
+                      "Claude did not report its resolved tool set for a read-only run.",
+                    )
+                  : unexpectedTools && unexpectedTools.length > 0
+                    ? processError(
+                        "verify Claude tool policy",
+                        `Claude enabled unexpected read-only tools: ${unexpectedTools.slice(0, 16).join(", ")}${unexpectedTools.length > 16 ? ", …" : ""}.`,
+                      )
+                    : undefined;
+              if (policyError) {
+                Deferred.doneUnsafe(initialized, Effect.fail(policyError));
+                void terminateTree(child, true).catch(() => {});
+              } else {
+                Deferred.doneUnsafe(
+                  initialized,
+                  Effect.succeed({
+                    sessionId: init.session_id,
+                    ...(init.model ? { model: init.model } : {}),
+                  }),
+                );
+              }
+            } else {
+              Deferred.doneUnsafe(
+                initialized,
+                Effect.succeed({
+                  sessionId: init.session_id,
+                  ...(init.model ? { model: init.model } : {}),
+                }),
+              );
+            }
+          }
           offer({ type: "claude_message", value });
         } catch {
+          if (!Deferred.isDoneUnsafe(initialized)) {
+            Deferred.doneUnsafe(
+              initialized,
+              Effect.fail(
+                processError("initialize stream", "Claude emitted malformed stream JSON."),
+              ),
+            );
+            void terminateTree(child, true).catch(() => {});
+            return;
+          }
           offer({ type: "protocol_error", message: "Claude emitted malformed stream JSON." });
         }
       };
+      const onStdoutOverflow = () => {
+        if (!Deferred.isDoneUnsafe(initialized)) {
+          Deferred.doneUnsafe(
+            initialized,
+            Effect.fail(
+              processError("initialize stream", "Claude stream JSON line exceeded 4 MiB."),
+            ),
+          );
+          void terminateTree(child, true).catch(() => {});
+          return;
+        }
+        offer({ type: "protocol_error", message: "Claude stream JSON line exceeded 4 MiB." });
+      };
       const detachStdout = child.stdout
-        ? appendLineParser(child.stdout, onLine, () =>
-            offer({ type: "protocol_error", message: "Claude stream JSON line exceeded 4 MiB." }),
-          )
+        ? appendLineParser(child.stdout, onLine, onStdoutOverflow)
         : () => {};
       const onStderr = (chunk: Buffer) => {
         stderr = `${stderr}${chunk.toString("utf8")}`;
         if (Buffer.byteLength(stderr, "utf8") > MAX_STDERR_BYTES)
           stderr = Buffer.from(stderr, "utf8").subarray(-MAX_STDERR_BYTES).toString("utf8");
+      };
+      const onStdoutError = (error: Error) => {
+        onStderr(Buffer.from(`\nClaude stdout error: ${error.message}\n`, "utf8"));
+        offer({ type: "protocol_error", message: "Claude output stream failed." });
+      };
+      const onStderrError = (error: Error) => {
+        onStderr(Buffer.from(`\nClaude stderr error: ${error.message}\n`, "utf8"));
+        offer({ type: "protocol_error", message: "Claude diagnostic stream failed." });
       };
       const withStderr = (message: string) => {
         const detail = sanitizeDiagnosticText(stderr.trim(), MAX_ERROR_STDERR_CHARS);
@@ -288,7 +350,9 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
         if (cleaned) return;
         cleaned = true;
         detachStdout();
+        child.stdout?.off("error", onStdoutError);
         child.stderr?.off("data", onStderr);
+        child.stderr?.off("error", onStderrError);
         child.stdin?.off("error", onStdinError);
         child.off("spawn", onSpawn);
         child.off("error", onError);
@@ -298,7 +362,9 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
         child.stderr?.destroy();
       };
 
+      child.stdout?.on("error", onStdoutError);
       child.stderr?.on("data", onStderr);
+      child.stderr?.on("error", onStderrError);
       child.stdin?.on("error", onStdinError);
       child.once("spawn", onSpawn);
       child.once("error", onError);
@@ -370,12 +436,17 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
             );
           case "prompt": {
             const message = typeof command.message === "string" ? command.message : "";
-            return writeLine({
-              type: "user",
-              message: { role: "user", content: message },
-              parent_tool_use_id: null,
-              session_id: sessionId,
-            }).pipe(Effect.andThen(respond(command, true)));
+            return Deferred.await(initialized).pipe(
+              Effect.flatMap(() =>
+                writeLine({
+                  type: "user",
+                  message: { role: "user", content: message },
+                  parent_tool_use_id: null,
+                  session_id: sessionId,
+                }),
+              ),
+              Effect.andThen(respond(command, true)),
+            );
           }
           default:
             return respond(
@@ -413,11 +484,8 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
                 Effect.flatMap((forcedExit) =>
                   forcedExit._tag === "Some"
                     ? Effect.void
-                    : Effect.die(
-                        processError(
-                          "terminate",
-                          "Claude Code did not exit after forced termination.",
-                        ),
+                    : Effect.logWarning(
+                        "Claude Code did not report closure after forced termination.",
                       ),
                 ),
               ),

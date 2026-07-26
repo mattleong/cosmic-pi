@@ -218,11 +218,18 @@ describe("Claude stream protocol", () => {
         message: { content: [{ type: "tool_use", name: "Read", input: {} }] },
       }),
     ).rejects.toBeDefined();
-    await expect(
-      decode({
-        type: "result",
-        result: "x".repeat(1024 * 1024 + 1),
-      }),
-    ).rejects.toBeDefined();
+    const oversized = await decode({
+      type: "result",
+      result: "x".repeat(1024 * 1024 + 1),
+      usage: { input_tokens: "unknown" },
+      total_cost_usd: "unknown",
+      errors: [{ message: "future structured error" }],
+    });
+    expect(claudeEnvelopeToAgentEvents(oversized, { tools: new Map() })).toMatchObject([
+      {
+        type: "settled",
+        usage: { input: 0, output: 0, totalTokens: 0, cost: 0 },
+      },
+    ]);
   });
 });

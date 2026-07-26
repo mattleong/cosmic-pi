@@ -3,6 +3,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
+import { piToolsForWriteIntent } from "../src/run/coordination.ts";
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
 import { SubagentService, type SubagentServiceShape } from "../src/run/service.ts";
 import { registerSubagentTool, type SubagentToolInput } from "../src/tools/subagent.ts";
@@ -95,6 +96,12 @@ const context = {
 } as unknown as ExtensionContext;
 
 describe("subagent tool", () => {
+  it("enforces the Pi read-only tool policy", () => {
+    const tools = ["read", "grep", "edit", "write", "bash", "mcp"];
+    expect(piToolsForWriteIntent(tools, "read-only")).toEqual(["read", "grep"]);
+    expect(piToolsForWriteIntent(tools, "writer")).toEqual(tools);
+  });
+
   it("uses fresh/background defaults, inherits model effort, and strips recursive tools", async () => {
     let request: StartSubagentRequest | undefined;
     const service: SubagentServiceShape = {
@@ -116,7 +123,17 @@ describe("subagent tool", () => {
         tool = definition as CapturedTool;
       },
       getThinkingLevel: () => "high",
-      getActiveTools: () => ["read", "edit", "subagent", "subagent_wait", "workflow"],
+      getActiveTools: () => [
+        "read",
+        "grep",
+        "edit",
+        "write",
+        "bash",
+        "mcp",
+        "subagent",
+        "subagent_wait",
+        "workflow",
+      ],
     } as unknown as ExtensionAPI;
     registerSubagentTool(pi, {
       run: (effect) =>
@@ -145,7 +162,7 @@ describe("subagent tool", () => {
       effort: "high",
       writeIntent: "read-only",
       parentLeafId: "user-1",
-      activeTools: ["read", "edit"],
+      activeTools: ["read", "grep"],
     });
   });
 

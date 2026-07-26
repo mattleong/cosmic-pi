@@ -151,15 +151,24 @@ const EffortSchema = Schema.Union([
   Schema.Literal("xhigh"),
   Schema.Literal("max"),
 ]);
+const RpcStateModelSchema = Schema.Struct({
+  provider: ProtocolNameSchema,
+  id: ProtocolNameSchema,
+});
 const RpcStateDataSchema = Schema.Struct({
   thinkingLevel: EffortSchema,
-  model: Schema.optional(Schema.String),
+  model: Schema.optional(Schema.Union([Schema.String, RpcStateModelSchema])),
   sessionFile: Schema.optional(Schema.String),
   sessionId: Schema.String,
 });
 
+export type RpcStateData = Schema.Schema.Type<typeof RpcStateDataSchema>;
+
 export const decodeRpcStateData = (value: unknown) =>
   Schema.decodeUnknownEffect(RpcStateDataSchema)(value);
+
+export const rpcStateModelId = (model: RpcStateData["model"]): string | undefined =>
+  typeof model === "string" ? model : model ? `${model.provider}/${model.id}` : undefined;
 
 const UsageSchema = Schema.Struct({
   input: Schema.optional(Schema.Number),

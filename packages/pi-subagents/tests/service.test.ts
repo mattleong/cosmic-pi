@@ -12,6 +12,7 @@ import type { SubagentNotification } from "../src/boundary/host-notifier.ts";
 import type { ParentReply, PeerNotice, RpcCommand } from "../src/run/protocol.ts";
 import {
   ChildProcess,
+  type ChildLaunchRequest,
   type ChildProcessHandle,
   type ChildWireEvent,
 } from "../src/boundary/child-process.ts";
@@ -20,6 +21,7 @@ import { SubagentService } from "../src/run/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 
 interface FakeChildControl {
+  readonly launch: ChildLaunchRequest;
   readonly commands: RpcCommand[];
   readonly ipc: Array<ParentReply | PeerNotice>;
   readonly terminations: Array<"graceful" | "force">;
@@ -38,13 +40,26 @@ interface FakeChildControl {
 
 function fakeChildLayer(
   beforeSpawn: Effect.Effect<void, never, never> = Effect.void,
-  options: { readonly dropInitialState?: boolean } = {},
+  options: {
+    readonly dropInitialState?: boolean;
+    readonly dropInitialStateAttempts?: number;
+    readonly releaseDefect?: boolean;
+    readonly initialFailures?: ReadonlyArray<{
+      readonly spawnIndex: number;
+      readonly type: RpcCommand["type"];
+      readonly error: string;
+    }>;
+  } = {},
 ) {
   const controls: FakeChildControl[] = [];
-  const layer = Layer.succeed(ChildProcess, {
+  let nextSpawnIndex = 0;
+  let remainingInitialStateDrops =
+    options.dropInitialStateAttempts ?? (options.dropInitialState ? Number.POSITIVE_INFINITY : 0);
+  const layer: Layer.Layer<ChildProcess> = Layer.succeed(ChildProcess, {
     spawn: (launch) =>
       Effect.acquireRelease(
         Effect.gen(function* () {
+          const spawnIndex = nextSpawnIndex++;
           yield* beforeSpawn;
           const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
           const exited = yield* Deferred.make<Extract<ChildWireEvent, { readonly type: "exit" }>>();
@@ -53,8 +68,13 @@ function fakeChildLayer(
           const terminations: Array<"graceful" | "force"> = [];
           let releaseCount = 0;
           let releaseGate: Deferred.Deferred<void, never> | undefined;
-          const failures: Array<{ readonly type: RpcCommand["type"]; readonly error: string }> = [];
-          const dropped: RpcCommand["type"][] = options.dropInitialState ? ["get_state"] : [];
+          const failures: Array<{ readonly type: RpcCommand["type"]; readonly error: string }> = (
+            options.initialFailures ?? []
+          )
+            .filter((failure) => failure.spawnIndex === spawnIndex)
+            .map(({ type, error }) => ({ type, error }));
+          const dropped: RpcCommand["type"][] = remainingInitialStateDrops > 0 ? ["get_state"] : [];
+          if (remainingInitialStateDrops > 0) remainingInitialStateDrops -= 1;
           const sendGates: Array<{
             readonly type: RpcCommand["type"];
             readonly gate: Deferred.Deferred<void, never>;
@@ -137,9 +157,22 @@ function fakeChildLayer(
                                 sessionId: "child-session",
                                 sessionFile: "/tmp/child-session.jsonl",
                                 thinkingLevel: "high",
-                                ...(launch.backend === "claude-cli"
-                                  ? { model: "claude-sonnet-resolved" }
-                                  : {}),
+                                model:
+                                  launch.backend === "claude-cli"
+                                    ? "claude-sonnet-resolved"
+                                    : {
+                                        provider: "openai-codex",
+                                        id: "gpt-5.6-sol",
+                                        name: "GPT 5.6 Sol",
+                                        reasoning: true,
+                                      },
+                                isStreaming: false,
+                                isCompacting: false,
+                                steeringMode: "all",
+                                followUpMode: "all",
+                                autoCompactionEnabled: true,
+                                messageCount: 0,
+                                pendingMessageCount: 0,
                               }
                             : undefined,
                       },
@@ -154,6 +187,7 @@ function fakeChildLayer(
             terminate: (mode) => Effect.sync(() => void terminations.push(mode)),
           };
           controls.push({
+            launch,
             commands,
             ipc,
             terminations,
@@ -175,6 +209,7 @@ function fakeChildLayer(
               if (releaseGate) yield* Deferred.await(releaseGate);
               releaseCount += 1;
               Queue.endUnsafe(events);
+              if (options.releaseDefect) return yield* Effect.die("fixture release defect");
             }),
           };
         }),
@@ -216,6 +251,7 @@ describe("SubagentService", () => {
         id: "agent-1",
         name: "auth-reader",
         state: "running",
+        model: "openai-codex/gpt-5.6-sol",
         sessionFile: "/tmp/child-session.jsonl",
       });
       expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual([
@@ -267,6 +303,125 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("coalesces streamed token activity publications", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "streaming-reader" }));
+      const beforeTokens = projections.length;
+      for (let index = 0; index < 100; index += 1)
+        fake.controls[0]?.offer({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: String(index) },
+        });
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Still working." }],
+          usage: { totalTokens: 1 },
+        },
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.totalTokens === 1);
+      expect(projections).toHaveLength(beforeTokens + 1);
+
+      yield* TestClock.adjust("1 second");
+      const beforeActivityTick = projections.length;
+      fake.controls[0]?.offer({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "next" },
+      });
+      yield* yieldUntil(() => projections.length === beforeActivityTick + 1);
+      expect((yield* service.status(run.id)).lastActivityAt).toBe(run.lastActivityAt + 1_000);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("terminates a completed Pi process and restores its saved session", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "terminate-and-resume" }));
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+      const completed = yield* service.status(run.id);
+      expect(completed.state).toBe("completed");
+      expect(completed.pid).toBeUndefined();
+      expect(completed.sessionFile).toBe("/tmp/child-session.jsonl");
+
+      const resumed = yield* service.resume(run.id, "Continue from disk.");
+      expect(resumed.state).toBe("running");
+      expect(fake.controls).toHaveLength(2);
+      expect(fake.controls[1]?.launch.resumeSessionFile).toBe("/tmp/child-session.jsonl");
+      expect(fake.controls[1]?.commands.map((command) => command.type)).toEqual([
+        "get_state",
+        "prompt",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("waits for completed-process cleanup before restoring the session", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const cleanupGate = yield* Deferred.make<void>();
+      const run = yield* service.start(request({ name: "cleanup-race" }));
+      fake.controls[0]?.gateRelease(cleanupGate);
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+
+      const resuming = yield* service
+        .resume(run.id, "Continue after cleanup.")
+        .pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      expect(fake.controls).toHaveLength(1);
+
+      yield* Deferred.succeed(cleanupGate, undefined);
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+      yield* TestClock.adjust("25 millis");
+      expect((yield* Fiber.join(resuming)).state).toBe("running");
+      expect(fake.controls).toHaveLength(2);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("terminates a completed Claude process and restores its session ID", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({ backend: "claude-cli", model: "sonnet", name: "resume-claude" }),
+      );
+      fake.controls[0]?.offerClaude({
+        type: "result",
+        subtype: "success",
+        result: "Done for now.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+
+      const resumed = yield* service.resume(run.id, "Continue the Claude session.");
+      expect(resumed.state).toBe("running");
+      expect(fake.controls[1]?.launch.resumeSessionId).toBe("child-session");
+      expect(fake.controls[1]?.launch.resumeSessionFile).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("exposes backend capabilities and rejects unsupported Claude controls", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
@@ -300,8 +455,8 @@ describe("SubagentService", () => {
       expect(run.model).toBe("claude-sonnet-resolved");
       expect(run.capabilities).toEqual(["resume", "rename-display"]);
       expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual([
-        "prompt",
         "get_state",
+        "prompt",
       ]);
 
       const renamed = yield* service.rename(run.id, "claude-local-name");
@@ -345,11 +500,44 @@ describe("SubagentService", () => {
       expect(projections.at(-1)?.runs[0]?.state).toBe("starting");
 
       yield* TestClock.adjust("50 seconds");
+      yield* TestClock.adjust("250 millis");
+      yield* yieldUntil(
+        () => fake.controls[1]?.commands.some((command) => command.type === "get_state") ?? false,
+      );
+      expect(fake.controls).toHaveLength(2);
+      expect(projections.at(-1)?.runs[0]?.state).toBe("starting");
+
+      yield* TestClock.adjust("60 seconds");
       const failure = yield* Fiber.join(starting).pipe(Effect.flip);
       expect(failure).toMatchObject({
         _tag: "SubagentProcessError",
         operation: "await RPC response from",
       });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("retries one transient Claude initialization failure before prompting", () => {
+    const fake = fakeChildLayer(Effect.void, { dropInitialStateAttempts: 1 });
+    const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const starting = yield* service
+        .start(request({ backend: "claude-cli", model: "sonnet", name: "retry-claude" }))
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () => fake.controls[0]?.commands.some((command) => command.type === "get_state") ?? false,
+      );
+      expect(fake.controls[0]?.commands.some((command) => command.type === "prompt")).toBe(false);
+
+      yield* TestClock.adjust("60 seconds");
+      yield* TestClock.adjust("250 millis");
+      const started = yield* Fiber.join(starting);
+      expect(started.state).toBe("running");
+      expect(fake.controls).toHaveLength(2);
+      expect(fake.controls[1]?.commands.map((command) => command.type)).toEqual([
+        "get_state",
+        "prompt",
+      ]);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -415,10 +603,36 @@ describe("SubagentService", () => {
 
       const resumed = yield* service.resume(run.id, "Check one more thing.");
       expect(resumed.state).toBe("running");
-      expect(fake.controls[0]?.commands.at(-1)).toMatchObject({
+      expect(fake.controls[1]?.launch.resumeSessionId).toBe("child-session");
+      expect(fake.controls[1]?.commands.at(-1)).toMatchObject({
         type: "prompt",
         message: "Check one more thing.",
       });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("clips an oversized Claude final result instead of failing the run", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({ backend: "claude-cli", model: "sonnet", name: "large-result" }),
+      );
+      fake.controls[0]?.offerClaude({
+        type: "result",
+        subtype: "success",
+        result: "x".repeat(1024 * 1024 + 1),
+        usage: { input_tokens: "future-shape" },
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      const completed = yield* service.status(run.id);
+      expect(completed.finalText?.length).toBe(32 * 1024 + 1);
+      expect(completed.finalText?.endsWith("…")).toBe(true);
+      expect(completed.usage.totalTokens).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -474,11 +688,84 @@ describe("SubagentService", () => {
 
         fake.controls[0]?.offerClaude({
           type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed_warning",
+            rateLimitType: "five_hour",
+            utilization: 0.89,
+            resetsAt: 7_200,
+          },
+        });
+        yield* yieldUntil(() =>
+          Boolean(projections.at(-1)?.runs[0]?.warning?.includes("89% used")),
+        );
+        expect(notifications.filter((value) => value.type === "warning")).toHaveLength(1);
+
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed_warning",
+            rateLimitType: "five_hour",
+            utilization: 0.91,
+            resetsAt: 7_200,
+          },
+        });
+        yield* yieldUntil(
+          () => notifications.filter((value) => value.type === "warning").length === 2,
+        );
+
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed_warning",
+            rateLimitType: "five_hour",
+            utilization: 0.94,
+            resetsAt: 7_200,
+          },
+        });
+        yield* yieldUntil(() =>
+          Boolean(projections.at(-1)?.runs[0]?.warning?.includes("94% used")),
+        );
+        expect(notifications.filter((value) => value.type === "warning")).toHaveLength(2);
+
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed_warning",
+            rateLimitType: "five_hour",
+            utilization: 0.96,
+            resetsAt: 7_200,
+          },
+        });
+        yield* yieldUntil(
+          () => notifications.filter((value) => value.type === "warning").length === 3,
+        );
+
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed_warning",
+            rateLimitType: "five_hour",
+            utilization: 0.85,
+            resetsAt: 10_800,
+          },
+        });
+        yield* yieldUntil(
+          () => notifications.filter((value) => value.type === "warning").length === 4,
+        );
+
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
           rate_limit_info: { status: "rejected", rateLimitType: "five_hour" },
         });
         yield* yieldUntil(() =>
           Boolean(projections.at(-1)?.runs[0]?.warning?.includes("was rejected")),
         );
+        expect(notifications.filter((value) => value.type === "warning")).toHaveLength(5);
+        expect(
+          (yield* service.status(run.id)).sessionEvents.filter(
+            (event) => event.type === "notice" && event.kind === "warning",
+          ),
+        ).toHaveLength(5);
         fake.controls[0]?.offerClaude({
           type: "rate_limit_event",
           rate_limit_info: { status: "allowed", rateLimitType: "five_hour" },
@@ -492,9 +779,11 @@ describe("SubagentService", () => {
 
   it.effect("waits briefly for a Claude result before failing a rejected limit", () => {
     const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
     const projections: SubagentProjection[] = [];
     const layer = SubagentService.layer({
       publish: (projection) => projections.push(projection),
+      notify: (notification) => notifications.push(notification),
     }).pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
       const service = yield* SubagentService;
@@ -529,6 +818,7 @@ describe("SubagentService", () => {
       const failed = yield* service.status(run.id);
       expect(failed.error).toBe("You've hit your Opus limit.");
       expect(failed.usage).toMatchObject({ input: 3, output: 1, totalTokens: 4 });
+      expect(notifications.filter((value) => value.type === "warning")).toHaveLength(1);
       expect(fake.controls[0]?.terminations).toEqual(["force"]);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
@@ -710,6 +1000,51 @@ describe("SubagentService", () => {
       const paused = yield* service.interrupt(run.id);
       expect(paused.state).toBe("paused");
       expect((yield* Fiber.join(waiting)).state).toBe("paused");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("finishes an accepted interrupt after its requesting fiber is cancelled", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "cancelled-interrupt-request" }));
+      const gate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextSend("abort", gate);
+      const interrupting = yield* service.interrupt(run.id).pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () => fake.controls[0]?.commands.some((command) => command.type === "abort") ?? false,
+      );
+      yield* Fiber.interrupt(interrupting);
+      yield* Deferred.succeed(gate, undefined);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "paused");
+      expect((yield* service.status(run.id)).state).toBe("paused");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("finishes an accepted resume after its requesting fiber is cancelled", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "cancelled-resume-request" }));
+      expect((yield* service.interrupt(run.id)).state).toBe("paused");
+
+      const gate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextSend("prompt", gate);
+      const resuming = yield* service.resume(run.id, "Continue safely.").pipe(Effect.forkScoped);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "starting");
+      yield* Fiber.interrupt(resuming);
+      yield* Deferred.succeed(gate, undefined);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
+      const resumed = yield* service.status(run.id);
+      expect(resumed.transcript).toContain("parent resumed: Continue safely.");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -945,7 +1280,9 @@ describe("SubagentService", () => {
   });
 
   it.effect("keeps a failed resume terminal and redacts the RPC error", () => {
-    const fake = fakeChildLayer();
+    const fake = fakeChildLayer(Effect.void, {
+      initialFailures: [{ spawnIndex: 1, type: "prompt", error: "token=secret-value" }],
+    });
     const projections: SubagentProjection[] = [];
     const layer = SubagentService.layer({
       publish: (projection) => projections.push(projection),
@@ -962,7 +1299,6 @@ describe("SubagentService", () => {
       });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-      fake.controls[0]?.failNext("prompt", "token=secret-value");
 
       const failure = yield* Effect.flip(service.resume(run.id, "Continue"));
       expect(failure.message).toContain("[REDACTED]");
@@ -970,7 +1306,7 @@ describe("SubagentService", () => {
       const failed = yield* service.status(run.id);
       expect(failed.state).toBe("failed");
       expect(failed.finalText).toBe("Preserved report.");
-      expect(fake.controls[0]?.terminations).toContain("force");
+      expect(fake.controls[1]?.terminations).toContain("force");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -1012,6 +1348,25 @@ describe("SubagentService", () => {
         request({ name: "writer-two", writeIntent: "writer", task: "Implement tests" }),
       );
       expect(second.state).toBe("running");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("releases writer ownership even when child scope cleanup defects", () => {
+    const fake = fakeChildLayer(Effect.void, { releaseDefect: true });
+    const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const first = yield* service.start(
+        request({ name: "defective-writer", writeIntent: "writer" }),
+      );
+      expect((yield* service.stop(first.id)).state).toBe("stopped");
+      expect(fake.controls[0]?.released()).toBe(1);
+
+      const second = yield* service.start(
+        request({ name: "replacement-writer", writeIntent: "writer" }),
+      );
+      expect(second.state).toBe("running");
+      expect((yield* service.stop(second.id)).state).toBe("stopped");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

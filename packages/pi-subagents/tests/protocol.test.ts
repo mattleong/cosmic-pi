@@ -9,6 +9,7 @@ import {
   decodeContactParentEnvelope,
   decodeRpcEnvelope,
   decodeRpcStateData,
+  rpcStateModelId,
 } from "../src/run/protocol.ts";
 
 describe("child protocol", () => {
@@ -75,6 +76,20 @@ describe("child protocol", () => {
       }),
     );
     expect(state.sessionFile).toBe("/tmp/child.jsonl");
+
+    const piState = await Effect.runPromise(
+      decodeRpcStateData({
+        sessionId: "pi-child",
+        thinkingLevel: "xhigh",
+        model: {
+          provider: "openai-codex",
+          id: "gpt-5.6-sol",
+          name: "GPT 5.6 Sol",
+          reasoning: true,
+        },
+      }),
+    );
+    expect(rpcStateModelId(piState.model)).toBe("openai-codex/gpt-5.6-sol");
 
     const message = await Effect.runPromise(
       decodeAssistantMessage({

@@ -1,4 +1,6 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+// Promise assertions are test-runner boundaries.
+// @effect-diagnostics effect/asyncFunction:off
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
 
@@ -19,5 +21,37 @@ describe("subagent Pi registration", () => {
     expect(tools).toEqual([]);
     expect(commands).toEqual(["subagents"]);
     expect(events).toEqual(["session_start", "turn_end", "session_tree", "session_shutdown"]);
+  });
+
+  it("fails activation visibly when subagent tool registration throws", async () => {
+    const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+    const notify = vi.fn();
+    const pi = {
+      registerTool: vi.fn(() => {
+        throw new Error("stale extension handle");
+      }),
+      registerCommand: vi.fn(),
+      on: vi.fn((name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
+        handlers.set(name, handler);
+      }),
+      sendMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+    registerSubagentApplication(pi);
+
+    const sessionStart = handlers.get("session_start");
+    expect(sessionStart).toBeTypeOf("function");
+    await sessionStart?.({}, {
+      cwd: process.cwd(),
+      signal: undefined,
+      hasUI: true,
+      mode: "tui",
+      isProjectTrusted: () => true,
+      ui: { notify },
+    } as unknown as ExtensionContext);
+
+    expect(notify).toHaveBeenCalledWith(
+      "Subagents failed to activate because tool registration failed.",
+      "error",
+    );
   });
 });

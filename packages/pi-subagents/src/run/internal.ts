@@ -1,13 +1,14 @@
 import type * as Deferred from "effect/Deferred";
 import type * as Scope from "effect/Scope";
-import type { ChildProcessHandle } from "../boundary/child-process.ts";
+import type { ChildLaunchRequest, ChildProcessHandle } from "../boundary/child-process.ts";
 import type { SubagentError } from "./errors.ts";
 import type { SubagentRunView } from "./model.ts";
 import type { RpcResponse } from "./protocol.ts";
 
 export interface RunRecord {
   view: SubagentRunView;
-  readonly scope: Scope.Closeable;
+  scope: Scope.Closeable;
+  launch: ChildLaunchRequest;
   process?: ChildProcessHandle | undefined;
   readonly responses: Map<string, Deferred.Deferred<RpcResponse, SubagentError>>;
   readonly activeTools: Map<string, string>;
@@ -25,5 +26,10 @@ export interface RunRecord {
   warningTurnTriggered: boolean;
   rateLimitGeneration: number;
   rateLimitRejected: boolean;
+  rateLimitRejectionNotified: boolean;
   rateLimitWarning?: string | undefined;
+  readonly rateLimitNotices: Map<
+    string,
+    { resetsAt?: number | undefined; highestThreshold: number; rejectionNotified: boolean }
+  >;
 }

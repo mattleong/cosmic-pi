@@ -53,6 +53,13 @@ describe("subagent child process boundary", () => {
     );
     const writerTools = writerArgs[writerArgs.indexOf("--tools") + 1]?.split(",") ?? [];
     expect(writerTools).toEqual(expect.arrayContaining(["Read", "Edit", "Write", "Bash"]));
+
+    const resumeArgs = buildClaudeCliArgs(
+      { ...request, resumeSessionId: "550e8400-e29b-41d4-a716-446655440000" },
+      "ignored-fresh-session-id",
+    );
+    expect(resumeArgs).toContain("--resume");
+    expect(resumeArgs).not.toContain("--session-id");
   });
 
   it.effect("bounds a cooperative abort when stdin never drains", () =>
