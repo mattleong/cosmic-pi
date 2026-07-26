@@ -12,7 +12,7 @@
 - `src/boundary/host-ui.ts` — exception-safe Pi status projection.
 - `src/job/` — job model, typed errors, bounded logs, projection, and scoped service owner.
 - `src/tools/` — `background_terminal` registration and pure rendering, decorated through the public `pi-code-previews` cooperative shell.
-- `src/ui/` — pure full-screen `/ps` presentation, interaction, and terminal-text sanitization.
+- `src/ui/` — pure full-screen `/ps` presentation, interaction, terminal-text sanitization, and collapsed/expanded tool log previews.
 
 ## Ownership
 

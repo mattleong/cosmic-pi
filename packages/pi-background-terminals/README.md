@@ -6,7 +6,7 @@ The main agent uses one `background_terminal` tool to decide when work should ru
 
 Use `/ps` to open the full-screen human process manager. It shows live bounded logs and permits explicit stop or clear actions, but does not provide a command-entry field.
 
-`background_terminal` tool calls use the `pi-code-previews` cooperative shell, including its configured background or border treatment and tool-call timing. Trusted project preview settings are loaded before the tool is registered for a session.
+`background_terminal` tool calls use the `pi-code-previews` cooperative shell, including its configured background or border treatment and tool-call timing. Log results show a 12-line head/tail preview by default; use `Ctrl+O` (or the configured `app.tools.expand` binding) to reveal the full fetched output. Trusted project preview settings are loaded before the tool is registered for a session.
 
 ## Lifecycle
 

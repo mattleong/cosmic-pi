@@ -8,7 +8,7 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { Text } from "@earendil-works/pi-tui";
+import { getKeybindings, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import { withCodePreviewShell } from "pi-code-previews";
@@ -16,6 +16,7 @@ import { Type, type Static } from "typebox";
 import { BackgroundTerminalService, type BackgroundJobFilter } from "../job/service.ts";
 import { InvalidBackgroundCommandError } from "../job/errors.ts";
 import type { BackgroundJobSnapshot, BackgroundLogSlice } from "../job/model.ts";
+import { selectBackgroundLogPreview } from "../ui/log-preview.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 
 const ACTIONS = ["start", "list", "status", "logs", "stop", "stop_all", "clear"] as const;
@@ -234,6 +235,16 @@ export function registerBackgroundTerminalTool(
           .join("\n"),
       );
       const details = result.details as BackgroundTerminalToolDetails | undefined;
+      let collapsedLogFooter: string | undefined;
+      if (details?.action === "logs") {
+        const preview = selectBackgroundLogPreview(text, expanded);
+        text = preview.text;
+        if (preview.hidden > 0) {
+          const expandKeys = getKeybindings().getKeys("app.tools.expand").join("/");
+          const expandHint = expandKeys ? `${expandKeys} expand` : "expand";
+          collapsedLogFooter = `Showing ${preview.shown} of ${preview.total} log lines · ${expandHint}`;
+        }
+      }
       if (expanded && details?.snapshot) {
         const snapshot = details.snapshot;
         text += `\n${sanitizeTerminalLine(snapshot.cwd)}${snapshot.pid ? ` · pid ${snapshot.pid}` : ""}`;
@@ -244,11 +255,12 @@ export function registerBackgroundTerminalTool(
       if (expanded && details?.logs) {
         text += `\nnext cursor ${details.logs.nextCursor} · earliest ${details.logs.earliestAvailableCursor}`;
       }
-      return new Text(
-        theme.fg(isPartial ? "warning" : "toolOutput", text || (isPartial ? "Working…" : "Done")),
-        0,
-        0,
+      let rendered = theme.fg(
+        isPartial ? "warning" : "toolOutput",
+        text || (isPartial ? "Working…" : "Done"),
       );
+      if (collapsedLogFooter) rendered += `\n${theme.fg("muted", `╰─ ${collapsedLogFooter}`)}`;
+      return new Text(rendered, 0, 0);
     },
   });
   pi.registerTool(withCodePreviewShell(tool));
