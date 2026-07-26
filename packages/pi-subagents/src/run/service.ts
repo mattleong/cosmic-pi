@@ -104,6 +104,11 @@ const rateLimitMessage = (event: ChildRateLimitEvent, now: number): string => {
   const reset = rateLimitResetText(event.resetsAt, now);
   if (event.isUsingOverage)
     return `Claude exhausted its ${rateLimitAllowance(event.rateLimitType)}${utilization}${reset}; continuing with paid overage.`;
+  if (
+    event.status === "rejected" &&
+    (event.overageStatus === "allowed" || event.overageStatus === "allowed_warning")
+  )
+    return `Claude exhausted its ${rateLimitAllowance(event.rateLimitType)}${utilization}${reset}; paid overage is available.`;
   const overageUnavailable =
     event.overageStatus === "rejected"
       ? `; paid overage unavailable${event.overageDisabledReason ? ` (${event.overageDisabledReason.replaceAll("_", " ")})` : ""}`
@@ -480,7 +485,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const message = event.status === "allowed" ? undefined : rateLimitMessage(event, now);
-      const rejected = event.status === "rejected" && event.isUsingOverage !== true;
+      const rejected =
+        event.status === "rejected" &&
+        event.isUsingOverage !== true &&
+        event.overageStatus === "rejected";
       const update = yield* withLock(
         Effect.sync(() => {
           const generation = ++record.rateLimitGeneration;
@@ -511,10 +519,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           if (event.isUsingOverage) {
             notifyParent = !notice.overageNotified;
             notice.overageNotified = true;
-          } else if (rejected) {
+          } else if (event.status === "rejected") {
             notifyParent = !notice.rejectionNotified;
             notice.rejectionNotified = true;
-            if (notifyParent) record.rateLimitRejectionNotified = true;
+            if (notifyParent && rejected) record.rateLimitRejectionNotified = true;
           } else if (
             event.status === "allowed_warning" &&
             event.utilization !== undefined &&

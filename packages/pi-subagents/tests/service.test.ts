@@ -832,6 +832,72 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("keeps Claude running when paid usage credits are available", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+      notify: (notification) => notifications.push(notification),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({ backend: "claude-cli", model: "sonnet", name: "claude-credits" }),
+      );
+      fake.controls[0]?.offerClaude({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "five_hour",
+          resetsAt: 3_600,
+          overageStatus: "allowed",
+          isUsingOverage: false,
+        },
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
+
+      const warning = yield* service.status(run.id);
+      expect(warning.warning).toBe(
+        "Claude exhausted its five hour allowance; resets in 1h; paid overage is available.",
+      );
+      expect(notifications).toContainEqual({
+        type: "warning",
+        id: run.id,
+        name: "claude-credits",
+        message: warning.warning,
+        triggerTurn: false,
+      });
+
+      yield* TestClock.adjust("2 seconds");
+      expect((yield* service.status(run.id)).state).toBe("running");
+      expect(fake.controls[0]?.terminations).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("defers ambiguous Claude limit events to the authoritative result", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({ backend: "claude-cli", model: "sonnet", name: "claude-ambiguous-limit" }),
+      );
+      fake.controls[0]?.offerClaude({
+        type: "rate_limit_event",
+        rate_limit_info: { status: "rejected", rateLimitType: "five_hour" },
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
+      yield* TestClock.adjust("2 seconds");
+
+      expect((yield* service.status(run.id)).state).toBe("running");
+      expect(fake.controls[0]?.terminations).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("waits briefly for a Claude result before failing a rejected limit", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
