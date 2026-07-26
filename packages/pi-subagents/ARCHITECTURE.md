@@ -46,7 +46,7 @@ The service owns revision-driven fleet waiters, completion claims, acknowledgeme
 
 ### UI and projection ownership
 
-The UI and host notifications consume immutable projections. Await progress carries immutable run snapshots in tool details so its renderer can color each agent name with the same state palette as the fleet inspector. They never own child sessions or processes. Session startup activates no runtime when cooperative tool registration throws; it shuts down the slot and emits one bounded host error notification instead of exposing a partially active command/UI-only extension.
+The UI and host notifications consume immutable projections. Await progress and completed start/await cards carry immutable run snapshots in tool details. The renderer uses the fleet state palette, projects collapsed cards to name/model/effort/status, and reveals bounded final reports only when expanded; model-facing tool content retains the full report for completion acknowledgement. They never own child sessions or processes. Session startup activates no runtime when cooperative tool registration throws; it shuts down the slot and emits one bounded host error notification instead of exposing a partially active command/UI-only extension.
 
 ## Write coordination
 

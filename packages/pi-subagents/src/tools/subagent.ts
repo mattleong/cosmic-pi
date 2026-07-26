@@ -21,7 +21,6 @@ import {
   type SubagentModelView,
   type SubagentRunView,
 } from "../run/model.ts";
-import { synchronousNow } from "../boundary/native-clock.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import {
   SubagentService,
@@ -31,7 +30,6 @@ import {
 import { MAX_TASK_CHARS, safeTextPrefix } from "../run/state.ts";
 import { runStateColor, runStateGlyph } from "../ui/run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
-import { renderSubagentSessionOutput } from "./renderers/session-output.ts";
 
 const ACTIONS = [
   "start",
@@ -524,6 +522,43 @@ export const renderAwaitProgress = (
     }),
   ].join("\n");
 
+const renderCompactRunSummaries = (runs: ReadonlyArray<SubagentRunView>, theme: Theme): string =>
+  runs
+    .map((run) => {
+      const color = runStateColor(run.state);
+      const name = sanitizeTerminalLine(run.name);
+      const model = sanitizeTerminalLine(run.model);
+      const effort = sanitizeTerminalLine(run.effort);
+      const state = sanitizeTerminalLine(run.state);
+      return `${theme.fg(color, `${runStateGlyph(run.state)} ${name}`)} · ${theme.fg("toolOutput", model)} · ${theme.fg("dim", `effort: ${effort}`)} · ${theme.fg(color, state)}`;
+    })
+    .join("\n");
+
+const expandedRunReports = (runs: ReadonlyArray<SubagentRunView>): string => {
+  const sections = runs.flatMap((run) => {
+    const name = sanitizeTerminalLine(run.name);
+    if (run.finalText) return [`Final report — ${name}\n${sanitizeTerminalText(run.finalText)}`];
+    if (run.error) return [`Failure — ${name}\n${sanitizeTerminalText(run.error)}`];
+    return [];
+  });
+  if (sections.length === 0) return "";
+  const text = sections.join("\n\n");
+  if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
+  const marker = "\n… [final reports truncated]";
+  return `${safeTextPrefix(text, MAX_TOOL_OUTPUT_CHARS - marker.length)}${marker}`;
+};
+
+export const renderStartAwaitResult = (
+  runs: ReadonlyArray<SubagentRunView>,
+  expanded: boolean,
+  theme: Theme,
+): string => {
+  const summaries = renderCompactRunSummaries(runs, theme);
+  if (!expanded) return summaries;
+  const reports = expandedRunReports(runs);
+  return reports ? `${summaries}\n\n${theme.fg("toolOutput", reports)}` : summaries;
+};
+
 const managementAcknowledgement = (
   action: SubagentToolInput["action"],
   runs: ReadonlyArray<SubagentRunView>,
@@ -768,7 +803,9 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
               runs,
               ...(startFailures.length > 0 ? { startFailures } : {}),
             }
-          : { action: input.action, ...(timedOut ? { timedOut: true } : {}) };
+          : input.action === "await"
+            ? { action: input.action, runs, ...(timedOut ? { timedOut: true } : {}) }
+            : { action: input.action, ...(timedOut ? { timedOut: true } : {}) };
       const text =
         input.action === "start"
           ? formatStartResult(runs, startFailures)
@@ -808,15 +845,12 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
       if (isPartial && details?.action === "await" && details.runs && details.awaitUntil)
         return new Text(renderAwaitProgress(details.runs, details.awaitUntil, theme), 0, 0);
       if (
-        expanded &&
         !isPartial &&
-        details?.action === "start" &&
-        details.runs?.length === 1 &&
+        (details?.action === "start" || details?.action === "await") &&
+        details.runs?.length &&
         !details.startFailures?.length
-      ) {
-        const run = details.runs[0];
-        if (run) return renderSubagentSessionOutput(run, theme, { now: synchronousNow() });
-      }
+      )
+        return new Text(renderStartAwaitResult(details.runs, expanded, theme), 0, 0);
       let text = sanitizeTerminalText(
         result.content
           .filter((part) => part.type === "text")

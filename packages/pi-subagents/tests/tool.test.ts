@@ -10,6 +10,7 @@ import { SubagentService, type SubagentServiceShape } from "../src/run/service.t
 import {
   registerSubagentTool,
   renderAwaitProgress,
+  renderStartAwaitResult,
   type SubagentToolInput,
 } from "../src/tools/subagent.ts";
 
@@ -131,6 +132,30 @@ describe("subagent tool", () => {
     expect(rendered).toContain("<warning>? waiting-agent</warning>");
     expect(rendered).toContain("<error>× failed-agent</error>");
     expect(rendered).toContain("<muted>■ stopped-agent</muted>");
+  });
+
+  it("keeps completed start and await cards compact until expanded", () => {
+    const theme = {
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+    } as unknown as Theme;
+    const run = view({
+      id: "agent-secret-id",
+      name: "review-agent",
+      model: "openai-codex/gpt-5.6-sol",
+      effort: "high",
+      state: "completed",
+      finalText: "## Findings\nEverything passed.",
+    });
+
+    const compact = renderStartAwaitResult([run], false, theme);
+    expect(compact).toBe(
+      "<success>✓ review-agent</success> · <toolOutput>openai-codex/gpt-5.6-sol</toolOutput> · <dim>effort: high</dim> · <success>completed</success>",
+    );
+
+    const expanded = renderStartAwaitResult([run], true, theme);
+    expect(expanded).toContain("Final report — review-agent");
+    expect(expanded).toContain("## Findings\nEverything passed.");
+    expect(expanded).not.toContain("agent-secret-id");
   });
 
   it("uses fresh/background defaults, inherits model effort, and strips recursive tools", async () => {
@@ -646,7 +671,10 @@ describe("subagent tool", () => {
     ]);
     expect(awaited?.content[0]?.text).toContain("First report.");
     expect(awaited?.content[0]?.text).toContain("Second report.");
-    expect(awaited?.details).toEqual({ action: "await" });
+    expect(awaited?.details).toMatchObject({
+      action: "await",
+      runs: [{ id: "agent-1" }, { id: "agent-2" }],
+    });
 
     const sentResult = await tool?.execute(
       "call",
