@@ -82,7 +82,7 @@ const StartSpecParameters = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        "Pi provider/model, or Claude alias/full ID. Pi inherits the parent; Claude defaults to sonnet.",
+        "Pi provider/model, or Claude alias/full ID (for example fable, sonnet, opus, or haiku). Pi inherits the parent; Claude defaults to sonnet.",
     }),
   ),
   effort: Type.Optional(
@@ -140,7 +140,11 @@ const SubagentToolParameters = Type.Object({
       maxLength: MAX_PARENT_MESSAGE_CHARS,
     }),
   ),
-  query: Type.Optional(Type.String({ description: "Optional model search text." })),
+  query: Type.Optional(
+    Type.String({
+      description: "Optional model search text; whitespace-separated terms match independently.",
+    }),
+  ),
 });
 
 export type SubagentStartSpec = Static<typeof StartSpecParameters>;
@@ -469,7 +473,7 @@ function availableModels(
   input: SubagentToolInput,
   ctx: ExtensionContext,
 ): ReadonlyArray<SubagentModelView> {
-  const query = input.query?.trim().toLowerCase();
+  const queryTerms = input.query?.trim().toLowerCase().split(/\s+/).filter(Boolean) ?? [];
   const piModels: ReadonlyArray<SubagentModelView> = ctx.modelRegistry
     .getAvailable()
     .map((model) => ({
@@ -479,6 +483,7 @@ function availableModels(
       reasoning: model.reasoning,
     }));
   const claudeModels: ReadonlyArray<SubagentModelView> = [
+    { backend: "claude-cli", id: "fable", name: "Claude Fable", reasoning: true },
     { backend: "claude-cli", id: "sonnet", name: "Claude Sonnet", reasoning: true },
     { backend: "claude-cli", id: "opus", name: "Claude Opus", reasoning: true },
     { backend: "claude-cli", id: "haiku", name: "Claude Haiku", reasoning: true },
@@ -487,10 +492,11 @@ function availableModels(
     ...(input.backend === "claude-cli" ? [] : piModels),
     ...(input.backend === "pi" ? [] : claudeModels),
   ]
-    .filter(
-      (model) =>
-        !query || `${model.backend} ${model.id} ${model.name}`.toLowerCase().includes(query),
-    )
+    .filter((model) => {
+      if (queryTerms.length === 0) return true;
+      const searchable = `${model.backend} ${model.id} ${model.name}`.toLowerCase();
+      return queryTerms.some((term) => searchable.includes(term));
+    })
     .slice(0, 100);
 }
 

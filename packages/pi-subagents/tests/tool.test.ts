@@ -920,12 +920,13 @@ describe("subagent tool", () => {
 
     const models = await tool?.execute(
       "call",
-      { action: "models", query: "sol" },
+      { action: "models", query: "fable sol" },
       undefined,
       undefined,
       context,
     );
     expect(models?.content[0]?.text).toContain("openai-codex/gpt-5.6-sol");
+    expect(models?.content[0]?.text).toContain("claude-cli/fable");
 
     await expect(
       tool?.execute(
