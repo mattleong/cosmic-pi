@@ -118,7 +118,7 @@ const SubagentToolParameters = Type.Object({
     Type.Array(Type.String(), {
       description: "Target run IDs for await, batch status, or batch send.",
       minItems: 1,
-      maxItems: 8,
+      maxItems: MAX_TARGET_RUNS,
     }),
   ),
   until: Type.Optional(
@@ -880,12 +880,12 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
     name: "subagent",
     label: "Subagent",
     description:
-      "Start one or up to eight session-scoped subagents per call and manage foreground or background runs. Use await to collect background results without polling.",
+      "Start one or up to twelve session-scoped subagents per call and manage foreground or background runs. Use await to collect background results without polling.",
     promptSnippet:
       "Start and manage named foreground/background subagents, including per-agent batch launches, with explicit model, effort, context, and write intent",
     promptGuidelines: [
       "Use subagent for delegated work that can proceed independently; background is the default launch mode.",
-      "For parallel launch, action=start accepts a starts array of up to eight per-agent specifications; successful launches remain active if another item fails.",
+      "For parallel launch, action=start accepts a starts array of up to twelve per-agent specifications; successful launches remain active if another item fails.",
       "Every subagent start must explicitly declare writeIntent as writer or read-only.",
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
       "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",

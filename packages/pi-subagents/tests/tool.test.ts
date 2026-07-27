@@ -464,7 +464,7 @@ describe("subagent tool", () => {
     });
   });
 
-  it("accepts exactly eight batch starts at the runtime boundary", async () => {
+  it("accepts exactly twelve batch starts at the runtime boundary", async () => {
     const requests: StartSubagentRequest[] = [];
     const service = {
       start: (input: StartSubagentRequest) =>
@@ -490,7 +490,7 @@ describe("subagent tool", () => {
       "call",
       {
         action: "start",
-        starts: Array.from({ length: 8 }, (_, index) => ({
+        starts: Array.from({ length: 12 }, (_, index) => ({
           task: `Review area ${index + 1}`,
           backend: "pi" as const,
           writeIntent: "read-only" as const,
@@ -501,11 +501,11 @@ describe("subagent tool", () => {
       context,
     );
 
-    expect(requests).toHaveLength(8);
+    expect(requests).toHaveLength(12);
     const details = result?.details as
       | { readonly runs?: ReadonlyArray<SubagentRunView> }
       | undefined;
-    expect(details?.runs).toHaveLength(8);
+    expect(details?.runs).toHaveLength(12);
   });
 
   it("rejects invalid batch cardinality and mixing singular start fields", async () => {
@@ -527,13 +527,13 @@ describe("subagent tool", () => {
 
     await expect(
       tool?.execute("call", { action: "start", starts: [] }, undefined, undefined, context),
-    ).rejects.toThrow("requires between 1 and 8 starts");
+    ).rejects.toThrow("requires between 1 and 12 starts");
     await expect(
       tool?.execute(
         "call",
         {
           action: "start",
-          starts: Array.from({ length: 9 }, (_, index) => ({
+          starts: Array.from({ length: 13 }, (_, index) => ({
             task: `Review area ${index + 1}`,
             backend: "pi" as const,
             writeIntent: "read-only" as const,
@@ -543,7 +543,7 @@ describe("subagent tool", () => {
         undefined,
         context,
       ),
-    ).rejects.toThrow("requires between 1 and 8 starts");
+    ).rejects.toThrow("requires between 1 and 12 starts");
     await expect(
       tool?.execute(
         "call",
@@ -820,7 +820,7 @@ describe("subagent tool", () => {
   });
 
   it("enforces the combined target count and aggregate detailed-output budget", async () => {
-    const runs = Array.from({ length: 9 }, (_, index) =>
+    const runs = Array.from({ length: 13 }, (_, index) =>
       view({
         id: `agent-${index + 1}`,
         name: `review-${index + 1}`,
@@ -877,18 +877,18 @@ describe("subagent tool", () => {
         undefined,
         context,
       ),
-    ).rejects.toThrow("at most 8 targets");
+    ).rejects.toThrow("at most 12 targets");
 
     const result = await tool?.execute(
       "call",
-      { action: "status", runIds: runs.slice(0, 8).map((run) => run.id) },
+      { action: "status", runIds: runs.slice(0, 12).map((run) => run.id) },
       undefined,
       undefined,
       context,
     );
     const text = result?.content[0]?.text ?? "";
     expect(text.length).toBeLessThanOrEqual(48_000);
-    for (const run of runs.slice(0, 8)) expect(text).toContain(run.id);
+    for (const run of runs.slice(0, 12)) expect(text).toContain(run.id);
     expect(text).toContain("[run output truncated]");
     expect(consumed).toEqual([]);
 
