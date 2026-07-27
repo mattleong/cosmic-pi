@@ -4,15 +4,17 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import {
-  makeRefreshCoordinator,
   makeRefreshCoordinatorWith,
+  mergeRefreshRequest,
   type RefreshRequest,
 } from "../src/coordination/refresh-coordinator.ts";
 
 describe("RefreshCoordinator", () => {
   it.effect("coalesces force and notify into one follow-up", () =>
     Effect.gen(function* () {
-      const coordinator = yield* makeRefreshCoordinator<string>();
+      const coordinator = yield* makeRefreshCoordinatorWith<RefreshRequest, string>(
+        mergeRefreshRequest,
+      );
       const started = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const requests: RefreshRequest[] = [];
@@ -91,7 +93,9 @@ describe("RefreshCoordinator", () => {
 
   it.effect("replays typed owner failure to every waiter and permits retry", () =>
     Effect.gen(function* () {
-      const coordinator = yield* makeRefreshCoordinator<string>();
+      const coordinator = yield* makeRefreshCoordinatorWith<RefreshRequest, string>(
+        mergeRefreshRequest,
+      );
       const started = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       let calls = 0;
@@ -121,7 +125,7 @@ describe("RefreshCoordinator", () => {
 
   it.effect("replays interruption and does not run queued follow-up", () =>
     Effect.gen(function* () {
-      const coordinator = yield* makeRefreshCoordinator();
+      const coordinator = yield* makeRefreshCoordinatorWith<RefreshRequest>(mergeRefreshRequest);
       const started = yield* Deferred.make<void>();
       let calls = 0;
       const operation = () =>

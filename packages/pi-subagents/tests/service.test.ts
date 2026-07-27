@@ -1370,7 +1370,12 @@ describe("SubagentService", () => {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "observed-report" }));
       const waiting = yield* service
-        .awaitTerminalObserved([run.id], "all_finished", (runs) => updates.push(runs))
+        .withAwaitTerminalObservations(
+          [run.id],
+          "all_finished",
+          (runs) => updates.push(runs),
+          Effect.succeed,
+        )
         .pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);
       fake.controls[0]?.offer({ type: "agent_settled" });

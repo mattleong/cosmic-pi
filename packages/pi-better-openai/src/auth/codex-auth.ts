@@ -115,16 +115,6 @@ export const readCodexAuthResult = Effect.fn("CodexAuth.readAuthResult")(functio
   } as const;
 });
 
-export const readCodexAuth = Effect.fn("CodexAuth.readAuth")(function* (authPath: string) {
-  const result = yield* readCodexAuthResult(authPath);
-  if (result._tag === "Found") {
-    const { source: _source, ...credentials } = result.credentials;
-    return credentials;
-  }
-  if (result._tag === "Missing") return undefined;
-  return yield* new CodexAuthError({ operation: result.operation, message: result.message });
-});
-
 export const getCodexCredentialsResult = Effect.fn("CodexAuth.getCredentialsResult")(function* (
   authPath: string,
   ctx: Pick<ExtensionContext, "modelRegistry">,

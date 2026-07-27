@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
-import { runPlatformEffect } from "../boundary/node-platform";
+import { runCodePreviewSessionEffect } from "../application/capability";
 import { codePreviewPerformanceConfig } from "../config/env";
 import { resolvePreviewPath } from "../paths/resolve";
 import { formatBytes } from "../shared/helpers";
@@ -71,7 +71,7 @@ export function readExistingFileForPreview(
   cwd: string,
   nextContent = "",
 ): Promise<ExistingFilePreview | undefined> {
-  return runPlatformEffect(readExistingFileForPreviewEffect(path, cwd, nextContent));
+  return runCodePreviewSessionEffect(readExistingFileForPreviewEffect(path, cwd, nextContent));
 }
 
 export function getWriteDiffSkipReason(before: unknown, nextContent: string): string | undefined {

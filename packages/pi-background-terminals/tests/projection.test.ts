@@ -4,7 +4,6 @@ import { footerStatus } from "../src/job/projection.ts";
 
 const projection = (states: ReadonlyArray<"running" | "exited" | "failed">) =>
   ({
-    revision: 1,
     jobs: states.map((state, index) => ({
       id: `term-${index + 1}`,
       command: "test",

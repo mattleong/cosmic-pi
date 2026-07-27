@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
 
+export const CONFIG_BASENAME = "pi-better-xai.json";
 export const FOOTER_MODES = ["replace", "status", "off"] as const;
 export const FooterModeSchema = Schema.Literals(FOOTER_MODES);
 export type FooterMode = typeof FooterModeSchema.Type;

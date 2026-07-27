@@ -1,4 +1,12 @@
 import * as Schema from "effect/Schema";
+import {
+  IMAGE_OUTPUT_FORMATS,
+  IMAGE_SAVE_MODES,
+  type ImageOutputFormat,
+  type ImageSaveMode,
+} from "../config/schema.ts";
+
+export { IMAGE_OUTPUT_FORMATS, IMAGE_SAVE_MODES, type ImageOutputFormat, type ImageSaveMode };
 
 export const OPENAI_IMAGE_TOOL = "openai_image";
 export const OPENAI_IMAGE_COMMAND = "openai-image";
@@ -11,12 +19,8 @@ export const MAX_IMAGE_RESPONSE_BYTES = 100 * 1024 * 1024;
 export const MAX_SSE_EVENT_CHARS = 80 * 1024 * 1024;
 export const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
 export const SUPPORTED_INPUT_IMAGE_FORMATS = new Set(["png", "jpeg", "jpg", "webp", "gif"]);
-export const IMAGE_SAVE_MODES = ["none", "project", "global", "custom"] as const;
 export const IMAGE_ACTIONS = ["auto", "generate", "edit"] as const;
-export const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
-export type ImageSaveMode = (typeof IMAGE_SAVE_MODES)[number];
 export type ImageAction = (typeof IMAGE_ACTIONS)[number];
-export type ImageOutputFormat = (typeof IMAGE_OUTPUT_FORMATS)[number];
 
 const NON_WHITESPACE_PATTERN = "\\S";
 const PROMPT_MAX_LENGTH = 32_768;

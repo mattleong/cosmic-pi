@@ -121,21 +121,10 @@ describe("config helpers", () => {
 
   test("settings patches preserve unknown shapes", async () => {
     const raw = { unknown: "preserved", usage: { unknownUsage: true } };
-    const fastUpdate = await Effect.runPromise(
-      prepareSettingUpdate("fast.enabled", "true", {
-        persistState: true,
-        active: true,
-        desiredActive: true,
-      }),
-    );
-    expect(fastUpdate(raw)).toMatchObject({
-      active: true,
-      desiredActive: true,
-      unknown: "preserved",
-    });
     const usageUpdate = await Effect.runPromise(
       prepareSettingUpdate("usage.refreshIntervalMs", "15000"),
     );
+    expect(usageUpdate(raw)).toMatchObject({ unknown: "preserved" });
     expect(usageUpdate(raw).usage).toEqual({ unknownUsage: true, refreshIntervalMs: 15_000 });
   });
 });

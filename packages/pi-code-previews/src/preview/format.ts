@@ -20,11 +20,17 @@ export function selectPreviewLines<T>(
   });
 }
 
+const PREVIEW_SPLIT_MIN_LIMIT = 8;
+
+function previewSplitCounts(limit: number): { head: number; tail: number } {
+  const head = Math.ceil(limit * 0.65);
+  return { head, tail: Math.max(1, limit - head - 1) };
+}
+
 function previewWindowPlan(total: number, limit: number): PreviewWindowPlan {
   if (total <= limit || limit <= 0) return { kind: "all", shown: total, hidden: 0 };
-  if (limit < 8) return { kind: "head", shown: limit, hidden: total - limit };
-  const head = Math.ceil(limit * 0.65);
-  const tail = Math.max(1, limit - head - 1);
+  if (limit < PREVIEW_SPLIT_MIN_LIMIT) return { kind: "head", shown: limit, hidden: total - limit };
+  const { head, tail } = previewSplitCounts(limit);
   return { kind: "split", head, tail, shown: head + tail, hidden: total - head - tail };
 }
 
@@ -71,9 +77,10 @@ export function selectPreviewTextLines(
   }
 
   const entries: Array<PreviewLineEntry<string>> = [];
-  const split = limit >= 8;
-  const head = split ? Math.ceil(limit * 0.65) : limit;
-  const tailLimit = split ? Math.max(1, limit - head - 1) : 0;
+  const split = limit >= PREVIEW_SPLIT_MIN_LIMIT;
+  const counts = split ? previewSplitCounts(limit) : undefined;
+  const head = counts === undefined ? limit : counts.head;
+  const tailLimit = counts === undefined ? 0 : counts.tail;
   const tail: Array<string | undefined> = [];
   let tailSize = 0;
   let tailCursor = 0;

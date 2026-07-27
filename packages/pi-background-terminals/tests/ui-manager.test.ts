@@ -9,7 +9,6 @@ const theme = {
 } as unknown as Theme;
 
 const projection: BackgroundTerminalProjection = {
-  revision: 1,
   jobs: [
     {
       id: "term-1",
@@ -122,7 +121,6 @@ describe("/ps process manager", () => {
       bytes: 8,
     }));
     const scrolling: BackgroundTerminalProjection = {
-      revision: 2,
       jobs: [{ ...projection.jobs[0]!, logs, logCursor: 30 }],
     };
     const component = new ProcessManagerComponent({

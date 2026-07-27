@@ -47,7 +47,6 @@ export interface BackgroundJobView extends BackgroundJobSnapshot {
 }
 
 export interface BackgroundTerminalProjection {
-  readonly revision: number;
   readonly jobs: ReadonlyArray<BackgroundJobView>;
 }
 

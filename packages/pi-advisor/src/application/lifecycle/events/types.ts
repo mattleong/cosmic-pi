@@ -29,7 +29,6 @@ export interface EventsDeps {
   readonly mutateMetrics: (mutate: (next: AdvisorApplicationState["metrics"]) => void) => void;
   readonly currentConfig: () => ResolvedAdvisorConfig;
   readonly isPaused: () => boolean;
-  readonly isStarted: () => boolean;
   readonly advanceDomainCounter: (
     key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
   ) => number;
@@ -85,7 +84,6 @@ export interface EventsDeps {
     ctx: ExtensionContext,
   ) => Effect.Effect<void>;
   readonly awaitCatchUp: (handle: AdvisorCheckpointHandle, ctx: ExtensionContext) => Promise<void>;
-  readonly fingerprint: () => string;
   readonly parentAnchor: (ctx: ExtensionContext) => ParentAnchor;
   readonly publishControllerSnapshot: () => Effect.Effect<void>;
   readonly checkpointOrchestrator: CheckpointOrchestratorShape;

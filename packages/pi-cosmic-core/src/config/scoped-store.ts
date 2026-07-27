@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import { JsonDocumentStore, type JsonObject } from "../platform/json-document.ts";
+import { JsonDocumentStore } from "../platform/json-document.ts";
 
 export interface ScopedDocumentPaths {
   readonly project: string;
@@ -47,23 +47,4 @@ export const selectScopedDocument = Effect.fn("ScopedStore.select")(function* (
     globalExists,
     preferred: projectExists ? paths.project : paths.global,
   } satisfies ScopedDocumentSelection;
-});
-
-const asObject = (value: unknown): JsonObject =>
-  typeof value === "object" && value !== null && !Array.isArray(value) ? (value as JsonObject) : {};
-
-/**
- * Atomically updates one owned top-level section while retaining unknown root and sibling fields
- * from the latest on-disk document.
- */
-export const updateScopedSection = Effect.fn("ScopedStore.updateSection")(function* (
-  path: string,
-  section: string,
-  update: (current: JsonObject) => JsonObject,
-) {
-  const documents = yield* JsonDocumentStore;
-  return yield* documents.updateObject(path, (raw) => ({
-    ...raw,
-    [section]: update(asObject(raw[section])),
-  }));
 });

@@ -17,7 +17,8 @@ import {
   type ShikiHighlighter,
 } from "../../src/boundary/shiki";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
-import { disposeShikiEffect, getShikiStatus, initializeShikiEffect } from "../../src/syntax/shiki";
+import { getShikiStatus } from "../../src/syntax/render";
+import { disposeShikiEffect, initializeShikiEffect } from "../../src/syntax/shiki";
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
 
 describe("Shiki adapter lifecycle", () => {

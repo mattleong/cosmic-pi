@@ -17,7 +17,6 @@ import {
   makeSubagentLayer,
   type SubagentApplication,
   type SubagentRuntimeError,
-  type SubagentSessionInput,
 } from "../layer.ts";
 import { SubagentService } from "../run/service.ts";
 import { registerSubagentManagerCommand } from "../settings/controller.ts";
@@ -38,15 +37,15 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
   let currentContext: ExtensionContext | undefined;
 
   const slot = makePiSessionRuntimeSlot<
-    SubagentSessionInput,
+    ExtensionContext,
     SubagentApplication,
     never,
     SubagentRuntimeError
   >({
-    makeRuntime: (input) =>
+    makeRuntime: () =>
       makePiManagedRuntime(
         pi,
-        makeSubagentLayer(input, {
+        makeSubagentLayer({
           publish: bridge.publish,
           notify,
         }),
@@ -57,7 +56,7 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
         Effect.tap((projection) => Effect.sync(() => bridge.publish(projection))),
         Effect.asVoid,
       ),
-    onActivated: ({ ctx }) => {
+    onActivated: (ctx) => {
       currentContext = ctx;
       bridge.setContext(ctx);
     },
@@ -101,14 +100,7 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
           notifyToolRegistrationFailure(ctx);
           return slot.shutdown().then(() => undefined);
         }
-        return slot.start(
-          {
-            ctx,
-            cwd: captured.cwd,
-            projectTrusted,
-          },
-          captured.signal,
-        );
+        return slot.start(ctx, captured.signal);
       })
       .then(() => undefined);
   });
@@ -122,16 +114,7 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
   pi.on("session_tree", (_event, ctx) => {
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable") return slot.shutdown().then(() => undefined);
-    return slot
-      .start(
-        {
-          ctx,
-          cwd: captured.cwd,
-          projectTrusted: isProjectTrusted(ctx),
-        },
-        captured.signal,
-      )
-      .then(() => undefined);
+    return slot.start(ctx, captured.signal).then(() => undefined);
   });
 
   pi.on("session_shutdown", () => slot.shutdown());

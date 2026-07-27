@@ -11,7 +11,7 @@ import type { SubagentNotification } from "../boundary/host-notifier.ts";
 import type { SubagentError } from "./errors.ts";
 import { SubagentProcessError, SubagentProtocolError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
-import type { SubagentRunView } from "./model.ts";
+import { isTerminalRunState, type SubagentRunView } from "./model.ts";
 import {
   assistantText,
   decodeAssistantMessage,
@@ -63,6 +63,11 @@ export interface RunEventDependencies {
 }
 
 const protocolError = (message: string) => new SubagentProtocolError({ message });
+/** Stopped-by-parent, stopping, or terminal records ignore further child events. */
+const isInactiveRecord = (record: RunRecord): boolean =>
+  record.stoppedByParent ||
+  record.view.state === "stopping" ||
+  isTerminalRunState(record.view.state);
 const isRawRpcResponse = (value: unknown): boolean =>
   typeof value === "object" &&
   value !== null &&
@@ -86,8 +91,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       const now = yield* Clock.currentTimeMillis;
       const message = sanitizeDiagnosticText(envelope.message, 16 * 1024);
       if (envelope.kind === "progress") {
-        const duplicate = record.view.progress === message;
-        const view = yield* mutateView(record, (current) =>
+        yield* mutateView(record, (current) =>
           current.state === "paused"
             ? undefined
             : {
@@ -102,7 +106,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                 ),
               },
         );
-        if (!view || duplicate) return;
         return;
       }
       if (envelope.kind === "warning") {
@@ -167,14 +170,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           }
           return Effect.void;
         }
-        if (
-          record.stoppedByParent ||
-          record.view.state === "stopping" ||
-          record.view.state === "completed" ||
-          record.view.state === "failed" ||
-          record.view.state === "stopped"
-        )
-          return Effect.void;
+        if (isInactiveRecord(record)) return Effect.void;
         switch (envelope.type) {
           case "agent_start":
             return Clock.currentTimeMillis.pipe(
@@ -421,48 +417,20 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
 
   return (record: RunRecord, event: ChildWireEvent): Effect.Effect<void, SubagentError> => {
     if (event.type === "claude_message") {
-      if (
-        record.stoppedByParent ||
-        record.view.state === "stopping" ||
-        record.view.state === "completed" ||
-        record.view.state === "failed" ||
-        record.view.state === "stopped"
-      )
-        return Effect.void;
+      if (isInactiveRecord(record)) return Effect.void;
       return handleClaudeEnvelope(record, event.value);
     }
     if (event.type === "rpc_message") {
-      if (
-        !isRawRpcResponse(event.value) &&
-        (record.stoppedByParent ||
-          record.view.state === "stopping" ||
-          record.view.state === "completed" ||
-          record.view.state === "failed" ||
-          record.view.state === "stopped")
-      )
-        return Effect.void;
+      // Raw RPC responses still settle pending requests on inactive records.
+      if (!isRawRpcResponse(event.value) && isInactiveRecord(record)) return Effect.void;
       return handleRpcEnvelope(record, event.value);
     }
     if (event.type === "ipc_message") {
-      if (
-        record.stoppedByParent ||
-        record.view.state === "stopping" ||
-        record.view.state === "completed" ||
-        record.view.state === "failed" ||
-        record.view.state === "stopped"
-      )
-        return Effect.void;
+      if (isInactiveRecord(record)) return Effect.void;
       return handleIpcEnvelope(record, event.value);
     }
     if (event.type === "protocol_error") {
-      if (
-        record.stoppedByParent ||
-        record.view.state === "stopping" ||
-        record.view.state === "completed" ||
-        record.view.state === "failed" ||
-        record.view.state === "stopped"
-      )
-        return Effect.void;
+      if (isInactiveRecord(record)) return Effect.void;
       const error = protocolError(event.message);
       return failRun(record, error.message, error).pipe(Effect.asVoid);
     }
@@ -475,14 +443,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       ),
     });
     failPendingResponses(record, processFailure);
-    if (
-      record.stoppedByParent ||
-      record.view.state === "stopping" ||
-      record.view.state === "stopped" ||
-      record.view.state === "completed" ||
-      record.view.state === "failed"
-    )
-      return Effect.void;
+    if (isInactiveRecord(record)) return Effect.void;
     return settle(record, "failed", processFailure.message).pipe(Effect.asVoid);
   };
 }

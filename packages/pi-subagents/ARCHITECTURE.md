@@ -18,7 +18,7 @@
 - `src/boundary/host-ui.ts` — synchronous immutable fleet projection bridge and disposable manager repaint ticker.
 - `src/run/` — backend/capability and run models, normalized child events, transport-specific Pi protocol decoders, errors, bounded structured child-session timelines, projection, and scoped fleet owner. `service.ts` remains the sole registry/lock owner; `completion.ts`, `rate-limit.ts`, `process-lifecycle.ts`, and `control.ts` are internal policy/orchestration rooms. `coordination.ts` owns the shared orchestration-tool denylist, parent-message bounds, and child prompts; the denylist is still applied at both the tool and the process boundary.
 - `src/tools/subagent.ts` — the single agent-facing management tool, including bounded per-agent batch-start validation, partial-failure projection, and cooperative `pi-code-previews` shell rendering.
-- `src/tools/renderers/session-output.ts` — shared width-aware child-session presentation for tool results and fleet details, with grouped activity, Markdown final reports, and optional technical metadata.
+- `src/ui/session-output.ts` — shared width-aware child-session presentation for tool results and fleet details, with grouped activity, Markdown final reports, and optional technical metadata.
 - `src/settings/controller.ts` — `/subagents` command registration.
 - `src/ui/` — pure responsive fleet presentation, run-state glyph/color projection, scroll projection, and terminal-text sanitization. Fixed-width activity frames and responsive grouped footer fitting come from `pi-cosmic-ui/manager`, shared with `/ps`.
 

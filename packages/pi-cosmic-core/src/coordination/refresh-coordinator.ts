@@ -98,11 +98,3 @@ export const makeRefreshCoordinatorWith = <Request, E = never>(
 
     return { run } as const;
   });
-
-/** Provider refresh specialization retained for existing packages. */
-export const makeRefreshCoordinator = <E = never>() =>
-  makeRefreshCoordinatorWith<RefreshRequest, E>(mergeRefreshRequest);
-
-export type RefreshCoordinator<E = never> = Effect.Success<
-  ReturnType<typeof makeRefreshCoordinator<E>>
->;

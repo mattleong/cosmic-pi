@@ -348,7 +348,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           mutateMetrics,
           currentConfig,
           isPaused,
-          isStarted,
           advanceDomainCounter,
           setDomainCounter,
           clearPersistentTrajectory,
@@ -372,7 +371,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           requestCheckpoint,
           awaitCatchUpEffectOwned,
           awaitCatchUp,
-          fingerprint,
           parentAnchor,
           publishControllerSnapshot,
           checkpointOrchestrator,
@@ -409,7 +407,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       const service = AdvisorController.of({
         getSnapshot: projection.getSnapshot,
         publish: productionController.publish,
-        refreshProjection: Effect.suspend(publishControllerSnapshot),
         replaceChild: productionController.replaceChild,
         stopChild: productionController.stopChild,
         sessionInitialize: (_event, input) =>

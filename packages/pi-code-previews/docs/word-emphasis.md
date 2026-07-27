@@ -78,7 +78,7 @@ src/diff/word/fixtures/emphasis-golden.ts
 The test runner renders each diff and compares the extracted emphasized spans:
 
 ```text
-src/diff/word/emphasis-golden.test.ts
+tests/diff/word/emphasis-golden.test.ts
 ```
 
 When real diffs reveal a miss, add the smallest representative case to the corpus. Prefer real examples over synthetic threshold tuning.

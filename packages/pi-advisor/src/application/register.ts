@@ -101,17 +101,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
         description: `Advisor ${name.replace("advisor", "").replace("-", " ").trim() || "control"}`,
         getArgumentCompletions: (prefix) =>
           hostBindings.commandDefinition(name)?.getArgumentCompletions?.(prefix) ?? null,
-        handler: (args, ctx) => {
-          const projected = hostBindings.commandHandler(name);
-          if ((name === "advisor-status" || name === "advisor-usage") && projected) {
-            return ignoreFailure(
-              runController((controller) => controller.refreshProjection)
-                .catch(() => undefined)
-                .then(() => projected(args, ctx)),
-            );
-          }
-          return ignoreFailure(runController((controller) => controller.command(name, args, ctx)));
-        },
+        handler: (args, ctx) =>
+          ignoreFailure(runController((controller) => controller.command(name, args, ctx))),
       });
     }
 

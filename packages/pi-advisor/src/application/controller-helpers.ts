@@ -231,11 +231,9 @@ export function sendAdvisorMessage(
 export function warnIfSetupRequired(
   ctx: ExtensionContext,
   config: ResolvedAdvisorConfig,
-  markShown: () => void,
   notify: HostNotifierShape["notify"],
 ): void {
   if (!config.enabled || config.configured) return;
-  markShown();
   notify(
     ctx,
     "Advisor review is enabled but no dedicated model is configured. Use /advisor-settings.",

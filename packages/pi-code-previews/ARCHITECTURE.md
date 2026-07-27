@@ -23,7 +23,7 @@ Provides syntax-highlighted previews, structured diffs, safer write/edit present
 - `src/syntax/` and `src/write/` are the other primary stateful features; `syntax/service.ts` owns Shiki state/lifecycle while `syntax/ingress.ts` owns the bounded synchronous renderer request bridge.
 - `src/diff/`, `src/paths/`, `src/tools/` (including grep/path-list/shell helpers), and `src/warnings/` contain deterministic preview policy and transformation logic.
 - `src/tools/` owns tool names/policy, cooperative shell API (`cooperative-tools.ts`), tool argument/result helpers (`data/`), and synchronous tool renderers (`renderers/`).
-- `src/boundary/` wraps Pi/Node/Shiki/environment/JSON boundaries (`node-platform.ts` for Node file platform runs).
+- `src/boundary/` wraps Pi/Node/Shiki/environment/JSON boundaries.
 - `src/preview/` and feature render modules are synchronous UI (no top-level `ui/` folder).
 - Package tests live under `tests/`, mirroring `src/` paths, with `*.test.ts` suffix.
 

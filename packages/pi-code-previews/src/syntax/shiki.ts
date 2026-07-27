@@ -18,7 +18,3 @@ export function initializeShiki(theme: string): Promise<void> {
 }
 
 export const disposeShikiEffect = CodePreviewSyntaxService.use((service) => service.dispose);
-
-// Compatibility facade. Synchronous render entrypoints import `./render` directly so they cannot
-// acquire an Effect runtime, Layer, Ref, or mutable service.
-export * from "./render";

@@ -87,7 +87,7 @@ export const makeSessionLifecycle = (d: EventsDeps) => {
         }));
         yield* d.publishControllerSnapshot();
         if (!d.currentConfig().configured)
-          warnIfSetupRequired(ctx, d.currentConfig(), () => undefined, d.notifyBestEffort);
+          warnIfSetupRequired(ctx, d.currentConfig(), d.notifyBestEffort);
         if (hostCancellationPending)
           return yield* new AdvisorExtensionError({
             operation: "session initialization",

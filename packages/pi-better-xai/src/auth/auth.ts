@@ -116,16 +116,6 @@ export const readXaiAuthResult = Effect.fn("XaiAuth.readXaiAuthResult")(function
   } as const satisfies XaiAuthResult;
 });
 
-export const readXaiAuth = Effect.fn("XaiAuth.readXaiAuth")(function* (authPath: string) {
-  const result = yield* readXaiAuthResult(authPath);
-  if (result._tag === "Found") {
-    const { source: _source, ...credentials } = result.credentials;
-    return credentials;
-  }
-  if (result._tag === "Missing") return undefined;
-  return yield* new XaiAuthError({ operation: result.operation, message: result.message });
-});
-
 const writeXaiAuth = Effect.fn("XaiAuth.writeXaiAuth")(function* (
   authPath: string,
   entry: { readonly access: string; readonly refresh: string; readonly expires: number },
@@ -211,7 +201,7 @@ const refreshXaiToken = Effect.fn("XaiAuth.refreshXaiToken")(function* (
   } satisfies XaiCredentials;
 });
 
-const getXaiCredentialsResultEffect = Effect.fn("XaiAuth.getXaiCredentialsResult")(function* (
+export const getXaiCredentialsResult = Effect.fn("XaiAuth.getXaiCredentialsResult")(function* (
   authPath: string,
 ) {
   const now = yield* Clock.currentTimeMillis;
@@ -274,15 +264,11 @@ const getXaiCredentialsResultEffect = Effect.fn("XaiAuth.getXaiCredentialsResult
   return { _tag: "Missing" } as const;
 });
 
-const getXaiCredentialsEffect = Effect.fn("XaiAuth.getXaiCredentials")(function* (
+export const getXaiCredentials = Effect.fn("XaiAuth.getXaiCredentials")(function* (
   authPath: string,
 ) {
-  const result = yield* getXaiCredentialsResultEffect(authPath);
+  const result = yield* getXaiCredentialsResult(authPath);
   if (result._tag === "Found") return result.credentials;
   if (result._tag === "Missing") return undefined;
   return yield* new XaiAuthError({ operation: result.operation, message: result.message });
 });
-
-export const getXaiCredentialsResult = getXaiCredentialsResultEffect;
-
-export const getXaiCredentials = getXaiCredentialsEffect;

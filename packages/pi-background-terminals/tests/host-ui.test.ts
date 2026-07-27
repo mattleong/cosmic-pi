@@ -4,7 +4,6 @@ import { makeProjectionBridge } from "../src/boundary/host-ui.ts";
 import type { BackgroundTerminalProjection } from "../src/job/model.ts";
 
 const running: BackgroundTerminalProjection = {
-  revision: 1,
   jobs: [
     {
       id: "term-1",
@@ -37,5 +36,24 @@ describe("background terminal host projection", () => {
       "pi-background-terminals",
       "1 background job active",
     );
+  });
+
+  it("keeps notifying remaining listeners when one subscriber throws", () => {
+    const bridge = makeProjectionBridge();
+    const before = vi.fn();
+    const after = vi.fn();
+    bridge.subscribe(before);
+    bridge.subscribe(() => {
+      throw new Error("subscriber failed");
+    });
+    bridge.subscribe(after);
+
+    expect(() => bridge.publish(running)).not.toThrow();
+    expect(before).toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledTimes(1);
+
+    expect(() => bridge.clear()).not.toThrow();
+    expect(before).toHaveBeenCalledTimes(2);
+    expect(after).toHaveBeenCalledTimes(2);
   });
 });

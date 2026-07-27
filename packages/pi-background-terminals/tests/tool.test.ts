@@ -70,7 +70,7 @@ describe("background_terminal tool", () => {
       stop: () => Effect.sync(() => (calls.push("stop"), { ...snapshot, state: "stopped" })),
       stopAll: () => Effect.sync(() => (calls.push("stop_all"), [snapshot])),
       clear: Effect.sync(() => (calls.push("clear"), 1)),
-      projection: Effect.succeed({ revision: 0, jobs: [] }),
+      projection: Effect.succeed({ jobs: [] }),
     };
     const runtime = ManagedRuntime.make(
       Layer.merge(Path.layer, Layer.succeed(BackgroundTerminalService, service)),

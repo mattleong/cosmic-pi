@@ -162,29 +162,10 @@ export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor[] = 
 const SETTINGS_OPTION_BY_ID = new Map(
   SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
 );
-export type SettingPatchContext = {
-  persistState?: boolean;
-  active?: boolean;
-  desiredActive?: boolean;
-};
-
 export const prepareSettingUpdate = Effect.fn("OpenAIConfig.prepareSettingUpdate")(function* (
   id: string,
   rawValue: string,
-  context: SettingPatchContext = {},
 ) {
-  if (id === "fast.enabled") {
-    const enabled = yield* boolean(id)(rawValue);
-    return (current: JsonObject): JsonObject => ({
-      ...current,
-      ...(context.persistState
-        ? {
-            active: context.active ?? enabled,
-            desiredActive: context.desiredActive ?? enabled,
-          }
-        : {}),
-    });
-  }
   const descriptor = SETTINGS_OPTION_BY_ID.get(id);
   if (!descriptor) return (current: JsonObject): JsonObject => ({ ...current });
   const parsedValue = yield* descriptor.decode(rawValue);

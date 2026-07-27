@@ -1,4 +1,3 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
 import { ChildProcess } from "./boundary/child-process.ts";
 import type {
@@ -8,18 +7,12 @@ import type {
 import type { SubagentProjection } from "./run/model.ts";
 import { SubagentService } from "./run/service.ts";
 
-export interface SubagentSessionInput {
-  readonly ctx: ExtensionContext;
-  readonly cwd: string;
-  readonly projectTrusted: boolean;
-}
-
 export interface SubagentLayerOptions {
   readonly publish: (projection: SubagentProjection) => void;
   readonly notify: (notification: SubagentNotification) => SubagentNotificationDelivery | undefined;
 }
 
-export const makeSubagentLayer = (_input: SubagentSessionInput, options: SubagentLayerOptions) =>
+export const makeSubagentLayer = (options: SubagentLayerOptions) =>
   SubagentService.layer({ publish: options.publish, notify: options.notify }).pipe(
     Layer.provideMerge(ChildProcess.layer),
   );

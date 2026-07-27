@@ -560,13 +560,15 @@ describe("persistent extension cutover", () => {
 
   test("counts cancellation at the final delivery boundary as a calibration discard", async () => {
     const value = harness({ reviewPolicy: "guardrail" });
+    await value.emit("session_start", { type: "session_start" });
+    // The delivery boundary reads the current host signal; a fresh post-start signal keeps the
+    // session runtime alive so the usage command can still report the discard.
     const controller = new AbortController();
     (value.ctx as unknown as { signal: AbortSignal }).signal = controller.signal;
     (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockImplementation(() => {
       controller.abort();
       return true;
     });
-    await value.emit("session_start", { type: "session_start" });
     await value.emit("turn_end", finalTurn("delivery-boundary candidate"));
     await tick();
     const current = value.runtimes[0]!;
@@ -2791,6 +2793,23 @@ describe("persistent extension cutover", () => {
     expect(status).toContain("Sequence: processed");
     expect(status).toContain("Catch-up barrier: hard 30,000 ms cap");
     expect(status).toContain("Active Advisor tools: read, grep, find, ls");
+  });
+
+  test("status and usage commands become inert after shutdown instead of using stale handlers", async () => {
+    const value = harness();
+    await value.emit("session_start", { type: "session_start" });
+    await value.emit("turn_end", finalTurn("candidate"));
+    await tick();
+    const current = value.runtimes[0]!;
+    current.pending[0]!.resolve(pass(current.requests[0]!));
+    await tick();
+    await value.emit("session_shutdown", { type: "session_shutdown" });
+
+    const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
+    notify.mockClear();
+    await value.commands.get("advisor-status")!.handler("", value.ctx as never);
+    await value.commands.get("advisor-usage")!.handler("", value.ctx as never);
+    expect(notify).not.toHaveBeenCalled();
   });
 
   test("cleans trajectory timers when newer user work supersedes the active turn", async () => {

@@ -2,9 +2,10 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { invokeHostCallback } from "../boundary/host-callback.ts";
 import type { ResolvedConfig } from "../config/index.ts";
-import { STATUS_KEY } from "../auth/identity.ts";
 import type * as MutableRef from "effect/MutableRef";
 import { visibleStatusLine, type XaiProjection } from "../usage/index.ts";
+
+export const STATUS_KEY = "better-xai";
 
 export interface FooterController {
   update(ctx: ExtensionContext): void;

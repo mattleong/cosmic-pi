@@ -115,11 +115,6 @@ export interface SubagentServiceShape {
     until: SubagentAwaitUntil,
     onUpdate?: (runs: ReadonlyArray<SubagentRunView>) => void,
   ) => Effect.Effect<ReadonlyArray<SubagentRunView>, SubagentError>;
-  readonly awaitTerminalObserved: (
-    ids: ReadonlyArray<string>,
-    until: SubagentAwaitUntil,
-    onUpdate?: (runs: ReadonlyArray<SubagentRunView>) => void,
-  ) => Effect.Effect<ReadonlyArray<SubagentRunObservation>, SubagentError>;
   readonly withAwaitTerminalObservations: <A, E, R>(
     ids: ReadonlyArray<string>,
     until: SubagentAwaitUntil,
@@ -128,9 +123,6 @@ export interface SubagentServiceShape {
   ) => Effect.Effect<A, SubagentError | E, R>;
   readonly list: Effect.Effect<ReadonlyArray<SubagentRunView>>;
   readonly status: (id: string) => Effect.Effect<SubagentRunView, SubagentNotFoundError>;
-  readonly observeStatus: (
-    id: string,
-  ) => Effect.Effect<SubagentRunObservation, SubagentNotFoundError>;
   readonly withStatusObservations: <A, E, R>(
     ids: ReadonlyArray<string>,
     use: (observations: ReadonlyArray<SubagentRunObservation>) => Effect.Effect<A, E, R>,
@@ -978,11 +970,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       releaseCompletionClaims,
     );
   };
-  const awaitTerminalObserved: SubagentServiceShape["awaitTerminalObserved"] = (
-    ids,
-    until,
-    onUpdate,
-  ) => withAwaitTerminalObservations(ids, until, onUpdate, Effect.succeed);
+  const awaitTerminalObserved = (
+    ids: ReadonlyArray<string>,
+    until: SubagentAwaitUntil,
+    onUpdate?: (runs: ReadonlyArray<SubagentRunView>) => void,
+  ): Effect.Effect<ReadonlyArray<SubagentRunObservation>, SubagentError> =>
+    withAwaitTerminalObservations(ids, until, onUpdate, Effect.succeed);
   const withStatusObservations: SubagentServiceShape["withStatusObservations"] = (ids, use) =>
     Effect.acquireUseRelease(
       acquireCompletionClaims(ids, false),
@@ -1005,7 +998,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const list = withLock(
     Effect.sync(() => sortRuns([...records.values()].map((record) => snapshotView(record.view)))),
   );
-  const observeStatus: SubagentServiceShape["observeStatus"] = (id) =>
+  const observeStatus = (
+    id: string,
+  ): Effect.Effect<SubagentRunObservation, SubagentNotFoundError> =>
     withLock(Effect.map(requireRecord(id), observeRecord));
   const status: SubagentServiceShape["status"] = (id) =>
     observeStatus(id).pipe(
@@ -1219,11 +1214,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     start,
     waitForForeground,
     awaitTerminal,
-    awaitTerminalObserved,
     withAwaitTerminalObservations,
     list,
     status,
-    observeStatus,
     withStatusObservations,
     consumeCompletions,
     send,

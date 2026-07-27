@@ -43,10 +43,10 @@ import { SharpAdapter } from "../src/boundary/sharp.ts";
 import { DEFAULT_COMPACTION_CONFIG, DEFAULT_IMAGE_CONFIG } from "../src/config/index.ts";
 import {
   OpenAIImageService,
-  _imageTest,
   registerOpenAIImage,
   type CodexImageResult,
 } from "../src/image/index.ts";
+import { TOOL_PARAMS } from "../src/image/types.ts";
 import { makeProjection, type OpenAIProjection } from "../src/usage/index.ts";
 
 const directories: string[] = [];
@@ -1093,17 +1093,17 @@ describe("Effect-native OpenAI image service", () => {
         registered!.execute("call", { prompt: "verbatim" }, undefined, onUpdate, ctx),
       );
       expect(currentContext).toBe(ctx);
-      expect(registered!.parameters).toEqual(_imageTest.TOOL_PARAMS);
-      expect(_imageTest.TOOL_PARAMS.properties.prompt).toMatchObject({
+      expect(registered!.parameters).toEqual(TOOL_PARAMS);
+      expect(TOOL_PARAMS.properties.prompt).toMatchObject({
         minLength: 1,
         maxLength: 32_768,
         pattern: "\\S",
       });
-      expect(_imageTest.TOOL_PARAMS.properties.images).toMatchObject({
+      expect(TOOL_PARAMS.properties.images).toMatchObject({
         maxItems: 5,
         items: { minLength: 1, maxLength: 4_096, pattern: "\\S" },
       });
-      expect(_imageTest.TOOL_PARAMS.additionalProperties).toBe(false);
+      expect(TOOL_PARAMS.additionalProperties).toBe(false);
       expect(onUpdate).toHaveBeenCalledWith({
         content: [{ type: "text", text: expect.stringContaining("gpt-5.5") }],
         details: undefined,

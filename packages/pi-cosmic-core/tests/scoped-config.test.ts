@@ -5,11 +5,7 @@ import * as Schema from "effect/Schema";
 import { JsonDocumentStore, type JsonObject } from "../src/platform/json-document.ts";
 import { makeInMemoryDocuments } from "../src/testing/layers.ts";
 import { decodeTolerantFields } from "../src/config/tolerant-fields.ts";
-import {
-  scopedDocumentPaths,
-  selectScopedDocument,
-  updateScopedSection,
-} from "../src/config/scoped-store.ts";
+import { scopedDocumentPaths, selectScopedDocument } from "../src/config/scoped-store.ts";
 
 it("decodes valid siblings, retains unknown keys, and bounds redacted diagnostics", () => {
   const decoded = decodeTolerantFields(
@@ -89,36 +85,4 @@ testLayer(Path.layer)("scoped document paths", (it) => {
       expect(selection.preferred).toBe(paths.project);
     }).pipe(Effect.provideService(JsonDocumentStore, memory.service));
   });
-});
-
-it.effect("preserves unknown root and section fields through atomic updates", () => {
-  const memory = makeInMemoryDocuments({
-    "/config.json": { future: true, footer: { enabled: false, futureFooter: 1 } },
-  });
-  return Effect.gen(function* () {
-    yield* updateScopedSection("/config.json", "footer", (footer) => ({
-      ...footer,
-      enabled: true,
-    }));
-    expect(memory.documents.get("/config.json")).toEqual({
-      future: true,
-      footer: { enabled: true, futureFooter: 1 },
-    });
-  }).pipe(Effect.provideService(JsonDocumentStore, memory.service));
-});
-
-it.effect("applies concurrent section updates without losing siblings", () => {
-  const memory = makeInMemoryDocuments({ "/config.json": { section: { future: true } } });
-  return Effect.gen(function* () {
-    yield* Effect.all(
-      [
-        updateScopedSection("/config.json", "section", (section) => ({ ...section, one: 1 })),
-        updateScopedSection("/config.json", "section", (section) => ({ ...section, two: 2 })),
-      ],
-      { concurrency: "unbounded" },
-    );
-    expect(memory.documents.get("/config.json")).toEqual({
-      section: { future: true, one: 1, two: 2 },
-    });
-  }).pipe(Effect.provideService(JsonDocumentStore, memory.service));
 });

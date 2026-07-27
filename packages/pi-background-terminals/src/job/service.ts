@@ -11,7 +11,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import {
   LocalProcess,
-  LocalProcessError,
+  type LocalProcessError,
   type LocalProcessHandle,
 } from "../boundary/local-process.ts";
 import { BackgroundTerminalConfigStore } from "../config/store.ts";
@@ -96,7 +96,6 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   const lock = yield* Semaphore.make(1);
   const jobs = new Map<string, JobRecord>();
   let nextId = 1;
-  let revision = 0;
   let closed = false;
   const retainedLogBudget = Math.max(1, Math.floor(config.totalLogBufferBytes / 2));
   const ingressLogBudget = Math.max(1, config.totalLogBufferBytes - retainedLogBudget);
@@ -108,7 +107,6 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
     Deferred.doneUnsafe(current, Effect.void);
   };
   const currentProjection = (): BackgroundTerminalProjection => ({
-    revision,
     jobs: sortJobsByActivity(
       [...jobs.values()].map((record) => ({
         ...record.snapshot,
@@ -117,7 +115,6 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
     ),
   });
   const publish = () => {
-    revision += 1;
     options.publish?.(currentProjection());
   };
   const totalLogBytes = () =>
@@ -280,14 +277,10 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         );
       }),
     ).pipe(
-      Effect.catch((error: LocalProcessError) =>
+      Effect.catch((spawnError: LocalProcessError) =>
         withLock(
           Effect.gen(function* () {
             const record = jobs.get(id);
-            const spawnError =
-              error instanceof LocalProcessError
-                ? error
-                : new LocalProcessError({ operation: "spawn", message: String(error) });
             Deferred.doneUnsafe(ownerRecord.handleReady, Effect.fail(spawnError));
             if (record !== ownerRecord || !isActiveJobState(ownerRecord.snapshot.state)) return;
             const endedAt = yield* Clock.currentTimeMillis;

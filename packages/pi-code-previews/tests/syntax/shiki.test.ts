@@ -21,7 +21,7 @@ import {
   syntaxProjection,
 } from "../../src/syntax/projection";
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
-import { isExactShikiCacheHit } from "../../src/syntax/shiki";
+import { isExactShikiCacheHit } from "../../src/syntax/render";
 
 const highlighter = (dispose: () => void) =>
   ({

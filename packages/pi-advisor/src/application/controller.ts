@@ -29,7 +29,6 @@ export const advisorControllerLayer = Layer.effect(
     const service = AdvisorController.of({
       getSnapshot: projection.getSnapshot,
       publish: (next) => projection.replace(next).pipe(Effect.orDie),
-      refreshProjection: Effect.void,
       replaceChild: resources.replaceChild,
       stopChild: () => resources.stopChild,
       sessionInitialize: () => unavailable("session initialize"),

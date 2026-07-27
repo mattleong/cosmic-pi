@@ -15,7 +15,7 @@ A pnpm workspace for pi extensions.
 
 ## Requirements
 
-- Node.js 22.22.2+, 24.15.0+, or 26+
+- Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`
 - pnpm 10.33.0 (declared in `packageManager`)
 
 ## Install

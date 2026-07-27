@@ -9,7 +9,7 @@ import {
   startToolSessionEvent,
   summarizeToolArguments,
 } from "../src/run/session-output.ts";
-import { renderSubagentSessionOutput } from "../src/tools/renderers/session-output.ts";
+import { renderSubagentSessionOutput } from "../src/ui/session-output.ts";
 import { sanitizeTerminalText } from "../src/ui/sanitize.ts";
 
 const theme = {

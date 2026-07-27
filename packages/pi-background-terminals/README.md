@@ -30,10 +30,11 @@ Optional configuration may be placed in:
   "totalLogBufferBytes": 2097152,
   "stopGraceMs": 2000,
   "maxLogWaitSeconds": 30,
-  "showFooterStatus": true,
-  "shellPath": null
+  "showFooterStatus": true
 }
 ```
+
+`shellPath` is an optional string (for example `"shellPath": "/bin/bash"`); when omitted, jobs run in the platform default shell.
 
 Captured output is bounded and sanitized before TUI rendering. Complete output should be redirected explicitly to a file when required.
 

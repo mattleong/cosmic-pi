@@ -21,7 +21,6 @@ async function openProcessManager(
   }
   await ctx.ui.custom<void>(
     (tui, theme, _keybindings, done) => {
-      let unsubscribe = () => {};
       const manager = new ProcessManagerComponent({
         theme,
         getProjection: bridge.get,
@@ -32,7 +31,7 @@ async function openProcessManager(
         stop: (id) => void actions.stop(id).catch(() => undefined),
         clear: () => void actions.clear().catch(() => undefined),
       });
-      unsubscribe = bridge.subscribe(() => {
+      const unsubscribe = bridge.subscribe(() => {
         manager.invalidate();
         tui.requestRender();
       });
@@ -42,7 +41,7 @@ async function openProcessManager(
       });
       return {
         render: (width) => manager.render(width),
-        handleInput: (data) => manager.handleInput?.(data),
+        handleInput: (data) => manager.handleInput(data),
         invalidate: () => manager.invalidate(),
         dispose: () => {
           stopSpinnerTicker();

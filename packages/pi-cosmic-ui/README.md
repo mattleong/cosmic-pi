@@ -53,6 +53,6 @@ Each active Pi session owns one scoped Effect runtime. Git and pull-request poll
 
 The public `pi-cosmic-ui/protocol` subpath exports the versioned `pi.events` channel names and contribution types. A producer first queries for a host and then upserts keyed text or media contributions. Text contributions provide plain text plus a semantic tone so Cosmic UI can apply the active theme. Media contributions may attach to the footer's render request, detach when the footer is hidden or replaced, and dispose when removed. Producers must remove their contributions during `session_shutdown`.
 
-Cosmic UI is the sole custom-footer owner when installed. It does not depend on provider-specific extensions; `pi-better-openai` detects the host and contributes fast-mode and subscription-usage primitives when both packages are loaded.
+Cosmic UI is the sole custom-footer owner when installed. It has no package or runtime dependency on provider-specific extensions, but it does recognize agreed contribution IDs — for example, extension statuses with the `pi-subagents` and `pi-background-terminals` IDs are ordered ahead of other extension statuses. `pi-better-openai` detects the host and contributes fast-mode and subscription-usage primitives when both packages are loaded.
 
 The public `pi-cosmic-ui/manager` subpath provides pure shared chrome for full-screen extension managers: fixed-width activity frames and responsive grouped footer fitting. `/subagents` and `/ps` use these primitives so their state animation and shortcut presentation remain aligned.

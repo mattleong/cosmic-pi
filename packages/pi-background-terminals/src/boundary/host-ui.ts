@@ -52,13 +52,22 @@ export function makeProjectionBridge(): BackgroundTerminalProjectionBridge {
 
   const updateFooter = () =>
     setStatusSafely(context, footerEnabled ? footerStatus(projection) : undefined);
+  const notifyListeners = () => {
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch {
+        // One throwing subscriber must not block the other projection listeners.
+      }
+    }
+  };
 
   return {
     get: () => projection,
     publish: (next) => {
       projection = next;
       updateFooter();
-      for (const listener of listeners) listener();
+      notifyListeners();
     },
     subscribe: (listener) => {
       listeners.add(listener);
@@ -77,7 +86,7 @@ export function makeProjectionBridge(): BackgroundTerminalProjectionBridge {
       setStatusSafely(context, undefined);
       context = undefined;
       projection = emptyProjection();
-      for (const listener of listeners) listener();
+      notifyListeners();
     },
   };
 }

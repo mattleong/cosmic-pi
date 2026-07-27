@@ -13,10 +13,7 @@ import {
   type SubagentProjection,
   type SubagentRunView,
 } from "../run/model.ts";
-import {
-  formatRelativeAge,
-  renderSubagentSessionOutput,
-} from "../tools/renderers/session-output.ts";
+import { formatRelativeAge, renderSubagentSessionOutput } from "./session-output.ts";
 import { animatedRunStateGlyph, runStateColor, runStateLabel } from "./run-state.ts";
 import { sanitizeTerminalLine } from "./sanitize.ts";
 

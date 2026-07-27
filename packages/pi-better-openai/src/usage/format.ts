@@ -1,4 +1,3 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -11,9 +10,8 @@ import {
   formatWindowedUsageLine,
   JsonHttpClient,
 } from "pi-cosmic-core";
-import { getCodexCredentials, type CodexCredentialsWithSource } from "../auth/codex-auth.ts";
+import type { CodexCredentialsWithSource } from "../auth/codex-auth.ts";
 
-export { readCodexAuth } from "../auth/codex-auth.ts";
 export type UsageScope = "default" | "spark";
 export type UsageSnapshot = {
   capturedAt: number;
@@ -215,13 +213,3 @@ export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWit
     } satisfies CodexUsageResult;
   },
 );
-
-export const requestCodexUsage = Effect.fn("CodexUsage.request")(function* (
-  authPath: string,
-  ctx: Pick<ExtensionContext, "modelRegistry">,
-  modelId?: string,
-) {
-  const credentials = yield* getCodexCredentials(authPath, ctx);
-  if (!credentials) return undefined;
-  return (yield* requestCodexUsageWithCredentials(credentials, modelId)).snapshot;
-});

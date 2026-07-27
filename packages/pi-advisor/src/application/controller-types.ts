@@ -81,7 +81,6 @@ export interface AdvisorControllerShape {
   /** Synchronous Pi/TUI boundary; returns a deeply frozen projection only. */
   readonly getSnapshot: () => AdvisorControllerSnapshot;
   readonly publish: (snapshot: AdvisorControllerSnapshot) => Effect.Effect<void>;
-  readonly refreshProjection: Effect.Effect<void>;
   readonly replaceChild: <A, E, R>(
     acquire: Effect.Effect<A, E, R>,
     release: (child: A) => Effect.Effect<void>,

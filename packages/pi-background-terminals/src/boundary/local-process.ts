@@ -13,6 +13,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import type { BackgroundLogStream } from "../job/model.ts";
+import { utf8ByteLength, utf8Tail } from "../job/utf8.ts";
 
 const INGRESS_CHUNKS = 32;
 const BLOCKED_ENVIRONMENT_KEYS = new Set(["BASH_ENV", "ENV", "NODE_OPTIONS", "NODE_PATH"]);
@@ -107,23 +108,6 @@ function terminateLingeringGroup(child: ChildProcess): void {
   }
 }
 
-const utf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
-
-function utf8Tail(text: string, maxBytes: number): string {
-  if (utf8Bytes(text) <= maxBytes) return text;
-  const characters = [...text];
-  let bytes = 0;
-  let start = characters.length;
-  while (start > 0) {
-    const character = characters[start - 1] ?? "";
-    const size = utf8Bytes(character);
-    if (bytes + size > maxBytes) break;
-    bytes += size;
-    start -= 1;
-  }
-  return characters.slice(start).join("");
-}
-
 const verifyCwd = (cwd: string) =>
   Effect.tryPromise({
     try: () => stat(cwd),
@@ -170,13 +154,13 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
 
   const offer = (stream: BackgroundLogStream, original: string) => {
     if (!original || outputClosed) return;
-    const text = utf8Tail(original, maxEventBytes);
-    totalDroppedBytes += utf8Bytes(original) - utf8Bytes(text);
+    const tail = utf8Tail(original, maxEventBytes);
+    totalDroppedBytes += utf8ByteLength(original) - tail.bytes;
     const droppedBytes = totalDroppedBytes - reportedDroppedBytes;
-    if (text && Queue.offerUnsafe(output, { stream, text, droppedBytes })) {
+    if (tail.text && Queue.offerUnsafe(output, { stream, text: tail.text, droppedBytes })) {
       reportedDroppedBytes = totalDroppedBytes;
     } else {
-      totalDroppedBytes += utf8Bytes(text);
+      totalDroppedBytes += tail.bytes;
     }
   };
   const closeOutput = () => {

@@ -10,7 +10,7 @@ import type { CodePreviewSettings } from "./schema";
 import { CodePreviewSettingsService } from "./service";
 import { cloneCodePreviewSettings } from "./state";
 
-export * from "./document-store";
+export { extractCodePreviewSettings, type LoadSettingsOptions } from "./document-store";
 /** Effect settings persistence service — preferred session door. */
 export {
   CodePreviewSettingsService,

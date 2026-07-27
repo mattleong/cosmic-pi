@@ -12,7 +12,7 @@ import {
   remainingResetSeconds,
   type JsonHttpResponseSchema,
 } from "pi-cosmic-core";
-import { getXaiCredentials, type XaiCredentialsWithSource } from "../auth/auth.ts";
+import { getXaiCredentials } from "../auth/auth.ts";
 
 export const BILLING_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 export const MONTHLY_BILLING_URL = `${BILLING_BASE_URL}/billing`;
@@ -233,7 +233,6 @@ const fetchBilling = Effect.fn("XaiUsage.fetchBilling")(function* <A, R>(
  */
 export interface XaiUsageResult {
   readonly snapshot: UsageSnapshot;
-  readonly credentialSource: XaiCredentialsWithSource["source"];
   readonly teamId?: string;
 }
 
@@ -272,7 +271,6 @@ const requestXaiUsageEffect = Effect.fn("XaiUsage.requestXaiUsage")(function* (a
   const now = yield* Clock.currentTimeMillis;
   return {
     snapshot: parseUsageSnapshot(decodedMonthly, decodedWeekly, now),
-    credentialSource: credentials.source,
     ...(credentials.teamId ? { teamId: credentials.teamId } : {}),
   } satisfies XaiUsageResult;
 });

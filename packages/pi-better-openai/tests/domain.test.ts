@@ -29,7 +29,7 @@ import {
   getCodexCredentials,
   getCodexCredentialsResult,
   parseCodexRegistryCredentials,
-  readCodexAuth,
+  readCodexAuthResult,
 } from "../src/auth/codex-auth.ts";
 import {
   DEFAULT_COMPACTION_CONFIG,
@@ -54,7 +54,7 @@ import {
   USAGE_URL,
   formatUsageSnapshot,
   parseUsageSnapshot,
-  requestCodexUsage,
+  requestCodexUsageWithCredentials,
 } from "../src/usage/index.ts";
 
 const NOW = 1_752_883_200_000;
@@ -166,9 +166,9 @@ describe("OpenAI configuration and credentials", () => {
           JSON.stringify({ access: "registry", accountId: "acct_registry" }),
         ),
       ).toEqual({ accessToken: "registry", accountId: "acct_registry" });
-      expect(yield* readCodexAuth(authPath)).toEqual({
-        accessToken: "file-token",
-        accountId: "acct_file",
+      expect(yield* readCodexAuthResult(authPath)).toEqual({
+        _tag: "Found",
+        credentials: { accessToken: "file-token", accountId: "acct_file", source: "authFile" },
       });
       expect((yield* getCodexCredentials(authPath, context()))?.source).toBe("authFile");
       expect(
@@ -178,7 +178,7 @@ describe("OpenAI configuration and credentials", () => {
         ))?.source,
       ).toBe("modelRegistry");
       yield* TestClock.adjust("2 seconds");
-      expect(yield* readCodexAuth(authPath)).toBeUndefined();
+      expect(yield* readCodexAuthResult(authPath)).toEqual({ _tag: "Missing" });
     }).pipe(Effect.provide(store.layer));
   });
 });
@@ -232,12 +232,13 @@ describe("usage payloads, visibility, and fast mode", () => {
       return Effect.succeed({ status: 200, body: payload });
     });
     return Effect.gen(function* () {
-      const snapshot = yield* requestCodexUsage(
+      const credentials = yield* getCodexCredentials(
         "/auth.json",
         context(JSON.stringify({ access: "token", accountId: "acct" })),
-        "gpt-5.5",
       );
-      expect(snapshot?.fiveHourLeftPercent).toBe(90);
+      expect(credentials).toBeDefined();
+      const result = yield* requestCodexUsageWithCredentials(credentials!, "gpt-5.5");
+      expect(result.snapshot.fiveHourLeftPercent).toBe(90);
       expect(request?.url).toBe(USAGE_URL);
       expect(request?.headers).toMatchObject({
         authorization: "Bearer token",

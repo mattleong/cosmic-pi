@@ -9,12 +9,8 @@ import {
   wrapTextWithAnsi,
   type Component,
 } from "@earendil-works/pi-tui";
-import {
-  isActiveRunState,
-  type SubagentRunView,
-  type SubagentSessionEvent,
-} from "../../run/model.ts";
-import { sanitizeTerminalLine, sanitizeTerminalText } from "../../ui/sanitize.ts";
+import { isActiveRunState, type SubagentRunView, type SubagentSessionEvent } from "../run/model.ts";
+import { sanitizeTerminalLine, sanitizeTerminalText } from "./sanitize.ts";
 
 export interface SessionOutputRenderOptions {
   readonly now?: number;

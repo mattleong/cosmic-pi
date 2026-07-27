@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { selectPreviewTextLines, trimSingleTrailingNewline } from "../../src/preview/format";
+import {
+  selectPreviewLines,
+  selectPreviewTextLines,
+  trimSingleTrailingNewline,
+} from "../../src/preview/format";
 import { countContentLines, countPreviewTextLines } from "../../src/preview/line-counts";
 
 test("trimSingleTrailingNewline preserves leading and meaningful trailing spaces", () => {
@@ -79,4 +83,33 @@ test("text preview selection retains all lines when unlimited or within the limi
     hidden: 0,
     total: 3,
   });
+});
+
+test("streaming text selection matches array selection across split boundaries", () => {
+  for (const total of [1, 7, 8, 9, 12, 30]) {
+    const lines = Array.from({ length: total }, (_, index) => `line ${index}`);
+    const text = lines.join("\n");
+    for (const limit of [0, 1, 6, 7, 8, 9, 10, total, total + 1]) {
+      const fromArray = selectPreviewLines(lines, limit);
+      const fromText = selectPreviewTextLines(text, limit);
+      assert.deepEqual(fromText, { ...fromArray, total }, `limit ${limit} of ${total} lines`);
+    }
+  }
+});
+
+test("split window boundary switches from head-only at a limit of eight", () => {
+  const lines = Array.from({ length: 20 }, (_, index) => `line ${index}`);
+  const headOnly = selectPreviewLines(lines, 7);
+  assert.deepEqual(
+    headOnly.entries.map((entry) => entry.kind),
+    Array.from({ length: 7 }, () => "line"),
+  );
+  assert.deepEqual({ shown: headOnly.shown, hidden: headOnly.hidden }, { shown: 7, hidden: 13 });
+
+  const split = selectPreviewLines(lines, 8);
+  assert.deepEqual(
+    split.entries.map((entry) => entry.kind),
+    [...Array.from({ length: 6 }, () => "line"), "hidden", "line"],
+  );
+  assert.deepEqual({ shown: split.shown, hidden: split.hidden }, { shown: 7, hidden: 13 });
 });
