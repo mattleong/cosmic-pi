@@ -38,8 +38,15 @@ export const CLAUDE_CLI_SUBAGENT_CAPABILITIES = [
 ] as const satisfies ReadonlyArray<SubagentCapability>;
 
 const CLAUDE_MODEL_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const CLAUDE_MODEL_ALIASES: ReadonlySet<string> = new Set(["fable", "sonnet", "opus", "haiku"]);
 
-export const isClaudeModelSelector = (value: string): boolean => CLAUDE_MODEL_SELECTOR.test(value);
+export const isClaudeModelSelector = (value: string): boolean => {
+  const trimmed = value.trim();
+  return (
+    CLAUDE_MODEL_SELECTOR.test(trimmed) &&
+    (CLAUDE_MODEL_ALIASES.has(trimmed) || trimmed.toLowerCase().startsWith("claude"))
+  );
+};
 
 export interface SubagentUsage {
   readonly input: number;

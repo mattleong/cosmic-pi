@@ -75,7 +75,8 @@ const StartSpecParameters = Type.Object({
   name: Type.Optional(Type.String({ description: "Optional display name." })),
   execution: Type.Optional(
     StringEnum(["foreground", "background"] as const, {
-      description: "Launch behavior; defaults to background.",
+      description:
+        "Launch behavior; defaults to background. Foreground blocks subagent_start until the run finishes, pauses, or asks a parent question.",
     }),
   ),
   context: Type.Optional(
@@ -86,7 +87,7 @@ const StartSpecParameters = Type.Object({
   ),
   backend: StringEnum(["pi", "claude-cli"] as const, {
     description:
-      'Execution backend. "pi" runs a Pi RPC child on an authenticated provider/model; "claude-cli" runs the installed Claude Code CLI on a Claude alias or full Claude model ID.',
+      'Execution backend. "pi" runs a Pi RPC child on an authenticated provider/model; "claude-cli" runs the installed Claude Code CLI on a Claude alias or full model ID beginning with "claude".',
   }),
   writeIntent: StringEnum(["writer", "read-only"] as const, {
     description: "Only one shared-cwd writer may be active.",
@@ -94,7 +95,7 @@ const StartSpecParameters = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        'For backend "pi": a canonical provider/model value exactly as listed by subagent_models (omit to inherit the parent model); a bare model ID is accepted only when it matches exactly one authenticated provider. For backend "claude-cli": a Claude alias (fable, sonnet, opus, haiku) or full Claude model ID — never a Pi provider/model; aliases track the CLI default, so an exact Claude version needs its full model ID. Claude defaults to sonnet.',
+        'For backend "pi": a canonical provider/model value exactly as listed by subagent_models (omit to inherit the parent model); a bare model ID is accepted only when it matches exactly one authenticated provider. For backend "claude-cli": a Claude alias (fable, sonnet, opus, haiku) or full model ID beginning with "claude" — never a Pi provider/model; aliases track the CLI default, so an exact Claude version needs its full model ID. Claude defaults to sonnet.',
     }),
   ),
   effort: Type.Optional(
@@ -172,7 +173,7 @@ const LifecycleParameters = Type.Object({
   runIds: RunIdsParameters,
   message: Type.Optional(
     Type.String({
-      description: "Optional continuation guidance used when resuming.",
+      description: 'Optional continuation guidance; valid only when action="resume".',
       maxLength: MAX_PARENT_MESSAGE_CHARS,
     }),
   ),
@@ -213,10 +214,18 @@ export interface SubagentStartFailure {
   readonly code?: string;
 }
 
+export interface SubagentActionFailure {
+  readonly id: string;
+  readonly message: string;
+  /** Machine-actionable failure code (specific validation code or the error tag). */
+  readonly code?: string;
+}
+
 export interface SubagentToolDetails {
   readonly action: SubagentToolInput["action"];
   readonly runs?: ReadonlyArray<SubagentRunView>;
   readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
+  readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
   readonly models?: ReadonlyArray<SubagentModelView>;
   readonly awaitUntil?: SubagentAwaitUntil;
   readonly timedOut?: boolean;
@@ -397,7 +406,7 @@ function resolveStart(
         return yield* new InvalidSubagentRequestError({
           code: "claude_model_invalid",
           message:
-            "Claude model must be a Claude alias (fable, sonnet, opus, haiku) or a full Claude model ID of at most 128 characters.",
+            'Claude model must be fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
         });
     }
     const resolved =
@@ -453,6 +462,7 @@ const formatRun = (run: SubagentRunView, detailed = false): string => {
     field("Model", `${run.backend}/${run.model} · ${run.effort}`),
     field("Mode", `${run.execution} · ${run.context}`),
     field("Intent", run.writeIntent),
+    field("Capabilities", `${run.capabilities.join(", ") || "none"}; stop/await always available`),
     run.pid ? field("Process", `pid ${run.pid}`) : undefined,
     field("Usage", `${run.usage.totalTokens} tokens · $${run.usage.cost.toFixed(4)}`),
     run.currentTool ? field("Tool", run.currentTool) : undefined,
@@ -524,6 +534,17 @@ const formatStartResult = (
     failureText ? `${failureText}${runs.length > 0 ? "\n\n" : ""}` : "",
   ).text;
 };
+
+const formatActionFailures = (failures: ReadonlyArray<SubagentActionFailure>): string =>
+  failures.length === 0
+    ? ""
+    : [
+        `Failed targets (${failures.length})`,
+        ...failures.map(
+          (failure) =>
+            `  ${sanitizeTerminalLine(failure.id)}: ${safeTextPrefix(sanitizeTerminalLine(failure.message), 320)}`,
+        ),
+      ].join("\n");
 
 const renderedCompletionReceipts = (
   observations: ReadonlyArray<SubagentRunObservation>,
@@ -913,10 +934,11 @@ export const awaitResultBanner = (details: SubagentToolDetails): OutcomeBanner |
 };
 
 const managementAcknowledgement = (
-  action: Exclude<SubagentToolInput["action"], "models" | "start" | "list" | "status" | "await">,
+  action: Exclude<SubagentToolInput["action"], "models" | "start">,
   runs: ReadonlyArray<SubagentRunView>,
 ): string => {
   const ids = runs.map((run) => run.id).join(", ");
+  if (runs.length === 0) return "";
   switch (action) {
     case "send":
       return `Guidance delivered to ${runs.length} subagent${runs.length === 1 ? "" : "s"}: ${ids}.`;
@@ -1059,10 +1081,30 @@ const executeSubagentAction = async (
       case "send": {
         const ids = yield* requiredTargetIds(input.action, input.runIds);
         const message = yield* requiredMessage(input.action, input.message);
-        const runs = yield* Effect.forEach(ids, (id) => service.send(id, message), {
-          concurrency: 8,
-        });
-        return { runs, timedOut: false };
+        const outcomes = yield* Effect.forEach(
+          ids,
+          (id) =>
+            service.send(id, message).pipe(
+              Effect.match({
+                onFailure: (error) => ({
+                  failure: {
+                    id,
+                    message: error.message,
+                    code: subagentErrorCode(error),
+                  } satisfies SubagentActionFailure,
+                }),
+                onSuccess: (run) => ({ run }),
+              }),
+            ),
+          { concurrency: 8 },
+        );
+        return {
+          runs: outcomes.flatMap((outcome) => ("run" in outcome ? [outcome.run] : [])),
+          actionFailures: outcomes.flatMap((outcome) =>
+            "failure" in outcome ? [outcome.failure] : [],
+          ),
+          timedOut: false,
+        };
       }
       case "reply":
         return {
@@ -1077,22 +1119,46 @@ const executeSubagentAction = async (
       case "interrupt":
       case "resume":
       case "stop": {
+        if (input.action !== "resume" && input.message !== undefined)
+          return yield* new InvalidSubagentRequestError({
+            message: 'subagent_lifecycle message is valid only when action="resume".',
+          });
         const ids = yield* requiredTargetIds(input.action, input.runIds);
-        const runs = yield* Effect.forEach(
+        const outcomes = yield* Effect.forEach(
           ids,
           (id) => {
-            switch (input.action) {
-              case "interrupt":
-                return service.interrupt(id);
-              case "resume":
-                return service.resume(id, input.message);
-              case "stop":
-                return service.stop(id);
-            }
+            const operation = (() => {
+              switch (input.action) {
+                case "interrupt":
+                  return service.interrupt(id);
+                case "resume":
+                  return service.resume(id, input.message);
+                case "stop":
+                  return service.stop(id);
+              }
+            })();
+            return operation.pipe(
+              Effect.match({
+                onFailure: (error) => ({
+                  failure: {
+                    id,
+                    message: error.message,
+                    code: subagentErrorCode(error),
+                  } satisfies SubagentActionFailure,
+                }),
+                onSuccess: (run) => ({ run }),
+              }),
+            );
           },
           { concurrency: 8 },
         );
-        return { runs, timedOut: false };
+        return {
+          runs: outcomes.flatMap((outcome) => ("run" in outcome ? [outcome.run] : [])),
+          actionFailures: outcomes.flatMap((outcome) =>
+            "failure" in outcome ? [outcome.failure] : [],
+          ),
+          timedOut: false,
+        };
       }
       case "rename":
         return {
@@ -1125,6 +1191,7 @@ const executeSubagentAction = async (
   let executionResult: {
     readonly runs: ReadonlyArray<SubagentRunView>;
     readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
+    readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
     readonly timedOut: boolean;
     readonly text?: string;
   };
@@ -1136,6 +1203,7 @@ const executeSubagentAction = async (
 
   const { runs, timedOut, text: formattedText } = executionResult;
   const startFailures = executionResult.startFailures ?? [];
+  const actionFailures = executionResult.actionFailures ?? [];
   const details: SubagentToolDetails =
     input.action === "start"
       ? {
@@ -1150,19 +1218,27 @@ const executeSubagentAction = async (
             awaitUntil: input.until,
             ...(timedOut ? { timedOut: true } : {}),
           }
-        : { action: input.action, ...(timedOut ? { timedOut: true } : {}) };
+        : {
+            action: input.action,
+            ...(actionFailures.length > 0 ? { runs, actionFailures } : {}),
+            ...(timedOut ? { timedOut: true } : {}),
+          };
   const text =
     input.action === "start"
       ? formatStartResult(runs, startFailures)
-      : runs.length === 0
-        ? "No subagent runs."
-        : input.action === "list"
-          ? runs.map((run) => formatRun(run)).join("\n")
-          : input.action === "status"
-            ? (formattedText ?? formatDetailedRuns(runs).text)
-            : input.action === "await"
+      : actionFailures.length > 0
+        ? [managementAcknowledgement(input.action, runs), formatActionFailures(actionFailures)]
+            .filter(Boolean)
+            .join("\n\n")
+        : runs.length === 0
+          ? "No subagent runs."
+          : input.action === "list"
+            ? runs.map((run) => formatRun(run)).join("\n")
+            : input.action === "status"
               ? (formattedText ?? formatDetailedRuns(runs).text)
-              : managementAcknowledgement(input.action, runs);
+              : input.action === "await"
+                ? (formattedText ?? formatDetailedRuns(runs).text)
+                : managementAcknowledgement(input.action, runs);
   return { content: [{ type: "text", text }], details };
 };
 
@@ -1243,7 +1319,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_start",
     label: "Start Subagents",
     description:
-      "Launch one to twelve session-scoped foreground or background subagents from one agents array. Successful launches remain active when a peer launch fails.",
+      "Launch one to twelve session-scoped subagents from one agents array. Background is the default; foreground blocks this call until the run finishes, pauses, or asks a parent question. Successful launches remain active when a peer launch fails.",
     promptSnippet: "Launch one or more delegated subagents with explicit backend and write intent",
     promptGuidelines: [
       "Use subagent_start for delegated work that can proceed independently; background is the default launch mode.",
@@ -1251,7 +1327,8 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
       "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",
       "When unsure of a model, call subagent_models first and pass its backend and model values to subagent_start verbatim.",
-      'Backend "pi" takes an authenticated canonical provider/model (or inherits the parent); backend "claude-cli" always starts fresh context and takes only a Claude alias or full Claude model ID, never a Pi provider/model.',
+      'Backend "pi" takes an authenticated canonical provider/model (or inherits the parent); backend "claude-cli" always starts fresh context and takes only a Claude alias or full model ID beginning with "claude", never a Pi provider/model.',
+      "Choose backend pi when the child may need mid-turn guidance, interruption, or parent questions; claude-cli supports await, stop, local rename, and resume after completion but not those interactive controls.",
     ],
     parameters: StartParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
@@ -1279,7 +1356,8 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   const status = defineTool({
     name: "subagent_status",
     label: "Subagent Status",
-    description: "Inspect up to twelve specific subagent run IDs.",
+    description:
+      "Inspect up to twelve specific subagent run IDs, including each run's backend capabilities.",
     parameters: StatusParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { action: "status", ...input }, signal, onUpdate, ctx),
@@ -1308,7 +1386,8 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   const send = defineTool({
     name: "subagent_send",
     label: "Send Subagent Guidance",
-    description: "Send the same guidance message to one or more running subagents.",
+    description:
+      "Send the same guidance message to one or more running Pi-backend subagents. claude-cli runs cannot receive mid-turn guidance; await, stop, or resume them after completion instead. Mixed-target calls report each success and failure.",
     parameters: SendParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { action: "send", ...input }, signal, onUpdate, ctx),
@@ -1319,7 +1398,8 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   const reply = defineTool({
     name: "subagent_reply",
     label: "Reply to Subagent",
-    description: "Answer a blocking question from one subagent waiting for its parent.",
+    description:
+      "Answer a blocking parent question from one Pi-backend subagent. claude-cli runs do not support parent questions.",
     parameters: ReplyParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { action: "reply", ...input }, signal, onUpdate, ctx),
@@ -1331,7 +1411,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_lifecycle",
     label: "Subagent Lifecycle",
     description:
-      "Interrupt, resume, or stop one or more subagents. Interrupt pauses work and is not a status operation.",
+      "Interrupt, resume, or stop one or more subagents. Interrupt pauses Pi-backend runs; claude-cli runs cannot be interrupted but can be stopped or resumed after completion. Message is valid only for resume. Mixed-target calls report each success and failure.",
     parameters: LifecycleParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, input, signal, onUpdate, ctx),

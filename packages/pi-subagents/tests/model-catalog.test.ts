@@ -92,6 +92,10 @@ describe("model catalog", () => {
     expect(claudeCliModelConflict("unknown/model", available)).toMatchObject({
       code: "claude_model_invalid",
     });
+    expect(claudeCliModelConflict("gpt-4o", available)).toMatchObject({
+      code: "claude_model_invalid",
+      message: expect.stringContaining('ID beginning with "claude"'),
+    });
     expect(claudeCliModelConflict("opus", available)).toBeUndefined();
     // A claude-prefixed ID stays valid for claude-cli even when a Pi provider also serves it.
     expect(claudeCliModelConflict("claude-opus-5", available)).toBeUndefined();

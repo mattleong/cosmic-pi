@@ -56,6 +56,7 @@ import {
   isTerminalRunState,
   PI_SUBAGENT_CAPABILITIES,
   type StartSubagentRequest,
+  type SubagentBackend,
   type SubagentCapability,
   type SubagentProjection,
   type SubagentRunView,
@@ -143,6 +144,23 @@ const notFound = (id: string) =>
   new SubagentNotFoundError({ id, message: `Subagent run not found: ${id}` });
 const capabilitiesFor = (request: StartSubagentRequest) =>
   request.backend === "claude-cli" ? CLAUDE_CLI_SUBAGENT_CAPABILITIES : PI_SUBAGENT_CAPABILITIES;
+const unsupportedCapabilityMessage = (
+  backend: SubagentBackend,
+  capability: SubagentCapability,
+  id: string,
+): string => {
+  switch (capability) {
+    case "steer":
+      return `${backend} subagents do not support mid-turn guidance. Await with subagent_await({ runIds: ["${id}"], until: "all_finished", timeoutSeconds: 0 }), inspect with subagent_status({ runIds: ["${id}"] }), or stop with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }).`;
+    case "interrupt":
+      return `${backend} subagents do not support interruption. Stop with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) or wait with subagent_await.`;
+    case "parent-contact":
+      return `${backend} subagents do not support parent questions or subagent_reply; use subagent_await or subagent_status instead.`;
+    default:
+      return `${backend} subagents do not support ${capability}. Inspect supported operations with subagent_status({ runIds: ["${id}"] }).`;
+  }
+};
+
 const requireCapability = (
   record: RunRecord,
   capability: SubagentCapability,
@@ -153,7 +171,7 @@ const requireCapability = (
         new UnsupportedSubagentCapabilityError({
           backend: record.view.backend,
           capability,
-          message: `${record.view.backend} subagents do not support ${capability}.`,
+          message: unsupportedCapabilityMessage(record.view.backend, capability, record.view.id),
         }),
       );
 
@@ -649,7 +667,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         if (request.backend === "claude-cli" && !isClaudeModelSelector(request.model))
           return yield* new InvalidSubagentRequestError({
             code: "claude_model_invalid",
-            message: "Claude model must be an alias or full model ID of at most 128 characters.",
+            message:
+              'Claude model must be fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
           });
         if (
           request.backend === "claude-cli" &&

@@ -50,6 +50,29 @@ describe("subagent host notifier", () => {
     });
   });
 
+  it("names the exact reply tool when a subagent asks a parent question", () => {
+    const sendMessage = vi.fn();
+    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+
+    notify({
+      type: "question",
+      id: "agent-7",
+      name: "reviewer",
+      requestId: "question-1",
+      message: "Should I update the fixture?",
+    });
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage.mock.calls[0]?.[0].content).toContain(
+      'subagent_reply({ runId: "agent-7", message: "..." })',
+    );
+    expect(sendMessage.mock.calls[0]?.[0].content).not.toContain("subagent({ action:");
+    expect(sendMessage.mock.calls[0]?.[1]).toEqual({
+      deliverAs: "steer",
+      triggerTurn: true,
+    });
+  });
+
   it("explains a single completion without a final report", () => {
     const sendMessage = vi.fn();
     const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
@@ -99,7 +122,7 @@ describe("subagent host notifier", () => {
     expect(sendMessage.mock.calls[1]?.[0].content).toContain("agent-2");
     expect(sendMessage.mock.calls[1]?.[0].content).toContain("(continued 2)");
     expect(sendMessage.mock.calls[1]?.[0].content).toContain(
-      "[Report truncated; use subagent status or await for agent-2.]",
+      "[Report truncated; use subagent_status or subagent_await for agent-2.]",
     );
     expect(delivery?.deliveredCompletionKeys).toEqual(["agent-1:1", "agent-2:1"]);
   });

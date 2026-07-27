@@ -10,7 +10,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { piToolsForWriteIntent } from "../src/run/coordination.ts";
-import { SubagentProcessError } from "../src/run/errors.ts";
+import { InvalidSubagentRequestError, SubagentProcessError } from "../src/run/errors.ts";
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
 import {
   SubagentService,
@@ -28,6 +28,7 @@ import {
 
 interface CapturedTool {
   readonly name: string;
+  readonly description?: string;
   readonly renderShell?: "default" | "self";
   readonly renderCall?: (...args: ReadonlyArray<unknown>) => unknown;
   readonly renderResult?: (...args: ReadonlyArray<unknown>) => unknown;
@@ -231,6 +232,17 @@ describe("subagent tool", () => {
     expect(properties("subagent_reply")).toEqual(["runId", "message"]);
     expect(properties("subagent_lifecycle")).toEqual(["action", "runIds", "message"]);
     expect(properties("subagent_rename")).toEqual(["runId", "name"]);
+    expect(tools.get("subagent_start")?.description).toContain("foreground blocks this call");
+    expect(tools.get("subagent_status")?.description).toContain("backend capabilities");
+    expect(tools.get("subagent_send")?.description).toContain(
+      "claude-cli runs cannot receive mid-turn guidance",
+    );
+    expect(tools.get("subagent_reply")?.description).toContain(
+      "claude-cli runs do not support parent questions",
+    );
+    expect(tools.get("subagent_lifecycle")?.description).toContain(
+      "claude-cli runs cannot be interrupted",
+    );
     for (const tool of tools.values()) {
       expect(tool.renderShell).toBe("default");
       expect(tool.renderCall).toBeTypeOf("function");
@@ -442,6 +454,9 @@ describe("subagent tool", () => {
     expect(tool?.renderCall).toBeTypeOf("function");
     expect(tool?.renderResult).toBeTypeOf("function");
     expect(tool?.promptGuidelines?.join(" ")).toContain("one writer");
+    expect(tool?.promptGuidelines?.join(" ")).toContain(
+      "claude-cli supports await, stop, local rename, and resume after completion",
+    );
     expect(result?.content[0]?.text).toContain("agent-1");
     expect(request).toMatchObject({
       backend: "pi",
@@ -756,6 +771,9 @@ describe("subagent tool", () => {
     expect(text).toContain("Name       auth-review");
     expect(text).toContain("ID         agent-1");
     expect(text).toContain("Model      pi/openai-codex/gpt-5.6-sol · high");
+    expect(text).toContain(
+      "Capabilities steer, interrupt, resume, rename-display, parent-contact, peer-notice, native-fork",
+    );
     expect(text).toContain("Final report\nViewport report.");
     expect(text).not.toContain("Activity:");
     expect(text.match(/Viewport report\./g)).toHaveLength(1);
@@ -834,6 +852,96 @@ describe("subagent tool", () => {
       "Guidance delivered to 2 subagents: agent-1, agent-2.",
     );
     expect(sentResult?.content[0]?.text).not.toContain("Subagent status");
+  });
+
+  it("reports per-target management outcomes without hiding successful side effects", async () => {
+    const sent: string[] = [];
+    const interrupted: string[] = [];
+    const service = subagentServiceDouble({
+      start: () => Effect.succeed(view()),
+      waitForForeground: () => Effect.succeed(view()),
+      awaitTerminal: () => Effect.succeed([]),
+      list: Effect.succeed([]),
+      status: () => Effect.succeed(view()),
+      send: (id) =>
+        id === "agent-2"
+          ? Effect.fail(
+              new InvalidSubagentRequestError({
+                code: "not_running",
+                message: "agent-2 is paused",
+              }),
+            )
+          : Effect.sync(() => (sent.push(id), view({ id }))),
+      reply: () => Effect.succeed(view()),
+      interrupt: (id) =>
+        id === "agent-2"
+          ? Effect.fail(
+              new InvalidSubagentRequestError({
+                code: "already_paused",
+                message: "agent-2 is already paused",
+              }),
+            )
+          : Effect.sync(() => (interrupted.push(id), view({ id, state: "paused" }))),
+      resume: () => Effect.succeed(view()),
+      rename: () => Effect.succeed(view()),
+      stop: () => Effect.succeed(view()),
+      projection: Effect.succeed({ revision: 0, runs: [] }),
+    });
+    const tools = captureSubagentTools(service);
+
+    const sendResult = await tools
+      .get("subagent_send")
+      ?.execute(
+        "call",
+        { runIds: ["agent-1", "agent-2"], message: "Conclude." },
+        undefined,
+        undefined,
+        context,
+      );
+    expect(sent).toEqual(["agent-1"]);
+    expect(sendResult?.content[0]?.text).toContain("Guidance delivered to 1 subagent: agent-1.");
+    expect(sendResult?.content[0]?.text).toContain("Failed targets (1)");
+    expect(sendResult?.content[0]?.text).toContain("agent-2: agent-2 is paused");
+    expect(sendResult?.details).toMatchObject({
+      action: "send",
+      runs: [{ id: "agent-1" }],
+      actionFailures: [{ id: "agent-2", code: "not_running" }],
+    });
+
+    const lifecycleResult = await tools
+      .get("subagent_lifecycle")
+      ?.execute(
+        "call",
+        { action: "interrupt", runIds: ["agent-1", "agent-2"] },
+        undefined,
+        undefined,
+        context,
+      );
+    expect(interrupted).toEqual(["agent-1"]);
+    expect(lifecycleResult?.content[0]?.text).toContain("Paused agent-1.");
+    expect(lifecycleResult?.content[0]?.text).toContain("agent-2 is already paused");
+    expect(lifecycleResult?.details).toMatchObject({
+      action: "interrupt",
+      actionFailures: [{ id: "agent-2", code: "already_paused" }],
+    });
+  });
+
+  it("rejects lifecycle messages for actions that cannot deliver them", async () => {
+    const service = {
+      ...startCapturingService([]),
+      interrupt: () => Effect.succeed(view({ state: "paused" })),
+    };
+    const tool = captureSubagentTools(service).get("subagent_lifecycle");
+
+    await expect(
+      tool?.execute(
+        "call",
+        { action: "interrupt", runIds: ["agent-1"], message: "Pause after this step." },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow('message is valid only when action="resume"');
   });
 
   it("routes focused reply, lifecycle, and rename operations", async () => {
@@ -1104,6 +1212,7 @@ describe("subagent tool", () => {
           },
           { task: "Probe", backend: "claude-cli", model: "gpt-5.6-sol", writeIntent: "read-only" },
           { task: "Probe", backend: "claude-cli", model: "Opus 5", writeIntent: "read-only" },
+          { task: "Probe", backend: "claude-cli", model: "gpt-4o", writeIntent: "read-only" },
         ],
       },
       undefined,
@@ -1117,6 +1226,7 @@ describe("subagent tool", () => {
         { index: 0, code: "backend_model_mismatch" },
         { index: 1, code: "backend_model_mismatch" },
         { index: 2, code: "claude_model_invalid" },
+        { index: 3, code: "claude_model_invalid" },
       ],
     });
     expect(result?.content[0]?.text).toContain('backend "pi"');

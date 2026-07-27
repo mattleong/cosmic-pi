@@ -180,7 +180,7 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
   if (!isClaudeModelSelector(request.model))
     return yield* processError(
       "launch",
-      "Claude model must be an alias or full model ID of at most 128 characters.",
+      'Claude model must be fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
     );
   const events = yield* Queue.dropping<ChildWireEvent, Cause.Done>(EVENT_CAPACITY);
   const ready = yield* Deferred.make<void, SubagentProcessError>();

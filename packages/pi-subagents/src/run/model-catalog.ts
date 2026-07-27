@@ -152,13 +152,18 @@ export const claudeCliModelConflict = (
   if (CLAUDE_CLI_ALIASES.has(trimmed) || trimmed.toLowerCase().startsWith("claude"))
     return undefined;
   const bareMatches = availablePi.filter((model) => model.id === trimmed);
-  if (bareMatches.length === 0) return undefined;
-  const candidates = bareMatches.map(canonicalPiModelId).sort();
+  if (bareMatches.length > 0) {
+    const candidates = bareMatches.map(canonicalPiModelId).sort();
+    return {
+      code: "backend_model_mismatch",
+      message:
+        candidates.length === 1
+          ? `"${trimmed}" is an authenticated Pi model ID; launch it with backend "pi" and model "${candidates[0]}", or pass a Claude alias/full Claude model ID for claude-cli.`
+          : `"${trimmed}" matches authenticated Pi models (${candidates.join(", ")}); launch it with backend "pi" using one canonical value, or pass a Claude alias/full Claude model ID for claude-cli.`,
+    };
+  }
   return {
-    code: "backend_model_mismatch",
-    message:
-      candidates.length === 1
-        ? `"${trimmed}" is an authenticated Pi model ID; launch it with backend "pi" and model "${candidates[0]}", or pass a Claude alias/full Claude model ID for claude-cli.`
-        : `"${trimmed}" matches authenticated Pi models (${candidates.join(", ")}); launch it with backend "pi" using one canonical value, or pass a Claude alias/full Claude model ID for claude-cli.`,
+    code: "claude_model_invalid",
+    message: `"${trimmed}" is not a Claude CLI alias or full Claude model ID. Use fable, sonnet, opus, haiku, or an ID beginning with "claude".`,
   };
 };

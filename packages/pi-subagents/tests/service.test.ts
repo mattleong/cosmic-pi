@@ -443,7 +443,16 @@ describe("SubagentService", () => {
       );
       expect(invalidModel).toMatchObject({
         _tag: "InvalidSubagentRequestError",
-        message: "Claude model must be an alias or full model ID of at most 128 characters.",
+        message:
+          'Claude model must be fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
+      });
+      const nonClaudeModel = yield* Effect.flip(
+        service.start(request({ backend: "claude-cli", model: "gpt-4o" })),
+      );
+      expect(nonClaudeModel).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        message:
+          'Claude model must be fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
       });
       expect(fake.controls).toHaveLength(0);
 
@@ -469,14 +478,40 @@ describe("SubagentService", () => {
         _tag: "UnsupportedSubagentCapabilityError",
         backend: "claude-cli",
         capability: "steer",
+        message: expect.stringContaining('subagent_await({ runIds: ["agent-1"]'),
       });
       const interrupting = yield* Effect.flip(service.interrupt(run.id));
       expect(interrupting).toMatchObject({
         _tag: "UnsupportedSubagentCapabilityError",
         capability: "interrupt",
+        message: expect.stringContaining(
+          'subagent_lifecycle({ action: "stop", runIds: ["agent-1"] })',
+        ),
       });
       expect(fake.controls[0]?.commands.some((command) => command.type === "steer")).toBe(false);
       expect(fake.controls[0]?.commands.some((command) => command.type === "abort")).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("allows local display rename while a run is still starting", () => {
+    const fake = fakeChildLayer(Effect.void, { dropInitialState: true });
+    const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const starting = yield* service
+        .start(request({ name: "initial-name" }))
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () => fake.controls[0]?.commands.some((command) => command.type === "get_state") ?? false,
+      );
+      const [run] = yield* service.list;
+      expect(run?.state).toBe("starting");
+
+      const renamed = yield* service.rename(run!.id, "renamed-while-starting");
+      expect(renamed).toMatchObject({ state: "starting", name: "renamed-while-starting" });
+      expect((yield* service.status(run!.id)).name).toBe("renamed-while-starting");
+
+      yield* Fiber.interrupt(starting);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -1037,6 +1072,10 @@ describe("SubagentService", () => {
 
       const waiting = yield* service.waitForForeground(first.id);
       expect(waiting.question?.message).toBe("Which API should I use?");
+      const guidanceFailure = yield* Effect.flip(service.send(first.id, "Use the public API."));
+      expect(guidanceFailure.message).toContain(
+        `subagent_reply({ runId: "${first.id}", message: "..." })`,
+      );
       const replied = yield* service.reply(first.id, "Use the public API.");
       expect(replied.state).toBe("running");
       expect(fake.controls[0]?.ipc).toContainEqual({
@@ -1200,6 +1239,10 @@ describe("SubagentService", () => {
       const paused = yield* service.interrupt(run.id);
       expect(paused.state).toBe("paused");
       expect(paused.question).toBeUndefined();
+      const guidanceFailure = yield* Effect.flip(service.send(run.id, "Continue."));
+      expect(guidanceFailure.message).toContain(
+        `subagent_lifecycle({ action: "resume", runIds: ["${run.id}"] })`,
+      );
 
       const resumed = yield* service.resume(run.id);
       expect(resumed.state).toBe("running");

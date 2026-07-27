@@ -72,7 +72,7 @@ const boundedCompletionSection = (
 ): string => {
   const section = completionSection(run);
   if (section.length <= maximumLength) return clip(section, maximumLength);
-  const marker = `\n\n[Report truncated; use subagent status or await for ${run.id}.]`;
+  const marker = `\n\n[Report truncated; use subagent_status or subagent_await for ${run.id}.]`;
   return `${clip(section, Math.max(0, maximumLength - marker.length))}${marker}`;
 };
 
@@ -183,7 +183,7 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
       return undefined;
     const content = clip(
       notification.type === "question"
-        ? `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with subagent({ action: "reply", runId: "${notification.id}", message: "..." }).`
+        ? `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with subagent_reply({ runId: "${notification.id}", message: "..." }).`
         : `Subagent ${notification.name} (${notification.id}) warning: ${notification.message}`,
     );
     try {

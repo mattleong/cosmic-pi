@@ -65,15 +65,23 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           yield* requireCapability(selected, "steer");
           if (selected.view.state === "waiting_for_parent")
             return yield* new InvalidSubagentRequestError({
-              message: `Subagent ${id} is waiting for a reply; use action=reply.`,
+              message: `Subagent ${id} is waiting for a parent reply; use subagent_reply({ runId: "${id}", message: "..." }).`,
             });
           if (selected.replyPendingRequestId)
             return yield* new InvalidSubagentRequestError({
               message: `Subagent ${id} already has a parent reply in flight.`,
             });
+          if (selected.view.state === "paused" || selected.view.state === "completed")
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${id} is ${selected.view.state}; resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance.`,
+            });
+          if (selected.view.state === "starting")
+            return yield* new InvalidSubagentRequestError({
+              message: `Subagent ${id} is still starting; wait for it to start before retrying subagent_send.`,
+            });
           if (selected.view.state !== "running")
             return yield* new InvalidSubagentRequestError({
-              message: `Subagent ${id} is ${selected.view.state}; use action=resume.`,
+              message: `Subagent ${id} is ${selected.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
             });
           return selected;
         }),
@@ -276,7 +284,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           const record = yield* requireRecord(id);
           yield* requireCapability(record, "rename-display");
           if (
-            record.view.state === "starting" ||
             record.view.state === "stopping" ||
             record.view.state === "stopped" ||
             record.view.state === "failed"
@@ -284,17 +291,17 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             return yield* new InvalidSubagentRequestError({
               message: `Subagent ${id} cannot be renamed while ${record.view.state}.`,
             });
-          if (record.view.state === "completed") {
+          if (record.view.state === "starting" || record.view.state === "completed") {
             record.view = { ...record.view, name };
             publish();
-            return { record, completedView: snapshotView(record.view) };
+            return { record, localView: snapshotView(record.view) };
           }
           return { record };
         }),
       );
-      if (selected.completedView) {
+      if (selected.localView) {
         yield* sendPeerNotices(id);
-        return selected.completedView;
+        return selected.localView;
       }
       if (selected.record.view.backend === "pi")
         yield* rpc(selected.record, { type: "set_session_name", name });
