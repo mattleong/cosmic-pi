@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 
 export class InvalidSubagentRequestError extends Schema.TaggedErrorClass<InvalidSubagentRequestError>()(
   "InvalidSubagentRequestError",
-  { message: Schema.String },
+  { message: Schema.String, code: Schema.optional(Schema.String) },
 ) {}
 
 export class SubagentNotFoundError extends Schema.TaggedErrorClass<SubagentNotFoundError>()(
@@ -22,8 +22,13 @@ export class SubagentWriterConflictError extends Schema.TaggedErrorClass<Subagen
 
 export class SubagentProcessError extends Schema.TaggedErrorClass<SubagentProcessError>()(
   "SubagentProcessError",
-  { operation: Schema.String, message: Schema.String },
+  { operation: Schema.String, message: Schema.String, code: Schema.optional(Schema.String) },
 ) {}
+
+/** Machine-actionable failure code: an explicit `code` when present, else the error tag. */
+export const subagentErrorCode = (error: SubagentError): string =>
+  ("code" in error && typeof error.code === "string" && error.code !== "" && error.code) ||
+  error._tag;
 
 export class SubagentProtocolError extends Schema.TaggedErrorClass<SubagentProtocolError>()(
   "SubagentProtocolError",

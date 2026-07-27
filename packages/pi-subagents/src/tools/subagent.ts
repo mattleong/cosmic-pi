@@ -25,8 +25,16 @@ import { withCodePreviewShell } from "pi-code-previews";
 import { Type, type Static } from "typebox";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/coordination.ts";
-import { InvalidSubagentRequestError } from "../run/errors.ts";
+import { InvalidSubagentRequestError, subagentErrorCode } from "../run/errors.ts";
 import {
+  CLAUDE_CLI_ALIAS_MODELS,
+  claudeCliModelConflict,
+  launchReadyModelLine,
+  resolvePiModelSelector,
+  searchSubagentModels,
+} from "../run/model-catalog.ts";
+import {
+  isClaudeModelSelector,
   isTerminalRunState,
   type StartSubagentRequest,
   type SubagentEffort,
@@ -72,11 +80,13 @@ const StartSpecParameters = Type.Object({
   ),
   context: Type.Optional(
     StringEnum(["fresh", "fork"] as const, {
-      description: "Child context; defaults to fresh.",
+      description:
+        'Child context; defaults to fresh. "fork" copies the parent Pi conversation and requires backend "pi"; claude-cli supports fresh only.',
     }),
   ),
   backend: StringEnum(["pi", "claude-cli"] as const, {
-    description: "Execution backend.",
+    description:
+      'Execution backend. "pi" runs a Pi RPC child on an authenticated provider/model; "claude-cli" runs the installed Claude Code CLI on a Claude alias or full Claude model ID.',
   }),
   writeIntent: StringEnum(["writer", "read-only"] as const, {
     description: "Only one shared-cwd writer may be active.",
@@ -84,12 +94,13 @@ const StartSpecParameters = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        "Pi provider/model, or Claude alias/full ID (for example fable, sonnet, opus, or haiku). Pi inherits the parent; Claude defaults to sonnet.",
+        'For backend "pi": a canonical provider/model value exactly as listed by subagent_models (omit to inherit the parent model); a bare model ID is accepted only when it matches exactly one authenticated provider. For backend "claude-cli": a Claude alias (fable, sonnet, opus, haiku) or full Claude model ID — never a Pi provider/model; aliases track the CLI default, so an exact Claude version needs its full model ID. Claude defaults to sonnet.',
     }),
   ),
   effort: Type.Optional(
     StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, {
-      description: "Thinking effort. Omit to inherit the parent effort.",
+      description:
+        "Thinking effort. Omit to inherit the parent effort. claude-cli supports low through max only; off and minimal are rejected.",
     }),
   ),
 });
@@ -108,7 +119,13 @@ const MessageParameters = Type.String({
 const ModelsParameters = Type.Object({
   query: Type.Optional(
     Type.String({
-      description: "Optional model search text; whitespace-separated terms match independently.",
+      description:
+        "Optional search text; every whitespace-separated term must match, so extra terms narrow the results.",
+    }),
+  ),
+  backend: Type.Optional(
+    StringEnum(["pi", "claude-cli"] as const, {
+      description: "Optional backend filter.",
     }),
   ),
 });
@@ -192,6 +209,8 @@ export interface SubagentStartFailure {
   readonly index: number;
   readonly name?: string;
   readonly message: string;
+  /** Machine-actionable failure code (specific validation code or the error tag). */
+  readonly code?: string;
 }
 
 export interface SubagentToolDetails {
@@ -280,22 +299,40 @@ function resolvePiModel(
 > {
   return Effect.gen(function* () {
     const requested = input.model?.trim();
-    const inherited = ctx.model;
-    const modelId = requested ?? (inherited ? `${inherited.provider}/${inherited.id}` : undefined);
-    if (!modelId)
-      return yield* new InvalidSubagentRequestError({
-        message: "No parent model is active; specify model.",
-      });
-    const slash = modelId.indexOf("/");
-    if (slash <= 0 || slash === modelId.length - 1)
-      return yield* new InvalidSubagentRequestError({
-        message: "model must use canonical provider/model form.",
-      });
-    const provider = modelId.slice(0, slash);
-    const id = modelId.slice(slash + 1);
+    let provider: string;
+    let id: string;
+    if (requested) {
+      const available = ctx.modelRegistry
+        .getAvailable()
+        .map((model) => ({ provider: model.provider, id: model.id }));
+      const resolution = resolvePiModelSelector(requested, available);
+      if (resolution.kind === "ambiguous")
+        return yield* new InvalidSubagentRequestError({
+          code: "pi_model_ambiguous",
+          message: `Pi model "${requested}" matches multiple authenticated providers: ${resolution.candidates.join(", ")}. Pass one canonical provider/model value.`,
+        });
+      if (resolution.kind === "unknown")
+        return yield* new InvalidSubagentRequestError({
+          code: "pi_model_unknown",
+          message: `Unknown or unauthenticated Pi model "${requested}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${resolution.nearMatches.join(", ")}.` : ""} Use subagent_models for launch-ready values.`,
+        });
+      provider = resolution.provider;
+      id = resolution.id;
+    } else {
+      const inherited = ctx.model;
+      if (!inherited)
+        return yield* new InvalidSubagentRequestError({
+          code: "pi_model_missing",
+          message: "No parent model is active; specify model.",
+        });
+      provider = inherited.provider;
+      id = inherited.id;
+    }
+    const modelId = `${provider}/${id}`;
     const model = ctx.modelRegistry.find(provider, id);
     if (!model || !ctx.modelRegistry.hasConfiguredAuth(model))
       return yield* new InvalidSubagentRequestError({
+        code: "pi_model_unauthenticated",
         message: `Model is unavailable or unauthenticated: ${modelId}`,
       });
     if (ctx.modelRegistry.getProviderAuthStatus(model.provider).source !== "runtime")
@@ -329,11 +366,13 @@ function resolveStart(
     const backend = input.backend;
     if (backend === "claude-cli" && !ctx.isProjectTrusted())
       return yield* new InvalidSubagentRequestError({
+        code: "claude_untrusted",
         message:
           "Claude CLI subagents require a trusted project because claude -p skips its trust dialog.",
       });
     if (backend === "claude-cli" && input.context === "fork")
       return yield* new InvalidSubagentRequestError({
+        code: "claude_context_unsupported",
         message: "Claude CLI does not support forked Pi context yet; use context=fresh.",
       });
     if (
@@ -342,8 +381,25 @@ function resolveStart(
       (input.effort === "off" || input.effort === "minimal")
     )
       return yield* new InvalidSubagentRequestError({
-        message: `Claude CLI does not support effort ${input.effort}.`,
+        code: "claude_effort_unsupported",
+        message: `Claude CLI does not support effort ${input.effort}; use low through max.`,
       });
+    if (backend === "claude-cli" && input.model?.trim()) {
+      const requested = input.model.trim();
+      const conflict = claudeCliModelConflict(
+        requested,
+        ctx.modelRegistry
+          .getAvailable()
+          .map((model) => ({ provider: model.provider, id: model.id })),
+      );
+      if (conflict) return yield* new InvalidSubagentRequestError(conflict);
+      if (!isClaudeModelSelector(requested))
+        return yield* new InvalidSubagentRequestError({
+          code: "claude_model_invalid",
+          message:
+            "Claude model must be a Claude alias (fable, sonnet, opus, haiku) or a full Claude model ID of at most 128 characters.",
+        });
+    }
     const resolved =
       backend === "pi"
         ? yield* resolvePiModel(input, ctx)
@@ -483,7 +539,6 @@ function availableModels(
   input: SubagentModelsInput,
   ctx: ExtensionContext,
 ): ReadonlyArray<SubagentModelView> {
-  const queryTerms = input.query?.trim().toLowerCase().split(/\s+/).filter(Boolean) ?? [];
   const piModels: ReadonlyArray<SubagentModelView> = ctx.modelRegistry
     .getAvailable()
     .map((model) => ({
@@ -492,19 +547,11 @@ function availableModels(
       name: model.name,
       reasoning: model.reasoning,
     }));
-  const claudeModels: ReadonlyArray<SubagentModelView> = [
-    { backend: "claude-cli", id: "fable", name: "Claude Fable", reasoning: true },
-    { backend: "claude-cli", id: "sonnet", name: "Claude Sonnet", reasoning: true },
-    { backend: "claude-cli", id: "opus", name: "Claude Opus", reasoning: true },
-    { backend: "claude-cli", id: "haiku", name: "Claude Haiku", reasoning: true },
-  ];
-  return [...piModels, ...claudeModels]
-    .filter((model) => {
-      if (queryTerms.length === 0) return true;
-      const searchable = `${model.backend} ${model.id} ${model.name}`.toLowerCase();
-      return queryTerms.some((term) => searchable.includes(term));
-    })
-    .slice(0, 100);
+  return searchSubagentModels(
+    [...piModels, ...CLAUDE_CLI_ALIAS_MODELS],
+    input.query,
+    input.backend,
+  );
 }
 
 const awaitProgressHeader = (
@@ -904,12 +951,10 @@ const executeSubagentAction = async (
           type: "text",
           text:
             models.length > 0
-              ? models
-                  .map(
-                    (model) =>
-                      `${model.backend}/${model.id} · ${model.reasoning ? "reasoning" : "no reasoning"}`,
-                  )
-                  .join("\n")
+              ? [
+                  "Pass backend and model to subagent_start exactly as listed.",
+                  ...models.map(launchReadyModelLine),
+                ].join("\n")
               : "No matching models.",
         },
       ],
@@ -964,6 +1009,7 @@ const executeSubagentAction = async (
                     index,
                     ...(spec.name?.trim() ? { name: spec.name.trim() } : {}),
                     message: error.message,
+                    code: subagentErrorCode(error),
                   } satisfies SubagentStartFailure,
                 }),
                 onSuccess: (run) => ({ run }),
@@ -1184,7 +1230,8 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
   const models = defineTool({
     name: "subagent_models",
     label: "Subagent Models",
-    description: "List authenticated Pi models and Claude CLI aliases available to subagents.",
+    description:
+      "List launch-ready subagent models: authenticated Pi provider/model values and Claude CLI aliases. Each line shows the exact backend and model values subagent_start accepts; all search terms must match.",
     parameters: ModelsParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { action: "models", ...input }, signal, onUpdate, ctx),
@@ -1203,6 +1250,8 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
       "Every subagent_start agent must explicitly declare writeIntent as writer or read-only.",
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
       "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",
+      "When unsure of a model, call subagent_models first and pass its backend and model values to subagent_start verbatim.",
+      'Backend "pi" takes an authenticated canonical provider/model (or inherits the parent); backend "claude-cli" always starts fresh context and takes only a Claude alias or full Claude model ID, never a Pi provider/model.',
     ],
     parameters: StartParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>

@@ -30,6 +30,7 @@ import {
   piToolsForWriteIntent,
 } from "../run/coordination.ts";
 import { SubagentProcessError } from "../run/errors.ts";
+import { ensureClaudeCliReady } from "./claude-preflight.ts";
 import { acquireClaudeChild } from "./claude-process.ts";
 import { terminateProcessTree } from "./process-tree.ts";
 import type { ParentReply, PeerNotice, RpcCommand } from "../run/protocol.ts";
@@ -503,7 +504,10 @@ export class ChildProcess extends Context.Service<ChildProcess, ChildProcessShap
   static readonly layer = Layer.succeed(this, {
     spawn: (request) =>
       request.backend === "claude-cli"
-        ? Effect.acquireRelease(acquireClaudeChild(request), (handle) => handle.release).pipe(
+        ? ensureClaudeCliReady().pipe(
+            Effect.andThen(
+              Effect.acquireRelease(acquireClaudeChild(request), (handle) => handle.release),
+            ),
             Effect.map(({ release: _release, ...handle }) => handle),
           )
         : Effect.acquireRelease(acquireChild(request), (handle) => handle.release).pipe(

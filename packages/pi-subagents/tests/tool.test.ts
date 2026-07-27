@@ -138,6 +138,57 @@ const context = {
   isProjectTrusted: () => true,
 } as unknown as ExtensionContext;
 
+const registryContext = (
+  available: ReadonlyArray<{
+    readonly provider: string;
+    readonly id: string;
+    readonly name: string;
+    readonly reasoning: boolean;
+  }>,
+): ExtensionContext =>
+  ({
+    ...(context as unknown as Record<string, unknown>),
+    modelRegistry: {
+      getAvailable: () => [...available],
+      find: (provider: string, id: string) =>
+        available.find((model) => model.provider === provider && model.id === id),
+      hasConfiguredAuth: () => true,
+      getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
+      getApiKeyAndHeaders: () => Promise.resolve({ ok: true, apiKey: "stored-key" }),
+    },
+  }) as unknown as ExtensionContext;
+
+const startCapturingService = (requests: StartSubagentRequest[]) =>
+  subagentServiceDouble({
+    start: (input) =>
+      Effect.sync(() => {
+        requests.push(input);
+        return view({ id: `agent-${requests.length}`, backend: input.backend, model: input.model });
+      }),
+    waitForForeground: () => Effect.succeed(view()),
+    awaitTerminal: () => Effect.succeed([]),
+    list: Effect.succeed([]),
+    status: () => Effect.succeed(view()),
+    send: () => Effect.succeed(view()),
+    reply: () => Effect.succeed(view()),
+    interrupt: () => Effect.succeed(view()),
+    resume: () => Effect.succeed(view()),
+    rename: () => Effect.succeed(view()),
+    stop: () => Effect.succeed(view()),
+    projection: Effect.succeed({ revision: 0, runs: [] }),
+  });
+
+interface CapturedModelView {
+  readonly backend: "pi" | "claude-cli";
+  readonly id: string;
+}
+
+const modelViews = (
+  result: { readonly details?: unknown } | undefined,
+): ReadonlyArray<CapturedModelView> =>
+  (result?.details as { readonly models?: ReadonlyArray<CapturedModelView> } | undefined)?.models ??
+  [];
+
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
 
@@ -169,7 +220,7 @@ describe("subagent tool", () => {
         | undefined;
     const properties = (name: string): ReadonlyArray<string> =>
       Object.keys(schema(name)?.properties ?? {});
-    expect(properties("subagent_models")).toEqual(["query"]);
+    expect(properties("subagent_models")).toEqual(["query", "backend"]);
     expect(properties("subagent_start")).toEqual(["agents"]);
     expect(properties("subagent_list")).toEqual([]);
     expect(properties("subagent_status")).toEqual(["runIds"]);
@@ -910,6 +961,206 @@ describe("subagent tool", () => {
     expect(consumed).toEqual([{ id: "agent-1", generation: 1 }]);
   });
 
+  it("returns launch-ready discovery values that round-trip into start verbatim", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const service = startCapturingService(requests);
+    const ctx = registryContext([
+      { provider: "openai-codex", id: "gpt-5.6-sol", name: "GPT 5.6 Sol", reasoning: true },
+      { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5", reasoning: true },
+    ]);
+    const tools = captureSubagentTools(service, ["read", "grep"]);
+
+    const models = await tools
+      .get("subagent_models")
+      ?.execute("call", {}, undefined, undefined, ctx);
+    const views = modelViews(models);
+    expect(views.map((model) => `${model.backend} ${model.id}`)).toEqual([
+      "pi openai-codex/gpt-5.6-sol",
+      "pi anthropic/claude-opus-5",
+      "claude-cli fable",
+      "claude-cli sonnet",
+      "claude-cli opus",
+      "claude-cli haiku",
+    ]);
+    for (const model of views) {
+      const started = await tools.get("subagent_start")?.execute(
+        "call",
+        {
+          agents: [
+            { task: "Probe", backend: model.backend, model: model.id, writeIntent: "read-only" },
+          ],
+        },
+        undefined,
+        undefined,
+        ctx,
+      );
+      expect(started?.details).not.toHaveProperty("startFailures");
+    }
+    expect(requests.map((request) => `${request.backend} ${request.model}`)).toEqual(
+      views.map((model) => `${model.backend} ${model.id}`),
+    );
+  });
+
+  it("narrows multi-term discovery queries with AND semantics and a backend filter", async () => {
+    const service = startCapturingService([]);
+    const ctx = registryContext([
+      { provider: "openai-codex", id: "gpt-5.5", name: "GPT 5.5", reasoning: true },
+      { provider: "xai", id: "grok-5-fast", name: "Grok 5 Fast", reasoning: true },
+      { provider: "zai", id: "glm-5-air", name: "GLM 5 Air", reasoning: false },
+      { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5", reasoning: true },
+    ]);
+    const modelsTool = captureSubagentTools(service).get("subagent_models");
+
+    const narrowed = await modelsTool?.execute(
+      "call",
+      { query: "opus 5" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(modelViews(narrowed).map((model) => model.id)).toEqual(["anthropic/claude-opus-5"]);
+
+    const filtered = await modelsTool?.execute(
+      "call",
+      { backend: "claude-cli" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(modelViews(filtered).map((model) => model.id)).toEqual([
+      "fable",
+      "sonnet",
+      "opus",
+      "haiku",
+    ]);
+  });
+
+  it("rejects duplicate bare Pi model IDs with canonical candidates instead of picking one", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const service = startCapturingService(requests);
+    const ctx = registryContext([
+      { provider: "openai", id: "gpt-5.5", name: "GPT 5.5", reasoning: true },
+      { provider: "openrouter", id: "gpt-5.5", name: "GPT 5.5 (OpenRouter)", reasoning: true },
+      { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5", reasoning: true },
+    ]);
+    const tool = captureSubagentTools(service, ["read"]).get("subagent_start");
+
+    const ambiguous = await tool?.execute(
+      "call",
+      { agents: [{ task: "Probe", backend: "pi", model: "gpt-5.5", writeIntent: "read-only" }] },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(requests).toHaveLength(0);
+    expect(ambiguous?.details).toMatchObject({
+      startFailures: [{ index: 0, code: "pi_model_ambiguous" }],
+    });
+    expect(ambiguous?.content[0]?.text).toContain("openai/gpt-5.5, openrouter/gpt-5.5");
+
+    await tool?.execute(
+      "call",
+      {
+        agents: [
+          { task: "Probe", backend: "pi", model: "claude-opus-5", writeIntent: "read-only" },
+        ],
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(requests.map((request) => request.model)).toEqual(["anthropic/claude-opus-5"]);
+
+    const unknown = await tool?.execute(
+      "call",
+      { agents: [{ task: "Probe", backend: "pi", model: "gpt-5.9", writeIntent: "read-only" }] },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(unknown?.details).toMatchObject({
+      startFailures: [{ index: 0, code: "pi_model_unknown" }],
+    });
+    expect(requests).toHaveLength(1);
+  });
+
+  it("fails claude-cli launches that use Pi model selectors before any start", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const service = startCapturingService(requests);
+    const ctx = registryContext([
+      { provider: "openai-codex", id: "gpt-5.6-sol", name: "GPT 5.6 Sol", reasoning: true },
+    ]);
+    const tool = captureSubagentTools(service, ["read"]).get("subagent_start");
+
+    const result = await tool?.execute(
+      "call",
+      {
+        agents: [
+          {
+            task: "Probe",
+            backend: "claude-cli",
+            model: "openai-codex/gpt-5.6-sol",
+            writeIntent: "read-only",
+          },
+          { task: "Probe", backend: "claude-cli", model: "gpt-5.6-sol", writeIntent: "read-only" },
+          { task: "Probe", backend: "claude-cli", model: "Opus 5", writeIntent: "read-only" },
+        ],
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(requests).toHaveLength(0);
+    expect(result?.details).toMatchObject({
+      startFailures: [
+        { index: 0, code: "backend_model_mismatch" },
+        { index: 1, code: "backend_model_mismatch" },
+        { index: 2, code: "claude_model_invalid" },
+      ],
+    });
+    expect(result?.content[0]?.text).toContain('backend "pi"');
+  });
+
+  it("rejects claude-cli fork context and unsupported efforts before launch", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const service = startCapturingService(requests);
+    const tool = captureSubagentTools(service, ["read"]).get("subagent_start");
+
+    const result = await tool?.execute(
+      "call",
+      {
+        agents: [
+          {
+            task: "Probe",
+            backend: "claude-cli",
+            model: "sonnet",
+            context: "fork",
+            writeIntent: "read-only",
+          },
+          {
+            task: "Probe",
+            backend: "claude-cli",
+            model: "sonnet",
+            effort: "off",
+            writeIntent: "read-only",
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(requests).toHaveLength(0);
+    expect(result?.details).toMatchObject({
+      startFailures: [
+        { index: 0, code: "claude_context_unsupported" },
+        { index: 1, code: "claude_effort_unsupported" },
+      ],
+    });
+  });
+
   it("requires launch policy fields in-schema and lists models without a runtime", async () => {
     const tools = captureSubagentTools({} as SubagentServiceShape);
     const modelsTool = tools.get("subagent_models");
@@ -927,14 +1178,22 @@ describe("subagent tool", () => {
       "backend",
       "writeIntent",
     ]);
-    const models = await modelsTool?.execute(
+    const piModels = await modelsTool?.execute(
       "call",
-      { query: "fable sol" },
+      { query: "sol" },
       undefined,
       undefined,
       context,
     );
-    expect(models?.content[0]?.text).toContain("openai-codex/gpt-5.6-sol");
-    expect(models?.content[0]?.text).toContain("claude-cli/fable");
+    expect(piModels?.content[0]?.text).toContain("backend=pi model=openai-codex/gpt-5.6-sol");
+    expect(piModels?.content[0]?.text).not.toContain("model=fable");
+    const claudeModels = await modelsTool?.execute(
+      "call",
+      { query: "fable" },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(claudeModels?.content[0]?.text).toContain("backend=claude-cli model=fable");
   });
 });

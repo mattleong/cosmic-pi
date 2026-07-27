@@ -638,14 +638,17 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           return yield* new InvalidSubagentRequestError({ message: "Subagent task is required." });
         if (request.backend === "claude-cli" && !request.projectTrusted)
           return yield* new InvalidSubagentRequestError({
+            code: "claude_untrusted",
             message: "Claude CLI subagents require a trusted project.",
           });
         if (request.backend === "claude-cli" && request.context === "fork")
           return yield* new InvalidSubagentRequestError({
+            code: "claude_context_unsupported",
             message: "Claude CLI does not support forked Pi context yet.",
           });
         if (request.backend === "claude-cli" && !isClaudeModelSelector(request.model))
           return yield* new InvalidSubagentRequestError({
+            code: "claude_model_invalid",
             message: "Claude model must be an alias or full model ID of at most 128 characters.",
           });
         if (
@@ -654,6 +657,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           (request.effort === "off" || request.effort === "minimal")
         )
           return yield* new InvalidSubagentRequestError({
+            code: "claude_effort_unsupported",
             message: `Claude CLI does not support effort ${request.effort}.`,
           });
         if (request.task.length > MAX_TASK_CHARS)
