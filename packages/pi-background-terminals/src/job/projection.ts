@@ -26,10 +26,11 @@ export function sortJobViews(
 }
 
 export function footerStatus(projection: BackgroundTerminalProjection): string | undefined {
-  const running = projection.jobs.filter((job) => isActiveJobState(job.state)).length;
+  const active = projection.jobs.filter((job) => isActiveJobState(job.state)).length;
   const failed = projection.jobs.filter(
     (job) => job.state === "failed" || job.state === "timed_out",
   ).length;
-  if (running === 0 && failed === 0) return undefined;
-  return `bg: ${running} running${failed > 0 ? ` · ${failed} failed` : ""}`;
+  if (active === 0 && failed === 0) return undefined;
+  if (active === 0) return `${failed} background job${failed === 1 ? "" : "s"} failed`;
+  return `${active} background job${active === 1 ? "" : "s"} active${failed > 0 ? ` · ${failed} failed` : ""}`;
 }

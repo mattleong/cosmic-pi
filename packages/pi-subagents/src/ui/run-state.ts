@@ -1,3 +1,4 @@
+import { brailleSpinnerFrame, startingSpinnerFrame } from "pi-cosmic-ui/manager";
 import type { SubagentRunState } from "../run/model.ts";
 
 export const runStateGlyph = (state: SubagentRunState): string => {
@@ -22,9 +23,8 @@ export const runStateGlyph = (state: SubagentRunState): string => {
 };
 
 export const animatedRunStateGlyph = (state: SubagentRunState, frame: number): string => {
-  if (state === "starting") return ["◌", "◔", "◑", "◕"][Math.abs(frame) % 4] ?? "◌";
-  if (state === "running")
-    return ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][Math.abs(frame) % 10] ?? "⠋";
+  if (state === "starting") return startingSpinnerFrame(frame);
+  if (state === "running") return brailleSpinnerFrame(frame);
   return runStateGlyph(state);
 };
 

@@ -20,6 +20,7 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 - `src/boundary/host-footer-projection.ts` materializes hostile Pi getters behind the host-callback boundary.
 - `src/footer/builtin-contributions.ts` projects detached host/application data into built-in text contributions.
 - The remaining `src/footer/` modules own registry/client behavior and pure responsive layout.
+- `src/manager/chrome.ts` exports pure shared manager chrome: fixed-width activity frames and responsive grouped action footers (`pi-cosmic-ui/manager`).
 - `src/probe/`, `src/config/`, `src/settings/`, and `src/working/` are vertical application features.
 - `src/working/service.ts` owns the scoped elapsed-time ticker and streamed-output rate estimate for Pi's working row.
 - `src/boundary/` isolates hostile synchronous host callbacks, including working-message updates.

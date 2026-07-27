@@ -171,7 +171,10 @@ export function createFooterComponent(options: {
             "xai.usage": renderXaiUsageLine,
           };
           const providerUsage = details.filter((entry) => entry.id in providerUsageRenderers);
-          const otherDetails = details.filter((entry) => !(entry.id in providerUsageRenderers));
+          const extensionDetails = details.filter((entry) => entry.id.startsWith("extension."));
+          const otherDetails = details.filter(
+            (entry) => !(entry.id in providerUsageRenderers) && !entry.id.startsWith("extension."),
+          );
           let lines: string[] = [];
           if (modelIdentity.length)
             lines.push(
@@ -199,6 +202,8 @@ export function createFooterComponent(options: {
               ),
             );
           }
+          for (const detail of extensionDetails)
+            lines.push(renderContributionLine([detail], width, theme, compact));
           if (!compact) {
             for (const detail of otherDetails)
               lines.push(renderContributionLine([detail], width, theme, false));

@@ -177,6 +177,8 @@ describe("Cosmic UI extension", () => {
         getExtensionStatuses: () =>
           new Map([
             ["pi-advisor", "⠋ review-model:medium advising…"],
+            ["pi-background-terminals", "2 background jobs active · 1 failed"],
+            ["pi-subagents", "3 subagents active · 1 awaiting reply"],
             ["other-extension", "other ready"],
           ]),
         getAvailableProviderCount: () => 2,
@@ -210,6 +212,15 @@ describe("Cosmic UI extension", () => {
     expect(rendered).toContain("+6L");
     expect(rendered).toContain("~4L");
     expect(rendered).toContain("other ready");
+    const compactStatusLines = footer.render(64);
+    const subagentLine = compactStatusLines.findIndex((line: string) =>
+      line.includes("3 subagents active"),
+    );
+    const backgroundLine = compactStatusLines.findIndex((line: string) =>
+      line.includes("2 background jobs active"),
+    );
+    expect(subagentLine).toBeGreaterThanOrEqual(0);
+    expect(backgroundLine).toBeGreaterThan(subagentLine);
     expect(rendered.indexOf("model-long-name")).toBeLessThan(rendered.indexOf("high"));
     expect(rendered.indexOf("high")).toBeLessThan(rendered.indexOf("/tmp/project"));
     expect(h.ctx.getContextUsage).toHaveBeenCalledTimes(1);

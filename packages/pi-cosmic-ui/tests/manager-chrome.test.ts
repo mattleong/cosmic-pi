@@ -1,0 +1,26 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { describe, expect, it } from "vitest";
+import {
+  brailleSpinnerFrame,
+  renderResponsiveManagerFooter,
+  startingSpinnerFrame,
+} from "../src/manager/chrome.ts";
+
+describe("shared manager chrome", () => {
+  it("projects stable-width activity frames", () => {
+    expect([0, 1, 2, 9].map(brailleSpinnerFrame)).toEqual(["⠋", "⠙", "⠹", "⠏"]);
+    expect([0, 1, 2, 3].map(startingSpinnerFrame)).toEqual(["◌", "◔", "◑", "◕"]);
+  });
+
+  it("selects the first grouped footer variant that fits", () => {
+    const variants = [
+      ["↑↓ Select · C-u/d Scroll", "x Stop", "? Help · Esc Close"],
+      ["↑↓ · C-u/d", "x Stop", "? · Esc"],
+    ];
+    const wide = renderResponsiveManagerFooter(80, variants);
+    expect(wide).toContain("↑↓ Select · C-u/d Scroll │ x Stop │ ? Help · Esc Close");
+    const narrow = renderResponsiveManagerFooter(30, variants);
+    expect(narrow).toContain("↑↓ · C-u/d │ x Stop");
+    expect(visibleWidth(narrow)).toBeLessThanOrEqual(30);
+  });
+});

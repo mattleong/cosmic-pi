@@ -188,19 +188,18 @@ export function builtinContributions(
       priority: 100,
       order: 1000,
     });
-  const remainingStatuses = host.extensionStatuses
-    .filter(({ id }) => id !== "pi-advisor")
-    .map(({ text }) => text)
-    .join(" ");
-  if (remainingStatuses)
+  for (const status of host.extensionStatuses.filter(({ id }) => id !== "pi-advisor")) {
+    const order =
+      status.id === "pi-subagents" ? 1000 : status.id === "pi-background-terminals" ? 1010 : 1020;
     result.push({
       kind: "text",
-      id: "extensions",
+      id: `extension.${status.id}`,
       region: "details",
-      text: remainingStatuses,
+      text: status.text,
       priority: 20,
-      order: 1000,
+      order,
     });
+  }
   return result;
 }
 
@@ -215,7 +214,10 @@ export function orderedContributions(
         !config.footer.hidden.includes(value.id) &&
         !(value.id.startsWith("metrics.") && config.footer.hidden.includes("metrics")) &&
         !(value.id.startsWith("git.") && config.footer.hidden.includes("git")) &&
-        !(value.id === "advisor.status" && config.footer.hidden.includes("extensions")),
+        !(
+          (value.id === "advisor.status" || value.id.startsWith("extension.")) &&
+          config.footer.hidden.includes("extensions")
+        ),
     )
     .sort((a, b) => (order.get(a.id) ?? a.order ?? 500) - (order.get(b.id) ?? b.order ?? 500));
 }

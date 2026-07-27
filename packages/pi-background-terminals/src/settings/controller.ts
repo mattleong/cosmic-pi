@@ -1,7 +1,8 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 // @effect-diagnostics effect/asyncFunction:off
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { BackgroundTerminalProjectionBridge } from "../boundary/host-ui.ts";
+import { startHostUiTicker, type BackgroundTerminalProjectionBridge } from "../boundary/host-ui.ts";
+import { synchronousNow } from "../boundary/native-clock.ts";
 import { ProcessManagerComponent } from "../ui/manager.ts";
 
 export interface ProcessManagerActions {
@@ -25,6 +26,7 @@ async function openProcessManager(
         theme,
         getProjection: bridge.get,
         getHeight: () => tui.terminal.rows,
+        getNow: synchronousNow,
         requestRender: () => tui.requestRender(),
         close: () => done(undefined),
         stop: (id) => void actions.stop(id).catch(() => undefined),
@@ -34,11 +36,18 @@ async function openProcessManager(
         manager.invalidate();
         tui.requestRender();
       });
+      const stopSpinnerTicker = startHostUiTicker(160, () => {
+        if (bridge.get().jobs.some((job) => job.state === "starting" || job.state === "running"))
+          tui.requestRender();
+      });
       return {
         render: (width) => manager.render(width),
         handleInput: (data) => manager.handleInput?.(data),
         invalidate: () => manager.invalidate(),
-        dispose: () => unsubscribe(),
+        dispose: () => {
+          stopSpinnerTicker();
+          unsubscribe();
+        },
       };
     },
     {

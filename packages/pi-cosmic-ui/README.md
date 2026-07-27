@@ -1,6 +1,6 @@
 # pi-cosmic-ui
 
-Composable, responsive UI elements for pi. Cosmic UI provides a custom footer that combines pi's location, session, token, context, model, thinking, and extension-status information with contributions from other extensions. While an agent is running, Pi's working row also shows elapsed time and estimated output speed (for example, `Working · 2m 14s · ~18.4 tok/s`). The estimate uses Pi's four-characters-per-token heuristic across streamed text, thinking, and tool-call arguments. Its generation clock pauses during tool execution, while the working elapsed time continues to show total agent wall time.
+Composable, responsive UI elements for pi. Cosmic UI provides a custom footer that combines pi's location, session, token, context, model, thinking, and extension-status information with contributions from other extensions. Active extension statuses render on separate lines; subagent status is ordered above background-job status. While an agent is running, Pi's working row also shows elapsed time and estimated output speed (for example, `Working · 2m 14s · ~18.4 tok/s`). The estimate uses Pi's four-characters-per-token heuristic across streamed text, thinking, and tool-call arguments. Its generation clock pauses during tool execution, while the working elapsed time continues to show total agent wall time.
 
 ## Install
 
@@ -54,3 +54,5 @@ Each active Pi session owns one scoped Effect runtime. Git and pull-request poll
 The public `pi-cosmic-ui/protocol` subpath exports the versioned `pi.events` channel names and contribution types. A producer first queries for a host and then upserts keyed text or media contributions. Text contributions provide plain text plus a semantic tone so Cosmic UI can apply the active theme. Media contributions may attach to the footer's render request, detach when the footer is hidden or replaced, and dispose when removed. Producers must remove their contributions during `session_shutdown`.
 
 Cosmic UI is the sole custom-footer owner when installed. It does not depend on provider-specific extensions; `pi-better-openai` detects the host and contributes fast-mode and subscription-usage primitives when both packages are loaded.
+
+The public `pi-cosmic-ui/manager` subpath provides pure shared chrome for full-screen extension managers: fixed-width activity frames and responsive grouped footer fitting. `/subagents` and `/ps` use these primitives so their state animation and shortcut presentation remain aligned.

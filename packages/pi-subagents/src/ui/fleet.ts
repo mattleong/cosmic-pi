@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import {
   Key,
   matchesKey,
@@ -212,7 +213,11 @@ export class SubagentFleetComponent implements Component {
   }
 
   private helpText(width: number, selected: SubagentRunView | undefined): string {
-    if (this.pendingStop) return ` x Confirm stop ${this.pendingStop} │ Esc Cancel `;
+    const contentWidth = Math.max(0, width - 2);
+    if (this.pendingStop)
+      return renderResponsiveManagerFooter(contentWidth, [
+        [`x Confirm stop ${this.pendingStop}`, "Esc Cancel"],
+      ]);
     const actions = [
       canMessage(selected)
         ? selected?.state === "waiting_for_parent"
@@ -235,28 +240,25 @@ export class SubagentFleetComponent implements Component {
       canRename(selected) ? "n Name" : undefined,
       canStop(selected) ? "x Stop" : undefined,
     ].filter((item): item is string => item !== undefined);
-    const grouped = (...groups: ReadonlyArray<string | undefined>) =>
-      ` ${groups.filter((group): group is string => Boolean(group)).join(" │ ")} `;
-    const full = grouped(
-      "↑↓ Select · C-u/d Scroll",
-      actions.length > 0 ? actions.join(" · ") : undefined,
-      "t Technical · ? Help · Esc Close",
-    );
-    if (visibleWidth(full) <= Math.max(0, width - 2)) return full;
-    const compact = grouped(
-      "↑↓ · C-u/d",
-      compactActions.length > 0 ? compactActions.join(" · ") : undefined,
-      "t Tech · ? Help · Esc",
-    );
-    if (visibleWidth(compact) <= Math.max(0, width - 2)) return compact;
     if (this.alternateHelp)
-      return grouped(
-        compactActions.length > 0 ? compactActions.join(" · ") : "No actions",
-        "? Keys",
-      );
-    return width >= 60
-      ? grouped("↑↓ Select · C-u/d", "t Details · ? Actions · Esc")
-      : grouped("↑↓ · Enter", "t", "? Actions · Esc");
+      return renderResponsiveManagerFooter(contentWidth, [
+        [compactActions.length > 0 ? compactActions.join(" · ") : "No actions", "? Keys"],
+      ]);
+    return renderResponsiveManagerFooter(contentWidth, [
+      [
+        "↑↓ Select · C-u/d Scroll",
+        actions.length > 0 ? actions.join(" · ") : undefined,
+        "t Technical · ? Help · Esc Close",
+      ],
+      [
+        "↑↓ · C-u/d",
+        compactActions.length > 0 ? compactActions.join(" · ") : undefined,
+        "t Tech · ? Help · Esc",
+      ],
+      width >= 60
+        ? ["↑↓ Select · C-u/d", "t Details · ? Actions · Esc"]
+        : ["↑↓ · Enter", "t", "? Actions · Esc"],
+    ]);
   }
 
   private detailLines(run: SubagentRunView | undefined, width: number): string[] {

@@ -4,7 +4,9 @@ Session-scoped background process management for pi.
 
 The main agent uses one `background_terminal` tool to decide when work should run independently of foreground `bash` calls. Supported actions are `start`, `list`, `status`, `logs`, `stop`, `stop_all`, and `clear`.
 
-Use `/ps` to open the full-screen human process manager. It shows live bounded logs and permits explicit stop or clear actions, but does not provide a command-entry field.
+Use `/ps` to open the full-screen human process manager. It uses the same responsive chrome as `/subagents`: shared Braille activity frames, humanized state rows, grouped capability-aware controls, two-press stop confirmation, and technical metadata on demand. Normal rows show `name · state · elapsed`; job IDs, PID, cwd, and the full command appear only after pressing `t`. `Ctrl-U` / `Ctrl-D` scroll logs, `f` toggles tail following, `Enter` toggles narrow-layout details, `?` switches compact action help, `c` clears retained terminal jobs, and `Esc` closes the manager. It does not provide a command-entry field.
+
+The main Pi footer uses natural status text such as `2 background jobs active · 1 failed`. When `pi-cosmic-ui` renders both extensions, subagent status occupies its own line above background-job status.
 
 `background_terminal` tool calls use the `pi-code-previews` cooperative shell, including its configured background or border treatment and tool-call timing. Log results show a 12-line head/tail preview by default; use `Ctrl+O` (or the configured `app.tools.expand` binding) to reveal the full fetched output. Trusted project preview settings are loaded before the tool is registered for a session.
 

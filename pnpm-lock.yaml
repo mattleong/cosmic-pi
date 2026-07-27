@@ -96,6 +96,9 @@ importers:
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
+      pi-cosmic-ui:
+        specifier: workspace:*
+        version: link:../pi-cosmic-ui
       typebox:
         specifier: 1.1.38
         version: 1.1.38
@@ -318,6 +321,9 @@ importers:
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
+      pi-cosmic-ui:
+        specifier: workspace:*
+        version: link:../pi-cosmic-ui
       typebox:
         specifier: 1.1.38
         version: 1.1.38

@@ -33,6 +33,9 @@ describe("background terminal host projection", () => {
     bridge.publish(running);
     bridge.setContext(context(nextStatus));
     expect(oldStatus).toHaveBeenCalledWith("pi-background-terminals", undefined);
-    expect(nextStatus).toHaveBeenLastCalledWith("pi-background-terminals", "bg: 1 running");
+    expect(nextStatus).toHaveBeenLastCalledWith(
+      "pi-background-terminals",
+      "1 background job active",
+    );
   });
 });

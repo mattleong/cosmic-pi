@@ -1,8 +1,30 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import { emptyProjection, footerStatus } from "../job/projection.ts";
 import type { BackgroundTerminalProjection } from "../job/model.ts";
 
 const STATUS_KEY = "pi-background-terminals";
+
+export const startHostUiTicker = (intervalMs: number, tick: () => void): (() => void) => {
+  const fiber = Effect.runFork(
+    Effect.sleep(intervalMs).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          try {
+            tick();
+          } catch {
+            // The host UI may be tearing down between timer ticks.
+          }
+        }),
+      ),
+      Effect.forever,
+    ),
+  );
+  return () => {
+    void Effect.runFork(Fiber.interrupt(fiber));
+  };
+};
 
 export interface BackgroundTerminalProjectionBridge {
   readonly get: () => BackgroundTerminalProjection;

@@ -20,7 +20,7 @@
 - `src/tools/subagent.ts` — the single agent-facing management tool, including bounded per-agent batch-start validation, partial-failure projection, and cooperative `pi-code-previews` shell rendering.
 - `src/tools/renderers/session-output.ts` — shared width-aware child-session presentation for tool results and fleet details, with grouped activity, Markdown final reports, and optional technical metadata.
 - `src/settings/controller.ts` — `/subagents` command registration.
-- `src/ui/` — pure responsive fleet presentation, shared run-state glyph/color projection, scroll projection, and terminal-text sanitization.
+- `src/ui/` — pure responsive fleet presentation, run-state glyph/color projection, scroll projection, and terminal-text sanitization. Fixed-width activity frames and responsive grouped footer fitting come from `pi-cosmic-ui/manager`, shared with `/ps`.
 
 ## Ownership
 

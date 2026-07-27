@@ -30,6 +30,7 @@
   "exports": {
     ".": "./index.ts",
     "./client": "./src/footer/client.ts",
+    "./manager": "./src/manager/chrome.ts",
     "./protocol": "./src/protocol/protocol.ts"
   },
   "publishConfig": {

@@ -20,8 +20,9 @@ const projection = (states: ReadonlyArray<"running" | "exited" | "failed">) =>
 describe("background terminal projection", () => {
   it("formats compact footer state", () => {
     expect(footerStatus(projection(["running", "running", "failed"]))).toBe(
-      "bg: 2 running · 1 failed",
+      "2 background jobs active · 1 failed",
     );
+    expect(footerStatus(projection(["failed"]))).toBe("1 background job failed");
     expect(footerStatus(projection(["exited"]))).toBeUndefined();
   });
 });
