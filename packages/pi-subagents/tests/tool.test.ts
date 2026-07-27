@@ -143,7 +143,9 @@ describe("subagent tool", () => {
     );
     expect(rendered).toContain("<success>● running-agent</success>");
     expect(rendered).toContain("<warning>? waiting-agent</warning>");
-    expect(rendered).toContain("<toolOutput>waiting for you</toolOutput>");
+    expect(rendered).toContain("<warning>waiting for you</warning>");
+    expect(rendered).toContain("<toolOutput>openai-codex/gpt-5.6-sol</toolOutput>");
+    expect(rendered).toContain("<thinkingHigh>high</thinkingHigh>");
     expect(rendered).toContain("<error>× failed-agent</error>");
     expect(rendered).toContain("<muted>■ stopped-agent</muted>");
     expect(renderAwaitProgress([view({ state: "running" })], "any_finished", theme)).toContain(
@@ -153,10 +155,10 @@ describe("subagent tool", () => {
       "<success>1 agent finished</success>",
     );
     expect(renderAwaitProgress([view({ state: "running" })], "all_finished", theme, 0)).toContain(
-      "<success>· auth-review</success>",
+      "<success>⠋ auth-review</success>",
     );
     expect(renderAwaitProgress([view({ state: "running" })], "all_finished", theme, 2)).toContain(
-      "<success>● auth-review</success>",
+      "<success>⠹ auth-review</success>",
     );
   });
 
@@ -203,7 +205,7 @@ describe("subagent tool", () => {
 
     const compact = renderStartAwaitResult([run], false, theme);
     expect(compact).toBe(
-      "<success>✓ review-agent</success> · <toolOutput>openai-codex/gpt-5.6-sol</toolOutput> · <thinkingHigh>effort: high</thinkingHigh> · <success>finished</success>\n<dim>▸ final report · expand to view</dim>",
+      "<success>✓ review-agent</success> · <toolOutput>openai-codex/gpt-5.6-sol</toolOutput> · <thinkingHigh>high</thinkingHigh> · <success>finished</success>\n<dim>▸ final report · expand to view</dim>",
     );
 
     const expanded = renderStartAwaitResult([run], true, theme);
@@ -233,10 +235,20 @@ describe("subagent tool", () => {
 
     const narrow = renderExpandedStartAwaitResult([second], theme).render(36);
     expect(narrow[0]).toContain("longer-agent-name");
-    expect(narrow[0]).toContain("finished");
-    expect(narrow[1]).toContain("effort: high");
+    expect(narrow[1]).toContain(" · high");
+    expect(narrow[2]).toContain("finished");
     expect(narrow.join("\n")).not.toContain(second.model);
     expect(narrow.every((line) => visibleWidth(line) <= 36)).toBe(true);
+  });
+
+  it("labels failed-run expansion as failure details", () => {
+    const theme = {
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+    } as unknown as Theme;
+    const failed = view({ state: "failed", error: "child failed" });
+    expect(renderStartAwaitResult([failed], false, theme)).toContain(
+      "<dim>▸ failure detail · expand to view</dim>",
+    );
   });
 
   it("keeps partial batch-start failures compact", () => {

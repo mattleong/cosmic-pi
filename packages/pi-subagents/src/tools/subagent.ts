@@ -565,12 +565,18 @@ export const renderAwaitProgress = (
       frame === undefined ? runStateGlyph(run.state) : animatedRunStateGlyph(run.state, frame);
     return theme.fg(runStateColor(run.state), `${glyph} ${sanitizeTerminalLine(run.name)}`);
   });
+  const models = runs.map((run) => theme.fg("toolOutput", sanitizeTerminalLine(run.model)));
+  const efforts = runs.map((run) =>
+    theme.fg(effortColor(run.effort), sanitizeTerminalLine(run.effort)),
+  );
   const nameWidth = names.reduce((width, name) => Math.max(width, visibleWidth(name)), 0);
+  const modelWidth = models.reduce((width, model) => Math.max(width, visibleWidth(model)), 0);
+  const effortWidth = efforts.reduce((width, effort) => Math.max(width, visibleWidth(effort)), 0);
   return [
     theme.fg(awaitHeaderColor(runs), awaitProgressHeader(runs, until)),
     ...runs.map(
       (run, index) =>
-        `${padVisible(names[index] ?? "", nameWidth)} · ${theme.fg("toolOutput", awaitRunStatus(run))}`,
+        `${padVisible(names[index] ?? "", nameWidth)} · ${padVisible(models[index] ?? "", modelWidth)} · ${padVisible(efforts[index] ?? "", effortWidth)} · ${theme.fg(runStateColor(run.state), awaitRunStatus(run))}`,
     ),
   ].join("\n");
 };
@@ -589,17 +595,14 @@ class AwaitProgressComponent implements Component {
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
     const frame = Math.floor(synchronousNow() / 160);
-    const rendered = renderAwaitProgress(this.runs, this.until, this.theme, frame).split("\n");
-    const header = truncateToWidth(rendered[0] ?? "", safeWidth);
     return [
-      header,
-      ...rendered.slice(1).flatMap((line) => {
-        if (visibleWidth(line) <= safeWidth) return [line];
-        const separator = line.indexOf(" · ");
-        if (separator < 0) return [truncateToWidth(line, safeWidth)];
-        const name = line.slice(0, separator);
-        const status = line.slice(separator + 3);
-        return [truncateToWidth(name, safeWidth), truncateToWidth(`  ${status}`, safeWidth)];
+      truncateToWidth(
+        this.theme.fg(awaitHeaderColor(this.runs), awaitProgressHeader(this.runs, this.until)),
+        safeWidth,
+      ),
+      ...renderResponsiveRunRows(this.runs, safeWidth, this.theme, {
+        frame,
+        status: awaitRunStatus,
       }),
     ];
   }
@@ -645,7 +648,7 @@ const renderCompactRunSummaries = (runs: ReadonlyArray<SubagentRunView>, theme: 
       const model = sanitizeTerminalLine(run.model);
       const effort = sanitizeTerminalLine(run.effort);
       const state = sanitizeTerminalLine(runStateLabel(run.state));
-      return `${theme.fg(color, `${runStateGlyph(run.state)} ${name}`)} · ${theme.fg("toolOutput", model)} · ${theme.fg(effortColor(run.effort), `effort: ${effort}`)} · ${theme.fg(color, state)}`;
+      return `${theme.fg(color, `${runStateGlyph(run.state)} ${name}`)} · ${theme.fg("toolOutput", model)} · ${theme.fg(effortColor(run.effort), effort)} · ${theme.fg(color, state)}`;
     })
     .join("\n");
 
@@ -680,11 +683,21 @@ const expandedRunReportSections = (
   });
 };
 
-const reportAffordance = (count: number, expanded: boolean, theme: Theme): string =>
-  theme.fg(
-    "dim",
-    `${expanded ? "▾" : "▸"} final report${count === 1 ? "" : "s"}${expanded ? "" : " · expand to view"}`,
-  );
+const reportAffordance = (
+  sections: ReadonlyArray<RunReportSection>,
+  expanded: boolean,
+  theme: Theme,
+): string => {
+  const reportCount = sections.filter((section) => section.kind === "report").length;
+  const failureCount = sections.length - reportCount;
+  const label =
+    failureCount === 0
+      ? `final report${reportCount === 1 ? "" : "s"}`
+      : reportCount === 0
+        ? `failure detail${failureCount === 1 ? "" : "s"}`
+        : "reports and failures";
+  return theme.fg("dim", `${expanded ? "▾" : "▸"} ${label}${expanded ? "" : " · expand to view"}`);
+};
 
 const renderStartFailures = (
   failures: ReadonlyArray<SubagentStartFailure>,
@@ -720,15 +733,29 @@ const renderStartAwaitOverview = (
     .filter(Boolean)
     .join("\n");
 
+interface ResponsiveRunRowOptions {
+  readonly frame?: number;
+  readonly status?: (run: SubagentRunView) => string;
+}
+
 const renderResponsiveRunRows = (
   runs: ReadonlyArray<SubagentRunView>,
   width: number,
   theme: Theme,
+  options: ResponsiveRunRowOptions = {},
 ): string[] => {
   const safeWidth = Math.max(1, width);
-  const names = runs.map((run) => `${runStateGlyph(run.state)} ${sanitizeTerminalLine(run.name)}`);
-  const efforts = runs.map((run) => `effort: ${sanitizeTerminalLine(run.effort)}`);
-  const states = runs.map((run) => sanitizeTerminalLine(runStateLabel(run.state)));
+  const names = runs.map((run) => {
+    const glyph =
+      options.frame === undefined
+        ? runStateGlyph(run.state)
+        : animatedRunStateGlyph(run.state, options.frame);
+    return `${glyph} ${sanitizeTerminalLine(run.name)}`;
+  });
+  const efforts = runs.map((run) => sanitizeTerminalLine(run.effort));
+  const states = runs.map((run) =>
+    sanitizeTerminalLine(options.status?.(run) ?? runStateLabel(run.state)),
+  );
   const nameWidth = names.reduce((max, name) => Math.max(max, visibleWidth(name)), 0);
   const effortWidth = efforts.reduce((max, effort) => Math.max(max, visibleWidth(effort)), 0);
   const stateWidth = states.reduce((max, state) => Math.max(max, visibleWidth(state)), 0);
@@ -745,7 +772,6 @@ const renderResponsiveRunRows = (
     const color = runStateColor(run.state);
     const name = theme.fg(color, names[index] ?? "");
     const state = theme.fg(color, states[index] ?? "");
-    const primary = `${name} · ${state}`;
     const effort = efforts[index] ?? "";
     const modelWidth = Math.max(1, safeWidth - visibleWidth(effort) - 3);
     const model = theme.fg(
@@ -753,10 +779,9 @@ const renderResponsiveRunRows = (
       truncateToWidth(sanitizeTerminalLine(run.model), modelWidth),
     );
     return [
-      ...(visibleWidth(primary) <= safeWidth
-        ? [primary]
-        : [truncateToWidth(name, safeWidth), truncateToWidth(`  ${state}`, safeWidth)]),
+      truncateToWidth(name, safeWidth),
       truncateToWidth(`${model} · ${theme.fg(effortColor(run.effort), effort)}`, safeWidth),
+      truncateToWidth(state, safeWidth),
     ];
   });
 };
@@ -766,7 +791,7 @@ class RunOverviewComponent implements Component {
   private readonly failures: ReadonlyArray<SubagentStartFailure>;
   private readonly expanded: boolean;
   private readonly theme: Theme;
-  private readonly reportCount: number;
+  private readonly reportSections: ReadonlyArray<RunReportSection>;
   private readonly banner: OutcomeBanner | undefined;
 
   constructor(
@@ -774,14 +799,14 @@ class RunOverviewComponent implements Component {
     failures: ReadonlyArray<SubagentStartFailure>,
     expanded: boolean,
     theme: Theme,
-    reportCount: number,
+    reportSections: ReadonlyArray<RunReportSection>,
     banner?: OutcomeBanner,
   ) {
     this.runs = runs;
     this.failures = failures;
     this.expanded = expanded;
     this.theme = theme;
-    this.reportCount = reportCount;
+    this.reportSections = reportSections;
     this.banner = banner;
   }
 
@@ -796,10 +821,10 @@ class RunOverviewComponent implements Component {
         .split("\n")
         .filter(Boolean)
         .map((line) => truncateToWidth(line, safeWidth)),
-      ...(this.reportCount > 0
+      ...(this.reportSections.length > 0
         ? [
             truncateToWidth(
-              reportAffordance(this.reportCount, this.expanded, this.theme),
+              reportAffordance(this.reportSections, this.expanded, this.theme),
               safeWidth,
             ),
           ]
@@ -822,7 +847,7 @@ export const renderStartAwaitResult = (
   const overview = renderStartAwaitOverview(runs, failures, expanded, theme, banner);
   const sections = expandedRunReportSections(runs);
   if (sections.length === 0) return overview;
-  const affordance = reportAffordance(sections.length, expanded, theme);
+  const affordance = reportAffordance(sections, expanded, theme);
   if (!expanded) return `${overview}\n${affordance}`;
   const reports = sections
     .map((section) => {
@@ -841,9 +866,7 @@ export const renderExpandedStartAwaitResult = (
 ): Component => {
   const container = new Container();
   const sections = expandedRunReportSections(runs);
-  container.addChild(
-    new RunOverviewComponent(runs, failures, true, theme, sections.length, banner),
-  );
+  container.addChild(new RunOverviewComponent(runs, failures, true, theme, sections, banner));
   if (sections.length === 0) return container;
   for (const section of sections) {
     container.addChild(new Spacer(1));
@@ -1213,7 +1236,7 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
             [],
             false,
             theme,
-            0,
+            [],
             awaitResultBanner(details),
           );
         return new AwaitProgressComponent(details.runs, details.awaitUntil, theme);
@@ -1231,7 +1254,7 @@ export function registerSubagentTool(pi: ExtensionAPI, runtime: SubagentToolRunt
           failures,
           false,
           theme,
-          expandedRunReportSections(details.runs).length,
+          expandedRunReportSections(details.runs),
           banner,
         );
       }
