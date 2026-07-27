@@ -1,8 +1,30 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import type { SubagentProjection } from "../run/model.ts";
 import { emptyProjection, fleetStatus } from "../run/projection.ts";
 
 const STATUS_KEY = "pi-subagents";
+
+export const startHostUiTicker = (intervalMs: number, tick: () => void): (() => void) => {
+  const fiber = Effect.runFork(
+    Effect.sleep(intervalMs).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          try {
+            tick();
+          } catch {
+            // The host UI may be tearing down between timer ticks.
+          }
+        }),
+      ),
+      Effect.forever,
+    ),
+  );
+  return () => {
+    void Effect.runFork(Fiber.interrupt(fiber));
+  };
+};
 
 export interface SubagentProjectionBridge {
   readonly get: () => SubagentProjection;

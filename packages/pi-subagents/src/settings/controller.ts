@@ -2,7 +2,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { synchronousNow } from "../boundary/native-clock.ts";
-import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
+import { startHostUiTicker, type SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import { SubagentFleetComponent } from "../ui/fleet.ts";
 
 export interface FleetManagerActions {
@@ -74,11 +74,18 @@ async function openFleetManager(
         manager.invalidate();
         tui.requestRender();
       });
+      const stopSpinnerTicker = startHostUiTicker(160, () => {
+        if (bridge.get().runs.some((run) => run.state === "starting" || run.state === "running"))
+          tui.requestRender();
+      });
       return {
         render: (width) => manager.render(width),
         handleInput: (data) => manager.handleInput(data),
         invalidate: () => manager.invalidate(),
-        dispose: () => unsubscribe(),
+        dispose: () => {
+          stopSpinnerTicker();
+          unsubscribe();
+        },
       };
     },
     {
