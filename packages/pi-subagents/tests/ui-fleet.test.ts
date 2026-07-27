@@ -105,6 +105,14 @@ describe("/subagents fleet UI", () => {
     expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
   });
 
+  it("groups navigation, available actions, and global footer controls", () => {
+    const footer = makeComponent(120, 18).lines.at(-1) ?? "";
+    expect(footer).toContain("↑↓ Select · C-u/d Scroll");
+    expect(footer).toContain("m Reply · i Interrupt");
+    expect(footer).toContain("t Technical · ? Help · Esc Close");
+    expect(footer).not.toContain("r Resume");
+  });
+
   it("shows completion age in fleet rows", () => {
     const { lines } = makeComponent(80, 18, completedProjection);
     expect(lines.join("\n")).toContain("finished 18s ago");
@@ -161,9 +169,9 @@ describe("/subagents fleet UI", () => {
     expect(component.render(42).join("\n")).not.toContain("Technical details");
     component.handleInput("t");
     expect(component.render(42).join("\n")).toContain("Technical details");
-    expect(component.render(42).at(-1)).toContain("? help");
+    expect(component.render(42).at(-1)).toContain("? Actions");
     component.handleInput("?");
-    expect(component.render(42).at(-1)).toContain("m reply");
+    expect(component.render(42).at(-1)).toContain("m Reply");
   });
 
   it.each([120, 80])("does not reset detail scrolling with Enter at width %s", (width) => {
@@ -181,12 +189,12 @@ describe("/subagents fleet UI", () => {
     };
     const { actions, component } = makeComponent(80, 18, twoRuns);
     component.handleInput("x");
-    expect(component.render(80).at(-1)).toContain("confirm stop agent-1");
+    expect(component.render(80).at(-1)).toContain("Confirm stop agent-1");
     component.handleInput("j");
-    expect(component.render(80).at(-1)).not.toContain("confirm stop agent-1");
+    expect(component.render(80).at(-1)).not.toContain("Confirm stop agent-1");
     component.handleInput("x");
     expect(actions.stop).not.toHaveBeenCalled();
-    expect(component.render(80).at(-1)).toContain("confirm stop agent-2");
+    expect(component.render(80).at(-1)).toContain("Confirm stop agent-2");
   });
 
   it("shows only supported actions for Claude runs", () => {
@@ -205,10 +213,10 @@ describe("/subagents fleet UI", () => {
     };
     const running = makeComponent(120, 18, claudeRunning);
     const runningHelp = running.component.render(120).at(-1) ?? "";
-    expect(runningHelp).toContain("n rename");
-    expect(runningHelp).toContain("x stop");
-    expect(runningHelp).not.toContain("m message");
-    expect(runningHelp).not.toContain("i interrupt");
+    expect(runningHelp).toContain("n Rename");
+    expect(runningHelp).toContain("x Stop");
+    expect(runningHelp).not.toContain("m Message");
+    expect(runningHelp).not.toContain("i Interrupt");
     running.component.handleInput("m");
     running.component.handleInput("i");
     expect(running.actions.message).not.toHaveBeenCalled();
@@ -219,9 +227,9 @@ describe("/subagents fleet UI", () => {
       runs: [{ ...claudeRunning.runs[0]!, state: "completed", endedAt: 2_000 }],
     });
     const completedHelp = completed.component.render(120).at(-1) ?? "";
-    expect(completedHelp).toContain("r resume");
-    expect(completedHelp).toContain("n rename");
-    expect(completedHelp).not.toContain("x stop");
+    expect(completedHelp).toContain("r Resume");
+    expect(completedHelp).toContain("n Rename");
+    expect(completedHelp).not.toContain("x Stop");
   });
 
   it.each(["paused", "stopping"] as const)(

@@ -33,8 +33,8 @@ Fleet controls:
 - `Ctrl-U` / `Ctrl-D` (`C-u` / `C-d` in the footer) scroll up and down through the selected run's session output while preserving live tail-follow at the bottom.
 - `Enter` toggles details in narrow layouts.
 - `t` toggles technical details such as run ID, PID, cwd, and session file.
-- `?` switches compact shortcut help on narrow terminals.
-- Capability-aware hints show only supported `m`, `i`, `r`, `n`, and `x` actions for the selected run.
+- `?` switches between navigation keys and contextual actions when the terminal cannot fit both.
+- The responsive footer groups navigation, selected-agent actions, and global controls with `│`; capability-aware hints hide unsupported `m`, `i`, `r`, `n`, and `x` actions.
 - Stopping requires two `x` presses on the same selected run. Changing selection or pressing `Esc` cancels the pending confirmation.
 - `Esc` closes the inspector when no stop confirmation is pending.
 

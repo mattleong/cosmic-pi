@@ -212,38 +212,51 @@ export class SubagentFleetComponent implements Component {
   }
 
   private helpText(width: number, selected: SubagentRunView | undefined): string {
-    if (this.pendingStop) return ` x confirm stop ${this.pendingStop} · esc cancel `;
+    if (this.pendingStop) return ` x Confirm stop ${this.pendingStop} │ Esc Cancel `;
     const actions = [
       canMessage(selected)
         ? selected?.state === "waiting_for_parent"
-          ? "m reply"
-          : "m message"
+          ? "m Reply"
+          : "m Message"
         : undefined,
-      canInterrupt(selected) ? "i interrupt" : undefined,
-      canResume(selected) ? "r resume" : undefined,
-      canRename(selected) ? "n rename" : undefined,
-      canStop(selected) ? "x stop" : undefined,
+      canInterrupt(selected) ? "i Interrupt" : undefined,
+      canResume(selected) ? "r Resume" : undefined,
+      canRename(selected) ? "n Rename" : undefined,
+      canStop(selected) ? "x Stop" : undefined,
     ].filter((item): item is string => item !== undefined);
-    if (width >= 100)
-      return ` ↑↓/jk select · C-u/C-d scroll · t technical${actions.length ? ` · ${actions.join(" · ")}` : ""} · esc close `;
-    if (width >= 60)
-      return this.alternateHelp
-        ? ` ${actions.length ? actions.join(" · ") : "no actions"} · ? keys · esc close `
-        : " jk select · C-u/C-d scroll · t tech · ? actions · esc close ";
     const compactActions = [
       canMessage(selected)
         ? selected?.state === "waiting_for_parent"
-          ? "m reply"
-          : "m msg"
+          ? "m Reply"
+          : "m Msg"
         : undefined,
-      canInterrupt(selected) ? "i int" : undefined,
-      canResume(selected) ? "r res" : undefined,
-      canRename(selected) ? "n name" : undefined,
-      canStop(selected) ? "x stop" : undefined,
+      canInterrupt(selected) ? "i Int" : undefined,
+      canResume(selected) ? "r Resume" : undefined,
+      canRename(selected) ? "n Name" : undefined,
+      canStop(selected) ? "x Stop" : undefined,
     ].filter((item): item is string => item !== undefined);
-    return this.alternateHelp
-      ? ` ${compactActions.length ? compactActions.join(" · ") : "no actions"} · ? keys `
-      : " jk · enter · C-u/C-d · t · ? help ";
+    const grouped = (...groups: ReadonlyArray<string | undefined>) =>
+      ` ${groups.filter((group): group is string => Boolean(group)).join(" │ ")} `;
+    const full = grouped(
+      "↑↓ Select · C-u/d Scroll",
+      actions.length > 0 ? actions.join(" · ") : undefined,
+      "t Technical · ? Help · Esc Close",
+    );
+    if (visibleWidth(full) <= Math.max(0, width - 2)) return full;
+    const compact = grouped(
+      "↑↓ · C-u/d",
+      compactActions.length > 0 ? compactActions.join(" · ") : undefined,
+      "t Tech · ? Help · Esc",
+    );
+    if (visibleWidth(compact) <= Math.max(0, width - 2)) return compact;
+    if (this.alternateHelp)
+      return grouped(
+        compactActions.length > 0 ? compactActions.join(" · ") : "No actions",
+        "? Keys",
+      );
+    return width >= 60
+      ? grouped("↑↓ Select · C-u/d", "t Details · ? Actions · Esc")
+      : grouped("↑↓ · Enter", "t", "? Actions · Esc");
   }
 
   private detailLines(run: SubagentRunView | undefined, width: number): string[] {
