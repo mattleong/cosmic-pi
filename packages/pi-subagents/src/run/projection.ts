@@ -15,5 +15,5 @@ export const fleetStatus = (projection: SubagentProjection): string | undefined 
   const active = projection.runs.filter((run) => isActiveRunState(run.state)).length;
   const waiting = projection.runs.filter((run) => run.state === "waiting_for_parent").length;
   if (active === 0) return undefined;
-  return `agents: ${active} active${waiting ? ` · ${waiting} waiting` : ""}`;
+  return `${active} subagent${active === 1 ? "" : "s"} active${waiting ? ` · ${waiting} awaiting ${waiting === 1 ? "reply" : "replies"}` : ""}`;
 };
