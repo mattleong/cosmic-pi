@@ -20,11 +20,10 @@ import {
 import { subagentServiceDouble } from "./subagent-service-double.ts";
 import {
   awaitResultBanner,
-  registerSubagentTool,
+  registerSubagentTools,
   renderAwaitProgressComponent,
   renderExpandedStartAwaitResult,
   renderStartAwaitOverviewComponent,
-  type SubagentToolInput,
 } from "../src/tools/subagent.ts";
 
 interface CapturedTool {
@@ -33,9 +32,10 @@ interface CapturedTool {
   readonly renderCall?: (...args: ReadonlyArray<unknown>) => unknown;
   readonly renderResult?: (...args: ReadonlyArray<unknown>) => unknown;
   readonly promptGuidelines?: ReadonlyArray<string>;
+  readonly parameters?: unknown;
   readonly execute: (
     id: string,
-    input: SubagentToolInput,
+    input: unknown,
     signal: AbortSignal | undefined,
     update:
       | ((result: {
@@ -77,6 +77,26 @@ const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
   ...overrides,
 });
+
+const captureSubagentTools = (
+  service: SubagentServiceShape,
+  activeTools: ReadonlyArray<string> = ["read"],
+): ReadonlyMap<string, CapturedTool> => {
+  const tools = new Map<string, CapturedTool>();
+  const pi = {
+    registerTool: (definition: unknown) => {
+      const tool = definition as CapturedTool;
+      tools.set(tool.name, tool);
+    },
+    getThinkingLevel: () => "high",
+    getActiveTools: () => [...activeTools],
+  } as unknown as ExtensionAPI;
+  registerSubagentTools(pi, {
+    run: (effect) =>
+      Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
+  });
+  return tools;
+};
 
 const context = {
   cwd: "/project",
@@ -125,6 +145,46 @@ describe("subagent tool", () => {
     const tools = ["read", "grep", "edit", "write", "bash", "mcp"];
     expect(piToolsForWriteIntent(tools, "read-only")).toEqual(["read", "grep"]);
     expect(piToolsForWriteIntent(tools, "writer")).toEqual(tools);
+  });
+
+  it("registers focused tools with non-overlapping parameter contracts", () => {
+    const tools = captureSubagentTools({} as SubagentServiceShape);
+    expect([...tools.keys()]).toEqual([
+      "subagent_models",
+      "subagent_start",
+      "subagent_list",
+      "subagent_status",
+      "subagent_await",
+      "subagent_send",
+      "subagent_reply",
+      "subagent_lifecycle",
+      "subagent_rename",
+    ]);
+    const schema = (name: string) =>
+      tools.get(name)?.parameters as
+        | {
+            readonly properties?: Readonly<Record<string, unknown>>;
+            readonly required?: ReadonlyArray<string>;
+          }
+        | undefined;
+    const properties = (name: string): ReadonlyArray<string> =>
+      Object.keys(schema(name)?.properties ?? {});
+    expect(properties("subagent_models")).toEqual(["query"]);
+    expect(properties("subagent_start")).toEqual(["agents"]);
+    expect(properties("subagent_list")).toEqual([]);
+    expect(properties("subagent_status")).toEqual(["runIds"]);
+    expect(properties("subagent_await")).toEqual(["runIds", "until", "timeoutSeconds"]);
+    expect(schema("subagent_status")?.required).toEqual(["runIds"]);
+    expect(schema("subagent_await")?.required).toEqual(["runIds", "until", "timeoutSeconds"]);
+    expect(properties("subagent_send")).toEqual(["runIds", "message"]);
+    expect(properties("subagent_reply")).toEqual(["runId", "message"]);
+    expect(properties("subagent_lifecycle")).toEqual(["action", "runIds", "message"]);
+    expect(properties("subagent_rename")).toEqual(["runId", "name"]);
+    for (const tool of tools.values()) {
+      expect(tool.renderShell).toBe("default");
+      expect(tool.renderCall).toBeTypeOf("function");
+      expect(tool.renderResult).toBeTypeOf("function");
+    }
   });
 
   it("color-codes agent names by state while await is in progress", () => {
@@ -304,38 +364,29 @@ describe("subagent tool", () => {
       stop: () => Effect.succeed(view()),
       projection: Effect.succeed({ revision: 0, runs: [] }),
     });
-    let tool: CapturedTool | undefined;
-    const pi = {
-      registerTool: (definition: unknown) => {
-        tool = definition as CapturedTool;
-      },
-      getThinkingLevel: () => "high",
-      getActiveTools: () => [
-        "read",
-        "grep",
-        "edit",
-        "write",
-        "bash",
-        "mcp",
-        "subagent",
-        "subagent_wait",
-        "workflow",
-      ],
-    } as unknown as ExtensionAPI;
-    registerSubagentTool(pi, {
-      run: (effect) =>
-        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
-    });
+    const tool = captureSubagentTools(service, [
+      "read",
+      "grep",
+      "edit",
+      "write",
+      "bash",
+      "mcp",
+      "subagent_start",
+      "subagent_await",
+      "workflow",
+    ]).get("subagent_start");
 
     const result = await tool?.execute(
       "call",
-      { action: "start", backend: "pi", task: "Review auth", writeIntent: "read-only" },
+      {
+        agents: [{ backend: "pi", task: "Review auth", writeIntent: "read-only" }],
+      },
       undefined,
       undefined,
       context,
     );
 
-    expect(tool?.name).toBe("subagent");
+    expect(tool?.name).toBe("subagent_start");
     expect(tool?.renderShell).toBe("default");
     expect(tool?.renderCall).toBeTypeOf("function");
     expect(tool?.renderResult).toBeTypeOf("function");
@@ -395,24 +446,12 @@ describe("subagent tool", () => {
       stop: () => Effect.succeed(view()),
       projection: Effect.succeed({ revision: 0, runs: [] }),
     });
-    let tool: CapturedTool | undefined;
-    const pi = {
-      registerTool: (definition: unknown) => {
-        tool = definition as CapturedTool;
-      },
-      getThinkingLevel: () => "high",
-      getActiveTools: () => ["read", "grep"],
-    } as unknown as ExtensionAPI;
-    registerSubagentTool(pi, {
-      run: (effect) =>
-        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
-    });
+    const tool = captureSubagentTools(service, ["read", "grep"]).get("subagent_start");
 
     const result = await tool?.execute(
       "call",
       {
-        action: "start",
-        starts: [
+        agents: [
           {
             task: "Review auth",
             name: "auth",
@@ -473,24 +512,12 @@ describe("subagent tool", () => {
           return view({ id: `agent-${requests.length}`, task: input.task });
         }),
     } as unknown as SubagentServiceShape;
-    let tool: CapturedTool | undefined;
-    const pi = {
-      registerTool: (definition: unknown) => {
-        tool = definition as CapturedTool;
-      },
-      getThinkingLevel: () => "high",
-      getActiveTools: () => ["read"],
-    } as unknown as ExtensionAPI;
-    registerSubagentTool(pi, {
-      run: (effect) =>
-        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
-    });
+    const tool = captureSubagentTools(service).get("subagent_start");
 
     const result = await tool?.execute(
       "call",
       {
-        action: "start",
-        starts: Array.from({ length: 12 }, (_, index) => ({
+        agents: Array.from({ length: 12 }, (_, index) => ({
           task: `Review area ${index + 1}`,
           backend: "pi" as const,
           writeIntent: "read-only" as const,
@@ -508,32 +535,24 @@ describe("subagent tool", () => {
     expect(details?.runs).toHaveLength(12);
   });
 
-  it("rejects invalid batch cardinality and mixing singular start fields", async () => {
+  it("advertises one canonical launch shape and enforces its cardinality", async () => {
     const service = {
       start: () => Effect.succeed(view()),
     } as unknown as SubagentServiceShape;
-    let tool: CapturedTool | undefined;
-    const pi = {
-      registerTool: (definition: unknown) => {
-        tool = definition as CapturedTool;
-      },
-      getThinkingLevel: () => "high",
-      getActiveTools: () => ["read"],
-    } as unknown as ExtensionAPI;
-    registerSubagentTool(pi, {
-      run: (effect) =>
-        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
-    });
+    const tool = captureSubagentTools(service).get("subagent_start");
+    const schema = tool?.parameters as
+      | { readonly properties?: Readonly<Record<string, unknown>> }
+      | undefined;
 
+    expect(Object.keys(schema?.properties ?? {})).toEqual(["agents"]);
     await expect(
-      tool?.execute("call", { action: "start", starts: [] }, undefined, undefined, context),
-    ).rejects.toThrow("requires between 1 and 12 starts");
+      tool?.execute("call", { agents: [] }, undefined, undefined, context),
+    ).rejects.toThrow("requires between 1 and 12 agents");
     await expect(
       tool?.execute(
         "call",
         {
-          action: "start",
-          starts: Array.from({ length: 13 }, (_, index) => ({
+          agents: Array.from({ length: 13 }, (_, index) => ({
             task: `Review area ${index + 1}`,
             backend: "pi" as const,
             writeIntent: "read-only" as const,
@@ -543,20 +562,7 @@ describe("subagent tool", () => {
         undefined,
         context,
       ),
-    ).rejects.toThrow("requires between 1 and 12 starts");
-    await expect(
-      tool?.execute(
-        "call",
-        {
-          action: "start",
-          task: "singular",
-          starts: [{ task: "batch", backend: "pi", writeIntent: "read-only" }],
-        },
-        undefined,
-        undefined,
-        context,
-      ),
-    ).rejects.toThrow("cannot combine starts with singular start fields");
+    ).rejects.toThrow("requires between 1 and 12 agents");
   });
 
   it("resolves Claude aliases without Pi model-registry authentication", async () => {
@@ -585,27 +591,19 @@ describe("subagent tool", () => {
       stop: () => Effect.succeed(view()),
       projection: Effect.succeed({ revision: 0, runs: [] }),
     });
-    let tool: CapturedTool | undefined;
-    const pi = {
-      registerTool: (definition: unknown) => {
-        tool = definition as CapturedTool;
-      },
-      getThinkingLevel: () => "high",
-      getActiveTools: () => ["read", "edit"],
-    } as unknown as ExtensionAPI;
-    registerSubagentTool(pi, {
-      run: (effect) =>
-        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
-    });
+    const tool = captureSubagentTools(service, ["read", "edit"]).get("subagent_start");
 
     const result = await tool?.execute(
       "call",
       {
-        action: "start",
-        backend: "claude-cli",
-        model: "opus",
-        task: "Review auth",
-        writeIntent: "read-only",
+        agents: [
+          {
+            backend: "claude-cli",
+            model: "opus",
+            task: "Review auth",
+            writeIntent: "read-only",
+          },
+        ],
       },
       undefined,
       undefined,
@@ -637,18 +635,7 @@ describe("subagent tool", () => {
       stop: () => Effect.succeed(view()),
       projection: Effect.succeed({ revision: 0, runs: [] }),
     });
-    let tool: CapturedTool | undefined;
-    const pi = {
-      registerTool: (definition: unknown) => {
-        tool = definition as CapturedTool;
-      },
-      getThinkingLevel: () => "high",
-      getActiveTools: () => ["read"],
-    } as unknown as ExtensionAPI;
-    registerSubagentTool(pi, {
-      run: (effect) =>
-        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
-    });
+    const tool = captureSubagentTools(service).get("subagent_start");
     const runtimeContext = {
       ...context,
       modelRegistry: {
@@ -661,10 +648,7 @@ describe("subagent tool", () => {
     await tool?.execute(
       "call",
       {
-        action: "start",
-        backend: "pi",
-        task: "Review auth",
-        writeIntent: "read-only",
+        agents: [{ backend: "pi", task: "Review auth", writeIntent: "read-only" }],
       },
       undefined,
       undefined,
@@ -707,22 +691,11 @@ describe("subagent tool", () => {
       stop: () => Effect.succeed(completed),
       projection: Effect.succeed({ revision: 1, runs: [completed] }),
     });
-    let tool: CapturedTool | undefined;
-    const pi = {
-      registerTool: (definition: unknown) => {
-        tool = definition as CapturedTool;
-      },
-      getThinkingLevel: () => "high",
-      getActiveTools: () => ["read"],
-    } as unknown as ExtensionAPI;
-    registerSubagentTool(pi, {
-      run: (effect) =>
-        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
-    });
+    const tool = captureSubagentTools(service).get("subagent_status");
 
     const result = await tool?.execute(
       "call",
-      { action: "status", runId: "agent-1" },
+      { runIds: ["agent-1"] },
       undefined,
       undefined,
       context,
@@ -737,7 +710,9 @@ describe("subagent tool", () => {
     expect(text.match(/Viewport report\./g)).toHaveLength(1);
     expect(result?.details).toEqual({ action: "status" });
 
-    const listed = await tool?.execute("call", { action: "list" }, undefined, undefined, context);
+    const listed = await captureSubagentTools(service)
+      .get("subagent_list")
+      ?.execute("call", {}, undefined, undefined, context);
     expect(listed?.details).toEqual({ action: "list" });
   });
 
@@ -774,23 +749,14 @@ describe("subagent tool", () => {
       stop: () => Effect.succeed(view()),
       projection: Effect.succeed({ revision: 0, runs: [] }),
     });
-    let tool: CapturedTool | undefined;
-    const pi = {
-      registerTool: (definition: unknown) => {
-        tool = definition as CapturedTool;
-      },
-      getThinkingLevel: () => "high",
-      getActiveTools: () => ["read"],
-    } as unknown as ExtensionAPI;
-    registerSubagentTool(pi, {
-      run: (effect) =>
-        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
-    });
+    const tools = captureSubagentTools(service);
+    const awaitTool = tools.get("subagent_await");
+    const sendTool = tools.get("subagent_send");
 
     const updates: string[] = [];
-    const awaited = await tool?.execute(
+    const awaited = await awaitTool?.execute(
       "call",
-      { action: "await", runIds: ["agent-1", "agent-2"] },
+      { runIds: ["agent-1", "agent-2"], until: "all_finished", timeoutSeconds: 0 },
       undefined,
       (result) => updates.push(result.content[0]?.text ?? ""),
       context,
@@ -805,9 +771,9 @@ describe("subagent tool", () => {
       runs: [{ id: "agent-1" }, { id: "agent-2" }],
     });
 
-    const sentResult = await tool?.execute(
+    const sentResult = await sendTool?.execute(
       "call",
-      { action: "send", runIds: ["agent-1", "agent-2"], message: "Conclude now." },
+      { runIds: ["agent-1", "agent-2"], message: "Conclude now." },
       undefined,
       undefined,
       context,
@@ -817,6 +783,67 @@ describe("subagent tool", () => {
       "Guidance delivered to 2 subagents: agent-1, agent-2.",
     );
     expect(sentResult?.content[0]?.text).not.toContain("Subagent status");
+  });
+
+  it("routes focused reply, lifecycle, and rename operations", async () => {
+    const operations: string[] = [];
+    const service = subagentServiceDouble({
+      start: () => Effect.succeed(view()),
+      waitForForeground: () => Effect.succeed(view()),
+      awaitTerminal: () => Effect.succeed([]),
+      list: Effect.succeed([]),
+      status: () => Effect.succeed(view()),
+      send: () => Effect.succeed(view()),
+      reply: (id, message) =>
+        Effect.sync(() => (operations.push(`reply:${id}:${message}`), view({ id }))),
+      interrupt: (id) =>
+        Effect.sync(() => (operations.push(`interrupt:${id}`), view({ id, state: "paused" }))),
+      resume: (id, message) =>
+        Effect.sync(() => (operations.push(`resume:${id}:${message ?? ""}`), view({ id }))),
+      rename: (id, name) =>
+        Effect.sync(() => (operations.push(`rename:${id}:${name}`), view({ id, name }))),
+      stop: (id) =>
+        Effect.sync(() => (operations.push(`stop:${id}`), view({ id, state: "stopped" }))),
+      projection: Effect.succeed({ revision: 0, runs: [] }),
+    });
+    const tools = captureSubagentTools(service);
+
+    await tools
+      .get("subagent_reply")
+      ?.execute("call", { runId: "agent-1", message: "Proceed." }, undefined, undefined, context);
+    await tools
+      .get("subagent_lifecycle")
+      ?.execute(
+        "call",
+        { action: "interrupt", runIds: ["agent-1", "agent-2"] },
+        undefined,
+        undefined,
+        context,
+      );
+    await tools
+      .get("subagent_lifecycle")
+      ?.execute(
+        "call",
+        { action: "resume", runIds: ["agent-1"], message: "Continue carefully." },
+        undefined,
+        undefined,
+        context,
+      );
+    await tools
+      .get("subagent_lifecycle")
+      ?.execute("call", { action: "stop", runIds: ["agent-2"] }, undefined, undefined, context);
+    await tools
+      .get("subagent_rename")
+      ?.execute("call", { runId: "agent-1", name: "reviewer" }, undefined, undefined, context);
+
+    expect(operations).toEqual([
+      "reply:agent-1:Proceed.",
+      "interrupt:agent-1",
+      "interrupt:agent-2",
+      "resume:agent-1:Continue carefully.",
+      "stop:agent-2",
+      "rename:agent-1:reviewer",
+    ]);
   });
 
   it("enforces the combined target count and aggregate detailed-output budget", async () => {
@@ -852,26 +879,13 @@ describe("subagent tool", () => {
       stop: () => Effect.succeed(runs[0]!),
       projection: Effect.succeed({ revision: 0, runs }),
     });
-    let tool: CapturedTool | undefined;
-    const pi = {
-      registerTool: (definition: unknown) => {
-        tool = definition as CapturedTool;
-      },
-      getThinkingLevel: () => "high",
-      getActiveTools: () => ["read"],
-    } as unknown as ExtensionAPI;
-    registerSubagentTool(pi, {
-      run: (effect) =>
-        Effect.runPromise(effect.pipe(Effect.provideService(SubagentService, service))),
-    });
+    const tool = captureSubagentTools(service).get("subagent_status");
 
     await expect(
       tool?.execute(
         "call",
         {
-          action: "status",
-          runId: "agent-1",
-          runIds: runs.slice(1).map((run) => run.id),
+          runIds: runs.map((run) => run.id),
         },
         undefined,
         undefined,
@@ -881,7 +895,7 @@ describe("subagent tool", () => {
 
     const result = await tool?.execute(
       "call",
-      { action: "status", runIds: runs.slice(0, 12).map((run) => run.id) },
+      { runIds: runs.slice(0, 12).map((run) => run.id) },
       undefined,
       undefined,
       context,
@@ -892,60 +906,35 @@ describe("subagent tool", () => {
     expect(text).toContain("[run output truncated]");
     expect(consumed).toEqual([]);
 
-    await tool?.execute(
-      "call",
-      { action: "status", runId: "agent-1" },
-      undefined,
-      undefined,
-      context,
-    );
+    await tool?.execute("call", { runIds: ["agent-1"] }, undefined, undefined, context);
     expect(consumed).toEqual([{ id: "agent-1", generation: 1 }]);
   });
 
-  it("requires write intent and backend and lists authenticated models without a runtime", async () => {
-    let tool: CapturedTool | undefined;
-    const pi = {
-      registerTool: (definition: unknown) => {
-        tool = definition as CapturedTool;
-      },
-      getThinkingLevel: () => "high",
-      getActiveTools: () => ["read"],
-    } as unknown as ExtensionAPI;
-    registerSubagentTool(pi, {
-      run: (effect) =>
-        Effect.runPromise(
-          effect.pipe(Effect.provideService(SubagentService, {} as SubagentServiceShape)),
-        ),
-    });
+  it("requires launch policy fields in-schema and lists models without a runtime", async () => {
+    const tools = captureSubagentTools({} as SubagentServiceShape);
+    const modelsTool = tools.get("subagent_models");
+    const startTool = tools.get("subagent_start");
+    const startSchema = startTool?.parameters as
+      | {
+          readonly properties?: {
+            readonly agents?: { readonly items?: { readonly required?: ReadonlyArray<string> } };
+          };
+        }
+      | undefined;
 
-    const models = await tool?.execute(
+    expect(startSchema?.properties?.agents?.items?.required).toEqual([
+      "task",
+      "backend",
+      "writeIntent",
+    ]);
+    const models = await modelsTool?.execute(
       "call",
-      { action: "models", query: "fable sol" },
+      { query: "fable sol" },
       undefined,
       undefined,
       context,
     );
     expect(models?.content[0]?.text).toContain("openai-codex/gpt-5.6-sol");
     expect(models?.content[0]?.text).toContain("claude-cli/fable");
-
-    await expect(
-      tool?.execute(
-        "call",
-        { action: "start", backend: "pi", task: "Do work" },
-        undefined,
-        undefined,
-        context,
-      ),
-    ).rejects.toThrow("writeIntent");
-
-    await expect(
-      tool?.execute(
-        "call",
-        { action: "start", task: "Do work", writeIntent: "read-only" },
-        undefined,
-        undefined,
-        context,
-      ),
-    ).rejects.toThrow("backend=pi or claude-cli");
   });
 });

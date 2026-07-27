@@ -20,7 +20,17 @@ import {
 } from "../layer.ts";
 import { SubagentService } from "../run/service.ts";
 import { registerSubagentManagerCommand } from "../settings/controller.ts";
-import { registerSubagentTool } from "../tools/subagent.ts";
+import { registerSubagentTools, SUBAGENT_TOOL_NAMES } from "../tools/subagent.ts";
+
+const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
+
+function deactivateSubagentTools(pi: ExtensionAPI): void {
+  try {
+    pi.setActiveTools(pi.getActiveTools().filter((name) => !SUBAGENT_TOOL_NAME_SET.has(name)));
+  } catch {
+    // A stale host cannot turn registration cleanup into an unhandled callback error.
+  }
+}
 
 function notifyToolRegistrationFailure(ctx: ExtensionContext): void {
   try {
@@ -93,10 +103,11 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
       .catch(() => undefined)
       .then(() => {
         try {
-          registerSubagentTool(pi, {
+          registerSubagentTools(pi, {
             run: (effect, signal) => run(effect, signal),
           });
         } catch {
+          deactivateSubagentTools(pi);
           notifyToolRegistrationFailure(ctx);
           return slot.shutdown().then(() => undefined);
         }

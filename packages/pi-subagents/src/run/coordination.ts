@@ -12,9 +12,15 @@ import { safeTextPrefix } from "./state.ts";
  * process boundary passes it again as `--exclude-tools`.
  */
 export const ORCHESTRATION_TOOL_DENYLIST: ReadonlySet<string> = new Set([
-  "subagent",
-  "subagent_wait",
-  "subagent_supervisor",
+  "subagent_models",
+  "subagent_start",
+  "subagent_list",
+  "subagent_status",
+  "subagent_await",
+  "subagent_send",
+  "subagent_reply",
+  "subagent_lifecycle",
+  "subagent_rename",
   "workflow",
   "workflow_control",
 ]);

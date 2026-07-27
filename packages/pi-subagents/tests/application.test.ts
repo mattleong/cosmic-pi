@@ -34,6 +34,8 @@ describe("subagent Pi registration", () => {
       on: vi.fn((name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
         handlers.set(name, handler);
       }),
+      getActiveTools: vi.fn(() => ["read", "subagent_start", "subagent_await"]),
+      setActiveTools: vi.fn(),
       sendMessage: vi.fn(),
     } as unknown as ExtensionAPI;
     registerSubagentApplication(pi);
@@ -49,6 +51,7 @@ describe("subagent Pi registration", () => {
       ui: { notify },
     } as unknown as ExtensionContext);
 
+    expect(pi.setActiveTools).toHaveBeenCalledWith(["read"]);
     expect(notify).toHaveBeenCalledWith(
       "Subagents failed to activate because tool registration failed.",
       "error",
