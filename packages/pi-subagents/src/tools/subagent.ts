@@ -30,6 +30,7 @@ import {
   CLAUDE_CLI_ALIAS_MODELS,
   claudeCliModelConflict,
   launchReadyModelLine,
+  MAX_DISCOVERY_RESULTS,
   resolvePiModelSelector,
   searchSubagentModels,
 } from "../run/model-catalog.ts";
@@ -76,7 +77,7 @@ const StartSpecParameters = Type.Object({
   execution: Type.Optional(
     StringEnum(["foreground", "background"] as const, {
       description:
-        "Launch behavior; defaults to background. Foreground blocks subagent_start until the run finishes, pauses, or asks a parent question.",
+        "Launch behavior; defaults to background. Foreground blocks subagent_start until the run finishes, pauses, or asks a parent question. Use at most one foreground agent per start call.",
     }),
   ),
   context: Type.Optional(
@@ -229,6 +230,7 @@ export interface SubagentToolDetails {
   readonly models?: ReadonlyArray<SubagentModelView>;
   readonly awaitUntil?: SubagentAwaitUntil;
   readonly timedOut?: boolean;
+  readonly attentionRequired?: boolean;
   readonly cancelled?: boolean;
 }
 
@@ -251,18 +253,16 @@ const requiredTargetIds = (
   action: SubagentToolInput["action"],
   runIds: ReadonlyArray<string>,
 ): Effect.Effect<ReadonlyArray<string>, InvalidSubagentRequestError> => {
-  const ids = runIds.map((id) => id.trim()).filter(Boolean);
-  const unique = [...new Set(ids)];
-  if (unique.length === 0)
+  const ids = runIds.map((id) => id.trim());
+  if (ids.length === 0)
     return Effect.fail(
       new InvalidSubagentRequestError({ message: `${action} requires at least one run ID.` }),
     );
-  if (unique.length !== ids.length || ids.length !== runIds.length)
+  if (ids.some((id) => !id))
     return Effect.fail(
-      new InvalidSubagentRequestError({
-        message: "Subagent target IDs must be non-empty and unique.",
-      }),
+      new InvalidSubagentRequestError({ message: "Subagent target IDs must be non-empty." }),
     );
+  const unique = [...new Set(ids)];
   if (unique.length > MAX_TARGET_RUNS)
     return Effect.fail(
       new InvalidSubagentRequestError({
@@ -275,13 +275,20 @@ const requiredTargetIds = (
 const startSpecs = (
   agents: ReadonlyArray<SubagentStartSpec>,
 ): Effect.Effect<ReadonlyArray<SubagentStartSpec>, InvalidSubagentRequestError> =>
-  agents.length > 0 && agents.length <= MAX_TARGET_RUNS
-    ? Effect.succeed(agents)
-    : Effect.fail(
-        new InvalidSubagentRequestError({
-          message: `subagent_start requires between 1 and ${MAX_TARGET_RUNS} agents.`,
-        }),
-      );
+  Effect.gen(function* () {
+    if (agents.length === 0 || agents.length > MAX_TARGET_RUNS)
+      return yield* new InvalidSubagentRequestError({
+        message: `subagent_start requires between 1 and ${MAX_TARGET_RUNS} agents.`,
+      });
+    const foregroundCount = agents.filter((agent) => agent.execution === "foreground").length;
+    if (foregroundCount > 1)
+      return yield* new InvalidSubagentRequestError({
+        code: "multiple_foreground_agents",
+        message:
+          "subagent_start accepts at most one foreground agent per call; launch additional agents in background mode to avoid blocking parent questions.",
+      });
+    return agents;
+  });
 
 const requiredMessage = (
   action: SubagentToolInput["action"],
@@ -520,7 +527,8 @@ const formatStartFailures = (failures: ReadonlyArray<SubagentStartFailure>): str
         ...failures.map((failure) => {
           const target = failure.name ? ` ${sanitizeTerminalLine(failure.name)}` : "";
           const message = safeTextPrefix(sanitizeTerminalLine(failure.message), 320);
-          return `  #${failure.index + 1}${target}: ${message}`;
+          const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
+          return `  #${failure.index + 1}${target}${code}: ${message}`;
         }),
       ].join("\n");
 
@@ -540,11 +548,18 @@ const formatActionFailures = (failures: ReadonlyArray<SubagentActionFailure>): s
     ? ""
     : [
         `Failed targets (${failures.length})`,
-        ...failures.map(
-          (failure) =>
-            `  ${sanitizeTerminalLine(failure.id)}: ${safeTextPrefix(sanitizeTerminalLine(failure.message), 320)}`,
-        ),
+        ...failures.map((failure) => {
+          const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
+          return `  ${sanitizeTerminalLine(failure.id)}${code}: ${safeTextPrefix(sanitizeTerminalLine(failure.message), 320)}`;
+        }),
       ].join("\n");
+
+const joinBoundedToolText = (parts: ReadonlyArray<string>): string => {
+  const text = parts.filter(Boolean).join("\n\n");
+  if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
+  const marker = "\n… [tool output truncated]";
+  return `${safeTextPrefix(text, MAX_TOOL_OUTPUT_CHARS - marker.length)}${marker}`;
+};
 
 const renderedCompletionReceipts = (
   observations: ReadonlyArray<SubagentRunObservation>,
@@ -920,6 +935,13 @@ export const awaitResultBanner = (details: SubagentToolDetails): OutcomeBanner |
       color: "warning",
       text: `Await timed out · ${unfinished.length} agent${unfinished.length === 1 ? "" : "s"} still running`,
     };
+  if (details.attentionRequired) {
+    const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
+    return {
+      color: "warning",
+      text: `Parent reply required · ${waiting} agent${waiting === 1 ? " is" : "s are"} waiting`,
+    };
+  }
   if (details.awaitUntil !== "any_finished") return undefined;
   const first = runs
     .filter((run) => isTerminalRunState(run.state))
@@ -974,8 +996,13 @@ const executeSubagentAction = async (
           text:
             models.length > 0
               ? [
-                  "Pass backend and model to subagent_start exactly as listed.",
+                  "Pass backend and model to subagent_start exactly as listed. Claude selectors still require an installed, authenticated CLI and a trusted project.",
                   ...models.map(launchReadyModelLine),
+                  ...(models.length >= MAX_DISCOVERY_RESULTS
+                    ? [
+                        `Showing at most ${MAX_DISCOVERY_RESULTS} matching selectors; narrow query or backend to search further.`,
+                      ]
+                    : []),
                 ].join("\n")
               : "No matching models.",
         },
@@ -998,25 +1025,81 @@ const executeSubagentAction = async (
     ) =>
       Effect.gen(function* () {
         const runs = observations.map((observation) => observation.run);
+        const waiting = runs.filter(
+          (run) => run.state === "waiting_for_parent" && run.question !== undefined,
+        );
+        const attentionRequired = waiting.length > 0;
+        const attentionText = attentionRequired
+          ? [
+              "Await paused because a parent reply is required; other subagents continue running.",
+              ...waiting.map(
+                (run) =>
+                  `Reply with subagent_reply({ runId: "${run.id}", message: "..." }), then call subagent_await again.`,
+              ),
+              "",
+            ].join("\n")
+          : "";
         const formatted = formatDetailedRuns(
           runs,
-          timedOut ? "Await timed out; subagents continue running.\n\n" : "",
+          timedOut ? "Await timed out; subagents continue running.\n\n" : attentionText,
         );
         yield* consumeCompletions(observations, formatted.fullyRenderedIds);
-        return { runs, timedOut, text: formatted.text };
+        return { runs, timedOut, attentionRequired, text: formatted.text };
       });
-    const finishStatus = (ids: ReadonlyArray<string>, timedOut: boolean) =>
-      service.withStatusObservations(ids, (observations) =>
-        finishObservations(observations, timedOut),
-      );
+    const finishStatus = (ids: ReadonlyArray<string>, timedOut: boolean, attentionAware = false) =>
+      service.withStatusObservations(ids, ({ observations, missingIds }) => {
+        const actionFailures = missingIds.map(
+          (id): SubagentActionFailure => ({
+            id,
+            code: "SubagentNotFoundError",
+            message: `Subagent run not found: ${id}. Use subagent_list to refresh active run IDs.`,
+          }),
+        );
+        if (attentionAware)
+          return finishObservations(observations, timedOut).pipe(
+            Effect.map((result) => ({ ...result, actionFailures })),
+          );
+        return Effect.gen(function* () {
+          const runs = observations.map((observation) => observation.run);
+          const failureText = formatActionFailures(actionFailures);
+          const formatted = formatDetailedRuns(
+            runs,
+            failureText ? `${failureText}${runs.length > 0 ? "\n\n" : ""}` : "",
+          );
+          yield* consumeCompletions(observations, formatted.fullyRenderedIds);
+          return {
+            runs,
+            timedOut,
+            attentionRequired: false,
+            text: formatted.text,
+            actionFailures,
+          };
+        });
+      });
 
     switch (input.action) {
       case "start": {
         const specs = yield* startSpecs(input.agents);
+        let launchedRuns: ReadonlyArray<SubagentRunView> = [];
         const startOne = (spec: SubagentStartSpec) =>
           Effect.gen(function* () {
             const request = yield* resolveStart(pi, spec, ctx);
             const started = yield* service.start(request);
+            launchedRuns = [...launchedRuns, started];
+            yield* Effect.sync(() =>
+              onUpdate?.({
+                content: [
+                  {
+                    type: "text",
+                    text: `Started ${launchedRuns.length} of ${specs.length} subagent${specs.length === 1 ? "" : "s"}${request.execution === "foreground" ? "; waiting for the foreground run" : ""}.`,
+                  },
+                ],
+                details: { action: "start", runs: launchedRuns },
+              }),
+            ).pipe(
+              Effect.catchDefect(() => Effect.void),
+              Effect.asVoid,
+            );
             return request.execution === "foreground"
               ? yield* service.waitForForeground(started.id)
               : started;
@@ -1076,7 +1159,7 @@ const executeSubagentAction = async (
           Effect.timeoutOption(`${input.timeoutSeconds} seconds`),
         );
         if (Option.isSome(outcome)) return outcome.value;
-        return yield* finishStatus(ids, true);
+        return yield* finishStatus(ids, true, true);
       }
       case "send": {
         const ids = yield* requiredTargetIds(input.action, input.runIds);
@@ -1106,16 +1189,25 @@ const executeSubagentAction = async (
           timedOut: false,
         };
       }
-      case "reply":
-        return {
-          runs: [
-            yield* service.reply(
-              yield* requiredRunId(input.action, input.runId),
-              yield* requiredMessage(input.action, input.message),
-            ),
-          ],
-          timedOut: false,
-        };
+      case "reply": {
+        const id = yield* requiredRunId(input.action, input.runId);
+        const message = yield* requiredMessage(input.action, input.message);
+        const outcome = yield* service.reply(id, message).pipe(
+          Effect.match({
+            onFailure: (error) => ({
+              failure: {
+                id,
+                message: error.message,
+                code: subagentErrorCode(error),
+              } satisfies SubagentActionFailure,
+            }),
+            onSuccess: (run) => ({ run }),
+          }),
+        );
+        return "run" in outcome
+          ? { runs: [outcome.run], timedOut: false }
+          : { runs: [], actionFailures: [outcome.failure], timedOut: false };
+      }
       case "interrupt":
       case "resume":
       case "stop": {
@@ -1160,30 +1252,42 @@ const executeSubagentAction = async (
           timedOut: false,
         };
       }
-      case "rename":
-        return {
-          runs: [
-            yield* service.rename(
-              yield* requiredRunId(input.action, input.runId),
-              input.name.trim(),
-            ),
-          ],
-          timedOut: false,
-        };
+      case "rename": {
+        const id = yield* requiredRunId(input.action, input.runId);
+        const outcome = yield* service.rename(id, input.name.trim()).pipe(
+          Effect.match({
+            onFailure: (error) => ({
+              failure: {
+                id,
+                message: error.message,
+                code: subagentErrorCode(error),
+              } satisfies SubagentActionFailure,
+            }),
+            onSuccess: (run) => ({ run }),
+          }),
+        );
+        return "run" in outcome
+          ? { runs: [outcome.run], timedOut: false }
+          : { runs: [], actionFailures: [outcome.failure], timedOut: false };
+      }
     }
   });
 
   const cancelAwait = () => {
     if (input.action !== "await" || !requestedAwaitUntil) return;
-    onUpdate?.({
-      content: [{ type: "text", text: "Await cancelled; subagents continue running." }],
-      details: {
-        action: "await",
-        runs: latestAwaitRuns,
-        awaitUntil: requestedAwaitUntil,
-        cancelled: true,
-      },
-    });
+    try {
+      onUpdate?.({
+        content: [{ type: "text", text: "Await cancelled; subagents continue running." }],
+        details: {
+          action: "await",
+          runs: latestAwaitRuns,
+          awaitUntil: requestedAwaitUntil,
+          cancelled: true,
+        },
+      });
+    } catch {
+      // Cancellation rendering is best effort and cannot own the waiter lifecycle.
+    }
   };
   if (signal?.aborted) cancelAwait();
   else signal?.addEventListener("abort", cancelAwait, { once: true });
@@ -1193,6 +1297,7 @@ const executeSubagentAction = async (
     readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
     readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
     readonly timedOut: boolean;
+    readonly attentionRequired?: boolean;
     readonly text?: string;
   };
   try {
@@ -1201,9 +1306,16 @@ const executeSubagentAction = async (
     signal?.removeEventListener("abort", cancelAwait);
   }
 
-  const { runs, timedOut, text: formattedText } = executionResult;
+  const { runs, timedOut, attentionRequired, text: formattedText } = executionResult;
   const startFailures = executionResult.startFailures ?? [];
   const actionFailures = executionResult.actionFailures ?? [];
+  const managementAction =
+    input.action === "send" ||
+    input.action === "reply" ||
+    input.action === "interrupt" ||
+    input.action === "resume" ||
+    input.action === "stop" ||
+    input.action === "rename";
   const details: SubagentToolDetails =
     input.action === "start"
       ? {
@@ -1217,19 +1329,24 @@ const executeSubagentAction = async (
             runs,
             awaitUntil: input.until,
             ...(timedOut ? { timedOut: true } : {}),
+            ...(attentionRequired ? { attentionRequired: true } : {}),
           }
         : {
             action: input.action,
-            ...(actionFailures.length > 0 ? { runs, actionFailures } : {}),
+            ...(managementAction || actionFailures.length > 0 ? { runs } : {}),
+            ...(actionFailures.length > 0 ? { actionFailures } : {}),
             ...(timedOut ? { timedOut: true } : {}),
           };
   const text =
     input.action === "start"
       ? formatStartResult(runs, startFailures)
       : actionFailures.length > 0
-        ? [managementAcknowledgement(input.action, runs), formatActionFailures(actionFailures)]
-            .filter(Boolean)
-            .join("\n\n")
+        ? input.action === "status"
+          ? (formattedText ?? formatDetailedRuns(runs).text)
+          : joinBoundedToolText([
+              managementAcknowledgement(input.action, runs),
+              formatActionFailures(actionFailures),
+            ])
         : runs.length === 0
           ? "No subagent runs."
           : input.action === "list"
@@ -1307,7 +1424,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_models",
     label: "Subagent Models",
     description:
-      "List launch-ready subagent models: authenticated Pi provider/model values and Claude CLI aliases. Each line shows the exact backend and model values subagent_start accepts; all search terms must match.",
+      "List accepted subagent model selectors: authenticated Pi provider/model values and Claude CLI aliases. Each line shows exact backend and model values subagent_start accepts; Claude selectors still require an installed, authenticated CLI and a trusted project. All search terms must match.",
     parameters: ModelsParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { action: "models", ...input }, signal, onUpdate, ctx),
@@ -1319,10 +1436,10 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_start",
     label: "Start Subagents",
     description:
-      "Launch one to twelve session-scoped subagents from one agents array. Background is the default; foreground blocks this call until the run finishes, pauses, or asks a parent question. Successful launches remain active when a peer launch fails.",
+      "Launch one to twelve session-scoped subagents from one agents array. Background is the default; at most one foreground agent is allowed and blocks this call until it finishes, pauses, or asks a parent question. Successful launches remain active when a peer launch fails.",
     promptSnippet: "Launch one or more delegated subagents with explicit backend and write intent",
     promptGuidelines: [
-      "Use subagent_start for delegated work that can proceed independently; background is the default launch mode.",
+      "Use subagent_start for delegated work that can proceed independently; background is the default launch mode, and each call accepts at most one foreground agent.",
       "Every subagent_start agent must explicitly declare writeIntent as writer or read-only.",
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
       "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",
@@ -1370,10 +1487,10 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_await",
     label: "Await Subagents",
     description:
-      "Wait once for selected background subagents to finish, with live progress and an explicit timeout; use zero for no timeout.",
+      "Wait for selected background subagents to finish, with live progress and an explicit timeout; use zero for no timeout. Returns early if a Pi subagent needs a parent reply, then call it again after subagent_reply.",
     promptSnippet: "Wait for background subagents and collect their final reports",
     promptGuidelines: [
-      "Do not poll subagent_status. After independent work, call subagent_await once to collect background results; use subagent_status only for troubleshooting or a user-requested snapshot.",
+      "Do not poll subagent_status. After independent work, call subagent_await to collect results; if it returns for a parent question, use subagent_reply and then call subagent_await again. Use subagent_status only for troubleshooting or a user-requested snapshot.",
     ],
     parameters: AwaitParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>

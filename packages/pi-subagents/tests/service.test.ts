@@ -454,6 +454,13 @@ describe("SubagentService", () => {
         message:
           'Claude model must be fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
       });
+      const providerStyleClaudeModel = yield* Effect.flip(
+        service.start(request({ backend: "claude-cli", model: "claude/opus" })),
+      );
+      expect(providerStyleClaudeModel).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "claude_model_invalid",
+      });
       expect(fake.controls).toHaveLength(0);
 
       const run = yield* service.start(
@@ -1094,6 +1101,54 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("returns an await when a selected run needs a parent reply", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = SubagentService.layer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "awaiting-question" }));
+      const awaiting = yield* service
+        .awaitTerminal([run.id], "all_finished")
+        .pipe(Effect.forkScoped);
+
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "question-during-await",
+        kind: "question",
+        message: "Should I update the fixture?",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+
+      const [attention] = yield* Fiber.join(awaiting);
+      expect(attention).toMatchObject({
+        id: run.id,
+        state: "waiting_for_parent",
+        question: { requestId: "question-during-await" },
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("reports every missing await ID before waiting", () => {
+    const fake = fakeChildLayer();
+    const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failure = yield* Effect.flip(
+        service.awaitTerminal(["agent-missing-1", "agent-missing-2"], "all_finished"),
+      );
+      expect(failure).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "subagent_runs_not_found",
+      });
+      expect(failure.message).toContain("agent-missing-1, agent-missing-2");
+      expect(failure.message).toContain("subagent_list");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("notifies after a foreground waiter returns on a blocking question", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
@@ -1266,7 +1321,12 @@ describe("SubagentService", () => {
       );
       yield* TestClock.adjust("10 seconds");
       const error = yield* Fiber.join(interrupting).pipe(Effect.flip);
-      expect(error._tag).toBe("SubagentProcessError");
+      expect(error).toMatchObject({
+        _tag: "SubagentProcessError",
+        code: "interrupt_outcome_uncertain",
+      });
+      expect(error.message).toContain("may still apply");
+      expect(error.message).toContain("subagent_status");
 
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "paused");
@@ -1429,6 +1489,23 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("returns found status observations alongside every stale ID", () => {
+    const fake = fakeChildLayer();
+    const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "status-selection" }));
+
+      const selection = yield* service.withStatusObservations(
+        [run.id, "agent-stale-1", "agent-stale-2"],
+        Effect.succeed,
+      );
+
+      expect(selection.observations.map((observation) => observation.run.id)).toEqual([run.id]);
+      expect(selection.missingIds).toEqual(["agent-stale-1", "agent-stale-2"]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("holds a completion claim through observation formatting and consumption", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
@@ -1446,7 +1523,7 @@ describe("SubagentService", () => {
       const acquired = yield* Deferred.make<void>();
       const releaseUse = yield* Deferred.make<void>();
       const observing = yield* service
-        .withStatusObservations([run.id], (observations) =>
+        .withStatusObservations([run.id], ({ observations }) =>
           Effect.gen(function* () {
             yield* Deferred.succeed(acquired, undefined);
             yield* Deferred.await(releaseUse);
@@ -1576,6 +1653,22 @@ describe("SubagentService", () => {
         yield* yieldUntil(() => attempts === index + 1);
       }
       expect(attempts).toBe(11);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("allows local display rename for stopped runs", () => {
+    const fake = fakeChildLayer();
+    const layer = SubagentService.layer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "stopped-name" }));
+      expect((yield* service.stop(run.id)).state).toBe("stopped");
+
+      const renamed = yield* service.rename(run.id, "renamed-stopped-run");
+      expect(renamed).toMatchObject({ state: "stopped", name: "renamed-stopped-run" });
+      expect(
+        fake.controls[0]?.commands.some((command) => command.type === "set_session_name"),
+      ).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -2083,7 +2176,12 @@ describe("SubagentService", () => {
       // The run is "running" again, so only the reply claim can reject the guidance.
       yield* Deferred.succeed(steerGate, undefined);
       const failure = yield* Fiber.join(sending).pipe(Effect.flip);
-      expect(failure._tag).toBe("InvalidSubagentRequestError");
+      expect(failure).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "guidance_outcome_uncertain",
+      });
+      expect(failure.message).toContain("may already have applied");
+      expect(failure.message).toContain("subagent_status");
 
       yield* Deferred.succeed(replyGate, undefined);
       expect((yield* Fiber.join(replying)).state).toBe("running");

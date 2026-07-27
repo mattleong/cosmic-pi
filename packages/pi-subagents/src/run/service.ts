@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot } from "pi-cosmic-core";
@@ -108,6 +109,11 @@ export interface SubagentRunObservation {
   readonly completionReceipt?: SubagentCompletionReceipt | undefined;
 }
 
+export interface SubagentStatusObservations {
+  readonly observations: ReadonlyArray<SubagentRunObservation>;
+  readonly missingIds: ReadonlyArray<string>;
+}
+
 export interface SubagentServiceShape {
   readonly start: (request: StartSubagentRequest) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly waitForForeground: (id: string) => Effect.Effect<SubagentRunView, SubagentNotFoundError>;
@@ -126,8 +132,8 @@ export interface SubagentServiceShape {
   readonly status: (id: string) => Effect.Effect<SubagentRunView, SubagentNotFoundError>;
   readonly withStatusObservations: <A, E, R>(
     ids: ReadonlyArray<string>,
-    use: (observations: ReadonlyArray<SubagentRunObservation>) => Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, SubagentNotFoundError | E, R>;
+    use: (selection: SubagentStatusObservations) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, InvalidSubagentRequestError | E, R>;
   readonly consumeCompletions: (
     receipts: ReadonlyArray<SubagentCompletionReceipt>,
   ) => Effect.Effect<void>;
@@ -693,11 +699,18 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 message: "The subagent session runtime is closed.",
               });
             const retainedProcesses = [...records.values()].filter(ownsProcessSlot).length;
-            if (retainedProcesses >= MAX_CONCURRENT_RUNS)
+            if (retainedProcesses >= MAX_CONCURRENT_RUNS) {
+              const cleanupCount = [...records.values()].filter(
+                (record) => record.cleanupPending,
+              ).length;
               return yield* new SubagentCapacityError({
                 limit: MAX_CONCURRENT_RUNS,
-                message: `Subagent capacity reached (${MAX_CONCURRENT_RUNS}). Stop an existing run first.`,
+                message:
+                  cleanupCount > 0
+                    ? `Subagent capacity is temporarily occupied while ${cleanupCount} run${cleanupCount === 1 ? "" : "s"} finish cleanup; retry shortly.`
+                    : `Subagent capacity reached (${MAX_CONCURRENT_RUNS}). Stop an active run first.`,
               });
+            }
             if (request.writeIntent === "writer") {
               const activeWriter = [...records.values()].find(ownsWriterSlot);
               if (activeWriter)
@@ -902,22 +915,35 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   interface CompletionClaim {
     readonly selected: ReadonlyArray<RunRecord>;
     readonly claimed: ReadonlyArray<RunRecord>;
+    readonly missingIds: ReadonlyArray<string>;
   }
-  const acquireCompletionClaims = (ids: ReadonlyArray<string>, claimAll: boolean) =>
+  const acquireCompletionClaims = (
+    ids: ReadonlyArray<string>,
+    claimAll: boolean,
+    allowMissing = false,
+  ) =>
     withCompletionGate(
       withLock(
-        Effect.forEach(ids, (id) => requireRecord(id)).pipe(
-          Effect.map((selected): CompletionClaim => {
-            const claimed = claimAll
-              ? selected
-              : selected.filter((record) => record.view.state === "completed");
-            for (const record of claimed) {
-              record.completionClaims += 1;
-              pendingCompletions.delete(record.view.id);
-            }
-            return { selected, claimed };
-          }),
-        ),
+        Effect.gen(function* () {
+          const selected = ids.flatMap((id) => {
+            const record = records.get(id);
+            return record ? [record] : [];
+          });
+          const missingIds = ids.filter((id) => !records.has(id));
+          if (!allowMissing && missingIds.length > 0)
+            return yield* new InvalidSubagentRequestError({
+              code: "subagent_runs_not_found",
+              message: `Subagent runs not found: ${missingIds.join(", ")}. Use subagent_list to refresh active run IDs.`,
+            });
+          const claimed = claimAll
+            ? selected
+            : selected.filter((record) => record.view.state === "completed");
+          for (const record of claimed) {
+            record.completionClaims += 1;
+            pendingCompletions.delete(record.view.id);
+          }
+          return { selected, claimed, missingIds } satisfies CompletionClaim;
+        }),
       ),
     );
   const releaseCompletionClaims = (claim: CompletionClaim) =>
@@ -949,8 +975,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             const observations = selected.map(observeRecord);
             const runs = observations.map((observation) => observation.run);
             const terminalCount = runs.filter((run) => isTerminalRunState(run.state)).length;
+            const parentAttentionRequired = runs.some(
+              (run) => run.state === "waiting_for_parent" && run.question !== undefined,
+            );
             const done =
-              until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length;
+              parentAttentionRequired ||
+              (until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length);
             if (done) return { done: true as const, runs, observations };
             const wake = yield* Deferred.make<void>();
             revisionWaiters.add(wake);
@@ -1001,8 +1031,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     withAwaitTerminalObservations(ids, until, onUpdate, Effect.succeed);
   const withStatusObservations: SubagentServiceShape["withStatusObservations"] = (ids, use) =>
     Effect.acquireUseRelease(
-      acquireCompletionClaims(ids, false),
-      (claim) => use(claim.selected.map(observeRecord)),
+      acquireCompletionClaims(ids, false, true),
+      (claim) =>
+        use({
+          observations: claim.selected.map(observeRecord),
+          missingIds: claim.missingIds,
+        }),
       releaseCompletionClaims,
     );
 
@@ -1049,8 +1083,26 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       ),
     );
 
-  const resume: SubagentServiceShape["resume"] = (id, message) =>
+  const waitForRunCleanupBounded = (
+    id: string,
+  ): Effect.Effect<void, SubagentNotFoundError | SubagentProcessError> =>
     waitForRunCleanup(id).pipe(
+      Effect.timeoutOption("10 seconds"),
+      Effect.flatMap((outcome) =>
+        Option.isSome(outcome)
+          ? Effect.void
+          : Effect.fail(
+              new SubagentProcessError({
+                operation: "resume",
+                code: "cleanup_timeout",
+                message: `Subagent ${id} cleanup did not finish within 10 seconds; inspect with subagent_status before retrying resume.`,
+              }),
+            ),
+      ),
+    );
+
+  const resume: SubagentServiceShape["resume"] = (id, message) =>
+    waitForRunCleanupBounded(id).pipe(
       Effect.andThen(
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
@@ -1083,11 +1135,18 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                   const retainedProcesses = [...records.values()].filter(
                     (candidate) => candidate !== selected && ownsProcessSlot(candidate),
                   ).length;
-                  if (retainedProcesses >= MAX_CONCURRENT_RUNS)
+                  if (retainedProcesses >= MAX_CONCURRENT_RUNS) {
+                    const cleanupCount = [...records.values()].filter(
+                      (record) => record.cleanupPending,
+                    ).length;
                     return yield* new SubagentCapacityError({
                       limit: MAX_CONCURRENT_RUNS,
-                      message: `Subagent capacity reached (${MAX_CONCURRENT_RUNS}). Stop an existing run first.`,
+                      message:
+                        cleanupCount > 0
+                          ? `Subagent capacity is temporarily occupied while ${cleanupCount} run${cleanupCount === 1 ? "" : "s"} finish cleanup; retry shortly.`
+                          : `Subagent capacity reached (${MAX_CONCURRENT_RUNS}). Stop an active run first.`,
                     });
+                  }
                   if (selected.view.backend === "pi" && !selected.view.sessionFile)
                     return yield* new InvalidSubagentRequestError({
                       message: `Subagent ${id} cannot resume because its Pi session file is unavailable.`,

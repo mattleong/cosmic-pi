@@ -2,6 +2,7 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
 import { spawn } from "node:child_process";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -38,9 +39,11 @@ const preflightError = (code: string, message: string) =>
   new SubagentProcessError({ operation: "preflight", message, code });
 
 const verifiedCommands = new Set<string>();
+const pendingCommands = new Map<string, Deferred.Deferred<void, SubagentProcessError>>();
 
 export const resetClaudeCliPreflightCache = (): void => {
   verifiedCommands.clear();
+  pendingCommands.clear();
 };
 
 const parseJsonObject = (text: string): unknown => {
@@ -129,9 +132,14 @@ const authenticationFailure = (probe: PreflightProbe): SubagentProcessError | un
     `${probe.stdout}\n${probe.stderr}`.trim(),
     MAX_DETAIL_CHARS,
   );
+  if (explicitlyUnauthenticated)
+    return preflightError(
+      "claude_cli_unauthenticated",
+      `Claude CLI is not authenticated; sign in with the installed Claude CLI and retry.${detail ? `\n${detail}` : ""}`,
+    );
   return preflightError(
-    "claude_cli_unauthenticated",
-    `Claude CLI is not authenticated; sign in with the installed Claude CLI and retry.${detail ? `\n${detail}` : ""}`,
+    "claude_cli_preflight_failed",
+    `Claude CLI auth preflight exited with code ${probe.exitCode ?? "unknown"}; verify that the installed CLI supports "auth status --json" and retry.${detail ? `\n${detail}` : ""}`,
   );
 };
 
@@ -149,13 +157,38 @@ export const ensureClaudeCliReady = (
     const args = options.commandArgs ?? [];
     const key = [command, ...args].join(" ");
     if (verifiedCommands.has(key)) return Effect.void;
-    return probeAuthStatus(command, args, options.timeoutMillis ?? PREFLIGHT_TIMEOUT_MILLIS).pipe(
-      Effect.flatMap((probe) => {
-        const failure = authenticationFailure(probe);
-        if (failure) return Effect.fail(failure);
-        return Effect.sync(() => {
-          verifiedCommands.add(key);
-        });
-      }),
-    );
+    return Effect.gen(function* () {
+      const gate = yield* Deferred.make<void, SubagentProcessError>();
+      const registration = yield* Effect.sync(() => {
+        const pending = pendingCommands.get(key);
+        if (pending) return { owner: false as const, gate: pending };
+        pendingCommands.set(key, gate);
+        return { owner: true as const, gate };
+      });
+      if (!registration.owner) return yield* Deferred.await(registration.gate);
+      const check = probeAuthStatus(
+        command,
+        args,
+        options.timeoutMillis ?? PREFLIGHT_TIMEOUT_MILLIS,
+      ).pipe(
+        Effect.flatMap((probe) => {
+          const failure = authenticationFailure(probe);
+          return failure ? Effect.fail(failure) : Effect.void;
+        }),
+        Effect.tap(() =>
+          Effect.sync(() => {
+            verifiedCommands.add(key);
+          }),
+        ),
+      );
+      return yield* Effect.uninterruptibleMask(() =>
+        check.pipe(
+          Effect.onExit((exit) =>
+            Effect.sync(() => {
+              if (pendingCommands.get(key) === gate) pendingCommands.delete(key);
+            }).pipe(Effect.andThen(Deferred.done(gate, exit)), Effect.asVoid),
+          ),
+        ),
+      );
+    });
   });

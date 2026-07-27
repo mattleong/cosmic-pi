@@ -10,7 +10,11 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { piToolsForWriteIntent } from "../src/run/coordination.ts";
-import { InvalidSubagentRequestError, SubagentProcessError } from "../src/run/errors.ts";
+import {
+  InvalidSubagentRequestError,
+  SubagentNotFoundError,
+  SubagentProcessError,
+} from "../src/run/errors.ts";
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
 import {
   SubagentService,
@@ -232,7 +236,7 @@ describe("subagent tool", () => {
     expect(properties("subagent_reply")).toEqual(["runId", "message"]);
     expect(properties("subagent_lifecycle")).toEqual(["action", "runIds", "message"]);
     expect(properties("subagent_rename")).toEqual(["runId", "name"]);
-    expect(tools.get("subagent_start")?.description).toContain("foreground blocks this call");
+    expect(tools.get("subagent_start")?.description).toContain("at most one foreground agent");
     expect(tools.get("subagent_status")?.description).toContain("backend capabilities");
     expect(tools.get("subagent_send")?.description).toContain(
       "claude-cli runs cannot receive mid-turn guidance",
@@ -312,6 +316,16 @@ describe("subagent tool", () => {
     expect(awaitResultBanner({ action: "await", runs: [running], cancelled: true })).toEqual({
       color: "warning",
       text: "Await cancelled · 1 agent continues running",
+    });
+    expect(
+      awaitResultBanner({
+        action: "await",
+        runs: [view({ state: "waiting_for_parent" })],
+        attentionRequired: true,
+      }),
+    ).toEqual({
+      color: "warning",
+      text: "Parent reply required · 1 agent is waiting",
     });
     expect(
       awaitResultBanner({
@@ -559,7 +573,9 @@ describe("subagent tool", () => {
     });
     expect(waited).toEqual(["agent-3"]);
     expect(result?.content[0]?.text).toContain("Failed starts (1)");
-    expect(result?.content[0]?.text).toContain("#2 broken: simulated launch failure");
+    expect(result?.content[0]?.text).toContain(
+      "#2 broken [SubagentProcessError]: simulated launch failure",
+    );
     expect(result?.content[0]?.text).toContain("agent-1");
     expect(result?.content[0]?.text).toContain("agent-3");
     expect(result?.details).toMatchObject({
@@ -567,6 +583,83 @@ describe("subagent tool", () => {
       runs: [{ id: "agent-1" }, { id: "agent-3" }],
       startFailures: [{ index: 1, name: "broken", message: "simulated launch failure" }],
     });
+  });
+
+  it("rejects multiple foreground agents before any launch side effect", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
+
+    await expect(
+      tool?.execute(
+        "call",
+        {
+          agents: [
+            {
+              task: "Review auth",
+              backend: "pi",
+              execution: "foreground",
+              writeIntent: "read-only",
+            },
+            {
+              task: "Review storage",
+              backend: "pi",
+              execution: "foreground",
+              writeIntent: "read-only",
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toThrow("at most one foreground agent");
+    expect(requests).toEqual([]);
+  });
+
+  it("publishes start progress before waiting on a foreground run", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const updates: string[] = [];
+    const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
+
+    await tool?.execute(
+      "call",
+      {
+        agents: [
+          {
+            task: "Review auth",
+            backend: "pi",
+            execution: "foreground",
+            writeIntent: "read-only",
+          },
+        ],
+      },
+      undefined,
+      (result) => updates.push(result.content[0]?.text ?? ""),
+      context,
+    );
+
+    expect(updates).toEqual(["Started 1 of 1 subagent; waiting for the foreground run."]);
+  });
+
+  it("does not let a failed partial renderer turn a successful launch into failure", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
+
+    const result = await tool?.execute(
+      "call",
+      {
+        agents: [{ task: "Review auth", backend: "pi", writeIntent: "read-only" }],
+      },
+      undefined,
+      () => {
+        throw new Error("stale renderer");
+      },
+      context,
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(result?.content[0]?.text).toContain("agent-1");
+    expect(result?.details).not.toHaveProperty("startFailures");
   });
 
   it("accepts exactly twelve batch starts at the runtime boundary", async () => {
@@ -901,7 +994,7 @@ describe("subagent tool", () => {
     expect(sent).toEqual(["agent-1"]);
     expect(sendResult?.content[0]?.text).toContain("Guidance delivered to 1 subagent: agent-1.");
     expect(sendResult?.content[0]?.text).toContain("Failed targets (1)");
-    expect(sendResult?.content[0]?.text).toContain("agent-2: agent-2 is paused");
+    expect(sendResult?.content[0]?.text).toContain("agent-2 [not_running]: agent-2 is paused");
     expect(sendResult?.details).toMatchObject({
       action: "send",
       runs: [{ id: "agent-1" }],
@@ -942,6 +1035,65 @@ describe("subagent tool", () => {
         context,
       ),
     ).rejects.toThrow('message is valid only when action="resume"');
+  });
+
+  it("deduplicates repeated target IDs before applying management operations", async () => {
+    const sent: string[] = [];
+    const service = {
+      ...startCapturingService([]),
+      send: (id: string) => Effect.sync(() => (sent.push(id), view({ id }))),
+    };
+    const tool = captureSubagentTools(service).get("subagent_send");
+
+    const result = await tool?.execute(
+      "call",
+      { runIds: ["agent-1", "agent-1"], message: "Conclude." },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(sent).toEqual(["agent-1"]);
+    expect(result?.content[0]?.text).toBe("Guidance delivered to 1 subagent: agent-1.");
+  });
+
+  it("returns structured failures for single-target reply and rename operations", async () => {
+    const service = {
+      ...startCapturingService([]),
+      reply: (id: string) =>
+        Effect.fail(
+          new InvalidSubagentRequestError({
+            code: "no_parent_question",
+            message: `Subagent ${id} has no pending parent question.`,
+          }),
+        ),
+      rename: (id: string) =>
+        Effect.fail(new SubagentNotFoundError({ id, message: `Subagent run not found: ${id}` })),
+    };
+    const tools = captureSubagentTools(service);
+
+    const replied = await tools
+      .get("subagent_reply")
+      ?.execute("call", { runId: "agent-1", message: "Proceed." }, undefined, undefined, context);
+    expect(replied?.content[0]?.text).toContain(
+      "agent-1 [no_parent_question]: Subagent agent-1 has no pending parent question.",
+    );
+    expect(replied?.details).toMatchObject({
+      actionFailures: [{ id: "agent-1", code: "no_parent_question" }],
+    });
+
+    const renamed = await tools
+      .get("subagent_rename")
+      ?.execute(
+        "call",
+        { runId: "agent-missing", name: "reviewer" },
+        undefined,
+        undefined,
+        context,
+      );
+    expect(renamed?.content[0]?.text).toContain(
+      "agent-missing [SubagentNotFoundError]: Subagent run not found: agent-missing",
+    );
   });
 
   it("routes focused reply, lifecycle, and rename operations", async () => {
@@ -1003,6 +1155,77 @@ describe("subagent tool", () => {
       "stop:agent-2",
       "rename:agent-1:reviewer",
     ]);
+  });
+
+  it("returns status for found IDs and model-visible failures for stale IDs", async () => {
+    const completed = view({ state: "completed", finalText: "Done." });
+    const withStatusObservations: SubagentServiceShape["withStatusObservations"] = (ids, use) =>
+      use({
+        observations: ids.includes("agent-1") ? [{ run: completed }] : [],
+        missingIds: ids.filter((id) => id !== "agent-1"),
+      });
+    const service = {
+      ...startCapturingService([]),
+      withStatusObservations,
+    };
+    const tool = captureSubagentTools(service).get("subagent_status");
+
+    const result = await tool?.execute(
+      "call",
+      { runIds: ["agent-1", "agent-stale"] },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(result?.content[0]?.text).toContain("Final report\nDone.");
+    expect(result?.content[0]?.text).toContain(
+      "agent-stale [SubagentNotFoundError]: Subagent run not found: agent-stale",
+    );
+    expect(result?.details).toMatchObject({
+      action: "status",
+      actionFailures: [{ id: "agent-stale", code: "SubagentNotFoundError" }],
+    });
+  });
+
+  it("returns await immediately when a subagent needs a parent reply", async () => {
+    const waiting = view({
+      state: "waiting_for_parent",
+      question: {
+        requestId: "question-1",
+        message: "Should I update the fixture?",
+        createdAt: 2,
+      },
+    });
+    const withAwaitTerminalObservations: SubagentServiceShape["withAwaitTerminalObservations"] = (
+      _ids,
+      _until,
+      _onUpdate,
+      use,
+    ) => use([{ run: waiting }]);
+    const service = {
+      ...startCapturingService([]),
+      withAwaitTerminalObservations,
+    };
+    const tool = captureSubagentTools(service).get("subagent_await");
+
+    const result = await tool?.execute(
+      "call",
+      { runIds: ["agent-1"], until: "all_finished", timeoutSeconds: 0 },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(result?.content[0]?.text).toContain(
+      'Reply with subagent_reply({ runId: "agent-1", message: "..." }), then call subagent_await again.',
+    );
+    expect(result?.content[0]?.text).toContain("Question   Should I update the fixture?");
+    expect(result?.details).toMatchObject({
+      action: "await",
+      attentionRequired: true,
+      runs: [{ state: "waiting_for_parent" }],
+    });
   });
 
   it("enforces the combined target count and aggregate detailed-output budget", async () => {
@@ -1141,6 +1364,24 @@ describe("subagent tool", () => {
       "opus",
       "haiku",
     ]);
+  });
+
+  it("marks discovery output when matching selectors reach the result cap", async () => {
+    const available = Array.from({ length: 105 }, (_, index) => ({
+      provider: "provider",
+      id: `model-${index + 1}`,
+      name: `Model ${index + 1}`,
+      reasoning: true,
+    }));
+    const ctx = registryContext(available);
+    const tool = captureSubagentTools(startCapturingService([])).get("subagent_models");
+
+    const result = await tool?.execute("call", {}, undefined, undefined, ctx);
+
+    expect(modelViews(result)).toHaveLength(100);
+    expect(result?.content[0]?.text).toContain(
+      "Showing at most 100 matching selectors; narrow query or backend to search further.",
+    );
   });
 
   it("rejects duplicate bare Pi model IDs with canonical candidates instead of picking one", async () => {

@@ -92,11 +92,13 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         Effect.gen(function* () {
           if (record.view.state !== "running")
             return yield* new InvalidSubagentRequestError({
-              message: `Subagent ${id} stopped before guidance was recorded.`,
+              code: "guidance_outcome_uncertain",
+              message: `Subagent ${id} changed state after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
             });
           if (record.replyPendingRequestId)
             return yield* new InvalidSubagentRequestError({
-              message: `Subagent ${id} claimed a parent reply before guidance was recorded.`,
+              code: "guidance_outcome_uncertain",
+              message: `Subagent ${id} claimed a parent reply after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
             });
           record.view = {
             ...record.view,
@@ -237,6 +239,12 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                     record.pauseRequested = false;
                     record.pauseOutcome = undefined;
                   }
+                  if (responseTimedOut)
+                    return yield* new SubagentProcessError({
+                      operation: "interrupt",
+                      code: "interrupt_outcome_uncertain",
+                      message: `Subagent ${id} did not confirm interruption in time, but the pause request remains pending and may still apply. Inspect with subagent_status before retrying.`,
+                    });
                   return yield* error;
                 }),
               ),
@@ -283,15 +291,15 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         Effect.gen(function* () {
           const record = yield* requireRecord(id);
           yield* requireCapability(record, "rename-display");
-          if (
-            record.view.state === "stopping" ||
-            record.view.state === "stopped" ||
-            record.view.state === "failed"
-          )
+          if (record.view.state === "stopping")
             return yield* new InvalidSubagentRequestError({
-              message: `Subagent ${id} cannot be renamed while ${record.view.state}.`,
+              message: `Subagent ${id} cannot be renamed while stopping.`,
             });
-          if (record.view.state === "starting" || record.view.state === "completed") {
+          if (
+            record.view.state !== "running" &&
+            record.view.state !== "waiting_for_parent" &&
+            record.view.state !== "paused"
+          ) {
             record.view = { ...record.view, name };
             publish();
             return { record, localView: snapshotView(record.view) };

@@ -1,6 +1,6 @@
 import type { SubagentBackend, SubagentModelView } from "./model.ts";
 
-const MAX_DISCOVERY_RESULTS = 100;
+export const MAX_DISCOVERY_RESULTS = 100;
 const MAX_NEAR_MATCHES = 6;
 
 /**

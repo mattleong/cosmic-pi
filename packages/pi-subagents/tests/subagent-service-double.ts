@@ -30,8 +30,27 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
   const withStatusObservations: SubagentServiceShape["withStatusObservations"] =
     base.withStatusObservations ??
     ((ids, use) =>
-      Effect.forEach(ids, observeStatus, { concurrency: 8 }).pipe(
-        Effect.flatMap((observations) => use(observations)),
+      Effect.forEach(
+        ids,
+        (id) =>
+          observeStatus(id).pipe(
+            Effect.match({
+              onFailure: () => ({ missingId: id }) as const,
+              onSuccess: (observation) => ({ observation }) as const,
+            }),
+          ),
+        { concurrency: 8 },
+      ).pipe(
+        Effect.flatMap((outcomes) =>
+          use({
+            observations: outcomes.flatMap((outcome) =>
+              "observation" in outcome ? [outcome.observation] : [],
+            ),
+            missingIds: outcomes.flatMap((outcome) =>
+              "missingId" in outcome ? [outcome.missingId] : [],
+            ),
+          }),
+        ),
       ));
   const withAwaitTerminalObservations: SubagentServiceShape["withAwaitTerminalObservations"] =
     base.withAwaitTerminalObservations ??

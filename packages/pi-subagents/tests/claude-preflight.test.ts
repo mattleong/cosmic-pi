@@ -77,7 +77,7 @@ describe("Claude CLI preflight", () => {
     expect(await readFile(counter, "utf8")).toBe("xx");
   });
 
-  it("treats a non-zero exit as unauthenticated and includes bounded diagnostics", async () => {
+  it("distinguishes a failed auth probe from explicit unauthenticated status", async () => {
     const script = await fixture(
       "fake-claude-exit.mjs",
       `process.stderr.write("Not logged in\\n");
@@ -87,8 +87,26 @@ process.exit(1);`,
     const error = await Effect.runPromise(
       Effect.flip(ensureClaudeCliReady({ command: process.execPath, commandArgs: [script] })),
     );
-    expect(error).toMatchObject({ code: "claude_cli_unauthenticated" });
+    expect(error).toMatchObject({ code: "claude_cli_preflight_failed" });
+    expect(error.message).toContain('supports "auth status --json"');
     expect(error.message).toContain("Not logged in");
+  });
+
+  it("deduplicates concurrent probes for the same command", async () => {
+    const counter = join(directory, "invocations");
+    const script = await fixture(
+      "fake-claude-concurrent.mjs",
+      `setTimeout(() => {
+  process.stdout.write(JSON.stringify({ loggedIn: true, status: "authenticated" }) + "\\n");
+}, 100);`,
+    );
+    const options = { command: process.execPath, commandArgs: [script] };
+
+    await Promise.all(
+      Array.from({ length: 8 }, () => Effect.runPromise(ensureClaudeCliReady(options))),
+    );
+
+    expect(await readFile(counter, "utf8")).toBe("x");
   });
 
   it("reports a missing executable distinctly", async () => {

@@ -37,7 +37,7 @@ export const CLAUDE_CLI_SUBAGENT_CAPABILITIES = [
   "rename-display",
 ] as const satisfies ReadonlyArray<SubagentCapability>;
 
-const CLAUDE_MODEL_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const CLAUDE_MODEL_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const CLAUDE_MODEL_ALIASES: ReadonlySet<string> = new Set(["fable", "sonnet", "opus", "haiku"]);
 
 export const isClaudeModelSelector = (value: string): boolean => {
