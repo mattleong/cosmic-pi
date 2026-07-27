@@ -9,5 +9,4 @@ export default function betterOpenAI(pi: ExtensionAPI): void {
 export {
   betterOpenAIWithDependencies,
   type BetterOpenAIExtensionDependencies,
-  _test,
 } from "./application.ts";

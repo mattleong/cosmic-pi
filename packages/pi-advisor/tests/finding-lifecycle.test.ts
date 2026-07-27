@@ -1,9 +1,46 @@
 import { describe, expect, test } from "vitest";
 import {
-  AdvisorFindingLifecycle,
+  acknowledgeAdvisorFindings,
+  advisorFindingLifecycleCounts,
+  emptyAdvisorFindingLifecycle,
   MAX_FINDING_LIFECYCLE_RECORDS,
+  reconcileAdvisorFindings,
+  restoreAdvisorFindingLifecycle,
+  supersedeAdvisorFindings,
+  type AdvisorFindingLifecycleState,
+  type AdvisorFindingRecord,
 } from "../src/review/finding-lifecycle.ts";
 import type { AdvisorFinding } from "../src/review/index.ts";
+
+/** Drives the immutable lifecycle reducers the way application state does. */
+function lifecycleDriver() {
+  let state: AdvisorFindingLifecycleState = emptyAdvisorFindingLifecycle();
+  return {
+    reconcile(
+      findings: readonly AdvisorFinding[],
+      options: { scope: string; completedTurn: number; complete: boolean },
+    ) {
+      const result = reconcileAdvisorFindings(state, findings, options);
+      state = result.state;
+      return result.findings;
+    },
+    acknowledge(ids: readonly string[]) {
+      state = acknowledgeAdvisorFindings(state, ids);
+    },
+    supersede(ids: readonly string[]) {
+      state = supersedeAdvisorFindings(state, ids);
+    },
+    snapshot(): AdvisorFindingRecord[] {
+      return state.records.map((record) => ({ ...record }));
+    },
+    restore(records: readonly AdvisorFindingRecord[] | undefined) {
+      state = restoreAdvisorFindingLifecycle(records);
+    },
+    counts() {
+      return advisorFindingLifecycleCounts(state);
+    },
+  };
+}
 
 const finding: AdvisorFinding = {
   fingerprint: "missing-validation",
@@ -18,7 +55,7 @@ const finding: AdvisorFinding = {
 
 describe("advisor finding lifecycle", () => {
   test("keeps stable IDs and acknowledges only after delivery", () => {
-    const lifecycle = new AdvisorFindingLifecycle();
+    const lifecycle = lifecycleDriver();
     const first = lifecycle.reconcile([finding], {
       scope: "session",
       completedTurn: 1,
@@ -36,7 +73,7 @@ describe("advisor finding lifecycle", () => {
   });
 
   test("reopens an acknowledged finding only when its severity escalates", () => {
-    const lifecycle = new AdvisorFindingLifecycle();
+    const lifecycle = lifecycleDriver();
     const first = lifecycle.reconcile([finding], {
       scope: "session",
       completedTurn: 1,
@@ -57,14 +94,14 @@ describe("advisor finding lifecycle", () => {
   });
 
   test("restores stable IDs and lifecycle state from bounded durable records", () => {
-    const original = new AdvisorFindingLifecycle();
+    const original = lifecycleDriver();
     const first = original.reconcile([finding], {
       scope: "session",
       completedTurn: 1,
       complete: false,
     });
     original.acknowledge([first[0]!.id!]);
-    const restored = new AdvisorFindingLifecycle();
+    const restored = lifecycleDriver();
     restored.restore(original.snapshot());
     const next = restored.reconcile([finding], {
       scope: "session",
@@ -76,7 +113,7 @@ describe("advisor finding lifecycle", () => {
   });
 
   test("supports explicit supersession without reopening terminal records", () => {
-    const lifecycle = new AdvisorFindingLifecycle();
+    const lifecycle = lifecycleDriver();
     const current = lifecycle.reconcile([finding], {
       scope: "session",
       completedTurn: 1,
@@ -87,7 +124,7 @@ describe("advisor finding lifecycle", () => {
   });
 
   test("hard-bounds open records with oldest-first eviction", () => {
-    const lifecycle = new AdvisorFindingLifecycle();
+    const lifecycle = lifecycleDriver();
     for (let index = 0; index < MAX_FINDING_LIFECYCLE_RECORDS + 6; index += 1) {
       lifecycle.reconcile([{ ...finding, fingerprint: `open-${index}` }], {
         scope: "session",
@@ -107,7 +144,7 @@ describe("advisor finding lifecycle", () => {
   });
 
   test("evicts terminal records before open records at the hard bound", () => {
-    const lifecycle = new AdvisorFindingLifecycle();
+    const lifecycle = lifecycleDriver();
     const records = Array.from(
       { length: MAX_FINDING_LIFECYCLE_RECORDS },
       (_, index) =>
@@ -130,7 +167,7 @@ describe("advisor finding lifecycle", () => {
   });
 
   test("resolves omitted findings only at complete checkpoints", () => {
-    const lifecycle = new AdvisorFindingLifecycle();
+    const lifecycle = lifecycleDriver();
     lifecycle.reconcile([finding], { scope: "session", completedTurn: 1, complete: false });
     lifecycle.reconcile([], { scope: "session", completedTurn: 2, complete: false });
     expect(lifecycle.snapshot()[0]?.status).toBe("open");

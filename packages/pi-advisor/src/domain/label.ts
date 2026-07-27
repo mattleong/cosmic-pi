@@ -1,4 +1,4 @@
-import { redactSensitiveText } from "../review/observation-protocol.ts";
+import { redactSensitiveText } from "./redaction.ts";
 
 export const MAX_ADVISOR_LABEL_CHARS = 256;
 

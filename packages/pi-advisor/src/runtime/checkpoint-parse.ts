@@ -1,10 +1,10 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { stringifyJson } from "../boundary/json.ts";
 import { isRecord } from "../shared/utils.ts";
-import { parseAdvisorReview } from "../review/parse.ts";
-import { redactSensitiveText } from "../review/observation-protocol.ts";
+import { parseAdvisorReviewValue } from "../review/parse.ts";
+import { AdvisorReviewParseError } from "../review/schema.ts";
+import { redactSensitiveText } from "../domain/redaction.ts";
 import { AdvisorModelError } from "./client.ts";
 import {
   AdvisorCheckpointWireSchema,
@@ -14,6 +14,13 @@ import {
   type AdvisorCheckpoint,
 } from "./types.ts";
 
+/**
+ * Checkpoint decoding.
+ *
+ * Like the review parser, this performs one wire gate plus one invariant assertion on the emitted
+ * checkpoint. Granular diagnostics run on the value that failed the gate so exact-key, correlation,
+ * and review-lane messages keep priority over the generic schema-validation message.
+ */
 export const decodeAdvisorCheckpoint = Effect.fn("AdvisorCheckpoint.decode")(function* (
   raw: string,
 ) {
@@ -22,19 +29,18 @@ export const decodeAdvisorCheckpoint = Effect.fn("AdvisorCheckpoint.decode")(fun
       message: "Advisor checkpoint exceeds the maximum response size.",
     });
   }
-  const decoded = yield* Schema.decodeUnknownEffect(
-    Schema.fromJsonString(AdvisorCheckpointWireSchema),
-  )(raw.trim(), { onExcessProperty: "error" }).pipe(
-    Effect.mapError(
-      () => new AdvisorModelError({ message: "Advisor checkpoint failed schema validation." }),
-    ),
-  );
   return yield* Effect.try({
-    try: () => diagnoseAdvisorCheckpoint(stringifyJson(decoded)),
+    try: () => parseCheckpointText(raw),
     catch: (error) =>
       error instanceof AdvisorModelError
         ? error
-        : new AdvisorModelError({ message: "Advisor checkpoint failed schema validation." }),
+        : // Embedded review diagnostics keep their exact message inside the checkpoint error type.
+          new AdvisorModelError({
+            message:
+              error instanceof AdvisorReviewParseError
+                ? error.message
+                : "Advisor checkpoint failed schema validation.",
+          }),
   });
 });
 
@@ -43,33 +49,29 @@ export const parseAdvisorCheckpointEffect = (
 ): Effect.Effect<AdvisorCheckpoint, AdvisorModelError> =>
   decodeAdvisorCheckpoint(raw).pipe(Effect.withSpan("pi-advisor.checkpoint.decode"));
 
-/** Pure compatibility parser retained for deterministic parser tests. */
-export function parseAdvisorCheckpoint(raw: string): AdvisorCheckpoint {
-  if (raw.length > MAX_ADVISOR_CHECKPOINT_CHARS) {
-    throw new AdvisorModelError({
-      message: "Advisor checkpoint exceeds the maximum response size.",
-    });
-  }
-  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(AdvisorCheckpointWireSchema), {
+function parseCheckpointText(raw: string): AdvisorCheckpoint {
+  const trimmed = raw.trim();
+  const gated = Schema.decodeUnknownOption(Schema.fromJsonString(AdvisorCheckpointWireSchema), {
     onExcessProperty: "error",
-  })(raw.trim());
-  if (Option.isNone(decoded)) {
-    diagnoseAdvisorCheckpoint(raw);
-    throw new AdvisorModelError({ message: "Advisor checkpoint failed schema validation." });
-  }
-  return diagnoseAdvisorCheckpoint(stringifyJson(decoded.value));
-}
-
-function diagnoseAdvisorCheckpoint(raw: string): AdvisorCheckpoint {
-  if (raw.length > MAX_ADVISOR_CHECKPOINT_CHARS) {
-    throw new AdvisorModelError({
-      message: "Advisor checkpoint exceeds the maximum response size.",
-    });
-  }
-  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(raw.trim());
+  })(trimmed);
+  if (Option.isSome(gated)) return finishCheckpoint(gated.value);
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(trimmed);
   if (Option.isNone(decoded))
     throw new AdvisorModelError({ message: "Advisor returned malformed checkpoint JSON." });
-  const parsed = decoded.value;
+  normalizeCheckpoint(decoded.value);
+  throw new AdvisorModelError({ message: "Advisor checkpoint failed schema validation." });
+}
+
+function finishCheckpoint(gated: unknown): AdvisorCheckpoint {
+  const checkpoint = normalizeCheckpoint(gated);
+  if (Option.isNone(Schema.decodeUnknownOption(AdvisorCheckpointWireSchema)(checkpoint))) {
+    throw new AdvisorModelError({ message: "Advisor checkpoint failed schema validation." });
+  }
+  return checkpoint;
+}
+
+/** Granular correlation/exact-key diagnostics on an already-decoded JSON value. */
+function normalizeCheckpoint(parsed: unknown): AdvisorCheckpoint {
   if (!isRecord(parsed))
     throw new AdvisorModelError({ message: "Advisor checkpoint must be an object." });
   const expected = [
@@ -107,22 +109,16 @@ function diagnoseAdvisorCheckpoint(raw: string): AdvisorCheckpoint {
   ) {
     throw new AdvisorModelError({ message: "Advisor state summary is invalid or too large." });
   }
-  const review = parseAdvisorReview(
-    stringifyJson({
-      verdict: parsed.verdict,
-      summary: parsed.summary,
-      ...(parsed.suggestions !== undefined ? { suggestions: parsed.suggestions } : {}),
-      findings: parsed.findings,
-    }),
-  );
-  const checkpoint: AdvisorCheckpoint = {
+  const review = parseAdvisorReviewValue({
+    verdict: parsed.verdict,
+    summary: parsed.summary,
+    ...(parsed.suggestions !== undefined ? { suggestions: parsed.suggestions } : {}),
+    findings: parsed.findings,
+  });
+  return {
     checkpointId: parsed.checkpointId,
     processedThrough: Number(parsed.processedThrough),
     stateSummary: redactSensitiveText(parsed.stateSummary),
     ...review,
   };
-  if (Option.isNone(Schema.decodeUnknownOption(AdvisorCheckpointWireSchema)(checkpoint))) {
-    throw new AdvisorModelError({ message: "Advisor checkpoint failed schema validation." });
-  }
-  return checkpoint;
 }

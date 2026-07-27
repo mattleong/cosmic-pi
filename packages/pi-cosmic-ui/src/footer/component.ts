@@ -37,7 +37,6 @@ import {
 import { footerContributions, footerSurfaces, type FooterRegistrySnapshot } from "./registry.ts";
 
 export type { FooterTotals } from "./builtin-contributions.ts";
-export { abbreviateHomePath } from "./builtin-contributions.ts";
 
 export interface FooterContributionView {
   readonly snapshot: () => FooterRegistrySnapshot;

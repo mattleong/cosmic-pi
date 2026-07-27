@@ -109,32 +109,3 @@ export const rollbackAdvisorFindingDedupe = (
   }
   return { ...state, seen, order };
 };
-
-/** Compatibility facade for external callers; application state uses the reducers above. */
-export class AdvisorFindingDedupe {
-  #state: AdvisorFindingDedupeState;
-  constructor(capacity = DEFAULT_FINDING_HISTORY_CAPACITY) {
-    this.#state = emptyAdvisorFindingDedupe(capacity);
-  }
-  filter(findings: readonly AdvisorFinding[], scope = "default") {
-    const {
-      rollback: _rollback,
-      state,
-      ...result
-    } = filterAdvisorFindingsWithRollback(this.#state, findings, scope);
-    this.#state = state;
-    return result;
-  }
-  filterWithRollback(findings: readonly AdvisorFinding[], scope = "default") {
-    const result = filterAdvisorFindingsWithRollback(this.#state, findings, scope);
-    this.#state = result.state;
-    const { state: _state, ...publicResult } = result;
-    return publicResult;
-  }
-  rollback(token: AdvisorFindingDedupeRollback): void {
-    this.#state = rollbackAdvisorFindingDedupe(this.#state, token);
-  }
-  reset(): void {
-    this.#state = emptyAdvisorFindingDedupe(this.#state.capacity);
-  }
-}

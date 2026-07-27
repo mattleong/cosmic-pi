@@ -1,7 +1,11 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import {
+  AgentDirectory,
   decodeTolerantFields,
   JsonDocumentStore,
   scopedDocumentPaths,
@@ -101,14 +105,6 @@ const readConfigTolerantly = (path: string) =>
       ),
     ),
   );
-
-export const readRawConfig = Effect.fn("pi-cosmic-ui.config.read-raw")(function* (path: string) {
-  const documents = yield* JsonDocumentStore;
-  return yield* documents.readObject(path).pipe(
-    Effect.map((value) => value ?? {}),
-    Effect.mapError(mapError("read", path)),
-  );
-});
 
 export const readConfig = Effect.fn("pi-cosmic-ui.config.read")(function* (path: string) {
   const documents = yield* JsonDocumentStore;
@@ -218,3 +214,46 @@ export const setFooterVisibility = Effect.fn("pi-cosmic-ui.config.set-visibility
     afterCommit,
   );
 });
+
+export interface CosmicUiConfigStoreShape {
+  readonly resolve: (
+    cwd: string,
+    projectTrusted?: boolean,
+  ) => Effect.Effect<ResolvedCosmicUiConfig, CosmicUiConfigError>;
+  readonly updateFooter: (
+    cwd: string,
+    patch: Partial<ResolvedCosmicUiConfig["footer"]>,
+    projectTrusted?: boolean,
+    afterCommit?: CosmicUiConfigAfterCommit,
+  ) => Effect.Effect<ResolvedCosmicUiConfig, CosmicUiConfigError>;
+  readonly setVisibility: (
+    cwd: string,
+    id: string,
+    visible: boolean,
+    projectTrusted?: boolean,
+    afterCommit?: CosmicUiConfigAfterCommit,
+  ) => Effect.Effect<ResolvedCosmicUiConfig, CosmicUiConfigError>;
+}
+
+/** The single Cosmic UI configuration persistence door. */
+export class CosmicUiConfigStore extends Context.Service<
+  CosmicUiConfigStore,
+  CosmicUiConfigStoreShape
+>()("pi-cosmic-ui/config/store/CosmicUiConfigStore") {
+  static readonly layer = Layer.effect(
+    this,
+    Effect.gen(function* () {
+      const agentDir = yield* AgentDirectory;
+      const dependencies = yield* Effect.context<JsonDocumentStore | Path.Path>();
+      const provide = <A, E>(effect: Effect.Effect<A, E, JsonDocumentStore | Path.Path>) =>
+        effect.pipe(Effect.provideContext(dependencies));
+      return CosmicUiConfigStore.of({
+        resolve: (cwd, projectTrusted) => provide(resolveConfig(cwd, agentDir, projectTrusted)),
+        updateFooter: (cwd, patch, projectTrusted, afterCommit) =>
+          provide(updateFooterConfig(cwd, agentDir, patch, projectTrusted, afterCommit)),
+        setVisibility: (cwd, id, visible, projectTrusted, afterCommit) =>
+          provide(setFooterVisibility(cwd, agentDir, id, visible, projectTrusted, afterCommit)),
+      });
+    }),
+  );
+}

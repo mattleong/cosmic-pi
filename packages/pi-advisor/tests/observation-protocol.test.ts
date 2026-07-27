@@ -1,11 +1,18 @@
 import { describe, expect, test } from "vitest";
+import { stringifyRedactedObservation } from "../src/domain/redaction.ts";
 import {
   AdvisorObservationBuffer,
   MAX_OBSERVATION_CHANNEL_CHARS,
   MAX_OBSERVATION_RECORDS,
   OBSERVATION_OMISSION_MARKER,
-  stringifyRedactedObservation,
 } from "../src/review/observation-protocol.ts";
+
+/** Peek + commit, the way the review queue consumes a correlated checkpoint. */
+function takeThrough(buffer: AdvisorObservationBuffer, through = buffer.sequence) {
+  const batch = buffer.peekThrough(through);
+  if (batch) buffer.commitThrough(through);
+  return batch;
+}
 
 describe("observation protocol", () => {
   test("does not invoke accessors or Proxy traps while snapshotting observations", () => {
@@ -62,7 +69,7 @@ describe("observation protocol", () => {
     buffer.ingest(1, { type: "assistant_thinking_delta", text: "more" });
     buffer.ingest(1, { type: "assistant_text_delta", text: "answer " });
     buffer.ingest(1, { type: "assistant_text_delta", text: "done" });
-    const batch = buffer.takeThrough();
+    const batch = takeThrough(buffer);
 
     expect(batch?.lastSequence).toBe(4);
     expect(batch?.observations.map((record) => record.type)).toEqual([
@@ -86,7 +93,7 @@ describe("observation protocol", () => {
       result: "ok",
       isError: false,
     });
-    const observations = buffer.takeThrough()?.observations ?? [];
+    const observations = takeThrough(buffer)?.observations ?? [];
 
     expect(observations.map((record) => record.sequence)).toEqual([1, 3, 4, 5]);
     expect(observations.map((record) => record.type)).toEqual([
@@ -113,7 +120,7 @@ describe("observation protocol", () => {
     for (let index = 0; index < MAX_OBSERVATION_RECORDS * 4; index += 1) {
       buffer.ingest(index, { type: "assistant_text_delta", text: "x".repeat(1_000) });
     }
-    const batch = buffer.takeThrough();
+    const batch = takeThrough(buffer);
     expect(batch?.observations.length).toBeLessThanOrEqual(MAX_OBSERVATION_RECORDS + 1);
     expect(batch?.rendered).toContain(OBSERVATION_OMISSION_MARKER);
     const sequences = batch?.observations.map((record) => record.sequence) ?? [];
@@ -160,7 +167,7 @@ describe("observation protocol", () => {
       result: "password=hunter2",
       isError: false,
     });
-    const rendered = buffer.takeThrough()?.rendered ?? "";
+    const rendered = takeThrough(buffer)?.rendered ?? "";
     expect(rendered).not.toMatch(/abc\.def|sk-abcdefghijklmnop|secret-value|hunter2/);
     expect(rendered).toContain("REDACTED");
   });
@@ -169,7 +176,7 @@ describe("observation protocol", () => {
     const buffer = new AdvisorObservationBuffer();
     buffer.ingest(1, { type: "assistant_final", text: "done", toolCalls: [] });
     buffer.ingest(1, { type: "turn_complete", status: "stop" });
-    expect(buffer.takeThrough()?.observations.map((record) => record.type)).toEqual([
+    expect(takeThrough(buffer)?.observations.map((record) => record.type)).toEqual([
       "assistant_final",
       "turn_complete",
     ]);
@@ -189,7 +196,7 @@ describe("observation protocol", () => {
       findingIds: [id],
       requestSequence: 2,
     });
-    const rendered = buffer.takeThrough()?.rendered ?? "";
+    const rendered = takeThrough(buffer)?.rendered ?? "";
     expect(rendered).toContain("advisor_intervention");
     expect(rendered).toContain("advisor_intervention_receipt");
     expect(rendered).toContain(id);
@@ -219,7 +226,7 @@ describe("observation protocol", () => {
     for (let index = 0; index < MAX_OBSERVATION_RECORDS * 2; index += 1) {
       buffer.ingest(1, { type: "turn_complete", status: "stop" });
     }
-    const types = buffer.takeThrough()?.observations.map((record) => record.type) ?? [];
+    const types = takeThrough(buffer)?.observations.map((record) => record.type) ?? [];
     expect(types).toContain("advisor_intervention");
     expect(types).toContain("advisor_intervention_receipt");
   });
@@ -229,7 +236,7 @@ describe("observation protocol", () => {
     for (let index = 0; index < 100; index += 1) {
       buffer.ingest(1, { type: "assistant_thinking_delta", text: "z".repeat(1_000) });
     }
-    const record = buffer.takeThrough()?.observations.at(-1);
+    const record = takeThrough(buffer)?.observations.at(-1);
     expect(record?.type).toBe("assistant_thinking_delta");
     if (record?.type === "assistant_thinking_delta") {
       expect(record.text.length).toBeLessThanOrEqual(MAX_OBSERVATION_CHANNEL_CHARS);

@@ -1,24 +1,12 @@
-import type {
-  BackgroundJobSnapshot,
-  BackgroundJobView,
-  BackgroundTerminalProjection,
-} from "./model.ts";
+import type { BackgroundJobSnapshot, BackgroundTerminalProjection } from "./model.ts";
 import { isActiveJobState } from "./model.ts";
 
 export const emptyProjection = (): BackgroundTerminalProjection => ({ revision: 0, jobs: [] });
 
-export function sortJobSnapshots(
-  jobs: ReadonlyArray<BackgroundJobSnapshot>,
-): ReadonlyArray<BackgroundJobSnapshot> {
-  return [...jobs].sort((left, right) => {
-    const active = Number(isActiveJobState(right.state)) - Number(isActiveJobState(left.state));
-    return active !== 0 ? active : right.startedAt - left.startedAt;
-  });
-}
-
-export function sortJobViews(
-  jobs: ReadonlyArray<BackgroundJobView>,
-): ReadonlyArray<BackgroundJobView> {
+/** Active jobs first, then most recently started. Shared by snapshot and view ordering. */
+export function sortJobsByActivity<A extends Pick<BackgroundJobSnapshot, "state" | "startedAt">>(
+  jobs: ReadonlyArray<A>,
+): ReadonlyArray<A> {
   return [...jobs].sort((left, right) => {
     const active = Number(isActiveJobState(right.state)) - Number(isActiveJobState(left.state));
     return active !== 0 ? active : right.startedAt - left.startedAt;

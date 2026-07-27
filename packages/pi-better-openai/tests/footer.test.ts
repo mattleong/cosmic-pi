@@ -14,9 +14,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import betterOpenAI, { _test } from "../index.ts";
+import betterOpenAI from "../index.ts";
 import { initialFastSnapshot } from "../src/fast/controller.ts";
-import { createFooterController } from "../src/footer/controller.ts";
+import { abbreviateHomePath, createFooterController } from "../src/footer/controller.ts";
 import { textPanel } from "../src/settings/picker.ts";
 import { makeProjection } from "../src/usage/index.ts";
 import { makeResolvedConfig } from "./helpers.ts";
@@ -190,10 +190,10 @@ afterEach(() => {
 
 describe("footer path formatting", () => {
   test("abbreviates only exact home and child paths", () => {
-    expect(_test.abbreviateHomePath("/Users/alice/project")).toBe("~/project");
-    expect(_test.abbreviateHomePath("/Users/alice")).toBe("~");
-    expect(_test.abbreviateHomePath("/home/alice/project")).toBe("~/project");
-    expect(_test.abbreviateHomePath("/project")).toBe("/project");
+    expect(abbreviateHomePath("/Users/alice/project")).toBe("~/project");
+    expect(abbreviateHomePath("/Users/alice")).toBe("~");
+    expect(abbreviateHomePath("/home/alice/project")).toBe("~/project");
+    expect(abbreviateHomePath("/project")).toBe("/project");
   });
 });
 
@@ -763,7 +763,6 @@ describe("footer mode ownership", () => {
     reenter = true;
     controller.update(ctx);
 
-    expect(controller.installed).toBe(true);
     expect(setFooter).toHaveBeenCalledTimes(3);
     controller.update(ctx);
     expect(setFooter).toHaveBeenCalledTimes(3);

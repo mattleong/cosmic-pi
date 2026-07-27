@@ -9,7 +9,7 @@
 import { readFileSync } from "node:fs";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { renderSyntaxHighlightedDiff } from "../src/diff/index";
-import { codePreviewSettings, setCodePreviewSettings } from "../src/settings/index";
+import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import { renderedWordEmphasisSpans } from "../src/testing/rendered-word-emphasis";
 import { wordEmphasisTelemetry } from "../src/testing/word-emphasis-telemetry";
 

@@ -125,9 +125,8 @@ export const protocolInvalidate = (event: CosmicFooterInvalidateEvent): FooterPr
   ...(event.id === undefined ? {} : { id: event.id }),
 });
 
-export interface FooterProtocolHostShape {
-  readonly stats: () => FooterProtocolBufferStats;
-}
+/** Scoped protocol ingress ownership. The host publishes through the registry, not this handle. */
+export type FooterProtocolHostShape = Readonly<Record<never, never>>;
 
 export class FooterProtocolHost extends Context.Service<
   FooterProtocolHost,
@@ -171,7 +170,7 @@ export class FooterProtocolHost extends Context.Service<
           Effect.sync(() => options.buffer.activate(ingress.offer)),
           () => Effect.sync(() => options.buffer.deactivate()),
         );
-        return FooterProtocolHost.of({ stats: options.buffer.stats });
+        return FooterProtocolHost.of({});
       }),
     );
   }

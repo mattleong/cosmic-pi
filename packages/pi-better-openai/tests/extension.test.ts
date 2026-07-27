@@ -84,7 +84,16 @@ function harness(dependencies?: BetterOpenAIExtensionDependencies) {
   const emit = async (name: string, event: any = {}, useCtx = ctx) => {
     for (const handler of handlers.get(name) ?? []) await handler(event, useCtx);
   };
-  return { ctx, handlers, commands, tool, pi, emit };
+  return {
+    ctx,
+    handlers,
+    commands,
+    get tool() {
+      return tool;
+    },
+    pi,
+    emit,
+  };
 }
 
 function stalledStartup() {
@@ -98,6 +107,14 @@ function stalledStartup() {
     Effect.ensuring(Effect.sync(() => void interruptions++)),
   );
   return { effect, started, interruptions: () => interruptions };
+}
+
+function deferredPromise() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 describe("Better OpenAI session boundary", () => {
@@ -128,6 +145,31 @@ describe("Better OpenAI session boundary", () => {
     expect(h.ctx.ui.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
     await h.emit("session_shutdown");
     expect(removeListener.mock.calls.length).toBeGreaterThanOrEqual(2);
+    await h.emit("session_shutdown");
+  });
+
+  test("ignores an older session when settings loads complete out of order", async () => {
+    const loads = [deferredPromise(), deferredPromise()];
+    const started: number[] = [];
+    let loadIndex = 0;
+    const h = harness({
+      loadPreviewSettings: () => loads[loadIndex++]!.promise,
+      startupEffect: (generation) =>
+        Effect.sync(() => {
+          started.push(generation);
+        }),
+    });
+
+    const first = h.emit("session_start");
+    const second = h.emit("session_start");
+    expect(loadIndex).toBe(2);
+
+    loads[1]!.resolve();
+    await second;
+    loads[0]!.resolve();
+    await first;
+
+    expect(started).toEqual([2]);
     await h.emit("session_shutdown");
   });
 
@@ -263,9 +305,7 @@ describe("Better OpenAI session boundary", () => {
     h.ctx.signal = controller.signal;
     await h.emit("session_start");
     expect(h.ctx.ui.notify).toHaveBeenCalledWith("Better OpenAI failed to start.", "warning");
-    await expect(
-      h.tool.execute("call", { prompt: "x" }, undefined, undefined, h.ctx),
-    ).rejects.toThrow("has not started");
+    expect(h.tool).toBeUndefined();
   });
 
   test("captures changing session cwd and signal getters exactly once", async () => {

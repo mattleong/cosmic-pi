@@ -1,7 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import { notifyAtHostBoundary, type HostNotificationLevel } from "../boundary/host-notifier.ts";
+import { recoverHostUi } from "../boundary/host-ui.ts";
 import { SETTINGS_OPTION_DESCRIPTORS, type ResolvedConfig } from "../config/index.ts";
-import { XaiBoundaryError, XaiUsageService } from "../usage/index.ts";
+import { XaiUsageService } from "../usage/index.ts";
 
 export function registerSettingsController(
   pi: ExtensionAPI,
@@ -9,11 +11,6 @@ export function registerSettingsController(
     config(ctx: ExtensionContext): ResolvedConfig;
     updateFooter(ctx: ExtensionContext): void;
     formatDebugStatus(ctx: ExtensionContext): string;
-    notifyAtHostBoundary(
-      ctx: ExtensionContext,
-      message: string,
-      level: "info" | "warning" | "error",
-    ): void;
     captureSignal(
       ctx: ExtensionContext,
     ):
@@ -22,25 +19,15 @@ export function registerSettingsController(
     run<A, E>(effect: Effect.Effect<A, E, XaiUsageService>, signal?: AbortSignal): Promise<A>;
   },
 ): void {
-  const { config, updateFooter, formatDebugStatus, notifyAtHostBoundary, captureSignal, run } =
-    options;
+  const { config, updateFooter, formatDebugStatus, captureSignal, run } = options;
   const completeHostFeedback = (
     ctx: ExtensionContext,
     message: string,
-    level: "info" | "warning" | "error",
+    level: HostNotificationLevel,
   ) => {
     notifyAtHostBoundary(ctx, message, level);
     return Promise.resolve();
   };
-  const recoverUi = (operation: string, action: () => void) =>
-    Effect.try({
-      try: action,
-      catch: () =>
-        new XaiBoundaryError({
-          operation,
-          message: "Unable to update Better xAI settings UI.",
-        }),
-    }).pipe(Effect.catch(() => Effect.logWarning(`Better xAI UI recovery: ${operation}_failed.`)));
 
   pi.registerCommand("xai-settings", {
     description: "Configure Better xAI usage display",
@@ -105,16 +92,16 @@ export function registerSettingsController(
       return run(
         XaiUsageService.use((service) => service.updateSetting(id, value)).pipe(
           Effect.tap(() =>
-            recoverUi("settings_render", () => updateFooter(ctx)).pipe(
+            recoverHostUi("settings_render", () => updateFooter(ctx)).pipe(
               Effect.andThen(
-                recoverUi("settings_success", () =>
+                recoverHostUi("settings_success", () =>
                   ctx.ui.notify(`${id} = ${descriptor.currentValue(config(ctx))}`, "info"),
                 ),
               ),
             ),
           ),
           Effect.catch((error) =>
-            recoverUi("settings_error", () => ctx.ui.notify(error.message, "error")),
+            recoverHostUi("settings_error", () => ctx.ui.notify(error.message, "error")),
           ),
         ),
         capturedSignal.signal,

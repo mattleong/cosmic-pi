@@ -9,10 +9,13 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "vitest";
 import {
-  defaultCodePreviewSettings,
-  setCodePreviewSettings,
-  codePreviewSettings,
-} from "../../src/settings/index";
+  codePreviewPerformanceConfig,
+  codePreviewToolsEnvironmentValue,
+  publishCodePreviewEnvironmentProjection,
+} from "../../src/config/env";
+import { defaultCodePreviewSettings } from "../../src/config/defaults";
+import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
+import { publishCodePreviewToolsEnvironment } from "../../src/tools/renderers/testing";
 import {
   formatEnabledCodePreviewTools,
   getEnabledCodePreviewTools,
@@ -23,23 +26,34 @@ let previousCodePreviewTools: string | undefined;
 
 beforeEach(() => {
   previousCodePreviewSettings = { ...codePreviewSettings };
-  previousCodePreviewTools = process.env.CODE_PREVIEW_TOOLS;
+  previousCodePreviewTools = codePreviewToolsEnvironmentValue;
 });
 
 afterEach(() => {
   setCodePreviewSettings(previousCodePreviewSettings);
-  if (previousCodePreviewTools === undefined) delete process.env.CODE_PREVIEW_TOOLS;
-  else process.env.CODE_PREVIEW_TOOLS = previousCodePreviewTools;
+  publishCodePreviewToolsEnvironment(previousCodePreviewTools);
 });
 
 test("CODE_PREVIEW_TOOLS selects enabled renderers", () => {
-  process.env.CODE_PREVIEW_TOOLS = "write,edit,grep";
+  publishCodePreviewToolsEnvironment("write,edit,grep");
   assert.deepEqual([...getEnabledCodePreviewTools()], ["write", "edit", "grep"]);
   assert.equal(formatEnabledCodePreviewTools(), "write, edit, grep");
 });
 
+test("publishing CODE_PREVIEW_TOOLS preserves performance projection values", () => {
+  const previousPerformance = codePreviewPerformanceConfig;
+  const customPerformance = { ...previousPerformance, cacheLimit: 7 };
+  publishCodePreviewEnvironmentProjection(customPerformance, undefined);
+  try {
+    publishCodePreviewToolsEnvironment("grep");
+    assert.equal(codePreviewPerformanceConfig.cacheLimit, 7);
+  } finally {
+    publishCodePreviewEnvironmentProjection(previousPerformance, previousCodePreviewTools);
+  }
+});
+
 test("settings select enabled renderers when CODE_PREVIEW_TOOLS is unset", () => {
-  delete process.env.CODE_PREVIEW_TOOLS;
+  publishCodePreviewToolsEnvironment(undefined);
   setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: ["bash", "write", "edit"] });
   assert.deepEqual([...getEnabledCodePreviewTools()], ["bash", "write", "edit"]);
   assert.equal(formatEnabledCodePreviewTools(), "bash, write, edit");
@@ -47,13 +61,13 @@ test("settings select enabled renderers when CODE_PREVIEW_TOOLS is unset", () =>
 
 test("CODE_PREVIEW_TOOLS overrides configured renderer settings", () => {
   setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: ["bash", "write", "edit"] });
-  process.env.CODE_PREVIEW_TOOLS = "grep";
+  publishCodePreviewToolsEnvironment("grep");
   assert.deepEqual([...getEnabledCodePreviewTools()], ["grep"]);
 });
 
 test("invalid CODE_PREVIEW_TOOLS values fall back to configured renderers", () => {
   setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: ["bash", "read"] });
-  process.env.CODE_PREVIEW_TOOLS = "gred";
+  publishCodePreviewToolsEnvironment("gred");
 
   assert.deepEqual([...getEnabledCodePreviewTools()], ["bash", "read"]);
 });
@@ -68,7 +82,7 @@ test("disabled preview settings force required renderers even with CODE_PREVIEW_
     lsResultPreview: false,
     tools: [],
   });
-  process.env.CODE_PREVIEW_TOOLS = "none";
+  publishCodePreviewToolsEnvironment("none");
   assert.deepEqual(
     [...getEnabledCodePreviewTools()],
     ["write", "edit", "grep", "find", "ls", "bash"],

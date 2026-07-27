@@ -108,12 +108,3 @@ export const decodeSettingUpdate = Effect.fn("XaiConfig.decodeSettingUpdate")(fu
     return next;
   }) satisfies RawConfigUpdate;
 });
-
-export const applySettingToRawConfig = Effect.fn("XaiConfig.applySetting")(function* (
-  current: JsonObject,
-  id: string,
-  rawValue: string,
-) {
-  const update = yield* decodeSettingUpdate(id, rawValue);
-  return update(current);
-});

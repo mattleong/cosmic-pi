@@ -1,7 +1,12 @@
 import { describe, expect, test } from "vitest";
 import {
   ADVISOR_IMMUNITY_COMPLETED_TURNS,
-  AdvisorRoutingState,
+  armAdvisorInterruption,
+  clearAdvisorCancellation,
+  completeAdvisorPrimaryTurn,
+  emptyAdvisorRoutingState,
+  isAdvisorImmunityActive,
+  latchAdvisorCancellation,
   routeAdvisorFinding,
   type AdvisorParentState,
 } from "../src/review/routing.ts";
@@ -123,43 +128,40 @@ describe("advisor routing", () => {
   });
 
   test("exactly three subsequently completed turns retain concern immunity", () => {
-    const state = new AdvisorRoutingState();
-    state.armInterruption();
+    let state = armAdvisorInterruption(emptyAdvisorRoutingState());
     expect(ADVISOR_IMMUNITY_COMPLETED_TURNS).toBe(3);
     for (let turn = 1; turn <= 3; turn += 1) {
-      state.completePrimaryTurn();
-      expect(state.immunityActive, `turn ${turn}`).toBe(true);
+      state = completeAdvisorPrimaryTurn(state);
+      expect(isAdvisorImmunityActive(state), `turn ${turn}`).toBe(true);
     }
-    state.completePrimaryTurn();
-    expect(state.immunityActive).toBe(false);
+    state = completeAdvisorPrimaryTurn(state);
+    expect(isAdvisorImmunityActive(state)).toBe(false);
   });
 
   test("blockers bypass and re-arm immunity while cancellation drops stale findings", () => {
-    const state = new AdvisorRoutingState();
-    state.armInterruption();
-    state.completePrimaryTurn();
+    let state = completeAdvisorPrimaryTurn(armAdvisorInterruption(emptyAdvisorRoutingState()));
     expect(
       routeAdvisorFinding({
         severity: "blocker",
         policy: "corrective",
         parentState: "final",
-        immunityActive: state.immunityActive,
+        immunityActive: isAdvisorImmunityActive(state),
         cancellationLatched: false,
       }),
     ).toBe("trigger-correction");
-    state.armInterruption();
-    expect(state.snapshot.immunityUntilCompletedTurn).toBe(4);
-    state.latchCancellation();
+    state = armAdvisorInterruption(state);
+    expect(state.immunityUntilCompletedTurn).toBe(4);
+    state = latchAdvisorCancellation(state);
     expect(
       routeAdvisorFinding({
         severity: "blocker",
         policy: "corrective",
         parentState: "idle",
-        immunityActive: state.immunityActive,
+        immunityActive: isAdvisorImmunityActive(state),
         cancellationLatched: state.cancellationLatched,
       }),
     ).toBe("silent");
-    state.clearCancellationForGenuineUserPrompt();
+    state = clearAdvisorCancellation(state);
     expect(state.cancellationLatched).toBe(false);
   });
 });

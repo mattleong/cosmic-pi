@@ -11,7 +11,7 @@ import { renderSyntaxHighlightedDiff } from "../src/diff/index";
 import { wordEmphasisTelemetry } from "../src/testing/word-emphasis-telemetry";
 import { changedRanges, changedRangesWithConfidence } from "../src/diff/word/emphasis";
 import { profileLine, profilePlacement } from "../src/diff/word/fixtures/profile-lines";
-import { codePreviewSettings, setCodePreviewSettings } from "../src/settings/index";
+import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import {
   benchTheme,
   formatDuration,

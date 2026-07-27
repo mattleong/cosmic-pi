@@ -8,20 +8,19 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import {
   clearCodePreviewSessionCapability,
-  deferCodePreview,
   previewScheduleEffect,
-  scheduleCodePreview,
 } from "../../src/application/capability";
-import { scheduleProjectedCodePreview } from "../../src/application/projection";
+import {
+  deferProjectedCodePreview,
+  scheduleProjectedCodePreview,
+} from "../../src/application/projection";
 
 test("no background work starts before acquisition or after shutdown", () => {
   clearCodePreviewSessionCapability();
   let calls = 0;
-  const cancelDeferred = deferCodePreview(() => calls++);
-  const cancelSchedule = scheduleCodePreview(1, () => calls++);
+  const cancelDeferred = deferProjectedCodePreview(() => calls++);
   const cancelProjectedSchedule = scheduleProjectedCodePreview(1, () => calls++);
   cancelDeferred();
-  cancelSchedule();
   cancelProjectedSchedule();
   assert.equal(calls, 0);
 });

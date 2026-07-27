@@ -15,7 +15,6 @@ export function abbreviateHomePath(cwd: string): string {
 }
 
 export interface FooterController {
-  readonly installed: boolean;
   update(ctx: ExtensionContext): void;
   resetTotals(): void;
   refreshTotals(ctx: ExtensionContext): void;
@@ -417,9 +416,6 @@ export function createFooterController(deps: {
   }
 
   return {
-    get installed() {
-      return footerInstalled;
-    },
     update: updateFooter,
     resetTotals: resetFooterTotals,
     refreshTotals: refreshFooterTotals,

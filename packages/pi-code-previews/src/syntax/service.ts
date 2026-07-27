@@ -6,7 +6,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { disposeShikiHighlighter, ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
 import { codePreviewPerformanceConfig } from "../config/env";
-import { codePreviewSettings } from "../settings/index";
+import { codePreviewSettings } from "../config/state";
 import { makeSyntaxIngress } from "./ingress";
 import {
   clearSyntaxProjection,

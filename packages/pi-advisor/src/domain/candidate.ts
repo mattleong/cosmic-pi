@@ -1,7 +1,7 @@
 import type { TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import { stringifyJson } from "../boundary/json.ts";
 import { snapshotData } from "./safe-data.ts";
-import { stringifyRedactedObservation } from "../review/observation-protocol.ts";
+import { stringifyRedactedObservation } from "./redaction.ts";
 import { isRecord } from "../shared/utils.ts";
 
 export type AdvisorReviewPhase = "final" | "progress";

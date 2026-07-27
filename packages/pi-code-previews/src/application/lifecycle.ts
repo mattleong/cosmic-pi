@@ -24,7 +24,7 @@ import {
   installCodePreviewSessionCapability,
 } from "./capability";
 import { CodePreviewSession } from "./service";
-import { codePreviewSettings } from "../settings/index";
+import { codePreviewSettings } from "../config/state";
 import type { CodePreviewToolName } from "../tools/names";
 import { registerToolRenderers } from "../tools/renderers/registration";
 export type CodePreviewRuntime = PiManagedRuntime<CodePreviewApplication, CodePreviewRuntimeError>;

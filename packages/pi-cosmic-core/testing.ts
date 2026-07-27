@@ -1,7 +1,6 @@
 export {
   capturedTelemetrySnapshot,
   jsonHttpRawResponse,
-  jsonHttpResponse,
   jsonHttpTestLayer,
   makeCapturedLogger,
   makeCapturedTracer,

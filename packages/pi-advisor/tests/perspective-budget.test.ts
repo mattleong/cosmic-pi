@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
-  AdvisorPerspectiveBudget,
+  commitAdvisorPerspective,
+  emptyAdvisorPerspectiveBudget,
   MAX_AUTOMATIC_PERSPECTIVES_PER_REQUEST,
+  selectAdvisorPerspective,
 } from "../src/review/perspective-budget.ts";
 import type { AdvisorSuggestion } from "../src/review/index.ts";
 
@@ -15,27 +17,28 @@ function suggestion(fingerprint: string): AdvisorSuggestion {
   };
 }
 
-describe("AdvisorPerspectiveBudget", () => {
+describe("advisor perspective budget", () => {
   test("selects a new semantic perspective and suppresses a normalized duplicate", () => {
-    const budget = new AdvisorPerspectiveBudget();
+    let budget = emptyAdvisorPerspectiveBudget();
     const first = suggestion("derive-state-from-queue");
-    expect(budget.select([first])).toBe(first);
-    budget.commit(first);
+    expect(selectAdvisorPerspective(budget, [first])).toBe(first);
+    budget = commitAdvisorPerspective(budget, first);
 
-    expect(budget.select([suggestion(" Derive state FROM queue ")])).toBeUndefined();
-    expect(budget.count).toBe(1);
+    expect(
+      selectAdvisorPerspective(budget, [suggestion(" Derive state FROM queue ")]),
+    ).toBeUndefined();
+    expect(budget.delivered).toBe(1);
   });
 
   test("caps optional guidance independently and resets for a genuine request", () => {
-    const budget = new AdvisorPerspectiveBudget();
+    let budget = emptyAdvisorPerspectiveBudget();
     for (let index = 0; index < MAX_AUTOMATIC_PERSPECTIVES_PER_REQUEST; index += 1) {
-      const next = suggestion(`angle-${index}`);
-      budget.commit(next);
+      budget = commitAdvisorPerspective(budget, suggestion(`angle-${index}`));
     }
-    expect(budget.select([suggestion("another-angle")])).toBeUndefined();
+    expect(selectAdvisorPerspective(budget, [suggestion("another-angle")])).toBeUndefined();
 
-    budget.reset();
-    expect(budget.select([suggestion("another-angle")])).toBeDefined();
-    expect(budget.count).toBe(0);
+    const reset = emptyAdvisorPerspectiveBudget();
+    expect(selectAdvisorPerspective(reset, [suggestion("another-angle")])).toBeDefined();
+    expect(reset.delivered).toBe(0);
   });
 });

@@ -7,7 +7,7 @@ import {
   makeRefreshCoordinator,
   makeRefreshCoordinatorWith,
   type RefreshRequest,
-} from "../index.ts";
+} from "../src/coordination/refresh-coordinator.ts";
 
 describe("RefreshCoordinator", () => {
   it.effect("coalesces force and notify into one follow-up", () =>

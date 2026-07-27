@@ -23,9 +23,14 @@ for (const packageName of packageNames) {
   manifests.set(packageName, JSON.parse(await readFile(path, "utf8")));
 }
 const coreManifest = manifests.get("pi-cosmic-core");
-const xaiManifest = manifests.get("pi-better-xai");
-const piVersion = coreManifest.devDependencies["@earendil-works/pi-coding-agent"];
-const tuiVersion = xaiManifest.peerDependencies["@earendil-works/pi-tui"];
+const catalogVersion = (name) => {
+  const escaped = name.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const version = new RegExp(`\\n  "?${escaped}"?: ([^\\n]+)`).exec(workspace)?.[1];
+  if (!version) throw new Error(`Missing ${name} from the pnpm catalog.`);
+  return version;
+};
+const piVersion = catalogVersion("@earendil-works/pi-coding-agent");
+const tuiVersion = catalogVersion("@earendil-works/pi-tui");
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "cosmic-pi-pack-"));
 
 function run(command, args, cwd) {
@@ -37,6 +42,18 @@ function run(command, args, cwd) {
     throw new Error(
       `${command} ${args.join(" ")} failed:\n${result.stdout ?? ""}${result.stderr ?? ""}`,
     );
+  }
+}
+
+function assertPackedProtocolsResolved(packageName, manifest) {
+  for (const section of ["dependencies", "peerDependencies", "optionalDependencies"]) {
+    for (const [dependency, version] of Object.entries(manifest[section] ?? {})) {
+      if (typeof version === "string" && /^(?:catalog:|workspace:)/.test(version)) {
+        throw new Error(
+          `Packed ${packageName} retains unresolved ${section}.${dependency} = ${version}.`,
+        );
+      }
+    }
   }
 }
 
@@ -105,7 +122,7 @@ try {
     [
       "--input-type=module",
       "--eval",
-      "const api = await import('pi-cosmic-core'); if (!api.PiApi || !api.makePiRuntime || !api.JsonDocumentStore || !api.JsonHttpClient || !api.nodePlatformLayer) throw new Error('missing core exports');",
+      "const api = await import('pi-cosmic-core'); const testing = await import('pi-cosmic-core/testing'); if (!api.PiApi || !api.makePiRuntime || !api.JsonDocumentStore || !api.JsonHttpClient || !api.nodePlatformLayer) throw new Error('missing core exports'); if (typeof testing.makeInMemoryDocuments !== 'function' || typeof testing.makeCapturedTracer !== 'function') throw new Error('missing core testing exports');",
     ],
     temporaryDirectory,
   );
@@ -114,7 +131,7 @@ try {
     [
       "--input-type=module",
       "--eval",
-      "import { createJiti } from 'jiti'; const jiti = createJiti(import.meta.url); const xai = await jiti.import('pi-better-xai'); const openai = await jiti.import('pi-better-openai'); const cosmicUi = await jiti.import('pi-cosmic-ui'); const advisor = await jiti.import('pi-advisor'); const terminals = await jiti.import('pi-background-terminals'); const subagents = await jiti.import('pi-subagents'); const protocol = await jiti.import('pi-cosmic-ui/protocol'); const client = await jiti.import('pi-cosmic-ui/client'); const previews = await import('pi-code-previews'); if (typeof xai.default !== 'function') throw new Error('missing xAI extension export'); if (typeof openai.default !== 'function') throw new Error('missing OpenAI extension export'); if (typeof cosmicUi.default !== 'function') throw new Error('missing Cosmic UI extension export'); if (typeof advisor.default !== 'function') throw new Error('missing advisor extension export'); if (typeof terminals.default !== 'function') throw new Error('missing background terminals extension export'); if (typeof subagents.default !== 'function') throw new Error('missing subagents extension export'); if (typeof previews.default !== 'function' || typeof previews.loadCodePreviewSettings !== 'function' || typeof previews.withCodePreviewShell !== 'function') throw new Error('missing code-preview public exports'); if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== 'function') throw new Error('missing Cosmic UI protocol exports'); if (typeof client.createCosmicFooterClient !== 'function') throw new Error('missing Cosmic UI client export');",
+      "import { createJiti } from 'jiti'; const jiti = createJiti(import.meta.url); const xai = await jiti.import('pi-better-xai'); const openai = await jiti.import('pi-better-openai'); const cosmicUi = await jiti.import('pi-cosmic-ui'); const advisor = await jiti.import('pi-advisor'); const terminals = await jiti.import('pi-background-terminals'); const subagents = await jiti.import('pi-subagents'); const protocol = await jiti.import('pi-cosmic-ui/protocol'); const client = await jiti.import('pi-cosmic-ui/client'); const manager = await jiti.import('pi-cosmic-ui/manager'); const fastModels = await jiti.import('pi-better-openai/fast-models'); const previews = await import('pi-code-previews'); if (typeof xai.default !== 'function') throw new Error('missing xAI extension export'); if (typeof openai.default !== 'function') throw new Error('missing OpenAI extension export'); if (typeof cosmicUi.default !== 'function') throw new Error('missing Cosmic UI extension export'); if (typeof advisor.default !== 'function') throw new Error('missing advisor extension export'); if (typeof terminals.default !== 'function') throw new Error('missing background terminals extension export'); if (typeof subagents.default !== 'function') throw new Error('missing subagents extension export'); if (typeof previews.default !== 'function' || typeof previews.loadCodePreviewSettings !== 'function' || typeof previews.withCodePreviewShell !== 'function') throw new Error('missing code-preview public exports'); if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== 'function') throw new Error('missing Cosmic UI protocol exports'); if (typeof client.createCosmicFooterClient !== 'function') throw new Error('missing Cosmic UI client export'); if (typeof manager.renderResponsiveManagerFooter !== 'function') throw new Error('missing Cosmic UI manager export'); if (typeof fastModels.supportsFastModel !== 'function') throw new Error('missing OpenAI fast-model export');",
     ],
     temporaryDirectory,
   );
@@ -122,6 +139,7 @@ try {
   const packedCoreManifest = JSON.parse(
     await readFile(join(temporaryDirectory, "node_modules/pi-cosmic-core/package.json"), "utf8"),
   );
+  assertPackedProtocolsResolved("pi-cosmic-core", packedCoreManifest);
   if (
     packedCoreManifest.dependencies.effect !== expectedEffectVersion ||
     packedCoreManifest.dependencies["@effect/platform-node"] !== expectedEffectVersion
@@ -133,6 +151,7 @@ try {
       await readFile(join(temporaryDirectory, "node_modules", packageName, "package.json"), "utf8"),
     );
     const sourceManifest = manifests.get(packageName);
+    assertPackedProtocolsResolved(packageName, packedManifest);
     if (
       packedManifest.dependencies.effect !== expectedEffectVersion ||
       packedManifest.dependencies["pi-cosmic-core"] !== coreManifest.version ||

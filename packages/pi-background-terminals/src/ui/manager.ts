@@ -235,16 +235,9 @@ export class ProcessManagerComponent implements Component {
       selected && isActiveJobState(selected.state) ? "x Stop" : undefined,
       jobs.some((job) => !isActiveJobState(job.state)) ? "c Clear" : undefined,
     ].filter((item): item is string => item !== undefined);
-    const compactActions = [
-      selected && isActiveJobState(selected.state)
-        ? `f ${this.follow ? "Unfollow" : "Follow"}`
-        : undefined,
-      selected && isActiveJobState(selected.state) ? "x Stop" : undefined,
-      jobs.some((job) => !isActiveJobState(job.state)) ? "c Clear" : undefined,
-    ].filter((item): item is string => item !== undefined);
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [
-        [compactActions.length > 0 ? compactActions.join(" · ") : "No actions", "? Keys"],
+        [actions.length > 0 ? actions.join(" · ") : "No actions", "? Keys"],
       ]);
     return renderResponsiveManagerFooter(contentWidth, [
       [
@@ -252,11 +245,7 @@ export class ProcessManagerComponent implements Component {
         actions.length > 0 ? actions.join(" · ") : undefined,
         "t Technical · ? Help · Esc Close",
       ],
-      [
-        "↑↓ · C-u/d",
-        compactActions.length > 0 ? compactActions.join(" · ") : undefined,
-        "t Tech · ? Help · Esc",
-      ],
+      ["↑↓ · C-u/d", actions.length > 0 ? actions.join(" · ") : undefined, "t Tech · ? Help · Esc"],
       width >= 60
         ? ["↑↓ Select · C-u/d", "t Details · ? Actions · Esc"]
         : ["↑↓ · Enter", "t", "? Actions · Esc"],

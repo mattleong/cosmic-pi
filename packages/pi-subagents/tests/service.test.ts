@@ -295,9 +295,6 @@ describe("SubagentService", () => {
       const completed = yield* service.status(started.id);
       expect(completed.finalText).toBe("Review complete.");
       expect(completed.usage.totalTokens).toBe(12);
-      expect(completed.transcript).toContain("✓ read");
-      expect(completed.transcript).toContain("Review complete.");
-      expect(completed.transcript).not.toContain("✓ readReview complete.");
       expect(completed.sessionEvents).toMatchObject([
         { type: "tool", toolName: "read", target: "src/auth.ts", state: "completed" },
         { type: "assistant", text: "Review complete." },
@@ -1171,7 +1168,13 @@ describe("SubagentService", () => {
       yield* Deferred.succeed(gate, undefined);
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
       const resumed = yield* service.status(run.id);
-      expect(resumed.transcript).toContain("parent resumed: Continue safely.");
+      expect(resumed.sessionEvents).toContainEqual(
+        expect.objectContaining({
+          type: "notice",
+          kind: "parent",
+          text: "Resume: Continue safely.",
+        }),
+      );
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -1366,9 +1369,9 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "observed-report" }));
-      const waiting = yield* service.awaitTerminalObserved!([run.id], "all_finished", (runs) =>
-        updates.push(runs),
-      ).pipe(Effect.forkScoped);
+      const waiting = yield* service
+        .awaitTerminalObserved([run.id], "all_finished", (runs) => updates.push(runs))
+        .pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);
       fake.controls[0]?.offer({ type: "agent_settled" });
       const observations = yield* Fiber.join(waiting);
@@ -1394,14 +1397,16 @@ describe("SubagentService", () => {
 
       const acquired = yield* Deferred.make<void>();
       const releaseUse = yield* Deferred.make<void>();
-      const observing = yield* service.withStatusObservations!([run.id], (observations) =>
-        Effect.gen(function* () {
-          yield* Deferred.succeed(acquired, undefined);
-          yield* Deferred.await(releaseUse);
-          const receipt = observations[0]?.completionReceipt;
-          if (receipt) yield* service.consumeCompletions!([receipt]);
-        }),
-      ).pipe(Effect.forkScoped);
+      const observing = yield* service
+        .withStatusObservations([run.id], (observations) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(acquired, undefined);
+            yield* Deferred.await(releaseUse);
+            const receipt = observations[0]?.completionReceipt;
+            if (receipt) yield* service.consumeCompletions([receipt]);
+          }),
+        )
+        .pipe(Effect.forkScoped);
       yield* Deferred.await(acquired);
       yield* TestClock.adjust("100 millis");
       expect(notifications).toEqual([]);
@@ -1984,7 +1989,9 @@ describe("SubagentService", () => {
         Boolean(
           projections
             .at(-1)
-            ?.runs[0]?.transcript.some((line) => line.includes("parent reply: First")),
+            ?.runs[0]?.sessionEvents.some(
+              (event) => event.type === "notice" && event.text.includes("Reply: First"),
+            ),
         ),
       );
       expect(
@@ -2032,9 +2039,10 @@ describe("SubagentService", () => {
 
       yield* Deferred.succeed(replyGate, undefined);
       expect((yield* Fiber.join(replying)).state).toBe("running");
-      const transcript = (yield* service.status(run.id)).transcript;
-      expect(transcript.some((entry) => entry.includes("parent guidance"))).toBe(false);
-      expect(transcript.some((entry) => entry.includes("parent reply: Answer"))).toBe(true);
+      const { sessionEvents } = yield* service.status(run.id);
+      const notices = sessionEvents.filter((event) => event.type === "notice");
+      expect(notices.some((event) => event.text.includes("Guidance:"))).toBe(false);
+      expect(notices.some((event) => event.text.includes("Reply: Answer"))).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

@@ -1,6 +1,7 @@
 import { type SettingItem } from "@earendil-works/pi-tui";
 import { getSettingsPath } from "../../config/store";
-import { formatSettingValue, type CodePreviewSettings } from "../index";
+import type { CodePreviewSettings } from "../../config/schema";
+import { formatSettingValue } from "../../config/values";
 import { SettingsGroupSubmenu, ThemeSelectSubmenu, ToolPreviewSettingsSubmenu } from "./submenus";
 import {
   ADVANCED_SETTING_IDS,

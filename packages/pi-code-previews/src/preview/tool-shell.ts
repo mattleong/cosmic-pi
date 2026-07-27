@@ -16,7 +16,8 @@ import {
   unwrapTimingComponent,
   withLastComponent,
 } from "./tool-timing";
-import { codePreviewSettings, type ToolCallBackgroundMode } from "../settings/index";
+import { type ToolCallBackgroundMode } from "../config/schema";
+import { codePreviewSettings } from "../config/state";
 
 export {
   hiddenPreviewExpandHintForShell,

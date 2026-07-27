@@ -10,21 +10,13 @@ import assert from "node:assert/strict";
 import { it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
-import { afterEach, test } from "vitest";
+import { test } from "vitest";
 import {
-  booleanEnv,
   loadCodePreviewEnvironment,
   parseBoolean,
   parsePositiveInteger,
   performanceConfigFromEnvironment,
 } from "../../src/config/env";
-
-const originalValue = process.env.CODE_PREVIEW_TEST_BOOLEAN;
-
-afterEach(() => {
-  if (originalValue === undefined) delete process.env.CODE_PREVIEW_TEST_BOOLEAN;
-  else process.env.CODE_PREVIEW_TEST_BOOLEAN = originalValue;
-});
 
 it.effect("decodes performance thresholds once through Effect Config", () =>
   Effect.gen(function* () {
@@ -50,10 +42,8 @@ test("boolean environment values recognize explicit true and false forms", () =>
   for (const value of ["0", "false", "OFF", " no "]) assert.equal(parseBoolean(value), false);
 });
 
-test("invalid boolean environment values preserve the configured fallback", () => {
-  process.env.CODE_PREVIEW_TEST_BOOLEAN = "invalid";
-  assert.equal(booleanEnv("CODE_PREVIEW_TEST_BOOLEAN", true), true);
-  assert.equal(booleanEnv("CODE_PREVIEW_TEST_BOOLEAN", false), false);
+test("invalid boolean environment values produce no decision", () => {
+  for (const value of ["invalid", "", " ", undefined]) assert.equal(parseBoolean(value), undefined);
 });
 
 test("positive integer environment values reject fractions and unsafe integers", () => {

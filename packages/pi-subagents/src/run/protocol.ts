@@ -72,11 +72,6 @@ const ContactParentSchema = Schema.Struct({
 });
 const IgnoredEventSchema = Schema.Struct({ type: Schema.String });
 const RpcDiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.String) });
-const IpcDiscriminantSchema = Schema.Struct({
-  channel: Schema.optional(Schema.String),
-  type: Schema.optional(Schema.String),
-});
-
 export type RpcResponse = Schema.Schema.Type<typeof RpcResponseSchema>;
 export type ContactParentEnvelope = Schema.Schema.Type<typeof ContactParentSchema>;
 export type RpcChildEnvelope =
@@ -91,8 +86,6 @@ export type RpcChildEnvelope =
   | Schema.Schema.Type<typeof ExtensionErrorSchema>
   | Schema.Schema.Type<typeof ExtensionUiRequestSchema>
   | { readonly type: "ignored"; readonly eventType: string };
-
-export type ChildEnvelope = RpcChildEnvelope | ContactParentEnvelope;
 
 export const decodeContactParentEnvelope = (value: unknown) =>
   Schema.decodeUnknownEffect(ContactParentSchema)(value);
@@ -128,17 +121,6 @@ export function decodeRpcEnvelope(
         return { type: "ignored" as const, eventType: ignored.type };
       }
     }
-  });
-}
-
-export function decodeChildEnvelope(
-  value: unknown,
-): Effect.Effect<ChildEnvelope, Schema.SchemaError> {
-  return Effect.gen(function* () {
-    const ipc = yield* Schema.decodeUnknownEffect(IpcDiscriminantSchema)(value);
-    return ipc.channel === "pi-subagents" && ipc.type === "contact_parent"
-      ? yield* decodeContactParentEnvelope(value)
-      : yield* decodeRpcEnvelope(value);
   });
 }
 

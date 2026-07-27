@@ -1,6 +1,41 @@
+import * as Effect from "effect/Effect";
+import { InvalidSubagentRequestError } from "./errors.ts";
+import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import { isActiveRunState, type StartSubagentRequest, type SubagentWriteIntent } from "./model.ts";
 import type { RunRecord } from "./internal.ts";
 import { safeTextPrefix } from "./state.ts";
+
+/**
+ * Orchestration tools a child must never receive.
+ *
+ * Applied twice on purpose: the tool resolves the parent's active tools against it, and the child
+ * process boundary passes it again as `--exclude-tools`.
+ */
+export const ORCHESTRATION_TOOL_DENYLIST: ReadonlySet<string> = new Set([
+  "subagent",
+  "subagent_wait",
+  "subagent_supervisor",
+  "workflow",
+  "workflow_control",
+]);
+
+export const ORCHESTRATION_TOOL_DENYLIST_ARGUMENT = [...ORCHESTRATION_TOOL_DENYLIST].join(",");
+
+/** Shared bound/emptiness policy for every parent-authored message that reaches a child. */
+export const validateParentMessage = (
+  message: string,
+  emptyMessage: string,
+): Effect.Effect<string, InvalidSubagentRequestError> => {
+  const normalized = message.trim();
+  if (!normalized) return Effect.fail(new InvalidSubagentRequestError({ message: emptyMessage }));
+  if (normalized.length > MAX_PARENT_MESSAGE_CHARS)
+    return Effect.fail(
+      new InvalidSubagentRequestError({
+        message: `Subagent message exceeds ${MAX_PARENT_MESSAGE_CHARS} characters.`,
+      }),
+    );
+  return Effect.succeed(normalized);
+};
 
 const PI_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "read",

@@ -1,4 +1,3 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -10,11 +9,7 @@ import {
   type JsonObject,
 } from "pi-cosmic-core";
 import { PositiveIntegerSchema, type XaiAuthResult } from "./result.ts";
-import {
-  ModelRegistryAuth,
-  provideModelRegistryAuth,
-  type WithoutModelRegistry,
-} from "../boundary/model-registry-auth.ts";
+import { ModelRegistryAuth } from "../boundary/model-registry-auth.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -288,27 +283,6 @@ const getXaiCredentialsEffect = Effect.fn("XaiAuth.getXaiCredentials")(function*
   return yield* new XaiAuthError({ operation: result.operation, message: result.message });
 });
 
-export function getXaiCredentialsResult(
-  authPath: string,
-): ReturnType<typeof getXaiCredentialsResultEffect>;
-export function getXaiCredentialsResult(
-  authPath: string,
-  ctx: Pick<ExtensionContext, "modelRegistry">,
-): WithoutModelRegistry<ReturnType<typeof getXaiCredentialsResultEffect>>;
-export function getXaiCredentialsResult(
-  authPath: string,
-  ctx?: Pick<ExtensionContext, "modelRegistry">,
-) {
-  const effect = getXaiCredentialsResultEffect(authPath);
-  return ctx ? provideModelRegistryAuth(effect, ctx) : effect;
-}
+export const getXaiCredentialsResult = getXaiCredentialsResultEffect;
 
-export function getXaiCredentials(authPath: string): ReturnType<typeof getXaiCredentialsEffect>;
-export function getXaiCredentials(
-  authPath: string,
-  ctx: Pick<ExtensionContext, "modelRegistry">,
-): WithoutModelRegistry<ReturnType<typeof getXaiCredentialsEffect>>;
-export function getXaiCredentials(authPath: string, ctx?: Pick<ExtensionContext, "modelRegistry">) {
-  const effect = getXaiCredentialsEffect(authPath);
-  return ctx ? provideModelRegistryAuth(effect, ctx) : effect;
-}
+export const getXaiCredentials = getXaiCredentialsEffect;

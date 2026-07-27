@@ -1,4 +1,4 @@
-import { redactSensitiveText, stringifyRedactedObservation } from "./observation-protocol.ts";
+import { redactSensitiveText, stringifyRedactedObservation } from "../domain/redaction.ts";
 import { isRecord } from "../shared/utils.ts";
 export const DEFAULT_MAX_CONTEXT_CHARS = 240_000;
 

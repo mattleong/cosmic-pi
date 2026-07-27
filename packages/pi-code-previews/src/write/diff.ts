@@ -16,9 +16,6 @@ export type ExistingFilePreview =
       sizeExceeded?: boolean;
     };
 
-/** Stable documented defaults retained for public/test compatibility. */
-export const MAX_WRITE_DIFF_BYTES = 200_000;
-export const MAX_WRITE_DIFF_CHANGED_LINE_CELLS = 1_000_000;
 const currentMaxWriteDiffBytes = () => codePreviewPerformanceConfig.maxWriteDiffBytes;
 const currentMaxChangedLineCells = () => codePreviewPerformanceConfig.maxWriteDiffChangedLineCells;
 

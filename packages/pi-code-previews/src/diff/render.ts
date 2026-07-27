@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { codePreviewSettings } from "../settings/index";
+import { codePreviewSettings } from "../config/state";
 import type { DiffWordEmphasis } from "../config/schema";
 import { expandPreviewTabs } from "../shared/helpers";
 import { escapeControlChars } from "../shared/terminal-text";

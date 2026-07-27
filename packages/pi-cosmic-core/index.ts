@@ -3,7 +3,6 @@ export { PiApi } from "./src/runtime/pi-api.ts";
 export {
   makePiManagedRuntime,
   makePiRuntime,
-  piHostFileLoggerLayer,
   piHostLoggerLayer,
   type PiHostLogTarget,
   type PiManagedRuntime,
@@ -15,10 +14,7 @@ export {
   type PiSessionRuntimeSlot,
 } from "./src/runtime/session-runtime.ts";
 export {
-  makeRefreshCoordinator,
-  makeRefreshCoordinatorWith,
   mergeRefreshRequest,
-  type RefreshCoordinator,
   type RefreshRequest,
 } from "./src/coordination/refresh-coordinator.ts";
 export {
@@ -35,10 +31,8 @@ export {
   type SafeFileShape,
 } from "./src/platform/safe-file.ts";
 export {
-  decodeSchemaDocument,
   readSchemaDocument,
   SchemaDocumentError,
-  updateSchemaDocument,
   type DecodedDocument,
 } from "./src/platform/schema-document.ts";
 export {
@@ -73,7 +67,6 @@ export {
 export {
   scopedDocumentPaths,
   selectScopedDocument,
-  updateScopedSection,
   type ScopedDocumentPathOptions,
   type ScopedDocumentPaths,
   type ScopedDocumentSelection,
@@ -137,7 +130,6 @@ export {
   clampPercent,
   formatCompactReset,
   formatPercent,
-  formatResetClock,
   formatResetCountdown,
   formatTokens,
   formatWindowedUsageLine,

@@ -1,4 +1,4 @@
-import { codePreviewSettings } from "../../settings/index";
+import { codePreviewSettings } from "../../config/state";
 import type { DiffWordEmphasis } from "../../config/schema";
 import { injectVisibleRanges } from "../../shared/terminal-text";
 import { isLightShikiTheme } from "../../syntax/render";

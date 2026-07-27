@@ -15,7 +15,6 @@ import {
   type AdvisorRuntimeStartOptions,
 } from "./types.ts";
 import { AdvisorModelError } from "./client.ts";
-import { buildCheckpointPrompt } from "./prompts.ts";
 
 export {
   MAX_ADVISOR_STATE_SUMMARY_CHARS,
@@ -32,7 +31,7 @@ export {
   type AdvisorRuntimeDriver,
   type AdvisorRuntimeDependencies,
 } from "./types.ts";
-export { parseAdvisorCheckpoint, parseAdvisorCheckpointEffect } from "./checkpoint-parse.ts";
+export { parseAdvisorCheckpointEffect } from "./checkpoint-parse.ts";
 export { AdvisorRuntime } from "./session-runtime.ts";
 export { NoDiscoveryAdvisorResourceLoader } from "./resource-loader.ts";
 
@@ -103,7 +102,3 @@ export const advisorRuntimeServiceLayer = (
       ({ runtime }) => runtime.disposeEffect(),
     ).pipe(Effect.map(({ service }) => service)),
   );
-
-export const _advisorRuntimeTest = {
-  buildCheckpointPrompt,
-};

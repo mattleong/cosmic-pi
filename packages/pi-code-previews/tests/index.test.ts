@@ -14,11 +14,8 @@ import type { Component } from "@earendil-works/pi-tui";
 import { afterEach, test } from "vitest";
 import codePreviews, { loadCodePreviewSettings, withCodePreviewShell } from "../index";
 import type { CodePreviewSettings, ToolCallBackgroundMode } from "../index";
-import {
-  codePreviewSettings,
-  defaultCodePreviewSettings,
-  setCodePreviewSettings,
-} from "../src/settings/index";
+import { defaultCodePreviewSettings } from "../src/config/defaults";
+import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import { renderComponent, stripAnsi, testTheme } from "../src/testing/render";
 import {
   cleanupTestTempDirectories,

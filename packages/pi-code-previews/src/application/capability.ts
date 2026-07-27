@@ -10,7 +10,6 @@ import type { CodePreviewSettingsService } from "../config/service";
 import type { CodePreviewSyntaxService } from "../syntax/service";
 import type { CodePreviewWriteService } from "../write/service";
 import {
-  deferProjectedCodePreview,
   publishCodePreviewDefer,
   publishCodePreviewSchedule,
   publishCodePreviewSessionActive,
@@ -125,20 +124,9 @@ export function runCodePreviewSessionEffect<A, E>(
   );
 }
 
-/** Queue only inside the active session; outside it the synchronous renderer remains unchanged. */
-export function deferCodePreview(task: () => void): () => void {
-  return deferProjectedCodePreview(task);
-}
-
 /** Fixed cadence avoids recursive-sleep drift while remaining TestClock driven. */
 export const previewScheduleEffect = (interval: number, task: () => void) =>
   Effect.sleep(interval).pipe(
     Effect.andThen(Effect.repeat(invokeCodePreviewCallback(task), Schedule.fixed(interval))),
     Effect.asVoid,
   );
-
-export function scheduleCodePreview(interval: number, task: () => void): () => void {
-  const active = activeCapability;
-  if (!active) return () => undefined;
-  return scheduleWithCapability(active, interval, task);
-}

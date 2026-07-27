@@ -8,7 +8,7 @@
 // @effect-diagnostics effect/globalDate:off
 import { FullWidthDiffText, renderSyntaxHighlightedDiff } from "../src/diff/index";
 import { startBenchmarkShikiSession } from "./shiki-session";
-import { codePreviewSettings, setCodePreviewSettings } from "../src/settings/index";
+import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import {
   benchTheme,
   numberedLines,

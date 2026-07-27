@@ -357,6 +357,7 @@ packages/pi-background-terminals/
     boundary/
       host-ui.ts
       local-process.ts
+      native-clock.ts
     job/
       service.ts
       model.ts
@@ -366,6 +367,7 @@ packages/pi-background-terminals/
     tools/
       background-terminal.ts
     ui/
+      log-preview.ts
       manager.ts
       sanitize.ts
   tests/

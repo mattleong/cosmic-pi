@@ -24,7 +24,10 @@ export function loadCodePreviewSettings(
   projectTrusted = false,
 ): Promise<CodePreviewSettings> {
   const effect = loadCodePreviewSettingsEffect(projectCwd, projectTrusted);
-  return hasCodePreviewSessionCapability()
-    ? runCodePreviewSessionEffect(effect)
-    : runOneShotSettingsEffect(effect);
+  if (!hasCodePreviewSessionCapability()) return runOneShotSettingsEffect(effect);
+  // A replacement may dispose the previously published session capability between the synchronous
+  // check above and execution. Retry through the serialized one-shot boundary so consumers never
+  // capture stale/default shell settings merely because extension session handlers ran in a
+  // different order.
+  return runCodePreviewSessionEffect(effect).catch(() => runOneShotSettingsEffect(effect));
 }

@@ -32,12 +32,9 @@ function hostLayer(buffer: ReturnType<typeof makeFooterProtocolBuffer>) {
     requestRenderNow: () => undefined,
     invalidate: () => undefined,
   };
-  const registry = FooterRegistryService.layer({
-    bridge,
-    publish: (snapshot) => {
-      bridge.snapshot = snapshot;
-    },
-  }).pipe(Layer.provide(HostCallbackBoundary.layer(makeHostCallbackBoundary())));
+  const registry = FooterRegistryService.layer({ bridge }).pipe(
+    Layer.provide(HostCallbackBoundary.layer(makeHostCallbackBoundary())),
+  );
   return {
     bridge,
     layer: FooterProtocolHost.layer({ buffer }).pipe(Layer.provideMerge(registry)),

@@ -1,11 +1,11 @@
-import { environmentValue } from "../boundary/environment";
-import { codePreviewSettings } from "../settings/index";
+import { codePreviewToolsEnvironmentValue } from "../config/env";
+import { codePreviewSettings } from "../config/state";
 import { ALL_CODE_PREVIEW_TOOLS, parseCodePreviewTools, type CodePreviewToolName } from "./names";
 import { formatToolsSettingValue, getEffectiveCodePreviewToolSet } from "./policy";
 
 export function getEnabledCodePreviewTools(): Set<CodePreviewToolName> {
   const configured =
-    parseCodePreviewTools(environmentValue("CODE_PREVIEW_TOOLS")) ?? codePreviewSettings.tools;
+    parseCodePreviewTools(codePreviewToolsEnvironmentValue) ?? codePreviewSettings.tools;
   return getEffectiveCodePreviewToolSet(configured, codePreviewSettings);
 }
 

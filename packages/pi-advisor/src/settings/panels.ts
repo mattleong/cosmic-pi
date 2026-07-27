@@ -8,8 +8,8 @@ import {
   type AdvisorConfigPatch,
   type AdvisorReviewPolicy,
   type ResolvedAdvisorConfig,
-  writeAdvisorConfigPatchAsync,
 } from "../config/options.ts";
+import { writeAdvisorConfigPatchAsync } from "../config/store.ts";
 import { safeAdvisorLabel } from "../domain/label.ts";
 import type { AdvisorSessionMetrics } from "../domain/metrics.ts";
 import { getAdvisorFailureLogPath } from "../logging/log.ts";

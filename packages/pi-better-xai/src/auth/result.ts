@@ -6,25 +6,17 @@ export const PositiveIntegerSchema = Schema.Number.check(
   Schema.isGreaterThan(0),
 );
 
-const CredentialsSchema = Schema.Struct({
-  accessToken: Schema.String,
-  refreshToken: Schema.optional(Schema.String),
-  expires: Schema.optional(PositiveIntegerSchema),
-  teamId: Schema.optional(Schema.String),
-  source: Schema.Literals(["modelRegistry", "authFile"]),
-});
+interface XaiAuthResultCredentials {
+  readonly accessToken: string;
+  readonly refreshToken?: string | undefined;
+  readonly expires?: number | undefined;
+  readonly teamId?: string | undefined;
+  readonly source: "modelRegistry" | "authFile";
+}
 
-export const XaiAuthResultSchema = Schema.Union([
-  Schema.TaggedStruct("Found", { credentials: CredentialsSchema }),
-  Schema.TaggedStruct("Missing", {}),
-  Schema.TaggedStruct("Unavailable", {
-    operation: Schema.String,
-    message: Schema.String,
-  }),
-  Schema.TaggedStruct("Malformed", {
-    operation: Schema.String,
-    message: Schema.String,
-  }),
-]);
-
-export type XaiAuthResult = typeof XaiAuthResultSchema.Type;
+/** Internally constructed auth outcome; unknown auth documents are decoded before this point. */
+export type XaiAuthResult =
+  | { readonly _tag: "Found"; readonly credentials: XaiAuthResultCredentials }
+  | { readonly _tag: "Missing" }
+  | { readonly _tag: "Unavailable"; readonly operation: string; readonly message: string }
+  | { readonly _tag: "Malformed"; readonly operation: string; readonly message: string };

@@ -27,8 +27,9 @@ import {
   makeInMemoryDocuments,
 } from "pi-cosmic-core/testing";
 import { getXaiCredentials, getXaiCredentialsResult } from "../src/auth/auth.ts";
+import { ModelRegistryAuth } from "../src/boundary/model-registry-auth.ts";
 import {
-  applySettingToRawConfig,
+  decodeSettingUpdate,
   readRawConfig,
   resolveConfig,
   writeConfig,
@@ -89,8 +90,18 @@ function registryContext(token = "registry-token") {
   } as unknown as ExtensionContext;
 }
 
-function providers(documents: Layer.Layer<JsonDocumentStore>, http: Layer.Layer<JsonHttpClient>) {
-  return Layer.mergeAll(documents, http, Path.layer, AgentDirectory.layer("/agent"));
+function providers(
+  documents: Layer.Layer<JsonDocumentStore>,
+  http: Layer.Layer<JsonHttpClient>,
+  ctx: ExtensionContext = registryContext(),
+) {
+  return Layer.mergeAll(
+    documents,
+    http,
+    Path.layer,
+    AgentDirectory.layer("/agent"),
+    ModelRegistryAuth.layer(() => ctx.modelRegistry),
+  );
 }
 
 function resolvedConfig(showOnlyOnSubscriptionModels = true): ResolvedConfig {
@@ -164,7 +175,7 @@ describe("xAI usage parsing", () => {
     );
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
-      const result = yield* Effect.result(requestXaiUsage("/agent/auth.json", registryContext()));
+      const result = yield* Effect.result(requestXaiUsage("/agent/auth.json"));
       expect(result._tag).toBe("Failure");
     }).pipe(Effect.provide(providers(documents.layer, http)));
   });
@@ -186,8 +197,8 @@ describe("xAI configuration", () => {
       expect(config.usage.enabled).toBe(false);
       expect(config.usage.refreshIntervalMs).toBe(30000);
       const raw = yield* readRawConfig(config.globalConfigPath);
-      const updated = yield* applySettingToRawConfig(raw, "usage.showResetTimes", "false");
-      yield* writeConfig(config.globalConfigPath, updated);
+      const update = yield* decodeSettingUpdate("usage.showResetTimes", "false");
+      yield* writeConfig(config.globalConfigPath, update(raw));
       expect(harness.documents.get(config.globalConfigPath)?.unknown).toBe("keep");
     }).pipe(Effect.provide(Layer.merge(harness.layer, Path.layer)));
   });
@@ -214,13 +225,13 @@ describe("xAI configuration", () => {
 
   it.effect("rejects malformed setting values instead of coercing them", () =>
     Effect.gen(function* () {
-      expect((yield* Effect.result(applySettingToRawConfig({}, "usage.enabled", "yes")))._tag).toBe(
+      expect((yield* Effect.result(decodeSettingUpdate("usage.enabled", "yes")))._tag).toBe(
         "Failure",
       );
       expect(
-        (yield* Effect.result(applySettingToRawConfig({}, "usage.refreshIntervalMs", "NaN")))._tag,
+        (yield* Effect.result(decodeSettingUpdate("usage.refreshIntervalMs", "NaN")))._tag,
       ).toBe("Failure");
-      expect((yield* Effect.result(applySettingToRawConfig({}, "footer.mode", "other")))._tag).toBe(
+      expect((yield* Effect.result(decodeSettingUpdate("footer.mode", "other")))._tag).toBe(
         "Failure",
       );
     }),
@@ -283,7 +294,7 @@ describe("xAI credentials", () => {
     const ctx = registryContext();
     ctx.modelRegistry.getApiKeyForProvider = () => Promise.reject(new Error("registry"));
     return Effect.gen(function* () {
-      const result = yield* getXaiCredentialsResult("/auth.json", ctx);
+      const result = yield* getXaiCredentialsResult("/auth.json");
       expect(result._tag).toBe("Unavailable");
       expect("message" in result ? result.message : "").not.toContain("redacted");
     }).pipe(
@@ -291,6 +302,7 @@ describe("xAI credentials", () => {
         providers(
           documents,
           httpLayer(() => Effect.die("unexpected HTTP")),
+          ctx,
         ),
       ),
     );
@@ -303,13 +315,14 @@ describe("xAI credentials", () => {
       },
     });
     return Effect.gen(function* () {
-      const result = yield* getXaiCredentialsResult("/agent/auth.json", registryContext(""));
+      const result = yield* getXaiCredentialsResult("/agent/auth.json");
       expect(result._tag).toBe("Malformed");
     }).pipe(
       Effect.provide(
         providers(
           harness.layer,
           httpLayer(() => Effect.die("unexpected HTTP")),
+          registryContext(""),
         ),
       ),
     );
@@ -330,12 +343,13 @@ describe("xAI credentials", () => {
     const http = httpLayer(() => Effect.die("unexpected HTTP"));
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
-      const credentials = yield* getXaiCredentials(
-        "/agent/auth.json",
-        registryContext(`header.${payload}.signature`),
-      );
+      const credentials = yield* getXaiCredentials("/agent/auth.json");
       expect(credentials?.teamId).toBe("team-42");
-    }).pipe(Effect.provide(providers(harness.layer, http)));
+    }).pipe(
+      Effect.provide(
+        providers(harness.layer, http, registryContext(`header.${payload}.signature`)),
+      ),
+    );
   });
 
   it.effect("refreshes expired auth and persists unknown auth fields", () => {
@@ -358,7 +372,7 @@ describe("xAI credentials", () => {
     );
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
-      const credentials = yield* getXaiCredentials("/agent/auth.json", registryContext());
+      const credentials = yield* getXaiCredentials("/agent/auth.json");
       expect(credentials?.accessToken).toBe("next-access");
       const xai = harness.documents.get("/agent/auth.json")?.xai as Record<string, unknown>;
       expect(xai.unknown).toBe("keep");
@@ -398,12 +412,16 @@ describe("xAI credentials", () => {
     );
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
-      const credentials = yield* getXaiCredentials("/agent/auth.json", registryContext("registry"));
+      const credentials = yield* getXaiCredentials("/agent/auth.json");
       expect(credentials?.accessToken).toBe("registry");
       expect(original.otherProvider.access).toBe("keep");
     }).pipe(
       Effect.provide(
-        providers(Layer.succeed(JsonDocumentStore, JsonDocumentStore.of(service)), http),
+        providers(
+          Layer.succeed(JsonDocumentStore, JsonDocumentStore.of(service)),
+          http,
+          registryContext("registry"),
+        ),
       ),
     );
   });
@@ -431,15 +449,15 @@ describe("xAI credentials", () => {
     );
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW + 299_999);
-      const before = yield* getXaiCredentials("/agent/auth.json", registryContext(""));
+      const before = yield* getXaiCredentials("/agent/auth.json");
       expect(before?.accessToken).toBe("current-access");
       expect(refreshes).toBe(0);
 
       yield* TestClock.setTime(NOW + 300_000);
-      const atBoundary = yield* getXaiCredentials("/agent/auth.json", registryContext(""));
+      const atBoundary = yield* getXaiCredentials("/agent/auth.json");
       expect(atBoundary?.accessToken).toBe("next-access");
       expect(refreshes).toBe(1);
-    }).pipe(Effect.provide(providers(harness.layer, http)));
+    }).pipe(Effect.provide(providers(harness.layer, http, registryContext(""))));
   });
 
   it.effect("cancels in-flight billing requests", () => {
@@ -451,7 +469,7 @@ describe("xAI credentials", () => {
     const http = httpLayer(() => Effect.never);
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
-      const fiber = yield* requestXaiUsage("/agent/auth.json", registryContext()).pipe(
+      const fiber = yield* requestXaiUsage("/agent/auth.json").pipe(
         Effect.provide(providers(harness.layer, http)),
         Effect.forkChild,
       );
@@ -470,10 +488,10 @@ describe("xAI credentials", () => {
     const http = httpLayer(() => Effect.fail({ _tag: "test" } as never));
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
-      const credentials = yield* getXaiCredentials("/agent/auth.json", registryContext("registry"));
+      const credentials = yield* getXaiCredentials("/agent/auth.json");
       expect(credentials?.source).toBe("modelRegistry");
       expect(credentials?.accessToken).toBe("registry");
-    }).pipe(Effect.provide(providers(harness.layer, http)));
+    }).pipe(Effect.provide(providers(harness.layer, http, registryContext("registry"))));
   });
 
   it.effect("fails closed after expired auth refresh fails with no registry token", () => {
@@ -492,11 +510,11 @@ describe("xAI credentials", () => {
     });
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
-      const result = yield* Effect.result(requestXaiUsage("/agent/auth.json", registryContext("")));
+      const result = yield* Effect.result(requestXaiUsage("/agent/auth.json"));
       expect(result._tag).toBe("Failure");
       expect(requests).toHaveLength(1);
       expect(requests.some(({ authorization }) => authorization === "Bearer expired")).toBe(false);
-    }).pipe(Effect.provide(providers(harness.layer, http)));
+    }).pipe(Effect.provide(providers(harness.layer, http, registryContext(""))));
   });
 
   it.effect("treats expired auth without a refresh token as missing", () => {
@@ -512,9 +530,9 @@ describe("xAI credentials", () => {
     );
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
-      expect(yield* requestXaiUsage("/agent/auth.json", registryContext(""))).toBeUndefined();
+      expect(yield* requestXaiUsage("/agent/auth.json")).toBeUndefined();
       expect(requests).toEqual([]);
-    }).pipe(Effect.provide(providers(harness.layer, http)));
+    }).pipe(Effect.provide(providers(harness.layer, http, registryContext(""))));
   });
 
   it.effect("uses a still-valid skew-window token only after refresh failure", () => {
@@ -541,10 +559,10 @@ describe("xAI credentials", () => {
     });
     return Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
-      expect(yield* requestXaiUsage("/agent/auth.json", registryContext(""))).toBeDefined();
+      expect(yield* requestXaiUsage("/agent/auth.json")).toBeDefined();
       expect(authorizations).toEqual(["Bearer still-valid", "Bearer still-valid"]);
       expect(authorizations).not.toContain("Bearer expired");
-    }).pipe(Effect.provide(providers(harness.layer, http)));
+    }).pipe(Effect.provide(providers(harness.layer, http, registryContext(""))));
   });
 
   it.effect("is interruptible while model registry credentials are pending", () => {
@@ -554,8 +572,8 @@ describe("xAI credentials", () => {
     const pending = new Promise<string | undefined>(() => undefined);
     ctx.modelRegistry.getApiKeyForProvider = () => pending;
     return Effect.gen(function* () {
-      const fiber = yield* getXaiCredentials("/agent/auth.json", ctx).pipe(
-        Effect.provide(providers(harness.layer, http)),
+      const fiber = yield* getXaiCredentials("/agent/auth.json").pipe(
+        Effect.provide(providers(harness.layer, http, ctx)),
         Effect.forkChild,
       );
       yield* Fiber.interrupt(fiber);
@@ -660,6 +678,48 @@ describe("xAI visibility", () => {
 });
 
 describe("xAI refresh lifecycle", () => {
+  it.effect("reports registry-only credentials as found without rereading the auth file", () => {
+    const payload = Buffer.from('{"team_id":"team-registry"}').toString("base64url");
+    const registryToken = `header.${payload}.signature`;
+    const harness = documentHarness();
+    const reads: string[] = [];
+    const observed: Layer.Layer<JsonDocumentStore> = Layer.effect(
+      JsonDocumentStore,
+      Effect.gen(function* () {
+        const base = yield* Effect.provide(JsonDocumentStore, harness.layer);
+        return JsonDocumentStore.of({
+          ...base,
+          readObject: (path) =>
+            Effect.sync(() => reads.push(path)).pipe(Effect.andThen(base.readObject(path))),
+        });
+      }),
+    );
+    const projection = makeProjection();
+    const http = httpLayer(({ url }) =>
+      Effect.succeed({
+        status: 200,
+        body: url.includes("format=credits") ? weeklyFixture : monthlyFixture,
+      }),
+    );
+    const serviceLayer = XaiUsageService.layer({
+      context: MutableRef.make(registryContext(registryToken)),
+      cwd: "/project",
+      projection,
+      onChange() {},
+      startPolling: false,
+      agentDir: "/agent",
+    }).pipe(Layer.provide(providers(observed, http, registryContext(registryToken))));
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* XaiUsageService.use((service) => service.refresh({ force: true }));
+      const published = MutableRef.get(projection);
+      expect(published.authFound).toBe(true);
+      expect(published.teamId).toBe("team-registry");
+      expect(published.snapshot).toBeDefined();
+      expect(reads.filter((path) => path === "/agent/auth.json")).toHaveLength(1);
+    }).pipe(Effect.scoped, Effect.provide(serviceLayer));
+  });
+
   it.effect("persists settings and exposes the disabled status", () => {
     const harness = documentHarness();
     const projection = makeProjection();

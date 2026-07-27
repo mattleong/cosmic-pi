@@ -22,14 +22,16 @@ import {
   clampContextChars,
   clampTimeoutMs,
   getAdvisorConfigPath,
-  loadAdvisorConfig,
   normalizeAdvisorConfig,
   patchAdvisorConfig,
+} from "../src/config/options.ts";
+import {
+  loadAdvisorConfig,
   readRawAdvisorConfig,
   writeAdvisorConfigPatch,
   writeAdvisorConfigPatchAsync,
   writeRawAdvisorConfig,
-} from "../src/config/options.ts";
+} from "../src/config/store.ts";
 
 function withTempDir<T>(run: (tempDir: string) => T): T {
   const tempDir = mkdtempSync(join(tmpdir(), "pi-advisor-config-"));

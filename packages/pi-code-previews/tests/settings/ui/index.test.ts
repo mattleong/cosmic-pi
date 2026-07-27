@@ -2,11 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createSettingsCategoryItems, isSettingsGroupItemId } from "../../../src/settings/ui/index";
 import { SETTING_ITEM_DEFINITIONS } from "../../../src/settings/ui/registry";
-import {
-  CODE_PREVIEW_SETTING_KEYS,
-  defaultCodePreviewSettings,
-  updateSetting,
-} from "../../../src/settings/index";
+import { defaultCodePreviewSettings } from "../../../src/config/defaults";
+import { CODE_PREVIEW_SETTING_KEYS } from "../../../src/config/definitions";
+import { updateSetting } from "../../../src/config/values";
 
 test("settings UI item values are handled by updateSetting", () => {
   assert.deepEqual(

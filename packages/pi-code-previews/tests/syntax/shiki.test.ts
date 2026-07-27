@@ -14,7 +14,7 @@ import {
   makeCapturedTracer,
 } from "pi-cosmic-core/testing";
 import { ShikiAdapter, ShikiBoundaryError, type ShikiHighlighter } from "../../src/boundary/shiki";
-import { codePreviewSettings, setCodePreviewSettings } from "../../src/settings/index";
+import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import {
   requestSyntaxInitialize,
   requestSyntaxLanguage,

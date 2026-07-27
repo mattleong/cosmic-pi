@@ -8,7 +8,8 @@
 // @effect-diagnostics effect/globalDate:off
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { defaultCodePreviewSettings, setCodePreviewSettings } from "../../../../src/settings/index";
+import { defaultCodePreviewSettings } from "../../../../src/config/defaults";
+import { setCodePreviewSettings } from "../../../../src/config/state";
 import {
   cloneCodePreviewSettingsForTest,
   renderComponent,
@@ -18,13 +19,14 @@ import {
 import {
   findRenderer,
   preserveCodePreviewToolsEnv,
+  publishCodePreviewToolsEnvironment,
   registerRenderers,
 } from "../../../../src/tools/renderers/testing";
 
 preserveCodePreviewToolsEnv();
 
 test("registered bash renderer can hide all successful output while preserving errors", () => {
-  process.env.CODE_PREVIEW_TOOLS = "bash";
+  publishCodePreviewToolsEnvironment("bash");
   const previousSettings = cloneCodePreviewSettingsForTest();
   setCodePreviewSettings({ ...defaultCodePreviewSettings, bashResultPreview: false });
   try {
@@ -72,7 +74,7 @@ test("registered bash renderer can hide all successful output while preserving e
 });
 
 test("registered bash renderer mutes successful output while preserving error color", () => {
-  process.env.CODE_PREVIEW_TOOLS = "bash";
+  publishCodePreviewToolsEnvironment("bash");
   const bash = findRenderer(registerRenderers(), "bash");
   assert.ok(bash.renderResult);
 
@@ -104,7 +106,7 @@ test("registered bash renderer mutes successful output while preserving error co
 });
 
 test("registered bash renderer hides grep, find, and ls command output when matching previews are off", () => {
-  process.env.CODE_PREVIEW_TOOLS = "bash";
+  publishCodePreviewToolsEnvironment("bash");
   const previousSettings = cloneCodePreviewSettingsForTest();
   setCodePreviewSettings({
     ...defaultCodePreviewSettings,
@@ -151,7 +153,7 @@ test("registered bash renderer hides grep, find, and ls command output when matc
 });
 
 test("registered bash renderer escapes terminal control characters in raw output", () => {
-  process.env.CODE_PREVIEW_TOOLS = "bash";
+  publishCodePreviewToolsEnvironment("bash");
   const bash = findRenderer(registerRenderers(), "bash");
   assert.ok(bash.renderResult);
 
@@ -168,7 +170,7 @@ test("registered bash renderer escapes terminal control characters in raw output
 });
 
 test("registered bash renderer preserves whitespace-sensitive output", () => {
-  process.env.CODE_PREVIEW_TOOLS = "bash";
+  publishCodePreviewToolsEnvironment("bash");
   const bash = findRenderer(registerRenderers(), "bash");
   assert.ok(bash.renderResult);
 

@@ -8,7 +8,7 @@
 // @effect-diagnostics effect/globalDate:off
 import assert from "node:assert/strict";
 import { test, vi } from "vitest";
-import { codePreviewSettings, setCodePreviewSettings } from "../../../../src/settings/index";
+import { codePreviewSettings, setCodePreviewSettings } from "../../../../src/config/state";
 import {
   cloneCodePreviewSettingsForTest,
   createToolRenderContext,
@@ -19,13 +19,14 @@ import {
 import {
   findRenderer,
   preserveCodePreviewToolsEnv,
+  publishCodePreviewToolsEnvironment,
   registerRenderers,
 } from "../../../../src/tools/renderers/testing";
 
 preserveCodePreviewToolsEnv();
 
 test("registered edit call previews proposed edits before execution", () => {
-  process.env.CODE_PREVIEW_TOOLS = "edit";
+  publishCodePreviewToolsEnvironment("edit");
   const edit = findRenderer(registerRenderers(), "edit");
   assert.ok(edit.renderCall);
   const args = {
@@ -58,7 +59,7 @@ test("registered edit call previews proposed edits before execution", () => {
 });
 
 test("registered edit timing measures execution start to result completion", () => {
-  process.env.CODE_PREVIEW_TOOLS = "edit";
+  publishCodePreviewToolsEnvironment("edit");
   const previousSettings = cloneCodePreviewSettingsForTest();
   setCodePreviewSettings({
     ...codePreviewSettings,
@@ -97,7 +98,7 @@ test("registered edit timing measures execution start to result completion", () 
 });
 
 test("registered write renderer hides code previews until expanded", () => {
-  process.env.CODE_PREVIEW_TOOLS = "write";
+  publishCodePreviewToolsEnvironment("write");
   const previousSettings = cloneCodePreviewSettingsForTest();
   setCodePreviewSettings({ ...codePreviewSettings, writeContentPreview: false });
   try {
@@ -179,7 +180,7 @@ test("registered write renderer hides code previews until expanded", () => {
 });
 
 test("registered write renderer does not label redacted previous content as a new file", () => {
-  process.env.CODE_PREVIEW_TOOLS = "write";
+  publishCodePreviewToolsEnvironment("write");
   const write = findRenderer(registerRenderers(), "write");
   assert.ok(write.renderResult);
 
@@ -205,7 +206,7 @@ test("registered write renderer does not label redacted previous content as a ne
 });
 
 test("registered write renderer distinguishes blank-only content from empty content", () => {
-  process.env.CODE_PREVIEW_TOOLS = "write";
+  publishCodePreviewToolsEnvironment("write");
   const write = findRenderer(registerRenderers(), "write");
   assert.ok(write.renderCall);
 
@@ -224,7 +225,7 @@ test("registered write renderer distinguishes blank-only content from empty cont
 });
 
 test("registered write result diffs use and invalidate on the write line limit", () => {
-  process.env.CODE_PREVIEW_TOOLS = "write";
+  publishCodePreviewToolsEnvironment("write");
   const previousSettings = cloneCodePreviewSettingsForTest();
   const write = findRenderer(registerRenderers(), "write");
   assert.ok(write.renderResult);
@@ -273,7 +274,7 @@ test("registered write result diffs use and invalidate on the write line limit",
 });
 
 test("registered write result skips pathological whole-file rewrite diffs", () => {
-  process.env.CODE_PREVIEW_TOOLS = "write";
+  publishCodePreviewToolsEnvironment("write");
   const write = findRenderer(registerRenderers(), "write");
   assert.ok(write.renderResult);
   const before = Array.from({ length: 2_000 }, (_, index) => `before ${index}`).join("\n");
@@ -298,7 +299,7 @@ test("registered write result skips pathological whole-file rewrite diffs", () =
 });
 
 test("registered edit renderer hides diff previews until expanded", () => {
-  process.env.CODE_PREVIEW_TOOLS = "edit";
+  publishCodePreviewToolsEnvironment("edit");
   const previousSettings = cloneCodePreviewSettingsForTest();
   setCodePreviewSettings({ ...codePreviewSettings, editDiffPreview: false });
   try {
@@ -359,7 +360,7 @@ test("registered edit renderer hides diff previews until expanded", () => {
 });
 
 test("registered write call reuses cached previews", () => {
-  process.env.CODE_PREVIEW_TOOLS = "write";
+  publishCodePreviewToolsEnvironment("write");
   const write = findRenderer(registerRenderers(), "write");
   assert.ok(write.renderCall);
   const args = { path: "src/a.ts", content: "const value = 1;\n" };
@@ -376,7 +377,7 @@ test("registered write call reuses cached previews", () => {
 });
 
 test("registered edit result header omits insertion and deletion shape counts", () => {
-  process.env.CODE_PREVIEW_TOOLS = "edit";
+  publishCodePreviewToolsEnvironment("edit");
   const edit = findRenderer(registerRenderers(), "edit");
   assert.ok(edit.renderCall);
   assert.ok(edit.renderResult);
@@ -405,7 +406,7 @@ test("registered edit result header omits insertion and deletion shape counts", 
 });
 
 test("registered result renderers stay synchronous without an active session", () => {
-  process.env.CODE_PREVIEW_TOOLS = "write,edit";
+  publishCodePreviewToolsEnvironment("write,edit");
   const registered = registerRenderers();
   const edit = findRenderer(registered, "edit");
   const write = findRenderer(registered, "write");

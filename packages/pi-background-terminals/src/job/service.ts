@@ -41,7 +41,7 @@ import {
   type ReadBackgroundLogs,
   type StartBackgroundJob,
 } from "./model.ts";
-import { sortJobSnapshots, sortJobViews } from "./projection.ts";
+import { sortJobsByActivity } from "./projection.ts";
 
 interface JobRecord {
   snapshot: BackgroundJobSnapshot;
@@ -109,7 +109,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   };
   const currentProjection = (): BackgroundTerminalProjection => ({
     revision,
-    jobs: sortJobViews(
+    jobs: sortJobsByActivity(
       [...jobs.values()].map((record) => ({
         ...record.snapshot,
         logs: record.logs.events,
@@ -392,7 +392,7 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   const list: BackgroundTerminalServiceShape["list"] = (filter = "all") =>
     withLock(
       Effect.sync(() =>
-        sortJobSnapshots(
+        sortJobsByActivity(
           [...jobs.values()]
             .map((record) => record.snapshot)
             .filter((snapshot) =>

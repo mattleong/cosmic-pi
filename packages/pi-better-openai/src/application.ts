@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
+import { loadCodePreviewSettings } from "pi-code-previews";
 import {
   captureSessionHost,
   hasTerminalUI,
@@ -17,14 +18,7 @@ import { createCosmicFooterClient } from "pi-cosmic-ui/client";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "./boundary/host-ui.ts";
 import { decodeOpenAICompactionDetails } from "./compaction/protocol.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
-import {
-  CONFIG_BASENAME,
-  DEFAULT_CONFIG,
-  DEFAULT_IMAGE_CONFIG,
-  configPaths,
-  type OpenAIConfigError,
-  type ResolvedConfig,
-} from "./config/index.ts";
+import { type OpenAIConfigError, type ResolvedConfig } from "./config/index.ts";
 import {
   fastDebugLines,
   fastStateText,
@@ -32,19 +26,18 @@ import {
   initialFastSnapshot,
   injectProviderPayload,
   isFastActive,
-  supportsFast,
   unsupportedRequestMessage,
 } from "./fast/controller.ts";
 import { FastModeService } from "./fast/service.ts";
-import { FAST_SERVICE_TIER, SUPPORTED_FAST_MODELS } from "./fast/models.ts";
+import { FAST_SERVICE_TIER } from "./fast/models.ts";
 import {
   makeOpenAIApplicationLayer,
   type OpenAIApplication,
   type OpenAIRuntimeError,
   type OpenAISessionInput,
 } from "./layer.ts";
-import { abbreviateHomePath, createFooterController } from "./footer/controller.ts";
-import { registerOpenAIImage, _imageTest } from "./image/index.ts";
+import { createFooterController } from "./footer/controller.ts";
+import { registerOpenAIImage } from "./image/index.ts";
 import { registerSettingsController } from "./settings/controller.ts";
 import {
   fastModeFooterPrimitive,
@@ -61,12 +54,12 @@ import {
   synchronizeProjectionContext,
   type OpenAIProjection,
 } from "./usage/index.ts";
-import { formatPercent, formatUsageSnapshot, parseUsageSnapshot } from "./usage/index.ts";
 
 const FAST_ID = "fast";
 
 export interface BetterOpenAIExtensionDependencies {
   readonly startupEffect: (generation: number) => Effect.Effect<void, never, OpenAIUsageService>;
+  readonly loadPreviewSettings?: (projectCwd: string, projectTrusted: boolean) => Promise<unknown>;
 }
 
 const captureSessionHostContext = (ctx: ExtensionContext) => {
@@ -278,9 +271,10 @@ export function betterOpenAIWithDependencies(
     fastProjection,
     run,
   });
-  registerOpenAIImage(pi, run, updateContext);
 
   pi.on("session_start", (_event, ctx) => {
+    // Admission order, not asynchronous settings-load completion order, owns session freshness.
+    const generation = ++startGeneration;
     const captured = captureSessionHostContext(ctx);
     if (captured._tag === "Failure") {
       safeHostUi(() => ctx.ui.notify("Better OpenAI failed to start.", "warning"));
@@ -300,17 +294,22 @@ export function betterOpenAIWithDependencies(
     footerController.invalidateSessionName();
     const context = MutableRef.make(ctx);
     currentContext = context;
-    return slot
-      .start(
-        {
-          ctx,
-          context,
-          cwd,
-          generation: ++startGeneration,
-          projectTrusted,
-        },
-        signal,
-      )
+    return (dependencies.loadPreviewSettings ?? loadCodePreviewSettings)(cwd, projectTrusted)
+      .catch(() => undefined)
+      .then(() => {
+        if (generation !== startGeneration) return undefined;
+        registerOpenAIImage(pi, run, updateContext);
+        return slot.start(
+          {
+            ctx,
+            context,
+            cwd,
+            generation,
+            projectTrusted,
+          },
+          signal,
+        );
+      })
       .then(() => undefined);
   });
   pi.on("agent_start", (_event, ctx) => {
@@ -429,18 +428,3 @@ export function betterOpenAIWithDependencies(
   pi.on("message_update", invalidateContextUsage);
   pi.on("message_end", invalidateContextUsage);
 }
-
-export const _test = {
-  CONFIG_BASENAME,
-  SUPPORTED_FAST_MODELS,
-  DEFAULT_CONFIG,
-  DEFAULT_IMAGE_CONFIG,
-  SERVICE_TIER: FAST_SERVICE_TIER,
-  configPaths,
-  abbreviateHomePath,
-  supportsFast,
-  parseUsageSnapshot,
-  formatPercent,
-  formatUsageSnapshot,
-  imageTest: _imageTest,
-};

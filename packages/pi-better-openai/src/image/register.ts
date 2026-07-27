@@ -1,7 +1,12 @@
-import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  defineTool,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
+import { withCodePreviewShell } from "pi-code-previews";
 import { safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
 import { isImageContent, resultText } from "./helpers.ts";
 import { OpenAIImageService } from "./service.ts";
@@ -92,7 +97,7 @@ export function registerOpenAIImage(
       );
     },
   });
-  pi.registerTool({
+  const tool = defineTool({
     name: OPENAI_IMAGE_TOOL,
     label: "OpenAI image",
     description:
@@ -115,4 +120,5 @@ export function registerOpenAIImage(
       }));
     },
   });
+  pi.registerTool(withCodePreviewShell(tool));
 }

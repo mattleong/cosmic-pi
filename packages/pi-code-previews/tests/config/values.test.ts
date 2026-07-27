@@ -1,12 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import {
-  codePreviewSettings,
-  defaultCodePreviewSettings,
-  normalizeSettings,
-  setCodePreviewSettings,
-  updateSetting,
-} from "../../src/settings/index";
+import { defaultCodePreviewSettings } from "../../src/config/defaults";
+import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
+import { normalizeSettings, updateSetting } from "../../src/config/values";
 
 test("settings normalization and reset preserve defaults", () => {
   const normalized = normalizeSettings({

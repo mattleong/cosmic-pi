@@ -56,8 +56,3 @@ export class DeferredPreview implements Component {
     this.component.invalidate();
   }
 }
-
-/** Public compatibility name retained for existing imports. */
-export const AsyncPreview = DeferredPreview;
-/** Public compatibility name retained for existing imports. */
-export const shouldRenderAsync = shouldRenderDeferred;

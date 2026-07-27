@@ -58,26 +58,3 @@ export const commitAdvisorIntervention = (
     correctionUsed: state.correctionUsed || correction,
   };
 };
-
-/** Compatibility facade. New application code stores the immutable snapshot directly. */
-export class AdvisorInterventionBudget {
-  #state = emptyAdvisorInterventionBudget();
-  get snapshot(): AdvisorInterventionBudgetSnapshot {
-    return this.#state;
-  }
-  canDeliver(severity: AdvisorSeverity): boolean {
-    return canDeliverAdvisorIntervention(this.#state, severity);
-  }
-  canCorrect(): boolean {
-    return canCorrectAdvisorIntervention(this.#state);
-  }
-  commit(severity: AdvisorSeverity, correction: boolean): void {
-    this.#state = commitAdvisorIntervention(this.#state, severity, correction);
-  }
-  restore(snapshot: Partial<AdvisorInterventionBudgetSnapshot> | undefined): void {
-    this.#state = sanitizeInterventionBudgetSnapshot(snapshot);
-  }
-  reset(): void {
-    this.#state = emptyAdvisorInterventionBudget();
-  }
-}

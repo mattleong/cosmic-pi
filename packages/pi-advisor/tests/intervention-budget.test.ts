@@ -1,32 +1,38 @@
 import { describe, expect, test } from "vitest";
-import { AdvisorInterventionBudget } from "../src/review/intervention-budget.ts";
+import {
+  canCorrectAdvisorIntervention,
+  canDeliverAdvisorIntervention,
+  commitAdvisorIntervention,
+  emptyAdvisorInterventionBudget,
+  sanitizeInterventionBudgetSnapshot,
+  type AdvisorInterventionBudgetSnapshot,
+} from "../src/review/intervention-budget.ts";
 
 describe("advisor intervention budget", () => {
   test("allows only strict escalation and one correction per request", () => {
-    const budget = new AdvisorInterventionBudget();
-    expect(budget.canDeliver("concern")).toBe(true);
-    budget.commit("concern", true);
-    expect(budget.canCorrect()).toBe(false);
-    expect(budget.canDeliver("concern")).toBe(false);
-    expect(budget.canDeliver("blocker")).toBe(true);
-    budget.commit("blocker", false);
-    expect(budget.canDeliver("blocker")).toBe(false);
+    let budget = emptyAdvisorInterventionBudget();
+    expect(canDeliverAdvisorIntervention(budget, "concern")).toBe(true);
+    budget = commitAdvisorIntervention(budget, "concern", true);
+    expect(canCorrectAdvisorIntervention(budget)).toBe(false);
+    expect(canDeliverAdvisorIntervention(budget, "concern")).toBe(false);
+    expect(canDeliverAdvisorIntervention(budget, "blocker")).toBe(true);
+    budget = commitAdvisorIntervention(budget, "blocker", false);
+    expect(canDeliverAdvisorIntervention(budget, "blocker")).toBe(false);
   });
 
   test("restores a pre-reservation snapshot when delivery is cancelled", () => {
-    const budget = new AdvisorInterventionBudget();
-    const before = budget.snapshot;
-    budget.commit("blocker", true);
-    budget.restore(before);
-    expect(budget.snapshot).toEqual({ delivered: 0, correctionUsed: false });
-    expect(budget.canDeliver("concern")).toBe(true);
+    const before: AdvisorInterventionBudgetSnapshot = emptyAdvisorInterventionBudget();
+    const reserved = commitAdvisorIntervention(before, "blocker", true);
+    expect(reserved).not.toEqual(before);
+    const restored = sanitizeInterventionBudgetSnapshot(before);
+    expect(restored).toEqual({ delivered: 0, correctionUsed: false });
+    expect(canDeliverAdvisorIntervention(restored, "concern")).toBe(true);
   });
 
   test("resets on a genuine request boundary", () => {
-    const budget = new AdvisorInterventionBudget();
-    budget.commit("blocker", true);
-    budget.reset();
-    expect(budget.canDeliver("concern")).toBe(true);
-    expect(budget.canCorrect()).toBe(true);
+    commitAdvisorIntervention(emptyAdvisorInterventionBudget(), "blocker", true);
+    const reset = emptyAdvisorInterventionBudget();
+    expect(canDeliverAdvisorIntervention(reset, "concern")).toBe(true);
+    expect(canCorrectAdvisorIntervention(reset)).toBe(true);
   });
 });

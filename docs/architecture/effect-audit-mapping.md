@@ -6,7 +6,7 @@ This file maps the numbered migration program to the implemented ownership bound
 2. Architecture guidance: shared TypeScript configuration, Oxlint, official Effect language-service diagnostics, and package tests.
 3. Process coordination: core `ProcessCoordinator`; JSON documents and Advisor failure logs use resolved keyed locks.
 4. Schema-first HTTP: typed accepted responses, raw rejected text, and schema-encoded streaming requests.
-5. Tolerant configuration: core scoped repository and field-level recovery adopted by providers and Cosmic UI.
+5. Tolerant configuration: core scoped store and field-level recovery adopted by providers and Cosmic UI.
 6. Projection/ingress primitives: core frozen projection and bounded synchronous ingress.
 7. Test infrastructure: shared deterministic document/HTTP Layers, lifecycle probe, bounded worker polling, stable telemetry snapshots, and Effect-native lifecycle tests. Session/failure/fiber helpers remain local where no identical second consumer exists.
 8. xAI boundaries: refined schemas and `ModelRegistryAuth` adapter.

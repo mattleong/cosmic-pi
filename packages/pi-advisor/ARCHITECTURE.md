@@ -51,7 +51,7 @@ Runs bounded second-model review of Pi responses, optionally delivers advice/rev
   - `format.ts` — pure formatting
 - `src/checkpoint/` owns checkpoint ledger and orchestrator resources.
 - `src/review/` contains review domain logic: `schema`/`parse`/`format` (via `review/index.ts` barrel), findings, routing, budgets, trajectory, observation protocol, context.
-- `src/config/` owns `schema.ts` (shape/defaults), `options.ts` (path + load/write/normalize), `store.ts` (persistence door), and model picking.
+- `src/config/` owns `schema.ts` (shape/defaults), `options.ts` (path resolution and normalization), `store.ts` (the sole persistence door, including Effect and compatibility APIs), and model picking.
 - `src/logging/` owns `log.ts` persistence and `logger.ts` service.
 - `src/ui/` is pure projection/renderer presentation only.
 - `src/status/service.ts` owns the Effect status spinner resource (not under `ui/`).

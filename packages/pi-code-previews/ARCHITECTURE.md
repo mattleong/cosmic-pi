@@ -18,8 +18,8 @@ Provides syntax-highlighted previews, structured diffs, safer write/edit present
 - `src/application/service.ts` is the canonical session application service; its Context key follows the `application/service` path.
 - `src/application/projection.ts` owns deferred/scheduled projection helpers for synchronous renderers.
 - `src/layer.ts` is the sole application Layer composition root.
-- `src/config/store.ts` is the settings persistence **door** (Effect `CodePreviewSettingsService` plus promise/compat helpers). Rooms: `schema`, `defaults`, `definitions`, `values`, `state`, `env`, `environment-service`, `document-store`, and internal `service.ts` (Context key retained).
-- `src/settings/` owns host commands (`controller.ts`), pre-session bootstrap, the compatibility barrel (`index.ts`), and settings menus under `settings/ui/`.
+- `src/config/store.ts` is the settings persistence **door** (Effect `CodePreviewSettingsService` plus the promise helpers the panel needs). Rooms: `schema`, `defaults`, `definitions`, `values`, `state`, `env`, `environment-service`, `document-store`, and internal `service.ts` (Context key retained). `env.ts` owns the single `CODE_PREVIEW_*` environment door: `CodePreviewEnvironmentService` decodes once and publishes the synchronous performance/tools projection.
+- `src/settings/` owns host commands (`controller.ts`), pre-session bootstrap (`bootstrap.ts`), and the persistence-aware `/code-preview-settings` controller in `panel.ts`; pure menus, submenus, and summaries remain under `settings/ui/`. Settings modules import config directly; there is no settings re-export barrel.
 - `src/syntax/` and `src/write/` are the other primary stateful features; `syntax/service.ts` owns Shiki state/lifecycle while `syntax/ingress.ts` owns the bounded synchronous renderer request bridge.
 - `src/diff/`, `src/paths/`, `src/tools/` (including grep/path-list/shell helpers), and `src/warnings/` contain deterministic preview policy and transformation logic.
 - `src/tools/` owns tool names/policy, cooperative shell API (`cooperative-tools.ts`), tool argument/result helpers (`data/`), and synchronous tool renderers (`renderers/`).

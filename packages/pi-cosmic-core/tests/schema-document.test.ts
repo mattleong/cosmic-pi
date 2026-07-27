@@ -5,12 +5,11 @@ import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
 import {
   JsonDocumentStore,
-  readSchemaDocument,
-  updateSchemaDocument,
   type JsonDocumentStoreShape,
   type JsonObject,
-} from "../index.ts";
-import { makeInMemoryDocuments } from "../testing.ts";
+} from "../src/platform/json-document.ts";
+import { readSchemaDocument, updateSchemaDocument } from "../src/platform/schema-document.ts";
+import { makeInMemoryDocuments } from "../src/testing/layers.ts";
 
 const ConfigSchema = Schema.Struct({ enabled: Schema.Boolean });
 

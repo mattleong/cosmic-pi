@@ -101,7 +101,6 @@ export interface SubagentRunView {
   readonly progress?: string | undefined;
   readonly warning?: string | undefined;
   readonly question?: PendingParentQuestion | undefined;
-  readonly transcript: ReadonlyArray<string>;
   readonly sessionEvents: ReadonlyArray<SubagentSessionEvent>;
   readonly finalText?: string | undefined;
   readonly error?: string | undefined;

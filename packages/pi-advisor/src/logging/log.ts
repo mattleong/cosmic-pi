@@ -8,7 +8,7 @@ import { ProcessCoordinator } from "pi-cosmic-core";
 import { nodeDirname, nodeJoin } from "../boundary/node.ts";
 import { snapshotDataRecord } from "../domain/safe-data.ts";
 import { safeAdvisorLabel } from "../domain/label.ts";
-import { redactSensitiveText } from "../review/observation-protocol.ts";
+import { redactSensitiveText } from "../domain/redaction.ts";
 
 const MAX_LOG_BYTES = 1_000_000;
 const MAX_ERROR_MESSAGE_CHARS = 4_000;

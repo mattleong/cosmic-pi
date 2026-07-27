@@ -163,28 +163,6 @@ function recordHash(
   return { ...state, seen, order };
 }
 
-/** Compatibility facade for external callers; application state uses the reducers above. */
-export class AdvisorEmissionGuard {
-  #state: AdvisorEmissionGuardState;
-  constructor(records: readonly string[] = [], capacity = MAX_EMISSION_HISTORY) {
-    this.#state = createAdvisorEmissionGuardState(records, capacity);
-  }
-  evaluate(checkpointId: string, review: AdvisorReview): AdvisorEmissionDecision {
-    const result = evaluateAdvisorEmission(this.#state, checkpointId, review);
-    this.#state = result.state;
-    return result.decision;
-  }
-  rollback(token: AdvisorEmissionRollback): void {
-    this.#state = rollbackAdvisorEmission(this.#state, token);
-  }
-  exportRecords(): string[] {
-    return exportAdvisorEmissionRecords(this.#state);
-  }
-  reset(records: readonly string[] = []): void {
-    this.#state = createAdvisorEmissionGuardState(records, this.#state.capacity);
-  }
-}
-
 function normalizeReview(review: AdvisorReview): string {
   return review.findings
     .map((finding) =>

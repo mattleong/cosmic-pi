@@ -15,7 +15,7 @@ import {
   createCodePreviewToolShell,
   hiddenPreviewExpandHintForShell,
 } from "../../preview/tool-shell";
-import { codePreviewSettings } from "../../settings/index";
+import { codePreviewSettings } from "../../config/state";
 import { countLabel, formatBytes } from "../../shared/helpers";
 import { getObjectValue } from "../../shared/helpers";
 import { escapeControlChars } from "../../shared/terminal-text";

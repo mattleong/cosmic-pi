@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { hashString } from "../../../shared/helpers";
-import { codePreviewSettings } from "../../../settings/index";
+import { codePreviewSettings } from "../../../config/state";
 import { getShikiStatus } from "../../../syntax/render";
 
 let themeCacheIdCounter = 0;

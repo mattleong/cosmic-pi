@@ -18,8 +18,8 @@ Adds xAI subscription-usage refresh, settings, status commands, and footer outpu
 - `src/usage/index.ts`, `src/settings/`, and `src/footer/` are the usage, settings, and fallback-footer features.
 - `src/usage/controller.ts` owns the usage Context service, `projection.ts` owns frozen projection policy, `debug.ts` owns deterministic diagnostics, and `format.ts` owns provider schemas and subscription formatting.
 - `src/config/` contains configuration schemas and deterministic policy.
-- `src/boundary/` contains model-registry/host adapters.
-- `src/ui/` reads frozen usage projections and emits plain Cosmic UI contributions.
+- `src/boundary/` contains the model-registry adapter and the Pi host adapters (`host-callback.ts`, `host-notifier.ts`, `host-ui.ts`).
+- `src/ui/primitives.ts` reads frozen usage projections and emits plain Cosmic UI contributions.
 
 ## State and resources
 

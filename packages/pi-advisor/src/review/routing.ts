@@ -99,51 +99,6 @@ export const clearAdvisorCancellation = (
   state: AdvisorRoutingStateSnapshot,
 ): AdvisorRoutingStateSnapshot => ({ ...state, cancellationLatched: false });
 
-/** Compatibility facade. New application code stores the immutable snapshot directly. */
-export class AdvisorRoutingState {
-  private state = emptyAdvisorRoutingState();
-
-  constructor(snapshot?: Partial<AdvisorRoutingStateSnapshot>) {
-    if (snapshot) this.state = sanitizeAdvisorRoutingState(snapshot);
-  }
-
-  get snapshot(): AdvisorRoutingStateSnapshot {
-    return { ...this.state };
-  }
-
-  get immunityActive(): boolean {
-    return isAdvisorImmunityActive(this.state);
-  }
-
-  get cancellationLatched(): boolean {
-    return this.state.cancellationLatched;
-  }
-
-  completePrimaryTurn(): void {
-    this.state = completeAdvisorPrimaryTurn(this.state);
-  }
-
-  armInterruption(): void {
-    this.state = armAdvisorInterruption(this.state);
-  }
-
-  latchCancellation(): void {
-    this.state = latchAdvisorCancellation(this.state);
-  }
-
-  clearCancellationForGenuineUserPrompt(): void {
-    this.state = clearAdvisorCancellation(this.state);
-  }
-
-  restore(snapshot: Partial<AdvisorRoutingStateSnapshot>): void {
-    this.state = sanitizeAdvisorRoutingState(snapshot);
-  }
-
-  reset(): void {
-    this.state = emptyAdvisorRoutingState();
-  }
-}
-
 function nonNegativeInteger(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }

@@ -8,12 +8,10 @@ import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import {
   AgentDirectory,
   JsonDocumentStore,
-  maskIdentifier,
   SafeFile,
   sanitizeDiagnosticError,
   StreamingHttpClient,
@@ -34,13 +32,10 @@ import {
   ToolParamsSchema,
   fail,
   type CodexImageResult,
-  type ImageGenerationDebug,
-  type ImageState,
 } from "./types.ts";
 
 export interface OpenAIImageServiceShape {
   readonly generate: (params: unknown) => Effect.Effect<CodexImageResult, OpenAIImageError>;
-  readonly debug: () => Effect.Effect<ImageGenerationDebug>;
 }
 export class OpenAIImageService extends Context.Service<
   OpenAIImageService,
@@ -64,7 +59,6 @@ export class OpenAIImageService extends Context.Service<
         const authPath = path.join(agentDir, "auth.json");
         const customSaveDir = yield* Config.option(Config.string("PI_IMAGE_SAVE_DIR"));
         const homeDirectory = yield* Config.option(Config.string("HOME"));
-        const state = yield* Ref.make<ImageState>({});
         const credentialsFor = (ctx: Pick<ExtensionContext, "modelRegistry">) =>
           getCodexCredentials(authPath, ctx).pipe(
             Effect.provideService(JsonDocumentStore, documents),
@@ -74,7 +68,6 @@ export class OpenAIImageService extends Context.Service<
         const readInputs = makeImageInputReader({ fs, path, safeFile, sharp });
         const { validatedGeneratedImage, persistImage } = makeImageOutput({ fs, path, sharp });
         const generate = Effect.fn("OpenAIImage.generate")(function* (rawParams: unknown) {
-          yield* Ref.set(state, { lastStatus: "requesting" });
           const parameterKeys = yield* Effect.try({
             try: () => (Predicate.isObject(rawParams) ? Object.keys(rawParams) : undefined),
             catch: imageError("params", "Invalid OpenAI image parameters."),
@@ -181,7 +174,6 @@ export class OpenAIImageService extends Context.Service<
             action,
             outputFormat,
           };
-          yield* Ref.set(state, { lastStatus: `completed (${result.id})` });
           return result;
         });
         const safeGenerate = (params: unknown) =>
@@ -205,31 +197,8 @@ export class OpenAIImageService extends Context.Service<
                 message,
               );
             }),
-            Effect.tapError((error) =>
-              Ref.set(state, { lastStatus: "error", lastError: error.message }),
-            ),
           );
-        const debug = Effect.fn("OpenAIImage.debug")(function* () {
-          const ctx = MutableRef.get(options.context);
-          const cfg = MutableRef.get(options.projection).config;
-          const credentials = yield* credentialsFor(ctx).pipe(Effect.catch(() => Effect.void));
-          const image = cfg?.image;
-          const accountId = maskIdentifier(credentials?.accountId);
-          return {
-            authFound: credentials !== undefined,
-            ...(credentials ? { authSource: credentials.source } : {}),
-            ...(accountId ? { accountId } : {}),
-            endpoint: CODEX_RESPONSES_URL,
-            defaultModel:
-              ctx.model?.provider === "openai-codex"
-                ? ctx.model.id
-                : (image?.defaultModel ?? "gpt-5.5"),
-            defaultSave: image?.defaultSave ?? "project",
-            enabled: image?.enabled ?? false,
-            ...(yield* Ref.get(state)),
-          } satisfies ImageGenerationDebug;
-        });
-        return OpenAIImageService.of({ generate: safeGenerate, debug });
+        return OpenAIImageService.of({ generate: safeGenerate });
       }),
     );
   }

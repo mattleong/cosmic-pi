@@ -203,13 +203,3 @@ export const prepareSettingUpdate = Effect.fn("OpenAIConfig.prepareSettingUpdate
     return next;
   };
 });
-
-export const applySettingToRawConfig = Effect.fn("OpenAIConfig.applySetting")(function* (
-  current: JsonObject,
-  id: string,
-  rawValue: string,
-  context: SettingPatchContext = {},
-) {
-  const update = yield* prepareSettingUpdate(id, rawValue, context);
-  return update(current);
-});

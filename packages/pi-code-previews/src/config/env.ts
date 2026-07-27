@@ -1,7 +1,6 @@
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { environmentValue } from "../boundary/environment";
 
 export function parsePositiveInteger(value: string | undefined): number | undefined {
   const parsed = Number(value);
@@ -23,10 +22,6 @@ export function parseBoolean(value: string | undefined): boolean | undefined {
     default:
       return undefined;
   }
-}
-
-export function booleanEnv(name: string, fallback: boolean): boolean {
-  return parseBoolean(environmentValue(name)) ?? fallback;
 }
 
 const ENVIRONMENT_KEYS = [
@@ -114,25 +109,33 @@ export const defaultCodePreviewPerformanceConfig: CodePreviewPerformanceConfig =
 export let codePreviewPerformanceConfig = defaultCodePreviewPerformanceConfig;
 export let codePreviewToolsEnvironmentValue: string | undefined;
 
+/** Every fallback comes from the canonical default object; the map only names the variables. */
+const PERFORMANCE_ENVIRONMENT_KEYS: Readonly<
+  Record<keyof CodePreviewPerformanceConfig, keyof CodePreviewEnvironment>
+> = Object.freeze({
+  asyncRenderChars: "CODE_PREVIEW_ASYNC_RENDER_CHARS",
+  maxHighlightChars: "CODE_PREVIEW_MAX_HIGHLIGHT_CHARS",
+  cacheLimit: "CODE_PREVIEW_CACHE_LIMIT",
+  cacheCharLimit: "CODE_PREVIEW_CACHE_CHAR_LIMIT",
+  contentLanguageDetectionChars: "CODE_PREVIEW_CONTENT_LANGUAGE_DETECTION_CHARS",
+  diffWrapRows: "CODE_PREVIEW_DIFF_WRAP_ROWS",
+  secretScanChars: "CODE_PREVIEW_SECRET_SCAN_CHARS",
+  maxWriteDiffBytes: "CODE_PREVIEW_MAX_WRITE_DIFF_BYTES",
+  maxWriteDiffChangedLineCells: "CODE_PREVIEW_MAX_WRITE_DIFF_CHANGED_LINE_CELLS",
+});
+
 export function performanceConfigFromEnvironment(
   environment: CodePreviewEnvironment,
 ): CodePreviewPerformanceConfig {
-  const integer = (key: keyof CodePreviewEnvironment, fallback: number) =>
-    parsePositiveInteger(environment[key]) ?? fallback;
-  return Object.freeze({
-    asyncRenderChars: integer("CODE_PREVIEW_ASYNC_RENDER_CHARS", 8_000),
-    maxHighlightChars: integer("CODE_PREVIEW_MAX_HIGHLIGHT_CHARS", 80_000),
-    cacheLimit: integer("CODE_PREVIEW_CACHE_LIMIT", 192),
-    cacheCharLimit: integer("CODE_PREVIEW_CACHE_CHAR_LIMIT", 4_000_000),
-    contentLanguageDetectionChars: integer("CODE_PREVIEW_CONTENT_LANGUAGE_DETECTION_CHARS", 50_000),
-    diffWrapRows: integer("CODE_PREVIEW_DIFF_WRAP_ROWS", 3),
-    secretScanChars: integer("CODE_PREVIEW_SECRET_SCAN_CHARS", 200_000),
-    maxWriteDiffBytes: integer("CODE_PREVIEW_MAX_WRITE_DIFF_BYTES", 200_000),
-    maxWriteDiffChangedLineCells: integer(
-      "CODE_PREVIEW_MAX_WRITE_DIFF_CHANGED_LINE_CELLS",
-      1_000_000,
-    ),
-  });
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(PERFORMANCE_ENVIRONMENT_KEYS).map(([field, key]) => [
+        field,
+        parsePositiveInteger(environment[key]) ??
+          defaultCodePreviewPerformanceConfig[field as keyof CodePreviewPerformanceConfig],
+      ]),
+    ) as unknown as CodePreviewPerformanceConfig,
+  );
 }
 
 export function publishCodePreviewEnvironmentProjection(

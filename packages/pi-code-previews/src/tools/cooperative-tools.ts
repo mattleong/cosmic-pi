@@ -6,7 +6,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { getTextContent } from "./data/results";
-import { codePreviewSettings, type ToolCallBackgroundMode } from "../settings/index";
+import { type ToolCallBackgroundMode } from "../config/schema";
+import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
 import { createCodePreviewToolShell } from "../preview/tool-shell";
 

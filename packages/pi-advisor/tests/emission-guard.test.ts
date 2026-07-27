@@ -1,10 +1,36 @@
 import { describe, expect, test } from "vitest";
 import {
-  AdvisorEmissionGuard,
+  createAdvisorEmissionGuardState,
+  evaluateAdvisorEmission,
+  exportAdvisorEmissionRecords,
   isContentFreeAdvisorReview,
   normalizeEmissionContent,
+  rollbackAdvisorEmission,
+  type AdvisorEmissionGuardState,
+  type AdvisorEmissionRollback,
 } from "../src/review/emission-guard.ts";
 import type { AdvisorReview, AdvisorSeverity } from "../src/review/index.ts";
+
+/** Drives the immutable emission reducers the way application state does. */
+function emissionGuard(records: readonly string[] = [], capacity?: number) {
+  let state: AdvisorEmissionGuardState =
+    capacity === undefined
+      ? createAdvisorEmissionGuardState(records)
+      : createAdvisorEmissionGuardState(records, capacity);
+  return {
+    evaluate(checkpointId: string, review: AdvisorReview) {
+      const result = evaluateAdvisorEmission(state, checkpointId, review);
+      state = result.state;
+      return result.decision;
+    },
+    rollback(token: AdvisorEmissionRollback) {
+      state = rollbackAdvisorEmission(state, token);
+    },
+    exportRecords() {
+      return exportAdvisorEmissionRecords(state);
+    },
+  };
+}
 
 function review(severity: AdvisorSeverity, issue = "Missing timeout handling!"): AdvisorReview {
   return {
@@ -22,13 +48,13 @@ function review(severity: AdvisorSeverity, issue = "Missing timeout handling!"):
   };
 }
 
-describe("AdvisorEmissionGuard", () => {
+describe("advisor emission guard", () => {
   test("normalizes Unicode, case and punctuation", () => {
     expect(normalizeEmissionContent("ＭISSING—Timeout!!!")).toBe("missing timeout");
   });
 
   test("suppresses passes and content-free no-issue prose", () => {
-    const guard = new AdvisorEmissionGuard();
+    const guard = emissionGuard();
     const pass: AdvisorReview = { verdict: "pass", summary: "NO ISSUES!!!", findings: [] };
     expect(isContentFreeAdvisorReview(pass)).toBe(true);
     expect(guard.evaluate("one", pass)).toEqual({ accepted: false, reason: "pass" });
@@ -56,14 +82,14 @@ describe("AdvisorEmissionGuard", () => {
       ],
     };
     expect(isContentFreeAdvisorReview(malformed)).toBe(true);
-    expect(new AdvisorEmissionGuard().evaluate("malformed", malformed)).toEqual({
+    expect(emissionGuard().evaluate("malformed", malformed)).toEqual({
       accepted: false,
       reason: "content-free",
     });
   });
 
   test("accepts at most one delivery per checkpoint without consuming a later slot", () => {
-    const guard = new AdvisorEmissionGuard();
+    const guard = emissionGuard();
     expect(guard.evaluate("one", review("concern")).accepted).toBe(true);
     expect(guard.evaluate("one", review("blocker"))).toEqual({
       accepted: false,
@@ -77,7 +103,7 @@ describe("AdvisorEmissionGuard", () => {
   });
 
   test("suppresses equal/lower normalized duplicates and accepts escalation", () => {
-    const guard = new AdvisorEmissionGuard();
+    const guard = emissionGuard();
     expect(guard.evaluate("one", review("concern")).accepted).toBe(true);
     expect(guard.evaluate("two", review("nit", " missing TIMEOUT handling "))).toEqual({
       accepted: false,
@@ -90,7 +116,7 @@ describe("AdvisorEmissionGuard", () => {
   });
 
   test("rolls back severity escalation without deleting the prior hash", () => {
-    const guard = new AdvisorEmissionGuard();
+    const guard = emissionGuard();
     expect(guard.evaluate("one", review("concern")).accepted).toBe(true);
     const escalation = guard.evaluate("two", review("blocker", "Missing timeout handling."));
     if (!escalation.accepted) throw new Error("expected escalation");
@@ -106,7 +132,7 @@ describe("AdvisorEmissionGuard", () => {
   });
 
   test("rolls back capacity eviction exactly", () => {
-    const guard = new AdvisorEmissionGuard([], 1);
+    const guard = emissionGuard([], 1);
     const first = review("concern", "First issue");
     const second = review("concern", "Second issue");
     expect(guard.evaluate("one", first).accepted).toBe(true);
@@ -122,7 +148,7 @@ describe("AdvisorEmissionGuard", () => {
   });
 
   test("rolls back an accepted recovery that never reached delivery", () => {
-    const guard = new AdvisorEmissionGuard();
+    const guard = emissionGuard();
     const accepted = guard.evaluate("aborted", review("blocker"));
     if (!accepted.accepted) throw new Error("expected accepted emission");
     guard.rollback(accepted.rollback);
@@ -132,11 +158,11 @@ describe("AdvisorEmissionGuard", () => {
   });
 
   test("restores only bounded sanitized severity/hash records", () => {
-    const first = new AdvisorEmissionGuard();
+    const first = emissionGuard();
     first.evaluate("one", review("concern"));
     const records = first.exportRecords();
     expect(records).toEqual([expect.stringMatching(/^concern:[a-f\d]{64}$/)]);
-    const restored = new AdvisorEmissionGuard(["garbage", ...records]);
+    const restored = emissionGuard(["garbage", ...records]);
     expect(restored.evaluate("two", review("concern"))).toEqual({
       accepted: false,
       reason: "duplicate",

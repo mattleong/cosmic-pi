@@ -1,8 +1,9 @@
 import { stringifyJson } from "../boundary/json.ts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { snapshotData, snapshotDataRecord } from "../domain/safe-data.ts";
+import { snapshotDataRecord } from "../domain/safe-data.ts";
 import { isRecord } from "../shared/utils.ts";
+import { redactObservationValue } from "../domain/redaction.ts";
 
 export const OBSERVATION_PROTOCOL_VERSION = 1;
 export const MAX_OBSERVATION_RECORDS = 256;
@@ -271,13 +272,6 @@ export class AdvisorObservationBuffer {
     this.protectedThrough = Math.max(0, ...this.coalescingBarriers.keys());
   }
 
-  /** Compatibility convenience for tests and callers that intentionally consume immediately. */
-  takeThrough(sequence = this.nextSequence): ObservationBatch | undefined {
-    const batch = this.peekThrough(sequence);
-    if (batch) this.commitThrough(sequence);
-    return batch;
-  }
-
   private enforceBounds(): void {
     let chars = estimateChars(this.records);
     while (this.records.length > MAX_OBSERVATION_RECORDS || chars > MAX_OBSERVATION_CHARS) {
@@ -406,54 +400,4 @@ function estimateChars(records: readonly AdvisorObservation[]): number {
 function clip(value: string, limit: number): string {
   if (value.length <= limit) return value;
   return `${value.slice(0, Math.max(0, limit - 24))}[... truncated ...]`;
-}
-
-/** Central recursive credential redaction used by every observation/delta path. */
-export function redactObservationValue(value: unknown): unknown {
-  return redactSnapshot(snapshotData(value), 0);
-}
-
-function redactSnapshot(value: unknown, depth: number): unknown {
-  if (depth > 16) return "[nested value omitted]";
-  if (typeof value === "string") return redactSensitiveText(value);
-  if (Array.isArray(value))
-    return value.slice(0, 256).map((item) => redactSnapshot(item, depth + 1));
-  if (!isRecord(value)) return value;
-  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-  for (const [key, item] of Object.entries(value).slice(0, 256)) {
-    result[key] = isSensitiveKey(key) ? "[REDACTED]" : redactSnapshot(item, depth + 1);
-  }
-  return result;
-}
-
-export function stringifyRedactedObservation(value: unknown): string {
-  try {
-    return stringifyJson(redactObservationValue(value)) ?? "[unavailable]";
-  } catch {
-    return "[unserializable]";
-  }
-}
-
-export function redactSensitiveText(value: string): string {
-  return value
-    .replace(
-      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-      "[REDACTED PRIVATE KEY]",
-    )
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+/gi, "Bearer [REDACTED]")
-    .replace(
-      /["']?\b((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|passwd|secret|token|client[_-]?secret|private[_-]?key)(?:[_-][A-Za-z0-9]+)*)\b["']?\s*[:=]\s*(?:Bearer\s+)?["']?[^\s,;"'}]+["']?/gi,
-      "$1=[REDACTED]",
-    )
-    .replace(
-      /\b(sk-[A-Za-z0-9_-]{12,}|gh[opusr]_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{20,})\b/g,
-      "[REDACTED CREDENTIAL]",
-    )
-    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED TOKEN]");
-}
-
-function isSensitiveKey(key: string): boolean {
-  return /(?:^|[_-])(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|passwd|secret|token|client[_-]?secret|private[_-]?key)(?:$|[_-])/i.test(
-    key,
-  );
 }

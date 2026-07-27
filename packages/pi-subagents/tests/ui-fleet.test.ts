@@ -35,7 +35,6 @@ const projection: SubagentProjection = {
       startedAt: 1,
       lastActivityAt: 2,
       question: { requestId: "q-1", message: "Which API?", createdAt: 2 },
-      transcript: ["Read auth.ts", "Need a decision"],
       sessionEvents: [
         {
           type: "tool",

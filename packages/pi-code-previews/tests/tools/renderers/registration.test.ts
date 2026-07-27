@@ -9,7 +9,8 @@
 import assert from "node:assert/strict";
 import { test, vi } from "vitest";
 import { registerToolRenderers } from "../../../src/tools/renderers/registration";
-import { defaultCodePreviewSettings, setCodePreviewSettings } from "../../../src/settings/index";
+import { defaultCodePreviewSettings } from "../../../src/config/defaults";
+import { setCodePreviewSettings } from "../../../src/config/state";
 import type { CodePreviewToolName } from "../../../src/tools/names";
 import {
   formatActiveCodePreviewTools,
@@ -18,6 +19,7 @@ import {
 import {
   findRenderer,
   preserveCodePreviewToolsEnv,
+  publishCodePreviewToolsEnvironment,
   registerRenderers,
 } from "../../../src/tools/renderers/testing";
 import {
@@ -30,7 +32,7 @@ import {
 preserveCodePreviewToolsEnv();
 
 test("renderer registration activates enabled preview tool overrides", () => {
-  process.env.CODE_PREVIEW_TOOLS = "grep,find,ls";
+  publishCodePreviewToolsEnvironment("grep,find,ls");
   const registered: Array<{ name: string }> = [];
   let activeTools = ["read", "bash"];
   registerToolRenderers(
@@ -65,7 +67,7 @@ test("renderer registration removes previously activated previews when disabled"
     registerTool: () => undefined,
   };
 
-  process.env.CODE_PREVIEW_TOOLS = "grep";
+  publishCodePreviewToolsEnvironment("grep");
   registerToolRenderers(pi as never, "/tmp/project", {
     registeredTools,
     activatedTools,
@@ -74,7 +76,7 @@ test("renderer registration removes previously activated previews when disabled"
   assert.deepEqual(activeTools, ["read", "bash", "grep"]);
   assert.deepEqual([...activatedTools], ["grep"]);
 
-  process.env.CODE_PREVIEW_TOOLS = "none";
+  publishCodePreviewToolsEnvironment("none");
   registerToolRenderers(pi as never, "/tmp/project", {
     registeredTools,
     activatedTools,
@@ -95,16 +97,16 @@ test("renderer registration does not remove tools that were already active", () 
     registerTool: () => undefined,
   };
 
-  process.env.CODE_PREVIEW_TOOLS = "grep";
+  publishCodePreviewToolsEnvironment("grep");
   registerToolRenderers(pi as never, "/tmp/project", { activatedTools, toolOptions: {} });
-  process.env.CODE_PREVIEW_TOOLS = "none";
+  publishCodePreviewToolsEnvironment("none");
   registerToolRenderers(pi as never, "/tmp/project", { activatedTools, toolOptions: {} });
   assert.deepEqual(activeTools, ["read", "bash", "grep"]);
   assert.deepEqual([...activatedTools], []);
 });
 
 test("renderer registration skips tools already owned by another extension", () => {
-  process.env.CODE_PREVIEW_TOOLS = "read,grep,write";
+  publishCodePreviewToolsEnvironment("read,grep,write");
   const registered: Array<{ name: string }> = [];
   registerToolRenderers(
     {
@@ -160,7 +162,7 @@ test("renderer registration skips tools already owned by another extension", () 
 });
 
 test("registered edit renderer preserves built-in metadata and prepareArguments shim", () => {
-  process.env.CODE_PREVIEW_TOOLS = "edit";
+  publishCodePreviewToolsEnvironment("edit");
   const edit = findRenderer(registerRenderers(), "edit");
   assert.equal(edit.name, "edit");
   assert.equal(typeof edit.prepareArguments, "function");
@@ -174,7 +176,7 @@ test("registered edit renderer preserves built-in metadata and prepareArguments 
 });
 
 test("registered renderers can use a self shell when tool backgrounds are disabled", () => {
-  process.env.CODE_PREVIEW_TOOLS = "bash,edit";
+  publishCodePreviewToolsEnvironment("bash,edit");
   setCodePreviewSettings({
     ...defaultCodePreviewSettings,
     toolCallBackground: "off",
@@ -189,7 +191,7 @@ test("registered renderers can use a self shell when tool backgrounds are disabl
 });
 
 test("border mode puts hidden output expand hints in the bottom-right border and timing in the top-right border", () => {
-  process.env.CODE_PREVIEW_TOOLS = "bash";
+  publishCodePreviewToolsEnvironment("bash");
   setCodePreviewSettings({
     ...defaultCodePreviewSettings,
     toolCallBackground: "border",
@@ -234,7 +236,7 @@ test("border mode puts hidden output expand hints in the bottom-right border and
 });
 
 test("border mode wraps tool call and result in a status-colored border-only shell", () => {
-  process.env.CODE_PREVIEW_TOOLS = "bash";
+  publishCodePreviewToolsEnvironment("bash");
   setCodePreviewSettings({
     ...defaultCodePreviewSettings,
     toolCallBackground: "border",

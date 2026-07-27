@@ -8,7 +8,8 @@
 // @effect-diagnostics effect/globalDate:off
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { defaultCodePreviewSettings, setCodePreviewSettings } from "../../../src/settings/index";
+import { defaultCodePreviewSettings } from "../../../src/config/defaults";
+import { setCodePreviewSettings } from "../../../src/config/state";
 import {
   cloneCodePreviewSettingsForTest,
   renderComponent,
@@ -18,13 +19,14 @@ import {
 import {
   findRenderer,
   preserveCodePreviewToolsEnv,
+  publishCodePreviewToolsEnvironment,
   registerRenderers,
 } from "../../../src/tools/renderers/testing";
 
 preserveCodePreviewToolsEnv();
 
 test("registered read renderer hides successful text content until expanded", () => {
-  process.env.CODE_PREVIEW_TOOLS = "read";
+  publishCodePreviewToolsEnvironment("read");
   const previousSettings = cloneCodePreviewSettingsForTest();
   setCodePreviewSettings({ ...defaultCodePreviewSettings, readContentPreview: false });
   try {
@@ -66,7 +68,7 @@ test("registered read renderer hides successful text content until expanded", ()
 });
 
 test("registered read renderer distinguishes blank-only files from empty files", () => {
-  process.env.CODE_PREVIEW_TOOLS = "read";
+  publishCodePreviewToolsEnvironment("read");
   const read = findRenderer(registerRenderers(), "read");
   assert.ok(read.renderResult);
 
@@ -86,7 +88,7 @@ test("registered read renderer distinguishes blank-only files from empty files",
 });
 
 test("registered read renderer leaves image rendering to pi", () => {
-  process.env.CODE_PREVIEW_TOOLS = "read";
+  publishCodePreviewToolsEnvironment("read");
   const read = findRenderer(registerRenderers(), "read");
   assert.ok(read.renderResult);
   const rendered = renderComponent(
@@ -107,7 +109,7 @@ test("registered read renderer leaves image rendering to pi", () => {
 });
 
 test("registered read renderer does not classify successful Error-prefixed content as failures", () => {
-  process.env.CODE_PREVIEW_TOOLS = "read";
+  publishCodePreviewToolsEnvironment("read");
   const read = findRenderer(registerRenderers(), "read");
   assert.ok(read.renderResult);
 
@@ -131,7 +133,7 @@ test("registered read renderer does not classify successful Error-prefixed conte
 });
 
 test("registered read renderer separates continuation notices from file content", () => {
-  process.env.CODE_PREVIEW_TOOLS = "read";
+  publishCodePreviewToolsEnvironment("read");
   const read = findRenderer(registerRenderers(), "read");
   assert.ok(read.renderResult);
 

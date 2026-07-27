@@ -16,9 +16,9 @@ import * as NodePath from "@effect/platform-node/NodePath";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { test } from "vitest";
+import { defaultCodePreviewPerformanceConfig } from "../../src/config/env";
 import {
   getWriteDiffSkipReason,
-  MAX_WRITE_DIFF_BYTES,
   readExistingFileForPreviewEffect,
   shouldSkipWriteDiffComplexity,
 } from "../../src/write/diff";
@@ -65,7 +65,11 @@ test("readExistingFileForPreview returns bounded previous content", async () => 
       },
     );
 
-    await writeFile(join(dir, "large.txt"), "x".repeat(MAX_WRITE_DIFF_BYTES + 1), "utf8");
+    await writeFile(
+      join(dir, "large.txt"),
+      "x".repeat(defaultCodePreviewPerformanceConfig.maxWriteDiffBytes + 1),
+      "utf8",
+    );
     const skipped = await Effect.runPromise(
       readExistingFileForPreviewEffect("large.txt", dir, "after").pipe(
         Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),

@@ -8,11 +8,8 @@
 // @effect-diagnostics effect/globalDate:off
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import {
-  cloneCodePreviewSettings,
-  codePreviewSettings,
-  type CodePreviewSettings,
-} from "../settings/index";
+import { type CodePreviewSettings } from "../config/schema";
+import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
 export { stripAnsi } from "../shared/terminal-text";
 
 export function renderComponent(component: Component, width = 100): string {

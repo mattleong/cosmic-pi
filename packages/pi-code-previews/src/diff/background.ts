@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { codePreviewSettings } from "../settings/index";
+import { codePreviewSettings } from "../config/state";
 
 export type DiffLineKind = "add" | "remove";
 export type DiffBackgroundResolver = (kind: DiffLineKind) => string | undefined;

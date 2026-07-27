@@ -108,9 +108,11 @@ src/
   platform/             # Node, HTTP, documents, files, process coordination
   config/               # scoped store, tolerant fields
   testing/              # shared test layers/probes
+  host-session.ts        # pure Pi host session capture helpers
   projection.ts
   security.ts
   subscription-format.ts
+  usage-projection.ts    # shared usage eligibility transitions
 ```
 
 ### PR layout checklist

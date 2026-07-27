@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Box, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, test } from "vitest";
-import { codePreviewSettings, setCodePreviewSettings } from "../../src/settings/index";
+import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { renderComponent, stripAnsi, testTheme } from "../../src/testing/render";
 import {
   FullWidthDiffText,

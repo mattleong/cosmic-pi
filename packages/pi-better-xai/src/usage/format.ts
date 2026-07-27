@@ -1,4 +1,3 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -8,17 +7,12 @@ import {
   clampPercent,
   formatCompactReset,
   formatPercent,
-  formatResetCountdown,
   formatWindowedUsageLine,
   JsonHttpClient,
   remainingResetSeconds,
   type JsonHttpResponseSchema,
 } from "pi-cosmic-core";
-import { getXaiCredentials } from "../auth/auth.ts";
-import {
-  provideModelRegistryAuth,
-  type WithoutModelRegistry,
-} from "../boundary/model-registry-auth.ts";
+import { getXaiCredentials, type XaiCredentialsWithSource } from "../auth/auth.ts";
 
 export const BILLING_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 export const MONTHLY_BILLING_URL = `${BILLING_BASE_URL}/billing`;
@@ -85,8 +79,6 @@ function parseIsoToSecondsFromNow(value: string | undefined, now: number): numbe
   if (Option.isNone(parsed)) return null;
   return Math.max(0, (DateTime.toEpochMillis(parsed.value) - now) / 1000);
 }
-
-export { formatResetCountdown };
 
 export function parseMonthlyBilling(
   payload: unknown,
@@ -161,8 +153,6 @@ export function parseUsageSnapshot(
   };
 }
 
-export { formatPercent };
-
 export function formatUsageSnapshot(
   snapshot: UsageSnapshot,
   options: { readonly showResetTimes: boolean },
@@ -235,6 +225,18 @@ const fetchBilling = Effect.fn("XaiUsage.fetchBilling")(function* <A, R>(
   });
 });
 
+/**
+ * Usage snapshot plus the redacted credential metadata resolved for the request.
+ *
+ * The metadata is carried out of the single credential resolution so callers never re-read the
+ * auth file: registry-only credentials must not be reported as missing auth.
+ */
+export interface XaiUsageResult {
+  readonly snapshot: UsageSnapshot;
+  readonly credentialSource: XaiCredentialsWithSource["source"];
+  readonly teamId?: string;
+}
+
 const requestXaiUsageEffect = Effect.fn("XaiUsage.requestXaiUsage")(function* (authPath: string) {
   const credentials = yield* getXaiCredentials(authPath);
   if (!credentials) return undefined;
@@ -268,15 +270,11 @@ const requestXaiUsageEffect = Effect.fn("XaiUsage.requestXaiUsage")(function* (a
   const decodedMonthly = monthly.body;
   const decodedWeekly = weekly?._tag === "Accepted" ? weekly.body : undefined;
   const now = yield* Clock.currentTimeMillis;
-  return parseUsageSnapshot(decodedMonthly, decodedWeekly, now);
+  return {
+    snapshot: parseUsageSnapshot(decodedMonthly, decodedWeekly, now),
+    credentialSource: credentials.source,
+    ...(credentials.teamId ? { teamId: credentials.teamId } : {}),
+  } satisfies XaiUsageResult;
 });
 
-export function requestXaiUsage(authPath: string): ReturnType<typeof requestXaiUsageEffect>;
-export function requestXaiUsage(
-  authPath: string,
-  ctx: Pick<ExtensionContext, "modelRegistry">,
-): WithoutModelRegistry<ReturnType<typeof requestXaiUsageEffect>>;
-export function requestXaiUsage(authPath: string, ctx?: Pick<ExtensionContext, "modelRegistry">) {
-  const effect = requestXaiUsageEffect(authPath);
-  return ctx ? provideModelRegistryAuth(effect, ctx) : effect;
-}
+export const requestXaiUsage = requestXaiUsageEffect;

@@ -16,7 +16,7 @@ import {
   ShikiBoundaryError,
   type ShikiHighlighter,
 } from "../../src/boundary/shiki";
-import { codePreviewSettings, setCodePreviewSettings } from "../../src/settings/index";
+import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { disposeShikiEffect, getShikiStatus, initializeShikiEffect } from "../../src/syntax/shiki";
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
 

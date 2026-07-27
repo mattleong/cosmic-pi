@@ -140,36 +140,6 @@ function trimRecords(records: AdvisorFindingRecord[]): AdvisorFindingRecord[] {
   );
   return records.filter((record) => !evicted.has(record.id));
 }
-/** Compatibility facade for external callers; application state uses reducers above. */
-export class AdvisorFindingLifecycle {
-  #state = emptyAdvisorFindingLifecycle();
-  reconcile(
-    findings: readonly AdvisorFinding[],
-    options: { scope: string; completedTurn: number; complete: boolean },
-  ): AdvisorFinding[] {
-    const result = reconcileAdvisorFindings(this.#state, findings, options);
-    this.#state = result.state;
-    return result.findings;
-  }
-  acknowledge(ids: readonly string[]): void {
-    this.#state = acknowledgeAdvisorFindings(this.#state, ids);
-  }
-  supersede(ids: readonly string[]): void {
-    this.#state = supersedeAdvisorFindings(this.#state, ids);
-  }
-  snapshot(): AdvisorFindingRecord[] {
-    return this.#state.records.map((record) => ({ ...record }));
-  }
-  restore(records: readonly AdvisorFindingRecord[] | undefined): void {
-    this.#state = restoreAdvisorFindingLifecycle(records);
-  }
-  counts(): Record<AdvisorFindingStatus, number> {
-    return advisorFindingLifecycleCounts(this.#state);
-  }
-  reset(): void {
-    this.#state = emptyAdvisorFindingLifecycle();
-  }
-}
 export function isValidAdvisorFindingRecord(value: unknown): value is AdvisorFindingRecord {
   if (!isRecord(value)) return false;
   return (

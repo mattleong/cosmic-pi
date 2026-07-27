@@ -32,7 +32,12 @@ import {
   queuePendingCompletion,
 } from "./completion.ts";
 import { makeRunControls } from "./control.ts";
-import { childSystemPrompt, peerNoticeText, taskPrompt } from "./coordination.ts";
+import {
+  childSystemPrompt,
+  peerNoticeText,
+  taskPrompt,
+  validateParentMessage,
+} from "./coordination.ts";
 import { makeRunEventHandler } from "./events.ts";
 import type { RunRecord } from "./internal.ts";
 import { makeRunProcessLifecycle } from "./process-lifecycle.ts";
@@ -40,7 +45,6 @@ import {
   COMPLETION_RETRY_INITIAL_MILLIS,
   COMPLETION_RETRY_MAX_MILLIS,
   MAX_CONCURRENT_RUNS,
-  MAX_PARENT_MESSAGE_CHARS,
   MAX_RETAINED_RUNS,
 } from "./limits.ts";
 import {
@@ -72,7 +76,6 @@ import {
   sanitizeName,
   snapshotView,
 } from "./state.ts";
-import { appendTranscript } from "./transcript.ts";
 
 const CLAUDE_RATE_LIMIT_RESULT_GRACE = "2 seconds";
 
@@ -82,21 +85,6 @@ const ownsProcessSlot = (record: RunRecord): boolean =>
 const ownsWriterSlot = (record: RunRecord): boolean =>
   record.view.writeIntent === "writer" &&
   (record.cleanupPending || isActiveRunState(record.view.state));
-
-const validateParentMessage = (
-  message: string,
-  emptyMessage: string,
-): Effect.Effect<string, InvalidSubagentRequestError> => {
-  const normalized = message.trim();
-  if (!normalized) return Effect.fail(new InvalidSubagentRequestError({ message: emptyMessage }));
-  if (normalized.length > MAX_PARENT_MESSAGE_CHARS)
-    return Effect.fail(
-      new InvalidSubagentRequestError({
-        message: `Subagent message exceeds ${MAX_PARENT_MESSAGE_CHARS} characters.`,
-      }),
-    );
-  return Effect.succeed(normalized);
-};
 
 export type SubagentNotificationCallback =
   | ((notification: SubagentNotification) => SubagentNotificationDelivery | undefined)
@@ -127,12 +115,12 @@ export interface SubagentServiceShape {
     until: SubagentAwaitUntil,
     onUpdate?: (runs: ReadonlyArray<SubagentRunView>) => void,
   ) => Effect.Effect<ReadonlyArray<SubagentRunView>, SubagentError>;
-  readonly awaitTerminalObserved?: (
+  readonly awaitTerminalObserved: (
     ids: ReadonlyArray<string>,
     until: SubagentAwaitUntil,
     onUpdate?: (runs: ReadonlyArray<SubagentRunView>) => void,
   ) => Effect.Effect<ReadonlyArray<SubagentRunObservation>, SubagentError>;
-  readonly withAwaitTerminalObservations?: <A, E, R>(
+  readonly withAwaitTerminalObservations: <A, E, R>(
     ids: ReadonlyArray<string>,
     until: SubagentAwaitUntil,
     onUpdate: ((runs: ReadonlyArray<SubagentRunView>) => void) | undefined,
@@ -140,14 +128,14 @@ export interface SubagentServiceShape {
   ) => Effect.Effect<A, SubagentError | E, R>;
   readonly list: Effect.Effect<ReadonlyArray<SubagentRunView>>;
   readonly status: (id: string) => Effect.Effect<SubagentRunView, SubagentNotFoundError>;
-  readonly observeStatus?: (
+  readonly observeStatus: (
     id: string,
   ) => Effect.Effect<SubagentRunObservation, SubagentNotFoundError>;
-  readonly withStatusObservations?: <A, E, R>(
+  readonly withStatusObservations: <A, E, R>(
     ids: ReadonlyArray<string>,
     use: (observations: ReadonlyArray<SubagentRunObservation>) => Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, SubagentNotFoundError | E, R>;
-  readonly consumeCompletions?: (
+  readonly consumeCompletions: (
     receipts: ReadonlyArray<SubagentCompletionReceipt>,
   ) => Effect.Effect<void>;
   readonly send: (id: string, message: string) => Effect.Effect<SubagentRunView, SubagentError>;
@@ -577,10 +565,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             ...record.view,
             warning: message,
             lastActivityAt: now,
-            transcript:
-              notifyParent && !duplicate
-                ? appendTranscript(record.view.transcript, `warning: ${message}`)
-                : record.view.transcript,
             sessionEvents:
               notifyParent && !duplicate
                 ? appendNoticeSessionEvent(record.view.sessionEvents, "warning", message, now)
@@ -724,7 +708,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               effort: request.effort,
               startedAt: now,
               lastActivityAt: now,
-              transcript: [],
               sessionEvents: [],
               usage: emptyUsage(),
             };
@@ -880,7 +863,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       : {}),
   });
 
-  const consumeCompletions: NonNullable<SubagentServiceShape["consumeCompletions"]> = (receipts) =>
+  const consumeCompletions: SubagentServiceShape["consumeCompletions"] = (receipts) =>
     withLock(
       Effect.sync(() => {
         for (const receipt of receipts) {
@@ -976,9 +959,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       );
     return waitLoop();
   };
-  const withAwaitTerminalObservations: NonNullable<
-    SubagentServiceShape["withAwaitTerminalObservations"]
-  > = (ids, until, onUpdate, use) => {
+  const withAwaitTerminalObservations: SubagentServiceShape["withAwaitTerminalObservations"] = (
+    ids,
+    until,
+    onUpdate,
+    use,
+  ) => {
     if (ids.length === 0)
       return Effect.fail(
         new InvalidSubagentRequestError({
@@ -992,15 +978,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       releaseCompletionClaims,
     );
   };
-  const awaitTerminalObserved: NonNullable<SubagentServiceShape["awaitTerminalObserved"]> = (
+  const awaitTerminalObserved: SubagentServiceShape["awaitTerminalObserved"] = (
     ids,
     until,
     onUpdate,
   ) => withAwaitTerminalObservations(ids, until, onUpdate, Effect.succeed);
-  const withStatusObservations: NonNullable<SubagentServiceShape["withStatusObservations"]> = (
-    ids,
-    use,
-  ) =>
+  const withStatusObservations: SubagentServiceShape["withStatusObservations"] = (ids, use) =>
     Effect.acquireUseRelease(
       acquireCompletionClaims(ids, false),
       (claim) => use(claim.selected.map(observeRecord)),
@@ -1022,7 +1005,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const list = withLock(
     Effect.sync(() => sortRuns([...records.values()].map((record) => snapshotView(record.view)))),
   );
-  const observeStatus: NonNullable<SubagentServiceShape["observeStatus"]> = (id) =>
+  const observeStatus: SubagentServiceShape["observeStatus"] = (id) =>
     withLock(Effect.map(requireRecord(id), observeRecord));
   const status: SubagentServiceShape["status"] = (id) =>
     observeStatus(id).pipe(
@@ -1181,10 +1164,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                     error: undefined,
                     finalText: undefined,
                     lastActivityAt: now,
-                    transcript: appendTranscript(
-                      record.view.transcript,
-                      `parent resumed: ${prompt}`,
-                    ),
                     sessionEvents: appendNoticeSessionEvent(
                       record.view.sessionEvents,
                       "parent",

@@ -9,7 +9,8 @@ import * as Layer from "effect/Layer";
 import { makePiManagedRuntime } from "pi-cosmic-core";
 import { afterEach, test } from "vitest";
 import { CodePreviewSession } from "../../src/application/service";
-import { defaultCodePreviewSettings, setCodePreviewSettings } from "../../src/settings/index";
+import { defaultCodePreviewSettings } from "../../src/config/defaults";
+import { setCodePreviewSettings } from "../../src/config/state";
 import {
   codePreviewExtensionTesting,
   codePreviewsWithDependencies,

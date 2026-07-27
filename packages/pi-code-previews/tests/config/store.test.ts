@@ -12,23 +12,39 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "vitest";
 import {
-  codePreviewSettings,
-  defaultCodePreviewSettings,
-  setCodePreviewSettings,
-} from "../../src/settings/index";
+  clearCodePreviewSessionCapability,
+  installCodePreviewSessionCapability,
+} from "../../src/application/capability";
+import { defaultCodePreviewSettings } from "../../src/config/defaults";
+import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { loadCodePreviewSettings } from "../../src/settings/bootstrap";
 import {
   cleanupTestTempDirectories,
   createTestTempDirectory,
 } from "../../src/testing/temp-directories";
+import * as Effect from "effect/Effect";
+import { runOneShotSettingsEffect } from "../../src/boundary/settings-one-shot";
 import {
+  CodePreviewSettingsService,
   extractCodePreviewSettings,
   getSettingsPath,
-  getSettingsSaveContext,
-  loadSettingsFromDisk,
   queueSettingsSave,
-  saveSettingsToDisk,
+  type LoadSettingsOptions,
 } from "../../src/config/store";
+import type { CodePreviewSettings } from "../../src/config/schema";
+
+/** Exercises the real settings service through its named one-shot boundary adapter. */
+const loadSettingsFromDisk = (options: LoadSettingsOptions = {}) =>
+  runOneShotSettingsEffect(
+    CodePreviewSettingsService.use((service) => service.loadFromDisk(options)),
+  );
+
+const saveSettingsToDisk = (settings: CodePreviewSettings, options: LoadSettingsOptions = {}) =>
+  runOneShotSettingsEffect(
+    CodePreviewSettingsService.use((service) =>
+      service.loadFromDisk(options).pipe(Effect.andThen(service.save(settings))),
+    ),
+  );
 
 const originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalHome = process.env.HOME;
@@ -118,7 +134,7 @@ test("saving preserves unknown root and nested settings fields", async () => {
   });
   const loaded = await loadSettingsFromDisk();
   assert.ok(loaded);
-  await saveSettingsToDisk({ ...loaded, readCollapsedLines: 20 }, getSettingsSaveContext());
+  await saveSettingsToDisk({ ...loaded, readCollapsedLines: 20 });
   const saved = JSON.parse(await readFile(join(root, "code-previews.json"), "utf8"));
   assert.equal(saved.owner, "keep");
   assert.equal(saved.codePreview.readCollapsedLines, 20);
@@ -202,13 +218,39 @@ test("saving a global change does not copy project defaults into other projects"
 
   const first = await loadSettingsFromDisk({ projectCwd: firstProject, projectTrusted: true });
   assert.ok(first);
-  await queueSettingsSave({ ...first, shikiTheme: "github-dark" });
+  await saveSettingsToDisk(
+    { ...first, shikiTheme: "github-dark" },
+    { projectCwd: firstProject, projectTrusted: true },
+  );
 
   const saved = JSON.parse(await readFile(join(agentDir, "code-previews.json"), "utf8"));
   assert.deepEqual(saved, { shikiTheme: "github-dark" });
   const second = await loadSettingsFromDisk({ projectCwd: secondProject, projectTrusted: true });
   assert.equal(second?.readCollapsedLines, 22);
   assert.equal(second?.shikiTheme, "github-dark");
+});
+
+test("idle queued saves retain trusted project baselines", async () => {
+  const root = await createTestTempDirectory("pi-code-previews-idle-project-save-");
+  const home = join(root, "home");
+  const agentDir = join(root, "agent");
+  const project = join(root, "project");
+  process.env.HOME = home;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+
+  await writeJson(join(project, ".pi", "settings.json"), {
+    codePreview: { readCollapsedLines: 77 },
+  });
+  const loaded = await loadSettingsFromDisk({ projectCwd: project, projectTrusted: true });
+  assert.ok(loaded);
+
+  await queueSettingsSave(
+    { ...loaded, shikiTheme: "github-dark" },
+    { projectCwd: project, projectTrusted: true },
+  );
+
+  const saved = JSON.parse(await readFile(join(agentDir, "code-previews.json"), "utf8"));
+  assert.deepEqual(saved, { shikiTheme: "github-dark" });
 });
 
 test("saving an unrelated change preserves existing explicit global overrides", async () => {
@@ -230,7 +272,10 @@ test("saving an unrelated change preserves existing explicit global overrides", 
 
   const first = await loadSettingsFromDisk({ projectCwd: firstProject, projectTrusted: true });
   assert.ok(first);
-  await queueSettingsSave({ ...first, shikiTheme: "github-dark" });
+  await saveSettingsToDisk(
+    { ...first, shikiTheme: "github-dark" },
+    { projectCwd: firstProject, projectTrusted: true },
+  );
 
   const saved = JSON.parse(await readFile(join(agentDir, "code-previews.json"), "utf8"));
   assert.deepEqual(saved, { readCollapsedLines: 77, shikiTheme: "github-dark" });
@@ -307,6 +352,31 @@ test("loadCodePreviewSettings only reads project settings when the project is tr
 
   const trusted = await loadCodePreviewSettings(project, true);
   assert.equal(trusted.readCollapsedLines, 99);
+});
+
+test("loadCodePreviewSettings falls back when a replaced session capability rejects", async () => {
+  const root = await createTestTempDirectory("pi-code-previews-replaced-bootstrap-");
+  const home = join(root, "home");
+  const agentDir = join(root, "agent");
+  const project = join(root, "project");
+  process.env.HOME = home;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  await writeJson(join(project, ".pi", "settings.json"), {
+    codePreview: { readCollapsedLines: 31 },
+  });
+
+  const token = 991;
+  installCodePreviewSessionCapability({
+    token,
+    run: () => Promise.reject(new Error("session replaced")),
+    fork: () => undefined,
+  });
+  try {
+    const loaded = await loadCodePreviewSettings(project, true);
+    assert.equal(loaded.readCollapsedLines, 31);
+  } finally {
+    clearCodePreviewSessionCapability(token);
+  }
 });
 
 test("loadCodePreviewSettings resets to defaults when no settings files exist", async () => {

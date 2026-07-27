@@ -7,7 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { advisorControllerLayer } from "../src/application/controller.ts";
-import { _advisorControllerTest } from "../src/application/controller-helpers.ts";
+import { advisorRuntimeEffectsFromDriver } from "../src/application/controller-helpers.ts";
 import {
   AdvisorController,
   type AdvisorControllerApplicationOptions,
@@ -70,7 +70,7 @@ describe("AdvisorController", () => {
 
   it.effect("keeps scoped finalization running when dependency driver cleanup rejects", () => {
     const events: string[] = [];
-    const runtime = _advisorControllerTest.runtimeEffectsFromDriver({
+    const runtime = advisorRuntimeEffectsFromDriver({
       activeToolNames: [],
       start: () => Promise.resolve(),
       checkpoint: () => Promise.reject(new Error("unused")),

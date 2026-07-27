@@ -25,7 +25,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
-import { piToolsForWriteIntent } from "../run/coordination.ts";
+import {
+  ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
+  piToolsForWriteIntent,
+} from "../run/coordination.ts";
 import { SubagentProcessError } from "../run/errors.ts";
 import { acquireClaudeChild } from "./claude-process.ts";
 import { terminateProcessTree } from "./process-tree.ts";
@@ -256,7 +259,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
     "--tools",
     [...new Set([...activeTools, "contact_parent"])].join(","),
     "--exclude-tools",
-    "subagent,subagent_wait,subagent_supervisor,workflow,workflow_control",
+    ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
     "--append-system-prompt",
     promptPath,
     "--name",
@@ -493,8 +496,6 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
     }),
   );
 });
-
-export const acquirePiChild = acquireChild;
 
 export class ChildProcess extends Context.Service<ChildProcess, ChildProcessShape>()(
   "pi-subagents/boundary/child-process/ChildProcess",

@@ -36,20 +36,3 @@ export const commitAdvisorPerspective = (
     fingerprints: [...state.fingerprints, fingerprint],
   };
 };
-
-/** Compatibility facade. New application code stores the immutable state directly. */
-export class AdvisorPerspectiveBudget {
-  #state = emptyAdvisorPerspectiveBudget();
-  select(suggestions: readonly AdvisorSuggestion[]): AdvisorSuggestion | undefined {
-    return selectAdvisorPerspective(this.#state, suggestions);
-  }
-  commit(suggestion: AdvisorSuggestion): void {
-    this.#state = commitAdvisorPerspective(this.#state, suggestion);
-  }
-  reset(): void {
-    this.#state = emptyAdvisorPerspectiveBudget();
-  }
-  get count(): number {
-    return this.#state.delivered;
-  }
-}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "vitest";
 import { renderSyntaxHighlightedDiff } from "../../../src/diff/index";
-import { codePreviewSettings, setCodePreviewSettings } from "../../../src/settings/index";
+import { codePreviewSettings, setCodePreviewSettings } from "../../../src/config/state";
 import { testTheme } from "../../../src/testing/render";
 import { renderedWordEmphasisSpans } from "../../../src/testing/rendered-word-emphasis";
 import { wordEmphasisGoldenCases } from "../../../src/diff/word/fixtures/emphasis-golden";

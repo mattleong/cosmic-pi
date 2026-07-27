@@ -15,7 +15,7 @@ import {
   wordEmphasisAccuracyCases,
   type WordEmphasisAccuracyCase,
 } from "../diff/word/fixtures/emphasis-accuracy";
-import { codePreviewSettings, setCodePreviewSettings } from "../settings/index";
+import { codePreviewSettings, setCodePreviewSettings } from "../config/state";
 import { initializeShiki } from "../syntax/shiki";
 import { testTheme } from "./render";
 import { parseRenderedWordEmphasis } from "./rendered-word-emphasis";

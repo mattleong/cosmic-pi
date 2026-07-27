@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { _advisorRuntimeTest } from "../src/runtime/runtime.ts";
+import { buildCheckpointPrompt } from "../src/runtime/prompts.ts";
 import {
   ADVISOR_SYSTEM_PROMPT,
   MAX_ADVISOR_EVIDENCE_CHARS,
@@ -14,13 +14,14 @@ import {
   buildRevisionSteer,
   formatAdvisorReview,
   parseAdvisorReview,
+  parseAdvisorReviewValue,
   sanitizeAdvisorReview,
   type AdvisorReview,
   type AdvisorReviewFocus,
 } from "../src/review/index.ts";
 
 function checkpointPrompt(focus: AdvisorReviewFocus, observations = "observations"): string {
-  return _advisorRuntimeTest.buildCheckpointPrompt({
+  return buildCheckpointPrompt({
     checkpointId: "cp-1",
     processedThrough: 0,
     observations,
@@ -233,6 +234,52 @@ describe("parseAdvisorReview", () => {
     ],
   ])("rejects %s", (_label, raw) => {
     expect(() => parseAdvisorReview(raw)).toThrow(AdvisorReviewParseError);
+  });
+
+  test.each([
+    [
+      "an extra root field",
+      JSON.stringify({ verdict: "pass", summary: "Fine", findings: [], confidence: 1 }),
+      "Advisor review must contain exactly verdict, summary, suggestions, and findings.",
+    ],
+    [
+      "an invalid verdict",
+      JSON.stringify({ verdict: "maybe", summary: "Fine", findings: [] }),
+      'Advisor verdict must be "pass", "suggest", or "revise".',
+    ],
+    [
+      "an empty summary",
+      JSON.stringify({ verdict: "pass", summary: " ", findings: [] }),
+      "Advisor summary must be a non-empty string.",
+    ],
+    ["malformed JSON", "{", "Advisor returned malformed JSON."],
+    ["an empty response", "   ", "Advisor returned an empty response."],
+  ])("keeps the granular diagnostic for %s", (_label, raw, message) => {
+    expect(() => parseAdvisorReview(raw)).toThrow(message);
+  });
+
+  test("fails closed when manual normalization accepts a wire-schema rejection", () => {
+    const value = { verdict: "pass", summary: "Fine", suggestions: null, findings: [] };
+    expect(() => parseAdvisorReview(JSON.stringify(value))).toThrow(
+      "Advisor review failed schema validation.",
+    );
+    expect(() => parseAdvisorReviewValue(value)).toThrow(
+      "Advisor review failed schema validation.",
+    );
+  });
+
+  test("applies the same diagnostics to already-decoded review values", () => {
+    expect(parseAdvisorReviewValue(JSON.parse(JSON.stringify(perspective)))).toEqual(perspective);
+    expect(() =>
+      parseAdvisorReviewValue({ verdict: "pass", summary: "Fine", findings: [], extra: 1 }),
+    ).toThrow("Advisor review must contain exactly verdict, summary, suggestions, and findings.");
+    expect(() =>
+      parseAdvisorReviewValue({
+        verdict: "pass",
+        summary: "x".repeat(MAX_ADVISOR_REVIEW_CHARS),
+        findings: [],
+      }),
+    ).toThrow("maximum response size");
   });
 });
 

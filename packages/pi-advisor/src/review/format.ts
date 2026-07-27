@@ -1,4 +1,4 @@
-import { redactSensitiveText } from "./observation-protocol.ts";
+import { redactSensitiveText } from "../domain/redaction.ts";
 import type { AdvisorReview } from "./schema.ts";
 
 export function formatAdvisorReview(review: AdvisorReview): string {

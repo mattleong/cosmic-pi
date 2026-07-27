@@ -65,10 +65,7 @@ export class FooterRegistryService extends Context.Service<
   FooterRegistryService,
   FooterRegistryServiceShape
 >()("pi-cosmic-ui/footer/registry/FooterRegistryService") {
-  static layer(options: {
-    readonly publish: (snapshot: FooterRegistrySnapshot) => void;
-    readonly bridge: FooterRegistryBridge;
-  }) {
+  static layer(options: { readonly bridge: FooterRegistryBridge }) {
     return Layer.effect(
       this,
       Effect.gen(function* () {
@@ -82,7 +79,6 @@ export class FooterRegistryService extends Context.Service<
         const publish = (next: RegistryState) => {
           published = snapshotOf(next);
           options.bridge.snapshot = published;
-          options.publish(published);
         };
         const renderNow = () => {
           if (renderSuppressionDepth > 0) return;
@@ -306,7 +302,6 @@ export class FooterRegistryService extends Context.Service<
           Effect.sync(() => {
             options.bridge.snapshot = published;
             options.bridge.requestRenderNow = renderNow;
-            options.publish(published);
           }),
           () =>
             clear.pipe(
@@ -315,7 +310,6 @@ export class FooterRegistryService extends Context.Service<
                   const empty = emptyFooterRegistrySnapshot();
                   options.bridge.snapshot = empty;
                   options.bridge.requestRenderNow = () => undefined;
-                  options.publish(empty);
                 }),
               ),
             ),

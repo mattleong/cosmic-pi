@@ -10,7 +10,7 @@ import {
   normalizeCosmicFooterRemoveEvent,
   normalizeCosmicFooterUpsertEvent,
   normalizeCosmicUiHostQuery,
-} from "../src/protocol.ts";
+} from "../src/protocol/protocol.ts";
 
 function event(contribution: Record<string, unknown>) {
   return { version: COSMIC_UI_PROTOCOL_VERSION, owner: "test-owner", contribution };

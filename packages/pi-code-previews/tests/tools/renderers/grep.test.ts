@@ -12,13 +12,14 @@ import { renderComponent, stripAnsi, testTheme } from "../../../src/testing/rend
 import {
   findRenderer,
   preserveCodePreviewToolsEnv,
+  publishCodePreviewToolsEnvironment,
   registerRenderers,
 } from "../../../src/tools/renderers/testing";
 
 preserveCodePreviewToolsEnv();
 
 test("registered grep renderer highlights literal matches only", () => {
-  process.env.CODE_PREVIEW_TOOLS = "grep";
+  publishCodePreviewToolsEnvironment("grep");
   const grep = findRenderer(registerRenderers(), "grep");
   assert.ok(grep.renderResult);
   const literalRendered = renderComponent(
@@ -53,7 +54,7 @@ test("registered grep renderer highlights literal matches only", () => {
 });
 
 test("registered grep renderer escapes terminal control characters in raw output", () => {
-  process.env.CODE_PREVIEW_TOOLS = "grep";
+  publishCodePreviewToolsEnvironment("grep");
   const grep = findRenderer(registerRenderers(), "grep");
   assert.ok(grep.renderResult);
 
@@ -70,7 +71,7 @@ test("registered grep renderer escapes terminal control characters in raw output
 });
 
 test("registered grep renderer does not classify successful Error-prefixed content as failures", () => {
-  process.env.CODE_PREVIEW_TOOLS = "grep";
+  publishCodePreviewToolsEnvironment("grep");
   const grep = findRenderer(registerRenderers(), "grep");
   assert.ok(grep.renderResult);
 
@@ -89,7 +90,7 @@ test("registered grep renderer does not classify successful Error-prefixed conte
 });
 
 test("registered grep renderer preserves whitespace-sensitive output", () => {
-  process.env.CODE_PREVIEW_TOOLS = "grep";
+  publishCodePreviewToolsEnvironment("grep");
   const grep = findRenderer(registerRenderers(), "grep");
   assert.ok(grep.renderResult);
 

@@ -4,7 +4,7 @@ import * as MutableRef from "effect/MutableRef";
 import { AgentDirectory, nodePlatformLayer } from "pi-cosmic-core";
 import { HostCallbackBoundary, type HostCallbackBoundaryShape } from "./boundary/host-callback.ts";
 import { WorkingMessageHost } from "./boundary/host-working-message.ts";
-import { CosmicUiConfigStore } from "./config/service.ts";
+import { CosmicUiConfigStore } from "./config/store.ts";
 import type { FooterTotals } from "./footer/component.ts";
 import { FooterRegistryService, type FooterRegistryBridge } from "./footer/registry.ts";
 import { CosmicUiService, type CosmicUiProjection } from "./protocol/service.ts";
@@ -52,12 +52,9 @@ export const makeCosmicUiApplicationLayer = (
     projectTrusted,
     onChange: options.requestRender,
   }).pipe(Layer.provide(Layer.mergeAll(configStore, probe, callbackBoundary)));
-  const registry = FooterRegistryService.layer({
-    bridge: options.bridge,
-    publish: (snapshot) => {
-      options.bridge.snapshot = snapshot;
-    },
-  }).pipe(Layer.provide(callbackBoundary));
+  const registry = FooterRegistryService.layer({ bridge: options.bridge }).pipe(
+    Layer.provide(callbackBoundary),
+  );
   const protocol = FooterProtocolHost.layer({ buffer: options.protocolBuffer }).pipe(
     Layer.provideMerge(registry),
   );

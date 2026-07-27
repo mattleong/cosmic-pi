@@ -15,6 +15,7 @@ import {
   makePiSessionRuntimeSlot,
 } from "pi-cosmic-core";
 import { createCosmicFooterClient } from "pi-cosmic-ui/client";
+import { notifyAtHostBoundary } from "./boundary/host-notifier.ts";
 import type { ResolvedConfig } from "./config/index.ts";
 import { createFooterController } from "./footer/controller.ts";
 import { registerSettingsController } from "./settings/controller.ts";
@@ -44,18 +45,6 @@ export interface BetterXaiExtensionDependencies {
 const defaultDependencies: BetterXaiExtensionDependencies = {
   startupEffect: () => XaiUsageService.use(() => Effect.void),
 };
-
-function notifyAtHostBoundary(
-  ctx: ExtensionContext,
-  message: string,
-  level: "info" | "warning" | "error",
-): void {
-  try {
-    ctx.ui.notify(message, level);
-  } catch {
-    // Promise-level Pi command recovery must never reject because notification failed.
-  }
-}
 
 function requiredConfig(projection: MutableRef.MutableRef<XaiProjection>): ResolvedConfig {
   const config = MutableRef.get(projection).config;
@@ -142,7 +131,6 @@ export function betterXaiWithDependencies(
     config,
     updateFooter,
     formatDebugStatus: (ctx) => formatDebug(projection, ctx),
-    notifyAtHostBoundary,
     captureSignal: captureHostSignal,
     run,
   });

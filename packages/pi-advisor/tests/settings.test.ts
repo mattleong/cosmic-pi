@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { type ResolvedAdvisorConfig, writeRawAdvisorConfig } from "../src/config/options.ts";
+import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
+import { writeRawAdvisorConfig } from "../src/config/store.ts";
 import {
   emptyAdvisorOutcomes,
   type AdvisorSessionMetrics,

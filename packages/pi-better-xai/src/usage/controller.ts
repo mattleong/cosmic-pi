@@ -20,7 +20,6 @@ import {
   type RefreshRequest,
 } from "pi-cosmic-core";
 import { ModelRegistryAuth } from "../boundary/model-registry-auth.ts";
-import { readXaiAuth } from "../auth/auth.ts";
 import {
   decodeSettingUpdate,
   readRawConfig,
@@ -233,16 +232,13 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                   notify: request.notify === true,
                   fetchedAt: now,
                 } as const;
-              const auth = yield* readXaiAuth(authPath).pipe(Effect.result);
               return {
                 _tag: "Success",
                 notify: request.notify === true,
                 fetchedAt: now,
-                snapshot: result.success,
-                authFound: auth._tag === "Success" && auth.success !== undefined,
-                ...(auth._tag === "Success" && auth.success?.teamId
-                  ? { teamId: auth.success.teamId }
-                  : {}),
+                snapshot: result.success.snapshot,
+                authFound: true,
+                ...(result.success.teamId ? { teamId: result.success.teamId } : {}),
               } as const;
             }),
           commit: (value) =>

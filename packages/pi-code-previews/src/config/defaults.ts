@@ -47,42 +47,60 @@ function environmentOption<T extends string>(
     : fallback;
 }
 
+/** Every fallback below is read from `defaultCodePreviewSettings`, never repeated as a literal. */
 export function defaultsFromEnvironment(environment: CodePreviewEnvironment): CodePreviewSettings {
+  const fallback = defaultCodePreviewSettings;
   const value = (name: keyof CodePreviewEnvironment) => environment[name];
-  const boolean = (name: keyof CodePreviewEnvironment, fallback: boolean) =>
-    parseBoolean(value(name)) ?? fallback;
-  const integer = (name: keyof CodePreviewEnvironment, fallback: number) =>
-    parsePositiveInteger(value(name)) ?? fallback;
+  const boolean = <K extends keyof CodePreviewSettings>(
+    name: keyof CodePreviewEnvironment,
+    key: K,
+  ) => parseBoolean(value(name)) ?? (fallback[key] as boolean);
+  const integer = <K extends keyof CodePreviewSettings>(
+    name: keyof CodePreviewEnvironment,
+    key: K,
+  ) => parsePositiveInteger(value(name)) ?? (fallback[key] as number);
   const theme = value("CODE_PREVIEW_THEME");
   const editLines = value("CODE_PREVIEW_EDIT_LINES");
   return {
-    shikiTheme: theme && theme in bundledThemes ? theme : "dark-plus",
+    shikiTheme: theme && theme in bundledThemes ? theme : fallback.shikiTheme,
     diffIntensity: environmentOption(
       value("CODE_PREVIEW_DIFF_INTENSITY"),
       DIFF_BACKGROUND_INTENSITIES,
-      "subtle",
+      fallback.diffIntensity,
     ),
-    wordEmphasis: environmentOption(value("CODE_PREVIEW_WORD_EMPHASIS"), DIFF_WORD_EMPHASES, "all"),
+    wordEmphasis: environmentOption(
+      value("CODE_PREVIEW_WORD_EMPHASIS"),
+      DIFF_WORD_EMPHASES,
+      fallback.wordEmphasis,
+    ),
     toolCallBackground:
-      parseToolCallBackgroundMode(value("CODE_PREVIEW_TOOL_CALL_BACKGROUND")) ?? "on",
-    toolCallTiming: boolean("CODE_PREVIEW_TOOL_CALL_TIMING", true),
-    readCollapsedLines: integer("CODE_PREVIEW_READ_LINES", 10),
-    readContentPreview: boolean("CODE_PREVIEW_READ_CONTENT", true),
-    writeContentPreview: boolean("CODE_PREVIEW_WRITE_CONTENT", true),
-    writeCollapsedLines: integer("CODE_PREVIEW_WRITE_LINES", 10),
-    editDiffPreview: boolean("CODE_PREVIEW_EDIT_DIFF", true),
-    editCollapsedLines: editLines === "all" ? "all" : (parsePositiveInteger(editLines) ?? 160),
-    grepCollapsedLines: integer("CODE_PREVIEW_GREP_LINES", 15),
-    grepResultPreview: boolean("CODE_PREVIEW_GREP_RESULTS", true),
-    findResultPreview: boolean("CODE_PREVIEW_FIND_RESULTS", true),
-    lsResultPreview: boolean("CODE_PREVIEW_LS_RESULTS", true),
-    pathListCollapsedLines: integer("CODE_PREVIEW_PATH_LIST_LINES", 20),
-    readLineNumbers: boolean("CODE_PREVIEW_READ_LINE_NUMBERS", true),
-    bashResultPreview: boolean("CODE_PREVIEW_BASH_RESULTS", true),
-    bashWarnings: boolean("CODE_PREVIEW_BASH_WARNINGS", true),
-    syntaxHighlighting: boolean("CODE_PREVIEW_SYNTAX", true),
-    secretWarnings: boolean("CODE_PREVIEW_SECRET_WARNINGS", true),
-    pathIcons: environmentOption(value("CODE_PREVIEW_PATH_ICONS"), PATH_ICON_MODES, "unicode"),
-    tools: [...ALL_CODE_PREVIEW_TOOLS],
+      parseToolCallBackgroundMode(value("CODE_PREVIEW_TOOL_CALL_BACKGROUND")) ??
+      fallback.toolCallBackground,
+    toolCallTiming: boolean("CODE_PREVIEW_TOOL_CALL_TIMING", "toolCallTiming"),
+    readCollapsedLines: integer("CODE_PREVIEW_READ_LINES", "readCollapsedLines"),
+    readContentPreview: boolean("CODE_PREVIEW_READ_CONTENT", "readContentPreview"),
+    writeContentPreview: boolean("CODE_PREVIEW_WRITE_CONTENT", "writeContentPreview"),
+    writeCollapsedLines: integer("CODE_PREVIEW_WRITE_LINES", "writeCollapsedLines"),
+    editDiffPreview: boolean("CODE_PREVIEW_EDIT_DIFF", "editDiffPreview"),
+    editCollapsedLines:
+      editLines === "all"
+        ? "all"
+        : (parsePositiveInteger(editLines) ?? fallback.editCollapsedLines),
+    grepCollapsedLines: integer("CODE_PREVIEW_GREP_LINES", "grepCollapsedLines"),
+    grepResultPreview: boolean("CODE_PREVIEW_GREP_RESULTS", "grepResultPreview"),
+    findResultPreview: boolean("CODE_PREVIEW_FIND_RESULTS", "findResultPreview"),
+    lsResultPreview: boolean("CODE_PREVIEW_LS_RESULTS", "lsResultPreview"),
+    pathListCollapsedLines: integer("CODE_PREVIEW_PATH_LIST_LINES", "pathListCollapsedLines"),
+    readLineNumbers: boolean("CODE_PREVIEW_READ_LINE_NUMBERS", "readLineNumbers"),
+    bashResultPreview: boolean("CODE_PREVIEW_BASH_RESULTS", "bashResultPreview"),
+    bashWarnings: boolean("CODE_PREVIEW_BASH_WARNINGS", "bashWarnings"),
+    syntaxHighlighting: boolean("CODE_PREVIEW_SYNTAX", "syntaxHighlighting"),
+    secretWarnings: boolean("CODE_PREVIEW_SECRET_WARNINGS", "secretWarnings"),
+    pathIcons: environmentOption(
+      value("CODE_PREVIEW_PATH_ICONS"),
+      PATH_ICON_MODES,
+      fallback.pathIcons,
+    ),
+    tools: [...fallback.tools],
   };
 }

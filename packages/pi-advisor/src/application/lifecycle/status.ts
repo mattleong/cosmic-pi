@@ -5,7 +5,7 @@ import {
   setAdvisorStatusAtHostBoundary,
 } from "../../boundary/host-status.ts";
 import type { ResolvedAdvisorConfig } from "../../config/options.ts";
-import { redactSensitiveText } from "../../review/observation-protocol.ts";
+import { redactSensitiveText } from "../../domain/redaction.ts";
 import type { AdvisorStatusServiceShape } from "../../status/service.ts";
 import {
   STATUS_KEY,

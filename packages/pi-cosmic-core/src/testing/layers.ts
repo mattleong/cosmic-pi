@@ -320,11 +320,6 @@ export const streamingHttpTestLayer = (
   );
 };
 
-export const jsonHttpResponse = (status: number, body: JsonValue): JsonHttpTestResponse => ({
-  status,
-  body,
-});
-
 export const jsonHttpRawResponse = (status: number, rawBody: string): JsonHttpTestResponse => ({
   status,
   rawBody,

@@ -13,10 +13,9 @@ import {
   SubagentNotFoundError,
   UnsupportedSubagentCapabilityError,
 } from "./errors.ts";
-import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
+import { validateParentMessage } from "./coordination.ts";
 import { appendNoticeSessionEvent } from "./session-output.ts";
 import { sanitizeName, snapshotView } from "./state.ts";
-import { appendTranscript } from "./transcript.ts";
 
 export interface RunControlDependencies {
   readonly ownerScope: Scope.Scope;
@@ -41,21 +40,6 @@ export interface RunControlDependencies {
     error?: string,
   ) => Effect.Effect<SubagentRunView>;
 }
-
-const validateParentMessage = (
-  message: string,
-  emptyMessage: string,
-): Effect.Effect<string, InvalidSubagentRequestError> => {
-  const normalized = message.trim();
-  if (!normalized) return Effect.fail(new InvalidSubagentRequestError({ message: emptyMessage }));
-  if (normalized.length > MAX_PARENT_MESSAGE_CHARS)
-    return Effect.fail(
-      new InvalidSubagentRequestError({
-        message: `Subagent message exceeds ${MAX_PARENT_MESSAGE_CHARS} characters.`,
-      }),
-    );
-  return Effect.succeed(normalized);
-};
 
 export function makeRunControls(dependencies: RunControlDependencies) {
   const {
@@ -109,7 +93,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           record.view = {
             ...record.view,
             lastActivityAt: now,
-            transcript: appendTranscript(record.view.transcript, `parent guidance: ${normalized}`),
             sessionEvents: appendNoticeSessionEvent(
               record.view.sessionEvents,
               "parent",
@@ -168,10 +151,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                 claimed.record.view = {
                   ...claimed.record.view,
                   lastActivityAt: now,
-                  transcript: appendTranscript(
-                    claimed.record.view.transcript,
-                    `parent reply: ${normalized}`,
-                  ),
                   sessionEvents: appendNoticeSessionEvent(
                     claimed.record.view.sessionEvents,
                     "parent",

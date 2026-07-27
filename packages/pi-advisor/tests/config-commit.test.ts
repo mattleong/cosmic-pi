@@ -9,11 +9,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { advisorPlatformLayer } from "../src/boundary/executor.ts";
-import {
-  readRawAdvisorConfig,
-  type ResolvedAdvisorConfig,
-  writeAdvisorConfigPatchEffect,
-} from "../src/config/options.ts";
+import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
+import { readRawAdvisorConfig, writeAdvisorConfigPatchEffect } from "../src/config/store.ts";
 
 it.effect("publishes committed config before interruption can observe the renamed document", () =>
   Effect.scoped(

@@ -86,21 +86,6 @@ export type ExtractedImageResult = Omit<
   CodexImageResult,
   "prompt" | "savedPath" | "model" | "action" | "outputFormat"
 >;
-export type ImageGenerationDebug = {
-  authFound: boolean;
-  authSource?: string;
-  accountId?: string;
-  endpoint: string;
-  defaultModel: string;
-  defaultSave: ImageSaveMode;
-  enabled: boolean;
-  lastStatus?: string;
-  lastError?: string;
-};
-export interface ImageState {
-  readonly lastStatus?: string;
-  readonly lastError?: string;
-}
 
 export class OpenAIImageError extends Schema.TaggedErrorClass<OpenAIImageError>()(
   "OpenAIImageError",

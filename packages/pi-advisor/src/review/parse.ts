@@ -1,4 +1,3 @@
-import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { stringifyJson } from "../boundary/json.ts";
@@ -11,7 +10,6 @@ import {
   ADVISOR_SUGGESTION_KINDS,
   ADVISOR_SUGGESTION_RELEVANCES,
   ADVISOR_VERDICTS,
-  AdvisorReviewParseError,
   AdvisorReviewWireSchema,
   MAX_ADVISOR_EVIDENCE_CHARS,
   MAX_ADVISOR_FINGERPRINT_CHARS,
@@ -29,63 +27,58 @@ import {
   type AdvisorSuggestion,
 } from "./schema.ts";
 
-export const parseAdvisorReviewEffect = Effect.fn("AdvisorReview.decode")(function* (raw: string) {
-  if (raw.length > MAX_ADVISOR_REVIEW_CHARS) {
-    return yield* reviewError("Advisor review exceeds the maximum response size.");
-  }
-  const jsonText = yield* Effect.try({
-    try: () => unwrapJson(raw),
-    catch: (error) =>
-      error instanceof AdvisorReviewParseError
-        ? error
-        : reviewError("Advisor returned malformed JSON."),
-  });
-  const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(AdvisorReviewWireSchema))(
-    jsonText,
-    { onExcessProperty: "error" },
-  ).pipe(Effect.mapError(() => reviewError("Advisor review failed schema validation.")));
-  return yield* Effect.try({
-    try: () => normalizeDecodedAdvisorReview(decoded),
-    catch: (error) =>
-      error instanceof AdvisorReviewParseError
-        ? error
-        : reviewError("Advisor review failed schema validation."),
-  });
-});
-
-/** Pure compatibility parser retained for deterministic parser consumers. */
+/**
+ * Advisor review decoding.
+ *
+ * Each entry point performs exactly two decodes: one wire gate that decides accept/reject, and one
+ * invariant assertion on the normalized candidate that leaves this module. Granular diagnostics run
+ * on the value that failed the gate, so exact-key and lane messages keep priority over the generic
+ * schema-validation message.
+ */
 export function parseAdvisorReview(raw: string): AdvisorReview {
   if (raw.length > MAX_ADVISOR_REVIEW_CHARS) {
     throw reviewError("Advisor review exceeds the maximum response size.");
   }
   const jsonText = unwrapJson(raw);
-  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(AdvisorReviewWireSchema), {
+  const gated = Schema.decodeUnknownOption(Schema.fromJsonString(AdvisorReviewWireSchema), {
     onExcessProperty: "error",
   })(jsonText);
-  if (Option.isNone(decoded)) {
-    // Preserve the established granular diagnostics, but no manually parsed
-    // value can cross the boundary when the domain Schema rejects it.
-    diagnoseAdvisorReview(raw);
-    throw reviewError("Advisor review failed schema validation.");
-  }
-  return normalizeDecodedAdvisorReview(decoded.value);
-}
-
-function normalizeDecodedAdvisorReview(value: unknown) {
-  return diagnoseAdvisorReview(stringifyJson(value));
-}
-
-function diagnoseAdvisorReview(raw: string): AdvisorReview {
-  if (raw.length > MAX_ADVISOR_REVIEW_CHARS) {
-    throw reviewError("Advisor review exceeds the maximum response size.");
-  }
-  const jsonText = unwrapJson(raw);
+  if (Option.isSome(gated)) return finishAdvisorReview(gated.value);
   const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))(jsonText);
   if (Option.isNone(decoded)) {
     throw reviewError({ message: "Advisor returned malformed JSON." });
   }
-  const parsed = decoded.value;
+  // Preserve the established granular diagnostics, but no manually parsed
+  // value can cross the boundary when the domain Schema rejects it.
+  normalizeAdvisorReview(decoded.value);
+  throw reviewError("Advisor review failed schema validation.");
+}
 
+/** Decode an already-parsed JSON value, used by the checkpoint parser for its review fields. */
+export function parseAdvisorReviewValue(value: unknown): AdvisorReview {
+  // Embedded reviews never pass through a raw response string, so the response bound is applied to
+  // their canonical serialization instead.
+  if (stringifyJson(value).length > MAX_ADVISOR_REVIEW_CHARS) {
+    throw reviewError("Advisor review exceeds the maximum response size.");
+  }
+  const gated = Schema.decodeUnknownOption(AdvisorReviewWireSchema, {
+    onExcessProperty: "error",
+  })(value);
+  if (Option.isSome(gated)) return finishAdvisorReview(gated.value);
+  normalizeAdvisorReview(value);
+  throw reviewError("Advisor review failed schema validation.");
+}
+
+function finishAdvisorReview(gated: unknown): AdvisorReview {
+  const candidate = normalizeAdvisorReview(gated);
+  if (Option.isNone(Schema.decodeUnknownOption(AdvisorReviewWireSchema)(candidate))) {
+    throw reviewError("Advisor review failed schema validation.");
+  }
+  return candidate;
+}
+
+/** Granular exact-key/lane/limit diagnostics on an already-decoded JSON value. */
+function normalizeAdvisorReview(parsed: unknown): AdvisorReview {
   if (
     !isRecord(parsed) ||
     (!hasExactKeys(parsed, ["verdict", "summary", "suggestions", "findings"]) &&
@@ -144,16 +137,12 @@ function diagnoseAdvisorReview(raw: string): AdvisorReview {
     throw reviewError("A revise verdict requires findings and an empty suggestions array.");
   }
 
-  const candidate: AdvisorReview = {
+  return {
     verdict: parsed.verdict,
     summary,
     ...(parsed.suggestions !== undefined || suggestions.length > 0 ? { suggestions } : {}),
     findings: parsedFindings,
   };
-  if (Option.isNone(Schema.decodeUnknownOption(AdvisorReviewWireSchema)(candidate))) {
-    throw reviewError("Advisor review failed schema validation.");
-  }
-  return candidate;
 }
 
 /** Format the complete structured critique for display. */

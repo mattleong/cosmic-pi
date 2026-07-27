@@ -1,6 +1,42 @@
 import { describe, expect, test } from "vitest";
-import { AdvisorFindingDedupe, normalizeAdvisorFinding } from "../src/review/dedupe.ts";
+import {
+  emptyAdvisorFindingDedupe,
+  filterAdvisorFindingsWithRollback,
+  normalizeAdvisorFinding,
+  rollbackAdvisorFindingDedupe,
+  type AdvisorFindingDedupeRollback,
+  type AdvisorFindingDedupeState,
+} from "../src/review/dedupe.ts";
 import type { AdvisorFinding } from "../src/review/index.ts";
+
+/** Drives the immutable reducers the way application state does. */
+function dedupeDriver(capacity?: number) {
+  let state: AdvisorFindingDedupeState =
+    capacity === undefined ? emptyAdvisorFindingDedupe() : emptyAdvisorFindingDedupe(capacity);
+  return {
+    filter(findings: readonly AdvisorFinding[], scope = "default") {
+      const {
+        rollback: _rollback,
+        state: next,
+        ...result
+      } = filterAdvisorFindingsWithRollback(state, findings, scope);
+      state = next;
+      return result;
+    },
+    filterWithRollback(findings: readonly AdvisorFinding[], scope = "default") {
+      const result = filterAdvisorFindingsWithRollback(state, findings, scope);
+      state = result.state;
+      const { state: _state, ...publicResult } = result;
+      return publicResult;
+    },
+    rollback(token: AdvisorFindingDedupeRollback) {
+      state = rollbackAdvisorFindingDedupe(state, token);
+    },
+    reset() {
+      state = emptyAdvisorFindingDedupe(state.capacity);
+    },
+  };
+}
 
 function finding(issue: string, recommendation = "Fix it."): AdvisorFinding {
   return {
@@ -23,7 +59,7 @@ describe("advisor finding dedupe", () => {
   });
 
   test("suppresses repeated findings within one request scope", () => {
-    const dedupe = new AdvisorFindingDedupe();
+    const dedupe = dedupeDriver();
     const first = finding("Missing await!");
     const duplicate = finding(" missing AWAIT ");
     const fresh = finding("No timeout");
@@ -40,7 +76,7 @@ describe("advisor finding dedupe", () => {
   });
 
   test("rolls back severity escalation without losing the prior severity", () => {
-    const dedupe = new AdvisorFindingDedupe();
+    const dedupe = dedupeDriver();
     const concern = finding("Escalating issue");
     const blocker = { ...concern, severity: "blocker" as const };
     dedupe.filter([concern]);
@@ -53,7 +89,7 @@ describe("advisor finding dedupe", () => {
   });
 
   test("rolls back capacity eviction exactly", () => {
-    const dedupe = new AdvisorFindingDedupe(1);
+    const dedupe = dedupeDriver(1);
     const first = finding("First");
     const second = finding("Second");
     dedupe.filter([first]);
@@ -66,7 +102,7 @@ describe("advisor finding dedupe", () => {
   });
 
   test("evicts old findings at the bounded capacity and resets", () => {
-    const dedupe = new AdvisorFindingDedupe(2);
+    const dedupe = dedupeDriver(2);
     const first = finding("First");
     dedupe.filter([first, finding("Second"), finding("Third")]);
 

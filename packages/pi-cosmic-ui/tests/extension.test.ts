@@ -14,7 +14,7 @@ import {
   COSMIC_UI_FOOTER_UPSERT,
   COSMIC_UI_HOST_QUERY,
   COSMIC_UI_PROTOCOL_VERSION,
-} from "../src/protocol.ts";
+} from "../src/protocol/protocol.ts";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => void | Promise<void>;
 

@@ -23,7 +23,6 @@ import {
   MAX_ADVISOR_TOOL_ROUNDS,
   makeAdvisorControlMailbox,
   NoDiscoveryAdvisorResourceLoader,
-  parseAdvisorCheckpoint,
   parseAdvisorCheckpointEffect,
   type AdvisorCheckpointRequest,
   type AdvisorRuntimeDriver,
@@ -117,6 +116,11 @@ function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisor
     configured: true,
     ...overrides,
   };
+}
+
+/** Drives the production Effect checkpoint decoder synchronously for deterministic assertions. */
+function parseCheckpoint(raw: string) {
+  return Effect.runSync(parseAdvisorCheckpointEffect(raw));
 }
 
 function checkpointJson(request: AdvisorCheckpointRequest) {
@@ -1071,7 +1075,7 @@ describe("AdvisorRuntime", () => {
       observations: "",
       focus: "standard",
     };
-    expect(parseAdvisorCheckpoint(checkpointJson(request))).toMatchObject({
+    expect(parseCheckpoint(checkpointJson(request))).toMatchObject({
       checkpointId: "cp",
       processedThrough: 4,
     });
@@ -1079,16 +1083,21 @@ describe("AdvisorRuntime", () => {
       ...JSON.parse(checkpointJson(request)),
       stateSummary: "api_key=sk-abcdefghijklmnop and Bearer abc.def.ghi",
     });
-    const sanitized = parseAdvisorCheckpoint(withSecret);
+    const sanitized = parseCheckpoint(withSecret);
     expect(sanitized.stateSummary).not.toMatch(/sk-abcdefghijklmnop|abc\.def\.ghi/);
     expect(sanitized.stateSummary).toContain("REDACTED");
-    expect(() => parseAdvisorCheckpoint("{}")).toThrow();
-    expect(() => parseAdvisorCheckpoint("not json")).toThrow();
-    expect(() => parseAdvisorCheckpoint("x".repeat(MAX_ADVISOR_CHECKPOINT_CHARS + 1))).toThrow(
+    expect(() => parseCheckpoint("{}")).toThrow();
+    expect(() => parseCheckpoint("not json")).toThrow();
+    expect(() =>
+      parseCheckpoint(
+        JSON.stringify({ ...JSON.parse(checkpointJson(request)), suggestions: null }),
+      ),
+    ).toThrow("schema validation");
+    expect(() => parseCheckpoint("x".repeat(MAX_ADVISOR_CHECKPOINT_CHARS + 1))).toThrow(
       "maximum response size",
     );
     expect(() =>
-      parseAdvisorCheckpoint(
+      parseCheckpoint(
         JSON.stringify({
           ...JSON.parse(checkpointJson(request)),
           checkpointId: "x".repeat(MAX_ADVISOR_CHECKPOINT_ID_CHARS + 1),
@@ -1141,7 +1150,7 @@ describe("AdvisorRuntime", () => {
       recommendation: "Correct the result.",
     };
     expect(() =>
-      parseAdvisorCheckpoint(
+      parseCheckpoint(
         JSON.stringify({
           ...JSON.parse(checkpointJson(request)),
           verdict: "revise",

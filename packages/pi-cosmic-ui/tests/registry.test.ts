@@ -33,12 +33,9 @@ function registryLayer(callbacks = makeHostCallbackBoundary()) {
     requestRenderNow: () => undefined,
     invalidate: () => undefined,
   };
-  const layer = FooterRegistryService.layer({
-    bridge,
-    publish: (snapshot) => {
-      bridge.snapshot = snapshot;
-    },
-  }).pipe(Layer.provide(HostCallbackBoundary.layer(callbacks)));
+  const layer = FooterRegistryService.layer({ bridge }).pipe(
+    Layer.provide(HostCallbackBoundary.layer(callbacks)),
+  );
   return { bridge, callbacks, layer };
 }
 

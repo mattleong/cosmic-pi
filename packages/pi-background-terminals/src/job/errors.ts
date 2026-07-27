@@ -25,11 +25,6 @@ export class BackgroundSpawnError extends Schema.TaggedErrorClass<BackgroundSpaw
   { message: Schema.String },
 ) {}
 
-export class BackgroundTerminationError extends Schema.TaggedErrorClass<BackgroundTerminationError>()(
-  "BackgroundTerminationError",
-  { id: Schema.String, message: Schema.String },
-) {}
-
 export class BackgroundRuntimeClosedError extends Schema.TaggedErrorClass<BackgroundRuntimeClosedError>()(
   "BackgroundRuntimeClosedError",
   { message: Schema.String },
@@ -41,5 +36,4 @@ export type BackgroundTerminalError =
   | BackgroundJobNotFoundError
   | BackgroundJobCapacityError
   | BackgroundSpawnError
-  | BackgroundTerminationError
   | BackgroundRuntimeClosedError;

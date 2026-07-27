@@ -3,7 +3,7 @@ import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { previewFooter, showingFooter, trimSingleTrailingNewline } from "../../preview/format";
 import { createCodePreviewToolShell } from "../../preview/tool-shell";
-import { codePreviewSettings } from "../../settings/index";
+import { codePreviewSettings } from "../../config/state";
 import { countLabel } from "../../shared/helpers";
 import { getObjectValue } from "../../shared/helpers";
 import { escapeControlChars } from "../../shared/terminal-text";

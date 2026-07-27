@@ -11,8 +11,7 @@ import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot, makeFrozenProjection, makeSubscriptionRefresh } from "pi-cosmic-core";
 import { HostCallbackBoundary } from "../boundary/host-callback.ts";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
-import { CosmicUiConfigStore } from "../config/service.ts";
-import { CosmicUiConfigError } from "../config/store.ts";
+import { CosmicUiConfigError, CosmicUiConfigStore } from "../config/store.ts";
 import type { FooterTotals } from "../footer/component.ts";
 import type { FooterGitStatus } from "../footer/git.ts";
 import { RepositoryProbe } from "../probe/repository-probe.ts";
@@ -50,20 +49,6 @@ export const resetProjection = (
   projection: MutableRef.MutableRef<CosmicUiProjection>,
   totals = emptyTotals(),
 ): void => void MutableRef.set(projection, immutable(initialProjection(totals)));
-/** Compatibility reset used only before a runtime owns the projection. */
-export function invalidateProbes(projection: MutableRef.MutableRef<CosmicUiProjection>): void {
-  const current = MutableRef.get(projection);
-  MutableRef.set(
-    projection,
-    immutable({
-      ...current,
-      gitStatus: undefined,
-      pullRequestNumber: undefined,
-      pullRequestCheckedAt: 0,
-      probeRevision: current.probeRevision + 1,
-    }),
-  );
-}
 export class CosmicProbeError extends Schema.TaggedErrorClass<CosmicProbeError>()(
   "CosmicProbeError",
   {

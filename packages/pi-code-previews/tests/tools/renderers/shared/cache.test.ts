@@ -5,7 +5,7 @@ import {
   previewCacheKey,
   writeCallPreviewCacheKey,
 } from "../../../../src/tools/renderers/shared/preview-cache-key";
-import { codePreviewSettings, setCodePreviewSettings } from "../../../../src/settings/index";
+import { codePreviewSettings, setCodePreviewSettings } from "../../../../src/config/state";
 import { clearSyntaxProjection, publishSyntaxProjection } from "../../../../src/syntax/projection";
 import { cloneCodePreviewSettingsForTest, testTheme } from "../../../../src/testing/render";
 

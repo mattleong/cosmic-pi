@@ -10,7 +10,7 @@ import * as Path from "effect/Path";
 import { JsonDocumentStore, nodePlatformLayer } from "pi-cosmic-core";
 import {
   SETTINGS_OPTION_DESCRIPTORS,
-  applySettingToRawConfig,
+  prepareSettingUpdate,
   configPaths,
   readConfig,
   readRawConfig,
@@ -115,24 +115,27 @@ describe("config helpers", () => {
       ["footer.mode", "other"],
       ["compaction.enabled", "sometimes"],
     ] as const) {
-      await expect(Effect.runPromise(applySettingToRawConfig({}, id, value))).rejects.toBeDefined();
+      await expect(Effect.runPromise(prepareSettingUpdate(id, value))).rejects.toBeDefined();
     }
   });
 
   test("settings patches preserve unknown shapes", async () => {
     const raw = { unknown: "preserved", usage: { unknownUsage: true } };
-    expect(
-      await Effect.runPromise(
-        applySettingToRawConfig(raw, "fast.enabled", "true", {
-          persistState: true,
-          active: true,
-          desiredActive: true,
-        }),
-      ),
-    ).toMatchObject({ active: true, desiredActive: true, unknown: "preserved" });
-    const usage = await Effect.runPromise(
-      applySettingToRawConfig(raw, "usage.refreshIntervalMs", "15000"),
+    const fastUpdate = await Effect.runPromise(
+      prepareSettingUpdate("fast.enabled", "true", {
+        persistState: true,
+        active: true,
+        desiredActive: true,
+      }),
     );
-    expect(usage.usage).toEqual({ unknownUsage: true, refreshIntervalMs: 15_000 });
+    expect(fastUpdate(raw)).toMatchObject({
+      active: true,
+      desiredActive: true,
+      unknown: "preserved",
+    });
+    const usageUpdate = await Effect.runPromise(
+      prepareSettingUpdate("usage.refreshIntervalMs", "15000"),
+    );
+    expect(usageUpdate(raw).usage).toEqual({ unknownUsage: true, refreshIntervalMs: 15_000 });
   });
 });

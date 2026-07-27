@@ -24,7 +24,6 @@ Usage display requires pi's `xai` OAuth credentials.
 
 - xAI subscription usage display via `/xai-usage` and the footer.
 - Weekly + monthly windows from xAI's CLI billing endpoints.
-- Public usage UI primitive from `pi-better-xai/ui`.
 - Cosmic UI integration when a host is present.
 
 ### Commands
@@ -34,7 +33,7 @@ Usage display requires pi's `xai` OAuth credentials.
 
 ## Footer
 
-The `pi-better-xai/ui` export provides a data-oriented usage primitive. The extension publishes it over the versioned Cosmic UI event protocol when a host is present.
+The extension publishes a data-oriented usage primitive over the versioned Cosmic UI event protocol when a host is present.
 
 When Cosmic UI is active, it owns footer layout and renders `xai.usage` with progress bars matching `openai.usage`:
 

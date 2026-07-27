@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createCodePreviewSettingsList } from "../commands/panels/settings";
+import { isProjectTrusted } from "pi-cosmic-core";
+import { createCodePreviewSettingsList } from "./panel";
 
 export function registerSettingsCommand(pi: ExtensionAPI): void {
   pi.registerCommand("code-preview-settings", {
@@ -9,6 +10,7 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
         createCodePreviewSettingsList({
           notify: (message, level) => ctx.ui.notify(message, level),
           done: () => done(undefined),
+          loadOptions: { projectCwd: ctx.cwd, projectTrusted: isProjectTrusted(ctx) },
         }),
       ),
   });

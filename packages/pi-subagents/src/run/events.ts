@@ -34,7 +34,6 @@ import {
   sanitizeOutputText,
   usageFromMessage,
 } from "./state.ts";
-import { appendTranscript } from "./transcript.ts";
 
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 
@@ -95,7 +94,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                 ...current,
                 progress: message,
                 lastActivityAt: now,
-                transcript: appendTranscript(current.transcript, `progress: ${message}`),
                 sessionEvents: appendNoticeSessionEvent(
                   current.sessionEvents,
                   "progress",
@@ -116,7 +114,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                 ...current,
                 warning: message,
                 lastActivityAt: now,
-                transcript: appendTranscript(current.transcript, `warning: ${message}`),
                 sessionEvents: appendNoticeSessionEvent(
                   current.sessionEvents,
                   "warning",
@@ -139,7 +136,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
               state: "waiting_for_parent",
               lastActivityAt: now,
               question: { requestId: envelope.requestId, message, createdAt: now },
-              transcript: appendTranscript(current.transcript, `question for parent: ${message}`),
               sessionEvents: appendNoticeSessionEvent(
                 current.sessionEvents,
                 "question",
@@ -243,10 +239,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                       lastActivityAt: now,
                       ...(record.latestAssistantText
                         ? {
-                            transcript: appendTranscript(
-                              current.transcript,
-                              record.latestAssistantText,
-                            ),
                             sessionEvents: appendAssistantSessionEvent(
                               current.sessionEvents,
                               record.latestAssistantText,
@@ -273,7 +265,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                   ...current,
                   currentTool: [...record.activeTools.values()].at(-1),
                   lastActivityAt: now,
-                  transcript: appendTranscript(current.transcript, `▶ ${envelope.toolName}`),
                   sessionEvents: startToolSessionEvent(current.sessionEvents, {
                     toolCallId: envelope.toolCallId,
                     toolName: envelope.toolName,
@@ -293,10 +284,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                   ...current,
                   currentTool: [...record.activeTools.values()].at(-1),
                   lastActivityAt: now,
-                  transcript: appendTranscript(
-                    current.transcript,
-                    `${envelope.isError ? "×" : "✓"} ${envelope.toolName}`,
-                  ),
                   sessionEvents: finishToolSessionEvent(current.sessionEvents, {
                     toolCallId: envelope.toolCallId,
                     toolName: envelope.toolName,
@@ -316,7 +303,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                 ...current,
                 warning: message,
                 lastActivityAt: now,
-                transcript: appendTranscript(current.transcript, `extension error: ${message}`),
                 sessionEvents: appendNoticeSessionEvent(
                   current.sessionEvents,
                   "warning",
@@ -403,7 +389,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
             ...(event.usage ? { usage: addUsage(current.usage, event.usage) } : {}),
             ...(finalText && !duplicatesLatestAssistant
               ? {
-                  transcript: appendTranscript(current.transcript, finalText),
                   sessionEvents: appendAssistantSessionEvent(current.sessionEvents, finalText, now),
                 }
               : {}),

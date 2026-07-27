@@ -146,16 +146,3 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
 }
 
 export const advisorExtension = createAdvisorExtension();
-
-export { advisorControllerLayer } from "./controller.ts";
-export {
-  ADVISOR_CATCH_UP_TIMEOUT_MS,
-  AdvisorController,
-  AdvisorExtensionError,
-  awaitAdvisorCatchUpEffect,
-  type AdvisorCatchUpOutcome,
-  type AdvisorControllerApplicationOptions,
-  type AdvisorExtensionDependencies,
-  type AdvisorSkipReason,
-} from "./controller-types.ts";
-export { advisorControllerApplicationLayer } from "./lifecycle.ts";

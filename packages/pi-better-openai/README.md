@@ -1,6 +1,6 @@
 # pi-better-openai
 
-A pi extension for OpenAI subscription workflows: fast mode, usage visibility, reusable UI primitives, footer polish, and image generation through `openai-codex` auth.
+A pi extension for OpenAI subscription workflows: fast mode, usage visibility, footer polish, and image generation through `openai-codex` auth.
 
 ## Install
 
@@ -34,8 +34,7 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
 - OpenAI subscription usage display via `/openai-usage` and the footer.
 - Interactive TUI settings picker via `/openai-settings`, plus scriptable updates via `/openai-settings <id> <value>`; run `/openai-settings help` for available keys.
 - Standalone footer customization for model, thinking, fast mode, usage, and token/cost context.
-- Public fast-mode and subscription-usage UI primitives from `pi-better-openai/ui`.
-- Automatic contribution of those primitives when `pi-cosmic-ui` is installed.
+- Automatic contribution of fast-mode and usage footer primitives when `pi-cosmic-ui` is installed.
 - OpenAI image generation/editing through the `openai_image` tool and `/openai-image` command.
 - Commands:
   - `/fast` toggles fast mode.
@@ -45,7 +44,7 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
 
 ## UI primitives
 
-The `pi-better-openai/ui` export provides data-oriented fast-mode and usage primitives. The Better OpenAI extension automatically publishes them over the versioned Cosmic UI event protocol when a host is present. Provider behavior remains independent of `pi-cosmic-ui`; there is no runtime dependency between the packages.
+Better OpenAI publishes data-oriented fast-mode and usage primitives over the versioned Cosmic UI event protocol when a host is present. Better OpenAI depends on `pi-cosmic-ui` only for that narrow plain-data protocol client; provider behavior stays correct when no Cosmic UI host answers discovery.
 
 When Cosmic UI is active, it owns footer layout, visibility, and density. Better OpenAI's `footer.mode` continues to control only the standalone fallback. The `usage.enabled` setting remains effective in both modes.
 

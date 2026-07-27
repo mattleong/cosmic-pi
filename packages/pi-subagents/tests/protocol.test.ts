@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   assistantText,
   decodeAssistantMessage,
-  decodeChildEnvelope,
   decodeContactParentEnvelope,
   decodeRpcEnvelope,
   decodeRpcStateData,
@@ -16,7 +15,7 @@ import {
 describe("child protocol", () => {
   it("decodes RPC, contact, and ignored events through schemas", async () => {
     const response = await Effect.runPromise(
-      decodeChildEnvelope({
+      decodeRpcEnvelope({
         type: "response",
         id: "rpc-1",
         command: "get_state",
@@ -27,7 +26,7 @@ describe("child protocol", () => {
     expect(response.type).toBe("response");
 
     const contact = await Effect.runPromise(
-      decodeChildEnvelope({
+      decodeContactParentEnvelope({
         channel: "pi-subagents",
         type: "contact_parent",
         requestId: "question-1",
@@ -35,10 +34,10 @@ describe("child protocol", () => {
         message: "Which API should I use?",
       }),
     );
-    expect("channel" in contact && contact.kind).toBe("question");
+    expect(contact.kind).toBe("question");
 
     const tool = await Effect.runPromise(
-      decodeChildEnvelope({
+      decodeRpcEnvelope({
         type: "tool_execution_start",
         toolCallId: "tool-1",
         toolName: "read",
@@ -47,7 +46,7 @@ describe("child protocol", () => {
     );
     expect(tool).toMatchObject({ type: "tool_execution_start", toolCallId: "tool-1" });
 
-    const ignored = await Effect.runPromise(decodeChildEnvelope({ type: "queue_update" }));
+    const ignored = await Effect.runPromise(decodeRpcEnvelope({ type: "queue_update" }));
     expect(ignored).toEqual({ type: "ignored", eventType: "queue_update" });
   });
 
@@ -127,11 +126,11 @@ describe("child protocol", () => {
 
   it("rejects malformed or oversized known events", async () => {
     await expect(
-      Effect.runPromise(decodeChildEnvelope({ type: "tool_execution_start" })),
+      Effect.runPromise(decodeRpcEnvelope({ type: "tool_execution_start" })),
     ).rejects.toBeDefined();
     await expect(
       Effect.runPromise(
-        decodeChildEnvelope({
+        decodeRpcEnvelope({
           type: "tool_execution_start",
           toolCallId: "x".repeat(1_025),
           toolName: "read",

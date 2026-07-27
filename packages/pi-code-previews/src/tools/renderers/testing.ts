@@ -1,6 +1,10 @@
 import { type Component } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach } from "vitest";
-import { environmentValue, setEnvironmentValueForTest } from "../../boundary/environment";
+import {
+  codePreviewPerformanceConfig,
+  codePreviewToolsEnvironmentValue,
+  publishCodePreviewEnvironmentProjection,
+} from "../../config/env";
 import { registerToolRenderers } from "./registration";
 
 export type RegisteredRenderer = {
@@ -14,15 +18,20 @@ export type RegisteredRenderer = {
   promptGuidelines?: string[];
 };
 
+/** Publishes only the tools portion of the synchronous environment projection for tests. */
+export function publishCodePreviewToolsEnvironment(value: string | undefined): void {
+  publishCodePreviewEnvironmentProjection(codePreviewPerformanceConfig, value);
+}
+
 export function preserveCodePreviewToolsEnv(): void {
   let previousCodePreviewTools: string | undefined;
 
   beforeEach(() => {
-    previousCodePreviewTools = environmentValue("CODE_PREVIEW_TOOLS");
+    previousCodePreviewTools = codePreviewToolsEnvironmentValue;
   });
 
   afterEach(() => {
-    setEnvironmentValueForTest("CODE_PREVIEW_TOOLS", previousCodePreviewTools);
+    publishCodePreviewToolsEnvironment(previousCodePreviewTools);
   });
 }
 

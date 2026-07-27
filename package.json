@@ -38,11 +38,9 @@
   },
   "devDependencies": {
     "@effect/language-service": "0.87.0",
-    "@effect/vitest": "catalog:",
-    "@types/node": "~22.19.0",
-    "effect": "catalog:",
-    "oxfmt": "^0.47.0",
-    "oxlint": "^1.62.0",
+    "@types/node": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
     "typescript": "6.0.3"
   },
   "engines": {

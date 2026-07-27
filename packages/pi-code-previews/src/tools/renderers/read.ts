@@ -4,7 +4,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { renderDisplayPath } from "../../paths/display";
 import { metadata, previewFooter } from "../../preview/format";
 import { createCodePreviewToolShell } from "../../preview/tool-shell";
-import { codePreviewSettings } from "../../settings/index";
+import { codePreviewSettings } from "../../config/state";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { resolvePreviewLanguage } from "../../syntax/language";
 import { normalizeShikiLanguage } from "../../syntax/render";

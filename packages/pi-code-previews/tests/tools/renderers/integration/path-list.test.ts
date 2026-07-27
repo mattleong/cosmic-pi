@@ -8,7 +8,8 @@
 // @effect-diagnostics effect/globalDate:off
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { defaultCodePreviewSettings, setCodePreviewSettings } from "../../../../src/settings/index";
+import { defaultCodePreviewSettings } from "../../../../src/config/defaults";
+import { setCodePreviewSettings } from "../../../../src/config/state";
 import {
   cloneCodePreviewSettingsForTest,
   renderComponent,
@@ -18,13 +19,14 @@ import {
 import {
   findRenderer,
   preserveCodePreviewToolsEnv,
+  publishCodePreviewToolsEnvironment,
   registerRenderers,
 } from "../../../../src/tools/renderers/testing";
 
 preserveCodePreviewToolsEnv();
 
 test("path-list integration hides successful grep, find, and ls results until expanded", () => {
-  process.env.CODE_PREVIEW_TOOLS = "grep,find,ls";
+  publishCodePreviewToolsEnvironment("grep,find,ls");
   const previousSettings = cloneCodePreviewSettingsForTest();
   setCodePreviewSettings({
     ...defaultCodePreviewSettings,
@@ -101,7 +103,7 @@ test("path-list integration hides successful grep, find, and ls results until ex
 });
 
 test("path-list integration keeps find and ls errors out of path-list formatting", () => {
-  process.env.CODE_PREVIEW_TOOLS = "find,ls";
+  publishCodePreviewToolsEnvironment("find,ls");
   const registered = registerRenderers();
   for (const name of ["find", "ls"]) {
     const tool = findRenderer(registered, name);

@@ -1,22 +1,26 @@
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { SettingsList } from "@earendil-works/pi-tui";
-import { cloneCodePreviewSettings, codePreviewSettings, updateSetting } from "../../settings/index";
+import type { LoadSettingsOptions } from "../config/document-store";
+import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
+import { updateSetting } from "../config/values";
 import {
   flushSettingsSaveQueue,
   formatSettingsSaveError,
   queueSettingsSave,
-} from "../../config/store";
-import { createSettingsCategoryItems, isSettingsGroupItemId } from "../../settings/ui/index";
-import { initializeShiki } from "../../syntax/shiki";
+} from "../config/store";
+import { initializeShiki } from "../syntax/shiki";
+import { createSettingsCategoryItems, isSettingsGroupItemId } from "./ui/index";
 
 interface SettingsListControllerOptions {
   notify: (message: string, level: "info" | "warning") => void;
   done: () => void;
+  loadOptions: LoadSettingsOptions;
 }
 
 export function createCodePreviewSettingsList({
   notify,
   done,
+  loadOptions,
 }: SettingsListControllerOptions): SettingsList {
   let list: SettingsList;
   let draftSettings = cloneCodePreviewSettings(codePreviewSettings);
@@ -33,7 +37,7 @@ export function createCodePreviewSettingsList({
     const changeRevision = ++revision;
     draftSettings = next;
     syncSettingsListValues(list, draftSettings, handleSettingChange);
-    void queueSettingsSave(next)
+    void queueSettingsSave(next, loadOptions)
       .then(() => {
         if (next.shikiTheme !== previousTheme) void initializeShiki(next.shikiTheme);
         if (resetRequested) notify("Code preview settings reset to defaults", "info");

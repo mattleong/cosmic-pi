@@ -21,10 +21,11 @@ Hosts the composable Pi footer, repository information, elapsed working-time ind
 - `src/footer/builtin-contributions.ts` projects detached host/application data into built-in text contributions.
 - The remaining `src/footer/` modules own registry/client behavior and pure responsive layout.
 - `src/manager/chrome.ts` exports pure shared manager chrome: fixed-width activity frames and responsive grouped action footers (`pi-cosmic-ui/manager`).
-- `src/probe/`, `src/config/`, `src/settings/`, and `src/working/` are vertical application features.
+- `src/config/store.ts` is the single configuration persistence door (`CosmicUiConfigStore` Context service plus the resolve/update helpers); `src/config/schema.ts` holds shape and defaults.
+- `src/probe/`, `src/settings/`, and `src/working/` are vertical application features.
 - `src/working/service.ts` owns the scoped elapsed-time ticker and streamed-output rate estimate for Pi's working row.
 - `src/boundary/` isolates hostile synchronous host callbacks, including working-message updates.
-- `src/protocol/protocol.ts` is the plain public protocol (package export `pi-cosmic-ui/protocol`).
+- `src/protocol/protocol.ts` is the plain public protocol (package export `pi-cosmic-ui/protocol`). The package root publishes only the default extension; `./protocol`, `./client`, and `./manager` are the named subpaths.
 - `src/protocol/host.ts` is the scoped protocol ingress host.
 - `src/protocol/service.ts` is the session host service (`CosmicUiService`; Context keys follow file paths under `protocol/`).
 

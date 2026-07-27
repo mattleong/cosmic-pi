@@ -41,7 +41,6 @@ const runView = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => (
   startedAt: 1_000,
   endedAt: 4_000,
   lastActivityAt: 4_000,
-  transcript: [],
   sessionEvents: [],
   finalText: "## Findings\n\n- Preview rendering works.",
   usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: 0.01 },

@@ -1022,16 +1022,6 @@ describe("Effect-native OpenAI image service", () => {
     }).pipe(h.effect);
   });
 
-  it.effect("masks credential identifiers in image diagnostics", () => {
-    const h = harness(() => Effect.succeed(httpResponse(200, sse([completed()]))));
-    return Effect.gen(function* () {
-      const debug = yield* OpenAIImageService.use((service) => service.debug());
-      expect(debug.authFound).toBe(true);
-      expect(debug.accountId).toBe("found");
-      expect(debug).not.toHaveProperty("accessToken");
-    }).pipe(h.effect);
-  });
-
   it.effect("bounds provider IDs in persisted filenames", () => {
     const hugeId = `ig_${"x".repeat(5_000)}`;
     const h = harness(() =>

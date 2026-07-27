@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { synchronousNow } from "../boundary/clock";
 import { deferProjectedCodePreview, scheduleProjectedCodePreview } from "../application/projection";
-import { codePreviewSettings } from "../settings/index";
+import { codePreviewSettings } from "../config/state";
 
 type ToolTimingUpdateContext = {
   state: unknown;

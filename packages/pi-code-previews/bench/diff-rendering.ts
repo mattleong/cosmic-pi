@@ -20,7 +20,7 @@ import {
 
 const { renderSyntaxHighlightedDiff } = await import("../src/diff/index");
 const { changedRanges } = await import("../src/diff/word/emphasis");
-const { codePreviewSettings, setCodePreviewSettings } = await import("../src/settings/index");
+const { codePreviewSettings, setCodePreviewSettings } = await import("../src/config/state");
 const { startBenchmarkShikiSession } = await import("./shiki-session");
 
 type BenchCase = {

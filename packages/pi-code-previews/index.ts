@@ -13,4 +13,4 @@ export { loadCodePreviewSettings } from "./src/settings/bootstrap";
 export { withCodePreviewShell, type CodePreviewShellOptions } from "./src/tools/cooperative-tools";
 
 /** Public settings types used by package authors integrating with pi-code-previews. */
-export type { CodePreviewSettings, ToolCallBackgroundMode } from "./src/settings/index";
+export type { CodePreviewSettings, ToolCallBackgroundMode } from "./src/config/schema";

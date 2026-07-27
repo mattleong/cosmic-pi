@@ -242,7 +242,3 @@ export function warnIfSetupRequired(
     "warning",
   );
 }
-
-export const _advisorControllerTest = {
-  runtimeEffectsFromDriver: advisorRuntimeEffectsFromDriver,
-};

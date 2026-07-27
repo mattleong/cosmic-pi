@@ -8,17 +8,22 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { piToolsForWriteIntent } from "../src/run/coordination.ts";
 import { SubagentProcessError } from "../src/run/errors.ts";
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
-import { SubagentService, type SubagentServiceShape } from "../src/run/service.ts";
+import {
+  SubagentService,
+  type SubagentAwaitUntil,
+  type SubagentServiceShape,
+} from "../src/run/service.ts";
+import { subagentServiceDouble } from "./subagent-service-double.ts";
 import {
   awaitResultBanner,
   registerSubagentTool,
-  renderAwaitProgress,
+  renderAwaitProgressComponent,
   renderExpandedStartAwaitResult,
-  renderStartAwaitResult,
+  renderStartAwaitOverviewComponent,
   type SubagentToolInput,
 } from "../src/tools/subagent.ts";
 
@@ -68,7 +73,6 @@ const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   effort: "high",
   startedAt: 1,
   lastActivityAt: 1,
-  transcript: [],
   sessionEvents: [],
   usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
   ...overrides,
@@ -127,39 +131,47 @@ describe("subagent tool", () => {
     const theme = {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
     } as unknown as Theme;
-    const rendered = renderAwaitProgress(
-      [
-        view({ id: "agent-1", name: "running-agent", state: "running" }),
-        view({ id: "agent-2", name: "waiting-agent", state: "waiting_for_parent" }),
-        view({ id: "agent-3", name: "failed-agent", state: "failed" }),
-        view({ id: "agent-4", name: "stopped-agent", state: "stopped" }),
-      ],
-      "all_finished",
-      theme,
-    );
+    const progress = (runs: ReadonlyArray<SubagentRunView>, until: SubagentAwaitUntil) =>
+      renderAwaitProgressComponent(runs, until, theme).render(120).join("\n");
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const rendered = progress(
+        [
+          view({ id: "agent-1", name: "running-agent", state: "running" }),
+          view({ id: "agent-2", name: "waiting-agent", state: "waiting_for_parent" }),
+          view({ id: "agent-3", name: "failed-agent", state: "failed" }),
+          view({ id: "agent-4", name: "stopped-agent", state: "stopped" }),
+        ],
+        "all_finished",
+      );
 
-    expect(rendered).toContain(
-      "<error>Waiting for all agents · 2 of 4 finished · 1 running · 1 waiting for you</error>",
-    );
-    expect(rendered).toContain("<success>● running-agent</success>");
-    expect(rendered).toContain("<warning>? waiting-agent</warning>");
-    expect(rendered).toContain("<warning>waiting for you</warning>");
-    expect(rendered).toContain("<toolOutput>openai-codex/gpt-5.6-sol</toolOutput>");
-    expect(rendered).toContain("<thinkingHigh>high</thinkingHigh>");
-    expect(rendered).toContain("<error>× failed-agent</error>");
-    expect(rendered).toContain("<muted>■ stopped-agent</muted>");
-    expect(renderAwaitProgress([view({ state: "running" })], "any_finished", theme)).toContain(
-      "Waiting for first agent · 0 of 1 finished · 1 running",
-    );
-    expect(renderAwaitProgress([view({ state: "completed" })], "all_finished", theme)).toContain(
-      "<success>1 agent finished</success>",
-    );
-    expect(renderAwaitProgress([view({ state: "running" })], "all_finished", theme, 0)).toContain(
-      "<success>⠋ auth-review</success>",
-    );
-    expect(renderAwaitProgress([view({ state: "running" })], "all_finished", theme, 2)).toContain(
-      "<success>⠹ auth-review</success>",
-    );
+      expect(rendered).toContain(
+        "<error>Waiting for all agents · 2 of 4 finished · 1 running · 1 waiting for you</error>",
+      );
+      expect(rendered).toContain("<success>⠋ running-agent</success>");
+      expect(rendered).toContain("<warning>? waiting-agent</warning>");
+      expect(rendered).toContain("<warning>waiting for you</warning>");
+      expect(rendered).toContain("<toolOutput>openai-codex/gpt-5.6-sol</toolOutput>");
+      expect(rendered).toContain("<thinkingHigh>high</thinkingHigh>");
+      expect(rendered).toContain("<error>× failed-agent</error>");
+      expect(rendered).toContain("<muted>■ stopped-agent</muted>");
+      expect(progress([view({ state: "running" })], "any_finished")).toContain(
+        "Waiting for first agent · 0 of 1 finished · 1 running",
+      );
+      expect(progress([view({ state: "completed" })], "all_finished")).toContain(
+        "<success>1 agent finished</success>",
+      );
+      expect(progress([view({ state: "running" })], "all_finished")).toContain(
+        "<success>⠋ auth-review</success>",
+      );
+      vi.setSystemTime(320);
+      expect(progress([view({ state: "running" })], "all_finished")).toContain(
+        "<success>⠹ auth-review</success>",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("projects timeout, cancellation, and first-finished await outcomes", () => {
@@ -203,15 +215,18 @@ describe("subagent tool", () => {
       finalText: "## Findings\nEverything passed.",
     });
 
-    const compact = renderStartAwaitResult([run], false, theme);
-    expect(compact).toBe(
-      "<success>✓ review-agent</success> · <toolOutput>openai-codex/gpt-5.6-sol</toolOutput> · <thinkingHigh>high</thinkingHigh> · <success>finished</success>\n<dim>▸ final report · expand to view</dim>",
-    );
+    const compact = renderStartAwaitOverviewComponent([run], theme).render(120);
+    expect(compact).toHaveLength(2);
+    expect(compact[0]).toContain("<success>✓ review-agent</success>");
+    expect(compact[0]).toContain("<toolOutput>openai-codex/gpt-5.6-sol</toolOutput>");
+    expect(compact[0]).toContain("<thinkingHigh>high</thinkingHigh>");
+    expect(compact[0]).toContain("<success>finished</success>");
+    expect(compact[1]).toBe("<dim>▸ final report · expand to view</dim>");
+    expect(compact.join("\n")).not.toContain("agent-secret-id");
 
-    const expanded = renderStartAwaitResult([run], true, theme);
+    const expanded = renderExpandedStartAwaitResult([run], theme).render(120).join("\n");
     expect(expanded).toContain("<dim>▾ final report</dim>");
     expect(expanded).toContain("Final report — review-agent");
-    expect(expanded).toContain("## Findings\nEverything passed.");
     expect(expanded).not.toContain("agent-secret-id");
 
     const markdown = renderExpandedStartAwaitResult([run], theme).render(80).join("\n");
@@ -246,7 +261,7 @@ describe("subagent tool", () => {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
     } as unknown as Theme;
     const failed = view({ state: "failed", error: "child failed" });
-    expect(renderStartAwaitResult([failed], false, theme)).toContain(
+    expect(renderStartAwaitOverviewComponent([failed], theme).render(120)).toContain(
       "<dim>▸ failure detail · expand to view</dim>",
     );
   });
@@ -256,18 +271,26 @@ describe("subagent tool", () => {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
     } as unknown as Theme;
     const failures = [{ index: 1, name: "broken-agent", message: "spawn failed" }];
-    const compact = renderStartAwaitResult([view({ name: "good-agent" })], false, theme, failures);
+    const compact = renderStartAwaitOverviewComponent(
+      [view({ name: "good-agent" })],
+      theme,
+      failures,
+    )
+      .render(120)
+      .join("\n");
     expect(compact).toContain("<success>● good-agent</success>");
     expect(compact).toContain("<error>× broken-agent</error> · <error>failed to start</error>");
     expect(compact).not.toContain("spawn failed");
 
-    const expanded = renderStartAwaitResult([view({ name: "good-agent" })], true, theme, failures);
+    const expanded = renderExpandedStartAwaitResult([view({ name: "good-agent" })], theme, failures)
+      .render(120)
+      .join("\n");
     expect(expanded).toContain("spawn failed");
   });
 
   it("uses fresh/background defaults, inherits model effort, and strips recursive tools", async () => {
     let request: StartSubagentRequest | undefined;
-    const service: SubagentServiceShape = {
+    const service = subagentServiceDouble({
       start: (input) => Effect.sync(() => ((request = input), view())),
       waitForForeground: () => Effect.succeed(view()),
       awaitTerminal: () => Effect.succeed([view()]),
@@ -280,7 +303,7 @@ describe("subagent tool", () => {
       rename: () => Effect.succeed(view()),
       stop: () => Effect.succeed(view()),
       projection: Effect.succeed({ revision: 0, runs: [] }),
-    };
+    });
     let tool: CapturedTool | undefined;
     const pi = {
       registerTool: (definition: unknown) => {
@@ -333,7 +356,7 @@ describe("subagent tool", () => {
   it("starts a per-agent batch and keeps successful launches when one fails", async () => {
     const requests: StartSubagentRequest[] = [];
     const waited: string[] = [];
-    const service: SubagentServiceShape = {
+    const service = subagentServiceDouble({
       start: (input) =>
         Effect.sync(() => requests.push(input)).pipe(
           Effect.flatMap((index) =>
@@ -371,7 +394,7 @@ describe("subagent tool", () => {
       rename: () => Effect.succeed(view()),
       stop: () => Effect.succeed(view()),
       projection: Effect.succeed({ revision: 0, runs: [] }),
-    };
+    });
     let tool: CapturedTool | undefined;
     const pi = {
       registerTool: (definition: unknown) => {
@@ -538,7 +561,7 @@ describe("subagent tool", () => {
 
   it("resolves Claude aliases without Pi model-registry authentication", async () => {
     let request: StartSubagentRequest | undefined;
-    const service = {
+    const service = subagentServiceDouble({
       start: (input: StartSubagentRequest) =>
         Effect.sync(
           () => (
@@ -561,7 +584,7 @@ describe("subagent tool", () => {
       rename: () => Effect.succeed(view()),
       stop: () => Effect.succeed(view()),
       projection: Effect.succeed({ revision: 0, runs: [] }),
-    } satisfies SubagentServiceShape;
+    });
     let tool: CapturedTool | undefined;
     const pi = {
       registerTool: (definition: unknown) => {
@@ -600,7 +623,7 @@ describe("subagent tool", () => {
 
   it("transfers runtime-only authentication without exposing it in the model id", async () => {
     let request: StartSubagentRequest | undefined;
-    const service = {
+    const service = subagentServiceDouble({
       start: (input: StartSubagentRequest) => Effect.sync(() => ((request = input), view())),
       waitForForeground: () => Effect.succeed(view()),
       awaitTerminal: () => Effect.succeed([view()]),
@@ -613,7 +636,7 @@ describe("subagent tool", () => {
       rename: () => Effect.succeed(view()),
       stop: () => Effect.succeed(view()),
       projection: Effect.succeed({ revision: 0, runs: [] }),
-    } satisfies SubagentServiceShape;
+    });
     let tool: CapturedTool | undefined;
     const pi = {
       registerTool: (definition: unknown) => {
@@ -657,7 +680,6 @@ describe("subagent tool", () => {
       state: "completed",
       endedAt: 2,
       finalText: "Viewport report.",
-      transcript: ["Viewport report."],
       sessionEvents: [
         {
           type: "tool",
@@ -671,7 +693,7 @@ describe("subagent tool", () => {
         { type: "assistant", text: "Viewport report.", createdAt: 2 },
       ],
     });
-    const service: SubagentServiceShape = {
+    const service = subagentServiceDouble({
       start: () => Effect.succeed(completed),
       waitForForeground: () => Effect.succeed(completed),
       awaitTerminal: () => Effect.succeed([completed]),
@@ -684,7 +706,7 @@ describe("subagent tool", () => {
       rename: () => Effect.succeed(completed),
       stop: () => Effect.succeed(completed),
       projection: Effect.succeed({ revision: 1, runs: [completed] }),
-    };
+    });
     let tool: CapturedTool | undefined;
     const pi = {
       registerTool: (definition: unknown) => {
@@ -734,7 +756,7 @@ describe("subagent tool", () => {
       finalText: "Second report.",
     });
     const sent: string[] = [];
-    const service: SubagentServiceShape = {
+    const service = subagentServiceDouble({
       start: () => Effect.succeed(view()),
       waitForForeground: () => Effect.succeed(view()),
       awaitTerminal: (_ids, _until, onUpdate) =>
@@ -751,7 +773,7 @@ describe("subagent tool", () => {
       rename: () => Effect.succeed(view()),
       stop: () => Effect.succeed(view()),
       projection: Effect.succeed({ revision: 0, runs: [] }),
-    };
+    });
     let tool: CapturedTool | undefined;
     const pi = {
       registerTool: (definition: unknown) => {
@@ -807,7 +829,7 @@ describe("subagent tool", () => {
       }),
     );
     const consumed: Array<{ readonly id: string; readonly generation: number }> = [];
-    const service: SubagentServiceShape = {
+    const service = subagentServiceDouble({
       start: () => Effect.succeed(runs[0]!),
       waitForForeground: () => Effect.succeed(runs[0]!),
       awaitTerminal: (ids) => Effect.succeed(ids.map((id) => runs.find((run) => run.id === id)!)),
@@ -829,7 +851,7 @@ describe("subagent tool", () => {
       rename: () => Effect.succeed(runs[0]!),
       stop: () => Effect.succeed(runs[0]!),
       projection: Effect.succeed({ revision: 0, runs }),
-    };
+    });
     let tool: CapturedTool | undefined;
     const pi = {
       registerTool: (definition: unknown) => {

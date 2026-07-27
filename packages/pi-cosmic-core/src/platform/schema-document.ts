@@ -47,10 +47,6 @@ const decodeSchemaObject = <A>(path: string, schema: Schema.Decoder<A>, raw: Jso
     Effect.mapError(mapError("decode", path, "Unable to decode schema document.")),
   );
 
-/** Decode an owned JSON object while retaining its unknown fields for forward-compatible updates. */
-export const decodeSchemaDocument = <A>(schema: Schema.Decoder<A>, raw: JsonObject) =>
-  decodeSchemaObject("unknown", schema, raw);
-
 export const readSchemaDocument = Effect.fn("SchemaDocument.read")(function* <A>(
   path: string,
   schema: Schema.Decoder<A>,
