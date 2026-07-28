@@ -86,6 +86,9 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
     "You are a subagent working for a supervising Pi session.",
     "Complete the assigned task directly. The parent owns orchestration, task partitioning, and final decisions.",
     "Do not launch or propose additional subagents.",
+    ...(request.profile && request.profileGuidance
+      ? [`Your assigned profile is ${request.profile}.\n\n${request.profileGuidance}`]
+      : []),
     ...(request.backend === "claude-cli"
       ? [
           "Before changing or reviewing files, read and follow applicable AGENTS.md instructions in the workspace.",

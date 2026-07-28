@@ -1,3 +1,5 @@
+import type { ProfileId, SubagentSelectionProvenance } from "../profiles/model.ts";
+
 export type SubagentRunState =
   | "starting"
   | "running"
@@ -12,6 +14,7 @@ export type SubagentExecution = "foreground" | "background";
 export type SubagentContextMode = "fresh" | "fork";
 export type SubagentWriteIntent = "writer" | "read-only";
 export type SubagentBackend = "pi" | "claude-cli";
+export type SubagentBackendSelector = SubagentBackend | "auto";
 export type SubagentCapability =
   | "steer"
   | "interrupt"
@@ -89,6 +92,8 @@ export interface SubagentRunView {
   readonly id: string;
   readonly name: string;
   readonly task: string;
+  readonly profile?: ProfileId | undefined;
+  readonly selection: SubagentSelectionProvenance;
   readonly cwd: string;
   readonly state: SubagentRunState;
   readonly execution: SubagentExecution;
@@ -123,6 +128,9 @@ export interface StartSubagentRequest {
   readonly name?: string | undefined;
   readonly backend: SubagentBackend;
   readonly task: string;
+  readonly profile?: ProfileId | undefined;
+  readonly profileGuidance?: string | undefined;
+  readonly selection?: SubagentSelectionProvenance | undefined;
   readonly cwd: string;
   readonly execution: SubagentExecution;
   readonly context: SubagentContextMode;
@@ -143,6 +151,7 @@ export interface SubagentModelView {
   readonly id: string;
   readonly name: string;
   readonly reasoning: boolean;
+  readonly policy?: "discouraged" | undefined;
 }
 
 export const hasSubagentCapability = (

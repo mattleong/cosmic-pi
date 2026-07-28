@@ -21,6 +21,11 @@ const runView = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => (
   id: "agent-1",
   name: "preview-check",
   task: "Inspect **preview rendering**.",
+  selection: {
+    source: "explicit",
+    reason: "Explicit backend/model selection.",
+    skippedCandidates: [],
+  },
   cwd: "/project",
   state: "completed",
   execution: "background",
@@ -150,7 +155,26 @@ describe("structured subagent session output", () => {
     ];
     const rendered = sanitizeTerminalText(
       renderSubagentSessionOutput(
-        runView({ sessionEvents: repeatedReads, pid: 42, sessionFile: "/tmp/session.jsonl" }),
+        runView({
+          sessionEvents: repeatedReads,
+          pid: 42,
+          sessionFile: "/tmp/session.jsonl",
+          profile: "reviewer",
+          selection: {
+            source: "profile-candidate",
+            candidateIndex: 1,
+            reason: "Profile reviewer selected configured candidate 2.",
+            skippedCandidates: [
+              {
+                candidateIndex: 0,
+                candidate: "pi/old-model",
+                code: "model_discouraged",
+                reason: "Old model is discouraged.",
+              },
+            ],
+            warning: "Explicit warning.",
+          },
+        }),
         theme,
         { now: 22_000, showTechnicalDetails: true },
       )
@@ -163,7 +187,10 @@ describe("structured subagent session output", () => {
     expect(rendered).toContain("src/one.ts · src/two.ts");
     expect(rendered).toContain("300ms");
     expect(rendered).toContain("Technical details");
-    expect(rendered).toContain("agent-1 · pi · background · pid 42");
+    expect(rendered).toContain("agent-1 · profile reviewer · pi · background · pid 42");
+    expect(rendered).toContain("selection  profile-candidate candidate 2");
+    expect(rendered).toContain("skipped  pi/old-model [model_discouraged]");
+    expect(rendered).toContain("policy  Explicit warning.");
     expect(rendered).toContain("session  /tmp/session.jsonl");
   });
 

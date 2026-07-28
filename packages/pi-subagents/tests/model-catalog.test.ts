@@ -34,21 +34,35 @@ describe("model catalog", () => {
   });
 
   it("requires every search term to match and ranks closer matches first", () => {
-    expect(searchSubagentModels(catalog, "opus 5").map((model) => model.id)).toEqual([
+    expect(searchSubagentModels(catalog, "opus 5").models.map((model) => model.id)).toEqual([
       "anthropic/claude-opus-5",
     ]);
-    expect(searchSubagentModels(catalog, "5").map((model) => model.id)).toEqual([
+    expect(searchSubagentModels(catalog, "5").models.map((model) => model.id)).toEqual([
       "openai-codex/gpt-5.5",
       "xai/grok-5-fast",
       "anthropic/claude-opus-5",
       "anthropic/claude-sonnet-5",
     ]);
     // Exact alias match outranks substring matches deterministically.
-    expect(searchSubagentModels(catalog, "opus")[0]?.id).toBe("opus");
+    expect(searchSubagentModels(catalog, "opus").models[0]?.id).toBe("opus");
     expect(
-      searchSubagentModels(catalog, "claude", "claude-cli").map((model) => model.backend),
+      searchSubagentModels(catalog, "claude", "claude-cli").models.map((model) => model.backend),
     ).toEqual(["claude-cli", "claude-cli", "claude-cli", "claude-cli"]);
-    expect(searchSubagentModels(catalog, "no-such-model")).toEqual([]);
+    expect(searchSubagentModels(catalog, "no-such-model").models).toEqual([]);
+  });
+
+  it("marks truncation only when matches beyond the discovery cap were dropped", () => {
+    const oversized = Array.from({ length: 105 }, (_, index) =>
+      piView("provider", `model-${index + 1}`, `Model ${index + 1}`),
+    );
+    const truncated = searchSubagentModels(oversized, undefined);
+    expect(truncated.models).toHaveLength(100);
+    expect(truncated.truncated).toBe(true);
+
+    const exact = searchSubagentModels(oversized.slice(0, 100), undefined);
+    expect(exact.models).toHaveLength(100);
+    expect(exact.truncated).toBe(false);
+    expect(searchSubagentModels(catalog, "opus 5").truncated).toBe(false);
   });
 
   it("resolves Pi selectors deterministically without picking among providers", () => {

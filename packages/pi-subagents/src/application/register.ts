@@ -24,18 +24,30 @@ import { registerSubagentTools, SUBAGENT_TOOL_NAMES } from "../tools/subagent.ts
 
 const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
 
-function deactivateSubagentTools(pi: ExtensionAPI): void {
+function deactivateSubagentTools(pi: ExtensionAPI): ReadonlyArray<string> {
   try {
-    pi.setActiveTools(pi.getActiveTools().filter((name) => !SUBAGENT_TOOL_NAME_SET.has(name)));
+    const active = pi.getActiveTools();
+    const removed = active.filter((name) => SUBAGENT_TOOL_NAME_SET.has(name));
+    pi.setActiveTools(active.filter((name) => !SUBAGENT_TOOL_NAME_SET.has(name)));
+    return removed;
   } catch {
     // A stale host cannot turn registration cleanup into an unhandled callback error.
+    return [];
   }
 }
 
-function notifyToolRegistrationFailure(ctx: ExtensionContext): void {
+function reactivateSubagentTools(pi: ExtensionAPI, names: ReadonlyArray<string>): void {
+  if (names.length === 0) return;
   try {
-    if (ctx.hasUI)
-      ctx.ui.notify("Subagents failed to activate because tool registration failed.", "error");
+    pi.setActiveTools([...new Set([...pi.getActiveTools(), ...names])]);
+  } catch {
+    // Recovery remains best effort when the host has already gone stale.
+  }
+}
+
+function notifyActivationFailure(ctx: ExtensionContext, message: string): void {
+  try {
+    if (ctx.hasUI) ctx.ui.notify(message, "error");
   } catch {
     // A stale host UI cannot turn failed activation into an unhandled callback error.
   }
@@ -45,6 +57,7 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
   const bridge = makeSubagentProjectionBridge();
   const notify = makeHostNotifier(pi);
   let currentContext: ExtensionContext | undefined;
+  let startupFailureTools: ReadonlyArray<string> = [];
 
   const slot = makePiSessionRuntimeSlot<
     ExtensionContext,
@@ -52,10 +65,13 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
     never,
     SubagentRuntimeError
   >({
-    makeRuntime: () =>
+    makeRuntime: (ctx) =>
       makePiManagedRuntime(
         pi,
         makeSubagentLayer({
+          cwd: ctx.cwd,
+          agentDirectory: getAgentDir(),
+          projectTrusted: isProjectTrusted(ctx),
           publish: bridge.publish,
           notify,
         }),
@@ -69,11 +85,20 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
     onActivated: (ctx) => {
       currentContext = ctx;
       bridge.setContext(ctx);
+      reactivateSubagentTools(pi, startupFailureTools);
+      startupFailureTools = [];
     },
     onDeactivated: () => {
       currentContext = undefined;
       notify.reset();
       bridge.clear();
+    },
+    onStartFailure: (ctx) => {
+      startupFailureTools = deactivateSubagentTools(pi);
+      notifyActivationFailure(
+        ctx,
+        "Subagents failed closed because configuration or runtime startup failed. Fix pi-subagents.json if present, inspect the logs, then run /reload.",
+      );
     },
   });
 
@@ -108,7 +133,10 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
           });
         } catch {
           deactivateSubagentTools(pi);
-          notifyToolRegistrationFailure(ctx);
+          notifyActivationFailure(
+            ctx,
+            "Subagents failed to activate because tool registration failed.",
+          );
           return slot.shutdown().then(() => undefined);
         }
         return slot.start(ctx, captured.signal);

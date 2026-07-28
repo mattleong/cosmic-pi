@@ -28,7 +28,7 @@ export const canonicalPiModelId = (model: PiCatalogModel): string =>
 
 /** Model line in the exact `backend` and `model` values `subagent_start` accepts verbatim. */
 export const launchReadyModelLine = (model: SubagentModelView): string =>
-  `backend=${model.backend} model=${model.id} · ${model.name} · ${model.reasoning ? "reasoning" : "no reasoning"}`;
+  `backend=${model.backend} model=${model.id} · ${model.name} · ${model.reasoning ? "reasoning" : "no reasoning"}${model.policy === "discouraged" ? " · discouraged (explicit selection only)" : ""}`;
 
 const searchRank = (model: SubagentModelView, terms: ReadonlyArray<string>): number => {
   const id = model.id.toLowerCase();
@@ -40,6 +40,17 @@ const searchRank = (model: SubagentModelView, terms: ReadonlyArray<string>): num
   return 3;
 };
 
+export interface SubagentModelSearchResult {
+  readonly models: ReadonlyArray<SubagentModelView>;
+  /** True only when matches beyond MAX_DISCOVERY_RESULTS were actually dropped. */
+  readonly truncated: boolean;
+}
+
+const cappedResults = (matches: ReadonlyArray<SubagentModelView>): SubagentModelSearchResult => ({
+  models: matches.slice(0, MAX_DISCOVERY_RESULTS),
+  truncated: matches.length > MAX_DISCOVERY_RESULTS,
+});
+
 /**
  * Discovery search: every whitespace-separated term must match (AND semantics), and results are
  * ordered by match closeness with the stable catalog order breaking ties.
@@ -48,21 +59,22 @@ export const searchSubagentModels = (
   models: ReadonlyArray<SubagentModelView>,
   query: string | undefined,
   backend?: SubagentBackend | undefined,
-): ReadonlyArray<SubagentModelView> => {
+): SubagentModelSearchResult => {
   const scoped =
     backend === undefined ? models : models.filter((model) => model.backend === backend);
   const terms = query?.trim().toLowerCase().split(/\s+/).filter(Boolean) ?? [];
-  if (terms.length === 0) return scoped.slice(0, MAX_DISCOVERY_RESULTS);
-  return scoped
-    .flatMap((model) => {
-      const searchable = `${model.backend} ${model.id} ${model.name}`.toLowerCase();
-      return terms.every((term) => searchable.includes(term))
-        ? [{ model, rank: searchRank(model, terms) }]
-        : [];
-    })
-    .sort((left, right) => left.rank - right.rank)
-    .map((entry) => entry.model)
-    .slice(0, MAX_DISCOVERY_RESULTS);
+  if (terms.length === 0) return cappedResults(scoped);
+  return cappedResults(
+    scoped
+      .flatMap((model) => {
+        const searchable = `${model.backend} ${model.id} ${model.name}`.toLowerCase();
+        return terms.every((term) => searchable.includes(term))
+          ? [{ model, rank: searchRank(model, terms) }]
+          : [];
+      })
+      .sort((left, right) => left.rank - right.rank)
+      .map((entry) => entry.model),
+  );
 };
 
 export type PiModelResolution =

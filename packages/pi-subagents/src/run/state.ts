@@ -49,6 +49,10 @@ export const snapshotView = (view: SubagentRunView): SubagentRunView =>
   freezeSnapshot({
     ...view,
     capabilities: [...view.capabilities],
+    selection: {
+      ...view.selection,
+      skippedCandidates: view.selection.skippedCandidates.map((candidate) => ({ ...candidate })),
+    },
     sessionEvents: view.sessionEvents.map((event) => ({ ...event })),
     usage: { ...view.usage },
   });

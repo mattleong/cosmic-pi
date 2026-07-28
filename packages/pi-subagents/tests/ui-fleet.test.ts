@@ -15,6 +15,11 @@ const projection: SubagentProjection = {
       id: "agent-1",
       name: "auth-reader",
       task: "Review authentication",
+      selection: {
+        source: "explicit",
+        reason: "Explicit backend/model selection.",
+        skippedCandidates: [],
+      },
       cwd: "/project",
       state: "waiting_for_parent",
       execution: "background",

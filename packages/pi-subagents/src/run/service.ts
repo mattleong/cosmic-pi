@@ -11,6 +11,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot } from "pi-cosmic-core";
 import { ChildProcess, type ChildLaunchRequest } from "../boundary/child-process.ts";
+import { SubagentProfileService } from "../profiles/service.ts";
 import type {
   SubagentNotification,
   SubagentNotificationDelivery,
@@ -183,6 +184,7 @@ const requireCapability = (
 
 const makeService = Effect.fn("SubagentService.make")(function* (options: SubagentServiceOptions) {
   const childProcesses = yield* ChildProcess;
+  const profileService = yield* SubagentProfileService;
   const ownerScope = yield* Effect.scope;
   const lock = yield* Semaphore.make(1);
   const completionGate = yield* Semaphore.make(1);
@@ -687,6 +689,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           });
         if (request.task.length > MAX_TASK_CHARS)
           return yield* new InvalidSubagentRequestError({ message: "Subagent task is too large." });
+        if (profileService.policyFor(request.backend, request.model) === "denied")
+          return yield* new InvalidSubagentRequestError({
+            code: "model_denied",
+            message: `Model ${request.backend}/${request.model} is denied by Subagents policy and cannot be started.`,
+          });
         const name = sanitizeName(request.name ?? "") || `subagent-${nextRunId}`;
         const now = yield* Clock.currentTimeMillis;
         const scope = yield* Scope.fork(ownerScope);
@@ -725,6 +732,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               id,
               name,
               task: request.task.trim(),
+              ...(request.profile ? { profile: request.profile } : {}),
+              selection: request.selection ?? {
+                source: "explicit",
+                reason: "Explicit backend/model selection.",
+                skippedCandidates: [],
+              },
               cwd: request.cwd,
               state: "starting",
               execution: request.execution,

@@ -22,22 +22,28 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { withCodePreviewShell } from "pi-code-previews";
+import { isProjectTrusted } from "pi-cosmic-core";
 import { Type, type Static } from "typebox";
+import {
+  hostProfileEnvironment,
+  liveSubagentStartBoundaries,
+  resolveProfileStart,
+  type SubagentStartBoundaries,
+} from "../boundary/host-profile-resolution.ts";
 import { synchronousNow } from "../boundary/native-clock.ts";
-import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/coordination.ts";
+import { PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
+import { profileCandidateLabel } from "../profiles/resolve.ts";
+import { SubagentProfileService, type SubagentProfileServiceShape } from "../profiles/service.ts";
 import { InvalidSubagentRequestError, subagentErrorCode } from "../run/errors.ts";
 import {
   CLAUDE_CLI_ALIAS_MODELS,
-  claudeCliModelConflict,
   launchReadyModelLine,
   MAX_DISCOVERY_RESULTS,
-  resolvePiModelSelector,
   searchSubagentModels,
+  type SubagentModelSearchResult,
 } from "../run/model-catalog.ts";
 import {
-  isClaudeModelSelector,
   isTerminalRunState,
-  type StartSubagentRequest,
   type SubagentEffort,
   type SubagentModelView,
   type SubagentRunView,
@@ -83,12 +89,18 @@ const StartSpecParameters = Type.Object({
   context: Type.Optional(
     StringEnum(["fresh", "fork"] as const, {
       description:
-        'Child context; defaults to fresh. "fork" copies the parent Pi conversation and requires backend "pi"; claude-cli supports fresh only.',
+        'Child context. Explicit values override the profile default. Only oracle defaults to "fork"; every other profile defaults to "fresh". Fork requires backend "pi" and a persisted parent leaf.',
     }),
   ),
-  backend: StringEnum(["pi", "claude-cli"] as const, {
+  profile: Type.Optional(
+    StringEnum(PROFILE_IDS, {
+      description:
+        "Behavior and automatic model-routing profile. Explicit pi/claude-cli backend and model values override routing while retaining profile guidance.",
+    }),
+  ),
+  backend: StringEnum(["auto", "pi", "claude-cli"] as const, {
     description:
-      'Execution backend. "pi" runs a Pi RPC child on an authenticated provider/model; "claude-cli" runs the installed Claude Code CLI on a Claude alias or full model ID beginning with "claude".',
+      'Execution backend. "auto" deterministically resolves the selected profile (or configured defaultProfile) and cannot combine with model. "pi" and "claude-cli" preserve explicit launch behavior.',
   }),
   writeIntent: StringEnum(["writer", "read-only"] as const, {
     description: "Only one shared-cwd writer may be active.",
@@ -96,13 +108,13 @@ const StartSpecParameters = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        'For backend "pi": a canonical provider/model value exactly as listed by subagent_models (omit to inherit the parent model); a bare model ID is accepted only when it matches exactly one authenticated provider. For backend "claude-cli": a Claude alias (fable, sonnet, opus, haiku) or full model ID beginning with "claude" — never a Pi provider/model; aliases track the CLI default, so an exact Claude version needs its full model ID. Claude defaults to sonnet.',
+        'Explicit model override. Invalid with backend "auto". For backend "pi": a canonical provider/model value exactly as listed by subagent_models (omit to inherit the parent model); a bare model ID is accepted only when unique. For backend "claude-cli": a Claude alias or full Claude model ID; Claude defaults to sonnet.',
     }),
   ),
   effort: Type.Optional(
     StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, {
       description:
-        "Thinking effort. Omit to inherit the parent effort. claude-cli supports low through max only; off and minimal are rejected.",
+        "Explicit thinking-effort override. Omit to use the candidate effort, then the profile default effort, then the parent effort. claude-cli supports low through max only; off and minimal are rejected.",
     }),
   ),
 });
@@ -127,7 +139,12 @@ const ModelsParameters = Type.Object({
   ),
   backend: Type.Optional(
     StringEnum(["pi", "claude-cli"] as const, {
-      description: "Optional backend filter.",
+      description: "Optional backend filter for explicit launch-ready model selectors.",
+    }),
+  ),
+  profile: Type.Optional(
+    StringEnum(PROFILE_IDS, {
+      description: "Optional profile filter; omit to discover every built-in profile route.",
     }),
   ),
 });
@@ -222,12 +239,30 @@ export interface SubagentActionFailure {
   readonly code?: string;
 }
 
+export interface ProfileCandidateDiscovery {
+  readonly order: number;
+  readonly candidate: string;
+  readonly status: "eligible" | "skipped";
+  readonly reason: string;
+}
+
+export interface SubagentProfileView {
+  readonly id: ProfileId;
+  readonly description: string;
+  readonly defaultContext: "fresh" | "fork";
+  readonly defaultEffort?: SubagentEffort | undefined;
+  readonly fallback: "fail" | "parent";
+  readonly candidates: ReadonlyArray<ProfileCandidateDiscovery>;
+}
+
 export interface SubagentToolDetails {
   readonly action: SubagentToolInput["action"];
   readonly runs?: ReadonlyArray<SubagentRunView>;
   readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
   readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
   readonly models?: ReadonlyArray<SubagentModelView>;
+  readonly profiles?: ReadonlyArray<SubagentProfileView>;
+  readonly defaultProfile?: ProfileId;
   readonly awaitUntil?: SubagentAwaitUntil;
   readonly timedOut?: boolean;
   readonly attentionRequired?: boolean;
@@ -235,11 +270,16 @@ export interface SubagentToolDetails {
 }
 
 export interface SubagentToolRuntime {
+  readonly boundaries?: SubagentToolBoundaries | undefined;
   readonly run: <A, E>(
-    effect: Effect.Effect<A, E, SubagentService>,
+    effect: Effect.Effect<A, E, SubagentService | SubagentProfileService>,
     signal?: AbortSignal,
   ) => Promise<A>;
 }
+
+export type SubagentToolBoundaries = SubagentStartBoundaries;
+
+const LIVE_TOOL_BOUNDARIES: SubagentToolBoundaries = liveSubagentStartBoundaries;
 
 const requiredRunId = (
   action: SubagentToolInput["action"],
@@ -298,167 +338,17 @@ const requiredMessage = (
     ? Effect.succeed(message.trim())
     : Effect.fail(new InvalidSubagentRequestError({ message: `${action} requires message.` }));
 
-function stableParentLeaf(ctx: ExtensionContext): string | undefined {
-  const leaf = ctx.sessionManager.getLeafEntry();
-  if (!leaf) return undefined;
-  if (leaf.type === "message" && leaf.message.role === "assistant")
-    return leaf.parentId ?? undefined;
-  return leaf.id;
-}
-
-function resolvePiModel(
-  input: SubagentStartSpec,
-  ctx: ExtensionContext,
-): Effect.Effect<
-  { readonly model: string; readonly runtimeApiKey?: string | undefined },
-  InvalidSubagentRequestError
-> {
-  return Effect.gen(function* () {
-    const requested = input.model?.trim();
-    let provider: string;
-    let id: string;
-    if (requested) {
-      const available = ctx.modelRegistry
-        .getAvailable()
-        .map((model) => ({ provider: model.provider, id: model.id }));
-      const resolution = resolvePiModelSelector(requested, available);
-      if (resolution.kind === "ambiguous")
-        return yield* new InvalidSubagentRequestError({
-          code: "pi_model_ambiguous",
-          message: `Pi model "${requested}" matches multiple authenticated providers: ${resolution.candidates.join(", ")}. Pass one canonical provider/model value.`,
-        });
-      if (resolution.kind === "unknown")
-        return yield* new InvalidSubagentRequestError({
-          code: "pi_model_unknown",
-          message: `Unknown or unauthenticated Pi model "${requested}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${resolution.nearMatches.join(", ")}.` : ""} Use subagent_models for launch-ready values.`,
-        });
-      provider = resolution.provider;
-      id = resolution.id;
-    } else {
-      const inherited = ctx.model;
-      if (!inherited)
-        return yield* new InvalidSubagentRequestError({
-          code: "pi_model_missing",
-          message: "No parent model is active; specify model.",
-        });
-      provider = inherited.provider;
-      id = inherited.id;
-    }
-    const modelId = `${provider}/${id}`;
-    const model = ctx.modelRegistry.find(provider, id);
-    if (!model || !ctx.modelRegistry.hasConfiguredAuth(model))
-      return yield* new InvalidSubagentRequestError({
-        code: "pi_model_unauthenticated",
-        message: `Model is unavailable or unauthenticated: ${modelId}`,
-      });
-    if (ctx.modelRegistry.getProviderAuthStatus(model.provider).source !== "runtime")
-      return { model: `${model.provider}/${model.id}` };
-    const auth = yield* Effect.tryPromise({
-      try: () => ctx.modelRegistry.getApiKeyAndHeaders(model),
-      catch: () =>
-        new InvalidSubagentRequestError({
-          message: `Unable to resolve runtime authentication for ${modelId}.`,
-        }),
-    });
-    if (!auth.ok || !auth.apiKey)
-      return yield* new InvalidSubagentRequestError({
-        message: `Runtime authentication is unavailable for ${modelId}.`,
-      });
-    return { model: `${model.provider}/${model.id}`, runtimeApiKey: auth.apiKey };
-  });
-}
-
-function resolveStart(
-  pi: ExtensionAPI,
-  input: SubagentStartSpec,
-  ctx: ExtensionContext,
-): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError> {
-  return Effect.gen(function* () {
-    const task = input.task.trim();
-    if (!task)
-      return yield* new InvalidSubagentRequestError({
-        message: "subagent_start requires every agent to have a task.",
-      });
-    const backend = input.backend;
-    if (backend === "claude-cli" && !ctx.isProjectTrusted())
-      return yield* new InvalidSubagentRequestError({
-        code: "claude_untrusted",
-        message:
-          "Claude CLI subagents require a trusted project because claude -p skips its trust dialog.",
-      });
-    if (backend === "claude-cli" && input.context === "fork")
-      return yield* new InvalidSubagentRequestError({
-        code: "claude_context_unsupported",
-        message: "Claude CLI does not support forked Pi context yet; use context=fresh.",
-      });
-    if (
-      backend === "claude-cli" &&
-      input.effort !== undefined &&
-      (input.effort === "off" || input.effort === "minimal")
-    )
-      return yield* new InvalidSubagentRequestError({
-        code: "claude_effort_unsupported",
-        message: `Claude CLI does not support effort ${input.effort}; use low through max.`,
-      });
-    if (backend === "claude-cli" && input.model?.trim()) {
-      const requested = input.model.trim();
-      const conflict = claudeCliModelConflict(
-        requested,
-        ctx.modelRegistry
-          .getAvailable()
-          .map((model) => ({ provider: model.provider, id: model.id })),
-      );
-      if (conflict) return yield* new InvalidSubagentRequestError(conflict);
-      if (!isClaudeModelSelector(requested))
-        return yield* new InvalidSubagentRequestError({
-          code: "claude_model_invalid",
-          message:
-            'Claude model must be fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
-        });
-    }
-    const resolved =
-      backend === "pi"
-        ? yield* resolvePiModel(input, ctx)
-        : { model: input.model?.trim() || "sonnet" };
-    const parentSessionFile = ctx.sessionManager.getSessionFile();
-    const parentLeafId = stableParentLeaf(ctx);
-    if (input.context === "fork" && (!parentSessionFile || !parentLeafId))
-      return yield* new InvalidSubagentRequestError({
-        message: "Forked context requires a persisted parent session with a stable leaf.",
-      });
-    return {
-      ...(input.name?.trim() ? { name: input.name.trim() } : {}),
-      backend,
-      task,
-      cwd: ctx.cwd,
-      execution: input.execution ?? "background",
-      context: input.context ?? "fresh",
-      writeIntent: input.writeIntent,
-      model: resolved.model,
-      ...(resolved.runtimeApiKey ? { runtimeApiKey: resolved.runtimeApiKey } : {}),
-      effort:
-        input.effort ??
-        (backend === "claude-cli" && ["off", "minimal"].includes(pi.getThinkingLevel())
-          ? "low"
-          : (pi.getThinkingLevel() as SubagentEffort)),
-      effortWasExplicit: input.effort !== undefined,
-      activeTools:
-        backend === "pi"
-          ? piToolsForWriteIntent(
-              pi.getActiveTools().filter((name) => !ORCHESTRATION_TOOL_DENYLIST.has(name)),
-              input.writeIntent,
-            )
-          : [],
-      projectTrusted: ctx.isProjectTrusted(),
-      parentSessionId: ctx.sessionManager.getSessionId(),
-      ...(parentSessionFile ? { parentSessionFile } : {}),
-      ...(parentLeafId ? { parentLeafId } : {}),
-    } satisfies StartSubagentRequest;
-  });
-}
+const selectionSourceLabel = (run: SubagentRunView): string => {
+  const candidate =
+    run.selection.candidateIndex === undefined
+      ? ""
+      : ` candidate ${run.selection.candidateIndex + 1}`;
+  return `${run.selection.source}${candidate}`;
+};
 
 const formatRun = (run: SubagentRunView, detailed = false): string => {
-  const header = `${run.id} ${run.name} · ${run.state} · ${run.writeIntent} · ${run.backend}/${run.model}:${run.effort}`;
+  const profile = run.profile ? ` · profile=${run.profile}` : "";
+  const header = `${run.id} ${run.name} · ${run.state} · ${run.writeIntent}${profile} · ${run.backend}/${run.model}:${run.effort}`;
   if (!detailed) return header;
   const field = (label: string, value: string): string => `  ${label.padEnd(10)} ${value}`;
   return [
@@ -466,7 +356,17 @@ const formatRun = (run: SubagentRunView, detailed = false): string => {
     field("Name", run.name),
     field("ID", run.id),
     field("State", run.state),
+    run.profile ? field("Profile", run.profile) : undefined,
     field("Model", `${run.backend}/${run.model} · ${run.effort}`),
+    field("Selection", selectionSourceLabel(run)),
+    field("Reason", run.selection.reason),
+    ...run.selection.skippedCandidates.map((candidate) =>
+      field(
+        "Skipped",
+        `${candidate.candidateIndex === undefined ? "fallback" : `candidate ${candidate.candidateIndex + 1}`} [${candidate.code}]: ${candidate.reason}`,
+      ),
+    ),
+    run.selection.warning ? field("Policy", run.selection.warning) : undefined,
     field("Mode", `${run.execution} · ${run.context}`),
     field("Intent", run.writeIntent),
     field("Capabilities", `${run.capabilities.join(", ") || "none"}; stop/await always available`),
@@ -574,7 +474,8 @@ const renderedCompletionReceipts = (
 function availableModels(
   input: SubagentModelsInput,
   ctx: ExtensionContext,
-): ReadonlyArray<SubagentModelView> {
+  profiles: SubagentProfileServiceShape,
+): SubagentModelSearchResult {
   const piModels: ReadonlyArray<SubagentModelView> = ctx.modelRegistry
     .getAvailable()
     .map((model) => ({
@@ -583,12 +484,84 @@ function availableModels(
       name: model.name,
       reasoning: model.reasoning,
     }));
-  return searchSubagentModels(
-    [...piModels, ...CLAUDE_CLI_ALIAS_MODELS],
-    input.query,
-    input.backend,
-  );
+  const selectorCatalog = isProjectTrusted(ctx)
+    ? [...piModels, ...CLAUDE_CLI_ALIAS_MODELS]
+    : piModels;
+  const policyAnnotated = selectorCatalog.flatMap((model) => {
+    const policy = profiles.policyFor(model.backend, model.id);
+    if (policy === "denied") return [];
+    return [{ ...model, ...(policy === "discouraged" ? { policy } : {}) }];
+  });
+  return searchSubagentModels(policyAnnotated, input.query, input.backend);
 }
+
+const profileDiscovery = (
+  input: SubagentModelsInput,
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  profiles: SubagentProfileServiceShape,
+): ReadonlyArray<SubagentProfileView> => {
+  const ids = input.profile ? [input.profile] : PROFILE_IDS;
+  const environment = hostProfileEnvironment(pi, ctx);
+  return ids.flatMap((id) => {
+    const definition = profiles.definition(id);
+    if (!definition) return [];
+    const route = profiles.config.profiles[definition.id];
+    const resolution = profiles.resolve(definition.id, environment);
+    const attempts = resolution.kind === "resolved" ? resolution.attempts : [];
+    const skipped = resolution.skippedCandidates;
+    const candidates: ProfileCandidateDiscovery[] = route.candidates.map((candidate, index) => {
+      const attempt = attempts.find((value) => value.candidateIndex === index);
+      const omitted = skipped.find((value) => value.candidateIndex === index);
+      return {
+        order: index + 1,
+        candidate: profileCandidateLabel(candidate),
+        status: attempt ? "eligible" : "skipped",
+        reason: attempt?.reason ?? omitted?.reason ?? "Candidate was not eligible.",
+      };
+    });
+    if (route.fallback === "parent") {
+      const attempt = attempts.find((value) => value.source === "profile-parent-fallback");
+      const omitted = skipped.find(
+        (value) => value.candidateIndex === undefined && value.candidate === "parent fallback",
+      );
+      candidates.push({
+        order: route.candidates.length + 1,
+        candidate: "parent fallback",
+        status: attempt ? "eligible" : "skipped",
+        reason: attempt?.reason ?? omitted?.reason ?? "Parent fallback was not eligible.",
+      });
+    }
+    return [
+      {
+        id: definition.id,
+        description: definition.description,
+        defaultContext: definition.defaultContext,
+        ...(definition.defaultEffort ? { defaultEffort: definition.defaultEffort } : {}),
+        fallback: route.fallback,
+        candidates,
+      },
+    ];
+  });
+};
+
+const formatProfileDiscovery = (
+  profiles: ReadonlyArray<SubagentProfileView>,
+  defaultProfile: ProfileId,
+): string =>
+  [
+    "Profiles (use backend=auto; explicit backend/model overrides routing but retains guidance)",
+    `Configured default profile: ${defaultProfile}`,
+    ...profiles.flatMap((profile) => [
+      `${profile.id} · context=${profile.defaultContext} · effort=${profile.defaultEffort ?? "inherit"} · fallback=${profile.fallback} · ${profile.description}`,
+      ...(profile.candidates.length > 0
+        ? profile.candidates.map(
+            (candidate) =>
+              `  ${candidate.order}. ${candidate.candidate} · ${candidate.status} · ${candidate.reason}`,
+          )
+        : ["  no configured candidates"]),
+    ]),
+  ].join("\n");
 
 const awaitProgressHeader = (
   runs: ReadonlyArray<SubagentRunView>,
@@ -798,7 +771,10 @@ const renderResponsiveRunRows = (
   if (safeWidth >= 64 && modelWidth >= 8)
     return runs.map((run, index) => {
       const name = theme.fg(runStateColor(run.state), names[index] ?? "");
-      const model = truncateToWidth(sanitizeTerminalLine(run.model), modelWidth);
+      const model = truncateToWidth(
+        sanitizeTerminalLine(`${run.profile ? `[${run.profile}] ` : ""}${run.model}`),
+        modelWidth,
+      );
       const effort = efforts[index] ?? "";
       const state = theme.fg(runStateColor(run.state), states[index] ?? "");
       return `${padVisible(name, nameWidth)} · ${padVisible(theme.fg("toolOutput", model), modelWidth)} · ${padVisible(theme.fg(effortColor(run.effort), effort), effortWidth)} · ${padVisible(state, stateWidth)}`;
@@ -811,7 +787,10 @@ const renderResponsiveRunRows = (
     const modelWidth = Math.max(1, safeWidth - visibleWidth(effort) - 3);
     const model = theme.fg(
       "toolOutput",
-      truncateToWidth(sanitizeTerminalLine(run.model), modelWidth),
+      truncateToWidth(
+        sanitizeTerminalLine(`${run.profile ? `[${run.profile}] ` : ""}${run.model}`),
+        modelWidth,
+      ),
     );
     return [
       truncateToWidth(name, safeWidth),
@@ -852,6 +831,32 @@ class RunOverviewComponent implements Component {
         ? [truncateToWidth(this.theme.fg(this.banner.color, this.banner.text), safeWidth)]
         : []),
       ...renderResponsiveRunRows(this.runs, safeWidth, this.theme),
+      ...(this.expanded
+        ? this.runs.flatMap((run) => {
+            const profile = run.profile ? `${run.profile} · ` : "";
+            const summary = `${profile}${selectionSourceLabel(run)} · ${run.selection.reason}`;
+            return [
+              truncateToWidth(this.theme.fg("dim", summary), safeWidth),
+              ...run.selection.skippedCandidates.map((candidate) =>
+                truncateToWidth(
+                  this.theme.fg(
+                    "dim",
+                    `  skipped ${candidate.candidate} [${candidate.code}] · ${candidate.reason}`,
+                  ),
+                  safeWidth,
+                ),
+              ),
+              ...(run.selection.warning
+                ? [
+                    truncateToWidth(
+                      this.theme.fg("warning", `  ${run.selection.warning}`),
+                      safeWidth,
+                    ),
+                  ]
+                : []),
+            ];
+          })
+        : []),
       ...renderStartFailures(this.failures, this.expanded, this.theme)
         .split("\n")
         .filter(Boolean)
@@ -986,29 +991,45 @@ const executeSubagentAction = async (
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<unknown> | undefined,
   ctx: ExtensionContext,
+  boundaries: SubagentToolBoundaries = runtime.boundaries ?? LIVE_TOOL_BOUNDARIES,
 ): Promise<AgentToolResult<unknown>> => {
   if (input.action === "models") {
-    const models = availableModels(input, ctx);
-    return {
-      content: [
-        {
-          type: "text",
-          text:
-            models.length > 0
-              ? [
-                  "Pass backend and model to subagent_start exactly as listed. Claude selectors still require an installed, authenticated CLI and a trusted project.",
-                  ...models.map(launchReadyModelLine),
-                  ...(models.length >= MAX_DISCOVERY_RESULTS
-                    ? [
-                        `Showing at most ${MAX_DISCOVERY_RESULTS} matching selectors; narrow query or backend to search further.`,
-                      ]
-                    : []),
-                ].join("\n")
-              : "No matching models.",
+    const discovery = Effect.gen(function* () {
+      const profileService = yield* SubagentProfileService;
+      const search = availableModels(input, ctx, profileService);
+      const models = search.models;
+      const profiles = profileDiscovery(input, pi, ctx, profileService);
+      const selectorText =
+        models.length > 0
+          ? [
+              "Accepted explicit selectors (denied models are hidden; discouraged models require explicit selection; Claude readiness is checked at launch)",
+              ...models.map(launchReadyModelLine),
+              ...(search.truncated
+                ? [
+                    `Showing the first ${MAX_DISCOVERY_RESULTS} matching selectors; narrow query or backend to search further.`,
+                  ]
+                : []),
+            ].join("\n")
+          : "No matching explicit model selectors.";
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: joinBoundedToolText([
+              formatProfileDiscovery(profiles, profileService.config.defaultProfile),
+              selectorText,
+            ]),
+          },
+        ],
+        details: {
+          action: input.action,
+          models,
+          profiles,
+          defaultProfile: profileService.config.defaultProfile,
         },
-      ],
-      details: { action: input.action, models },
-    };
+      };
+    });
+    return runtime.run(discovery, signal);
   }
 
   let latestAwaitRuns: ReadonlyArray<SubagentRunView> = [];
@@ -1083,7 +1104,7 @@ const executeSubagentAction = async (
         let launchedRuns: ReadonlyArray<SubagentRunView> = [];
         const startOne = (spec: SubagentStartSpec) =>
           Effect.gen(function* () {
-            const request = yield* resolveStart(pi, spec, ctx);
+            const request = yield* resolveProfileStart(pi, spec, ctx, boundaries);
             const started = yield* service.start(request);
             launchedRuns = [...launchedRuns, started];
             yield* Effect.sync(() =>
@@ -1424,7 +1445,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_models",
     label: "Subagent Models",
     description:
-      "List accepted subagent model selectors: authenticated Pi provider/model values and Claude CLI aliases. Each line shows exact backend and model values subagent_start accepts; Claude selectors still require an installed, authenticated CLI and a trusted project. All search terms must match.",
+      "Discover deterministic subagent profiles plus accepted explicit model selectors. Profile output shows default context, ordered candidates, skips, and fallback. Denied selectors are hidden; discouraged selectors are marked explicit-only. All model search terms must match.",
     parameters: ModelsParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { action: "models", ...input }, signal, onUpdate, ctx),
@@ -1436,15 +1457,16 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_start",
     label: "Start Subagents",
     description:
-      "Launch one to twelve session-scoped subagents from one agents array. Background is the default; at most one foreground agent is allowed and blocks this call until it finishes, pauses, or asks a parent question. Successful launches remain active when a peer launch fails.",
-    promptSnippet: "Launch one or more delegated subagents with explicit backend and write intent",
+      "Launch one to twelve session-scoped subagents from one agents array. Backend is required: use auto for deterministic profile routing or pi/claude-cli for an explicit override. Background is the default; at most one foreground agent is allowed. Successful launches remain active when a peer launch fails.",
+    promptSnippet: "Launch delegated subagents using a task profile and explicit write intent",
     promptGuidelines: [
       "Use subagent_start for delegated work that can proceed independently; background is the default launch mode, and each call accepts at most one foreground agent.",
-      "Every subagent_start agent must explicitly declare writeIntent as writer or read-only.",
+      "Every subagent_start agent must explicitly declare writeIntent as writer or read-only and must provide backend; prefer backend=auto unless the user requests a model or backend capabilities require an explicit choice.",
+      "Choose a profile by task: scout for local reconnaissance, researcher for sourced external research, planner for plans, worker for implementation, reviewer for independent review, oracle for inherited-decision analysis, and delegate for general work.",
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
       "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",
-      "When unsure of a model, call subagent_models first and pass its backend and model values to subagent_start verbatim.",
-      'Backend "pi" takes an authenticated canonical provider/model (or inherits the parent); backend "claude-cli" always starts fresh context and takes only a Claude alias or full model ID beginning with "claude", never a Pi provider/model.',
+      "Use subagent_models to inspect profile routing or explicit launch-ready selectors; never substitute an arbitrary model when a profile has no eligible candidate.",
+      'Backend "auto" cannot combine with model. Explicit backend "pi" takes an authenticated canonical provider/model (or inherits the parent); "claude-cli" takes only a Claude alias or full Claude model ID.',
       "Choose backend pi when the child may need mid-turn guidance, interruption, or parent questions; claude-cli supports await, stop, local rename, and resume after completion but not those interactive controls.",
     ],
     parameters: StartParameters,

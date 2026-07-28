@@ -199,10 +199,45 @@ const emptyActivityLabel = (run: SubagentRunView): string => {
 function addTechnicalDetails(container: Container, run: SubagentRunView, theme: Theme): void {
   container.addChild(new Spacer(1));
   container.addChild(new Text(theme.fg("muted", theme.bold("Technical details")), 0, 0));
-  const process = [run.id, run.backend, run.execution, run.pid ? `pid ${run.pid}` : undefined]
+  const process = [
+    run.id,
+    run.profile ? `profile ${run.profile}` : undefined,
+    run.backend,
+    run.execution,
+    run.pid ? `pid ${run.pid}` : undefined,
+  ]
     .filter((value): value is string => value !== undefined)
     .join(" · ");
   container.addChild(new Text(theme.fg("dim", process), 2, 0));
+  const candidate =
+    run.selection.candidateIndex === undefined
+      ? run.selection.source
+      : `${run.selection.source} candidate ${run.selection.candidateIndex + 1}`;
+  container.addChild(
+    new HangingText(
+      theme.fg("dim", "selection  "),
+      theme.fg("dim", `${candidate} · ${sanitizeTerminalLine(run.selection.reason)}`),
+    ),
+  );
+  for (const skipped of run.selection.skippedCandidates) {
+    container.addChild(
+      new HangingText(
+        theme.fg("dim", "skipped  "),
+        theme.fg(
+          "dim",
+          `${sanitizeTerminalLine(skipped.candidate)} [${sanitizeTerminalLine(skipped.code)}] · ${sanitizeTerminalLine(skipped.reason)}`,
+        ),
+      ),
+    );
+  }
+  if (run.selection.warning) {
+    container.addChild(
+      new HangingText(
+        theme.fg("warning", "policy  "),
+        theme.fg("warning", sanitizeTerminalLine(run.selection.warning)),
+      ),
+    );
+  }
   container.addChild(
     new HangingText(theme.fg("dim", "cwd  "), theme.fg("dim", sanitizeTerminalLine(run.cwd))),
   );
@@ -242,7 +277,7 @@ export function renderSubagentSessionOutput(
     new Text(
       theme.fg(
         "dim",
-        `${run.writeIntent} · ${run.context} · ${run.model}:${run.effort} · ${runDuration(run, now)}`,
+        `${run.writeIntent} · ${run.profile ? `${run.profile} · ` : ""}${run.context} · ${run.model}:${run.effort} · ${runDuration(run, now)}`,
       ),
       0,
       0,
