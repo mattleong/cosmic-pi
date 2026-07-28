@@ -170,7 +170,7 @@ const selectedEfforts = (
   );
 };
 
-const chooseScope = (
+const chooseScope = async (
   ctx: ExtensionCommandContext,
   inspection: SubagentConfigInspection,
   projectTrusted: boolean,
@@ -178,11 +178,11 @@ const chooseScope = (
   const global = `Global · ${inspection.config.globalConfigPath}`;
   const project = `Project · ${inspection.config.projectConfigPath}`;
   const options = projectTrusted ? [global, project] : [global];
-  return ctx.ui
-    .select("Subagent profile settings · choose scope", options)
-    .then((selected) =>
-      selected === global ? "global" : selected === project ? "project" : undefined,
-    );
+  const selected = await ctx.ui.select(
+    "Subagent profile settings · choose scope · esc close",
+    options,
+  );
+  return selected === global ? "global" : selected === project ? "project" : undefined;
 };
 
 async function reloadAfterSave(
@@ -203,6 +203,8 @@ async function reloadAfterSave(
   ctx.ui.notify("Profile saved. The change applies on the next /reload.", "info");
 }
 
+type EditProfileResult = "back" | "saved";
+
 async function editProfile(
   ctx: ExtensionCommandContext,
   bridge: SubagentProjectionBridge,
@@ -210,7 +212,7 @@ async function editProfile(
   inspection: SubagentConfigInspection,
   scope: SubagentConfigScope,
   profile: ProfileId,
-): Promise<void> {
+): Promise<EditProfileResult> {
   const declared = declaredAt(inspection, scope, profile);
   const scopePath =
     scope === "global" ? inspection.config.globalConfigPath : inspection.config.projectConfigPath;
@@ -219,7 +221,7 @@ async function editProfile(
       `${profile}: Ordered route · ${declared.length} candidates declared in ${scopePath}. Multi-candidate routes are read-only in this UI; edit that file as JSON.`,
       "warning",
     );
-    return;
+    return "back";
   }
   if (scopeRouteInvalid(inspection, scope, profile))
     ctx.ui.notify(
@@ -237,65 +239,76 @@ async function editProfile(
     projectScope: scope === "project",
     policyFor: (backend, model) => modelPolicyFor(inspection.config, backend, model),
   });
-  const model = await selectProfileModel(ctx, choices, current);
-  if (!model) return;
-  if (
-    (model.kind === "model" || model.kind === "parent") &&
-    model.policy === "discouraged" &&
-    !(await ctx.ui.confirm(
-      "Discouraged model",
-      "This model is discouraged by Subagents policy. Save it as an explicit profile choice anyway?",
-    ))
-  )
-    return;
 
-  let route: DeclaredProfileRoute | undefined;
-  if (model.kind === "inherit") route = undefined;
-  else if (model.kind === "disabled") route = "disabled";
-  else {
-    const options = effortPickerOptions(selectedEfforts(choices, model));
-    const selected = await ctx.ui.select(
-      `Effort for ${model.kind === "parent" ? "Parent model" : model.selector}`,
-      options.map((option) => option.label),
-    );
-    const effort = options.find((option) => option.label === selected)?.effort;
-    if (!effort) return;
-    route = { model: model.kind === "parent" ? "parent" : model.selector, effort };
-    if (scope === "global" && route.model === "parent" && route.effort === "default")
-      route = undefined;
-  }
-
-  const summary =
-    route === undefined
-      ? scope === "project"
-        ? "Inherit global"
-        : "Built-in parent/default"
-      : route === "disabled"
-        ? "Disabled"
-        : `${route.model} · ${route.effort}`;
-  if (
-    !(await ctx.ui.confirm(`Save ${profile}?`, `${summary}\n\nScope: ${scope}\nPath: ${scopePath}`))
-  )
-    return;
-  const expectedDocument =
-    scope === "global" ? inspection.globalDocument : inspection.projectDocument;
-  try {
-    await actions.patchProfile({
-      scope,
+  while (true) {
+    const model = await selectProfileModel(ctx, choices, current, {
       profile,
-      ...(route === undefined ? {} : { route }),
-      expectedExists: expectedDocument !== undefined,
-      ...(expectedDocument === undefined ? {} : { expectedDocument }),
-      projectTrusted: isProjectTrusted(ctx),
+      scope,
+      path: scopePath,
     });
-  } catch (error) {
-    ctx.ui.notify(
-      error instanceof Error ? error.message : "Could not save profile settings.",
-      "error",
-    );
-    return;
+    if (!model) return "back";
+    if (
+      (model.kind === "model" || model.kind === "parent") &&
+      model.policy === "discouraged" &&
+      !(await ctx.ui.confirm(
+        `Discouraged model for ${profile}`,
+        "This model is discouraged by Subagents policy. Save it as an explicit profile choice anyway?",
+      ))
+    )
+      continue;
+
+    let route: DeclaredProfileRoute | undefined;
+    if (model.kind === "inherit") route = undefined;
+    else if (model.kind === "disabled") route = "disabled";
+    else {
+      const options = effortPickerOptions(selectedEfforts(choices, model));
+      const selected = await ctx.ui.select(
+        `Profile: ${profile} · Effort for ${model.kind === "parent" ? "Parent model" : model.selector} · esc back to models`,
+        options.map((option) => option.label),
+      );
+      const effort = options.find((option) => option.label === selected)?.effort;
+      if (!effort) continue;
+      route = { model: model.kind === "parent" ? "parent" : model.selector, effort };
+      if (scope === "global" && route.model === "parent" && route.effort === "default")
+        route = undefined;
+    }
+
+    const summary =
+      route === undefined
+        ? scope === "project"
+          ? "Inherit global"
+          : "Built-in parent/default"
+        : route === "disabled"
+          ? "Disabled"
+          : `${route.model} · ${route.effort}`;
+    if (
+      !(await ctx.ui.confirm(
+        `Save ${profile}?`,
+        `${summary}\n\nScope: ${scope}\nPath: ${scopePath}`,
+      ))
+    )
+      continue;
+    const expectedDocument =
+      scope === "global" ? inspection.globalDocument : inspection.projectDocument;
+    try {
+      await actions.patchProfile({
+        scope,
+        profile,
+        ...(route === undefined ? {} : { route }),
+        expectedExists: expectedDocument !== undefined,
+        ...(expectedDocument === undefined ? {} : { expectedDocument }),
+        projectTrusted: isProjectTrusted(ctx),
+      });
+    } catch (error) {
+      ctx.ui.notify(
+        error instanceof Error ? error.message : "Could not save profile settings.",
+        "error",
+      );
+      return "back";
+    }
+    await reloadAfterSave(ctx, bridge);
+    return "saved";
   }
-  await reloadAfterSave(ctx, bridge);
 }
 
 async function openProfileSettings(
@@ -322,19 +335,24 @@ async function openProfileSettings(
     );
     return;
   }
-  const scope = await chooseScope(ctx, inspection, projectTrusted);
-  if (!scope) return;
-  const path =
-    scope === "global" ? inspection.config.globalConfigPath : inspection.config.projectConfigPath;
-  const labels = PROFILE_IDS.map((profile) => profileSummary(inspection, profile));
-  const selected = await ctx.ui.select(
-    `${scope === "global" ? "Global" : "Project"} profiles · ${path}`,
-    labels,
-  );
-  const index = selected ? labels.indexOf(selected) : -1;
-  const profile = index >= 0 ? PROFILE_IDS[index] : undefined;
-  if (!profile) return;
-  await editProfile(ctx, bridge, actions, inspection, scope, profile);
+  while (true) {
+    const scope = await chooseScope(ctx, inspection, projectTrusted);
+    if (!scope) return;
+    const path =
+      scope === "global" ? inspection.config.globalConfigPath : inspection.config.projectConfigPath;
+
+    while (true) {
+      const labels = PROFILE_IDS.map((profile) => profileSummary(inspection, profile));
+      const selected = await ctx.ui.select(
+        `${scope === "global" ? "Global" : "Project"} profiles · ${path} · esc back to scope`,
+        labels,
+      );
+      const index = selected ? labels.indexOf(selected) : -1;
+      const profile = index >= 0 ? PROFILE_IDS[index] : undefined;
+      if (!profile) break;
+      if ((await editProfile(ctx, bridge, actions, inspection, scope, profile)) === "saved") return;
+    }
+  }
 }
 
 export function registerSubagentManagerCommand(

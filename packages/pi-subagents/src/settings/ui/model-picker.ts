@@ -3,7 +3,7 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { DynamicBorder, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter, Input, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import type { ModelPolicy } from "../../config/options.ts";
-import type { ProfileCandidateEffort } from "../../profiles/model.ts";
+import type { ProfileCandidateEffort, ProfileId } from "../../profiles/model.ts";
 import { CLAUDE_CLI_ALIAS_MODELS } from "../../run/model-catalog.ts";
 import type { SubagentEffort } from "../../run/model.ts";
 
@@ -132,10 +132,17 @@ const buildList = (
   return list;
 };
 
+export interface ProfileModelPickerContext {
+  readonly profile: ProfileId;
+  readonly scope: "global" | "project";
+  readonly path: string;
+}
+
 export function selectProfileModel(
   ctx: ExtensionCommandContext,
   choices: ReadonlyArray<ProfileModelPickerChoice>,
   current: string | undefined,
+  pickerContext: ProfileModelPickerContext,
 ): Promise<ProfileModelChoice | undefined> {
   return ctx.ui
     .custom<string | null>((tui, theme, keybindings, done) => {
@@ -161,14 +168,26 @@ export function selectProfileModel(
         render(width: number) {
           return [
             ...top.render(width),
-            ...new Text(theme.fg("accent", theme.bold("Select Profile Model")), 1, 0).render(width),
+            ...new Text(
+              theme.fg("accent", theme.bold(`Profile: ${pickerContext.profile} · Select model`)),
+              1,
+              0,
+            ).render(width),
+            ...new Text(
+              theme.fg(
+                "dim",
+                `Scope: ${pickerContext.scope === "global" ? "Global" : "Project"} · ${pickerContext.path}`,
+              ),
+              1,
+              0,
+            ).render(width),
             ...new Text(theme.fg("dim", "Search models:"), 1, 0).render(width),
             ...input.render(width),
             "",
             ...list.render(width),
             "",
             ...new Text(
-              theme.fg("dim", "Type to search · ↑↓ navigate · enter select · esc cancel"),
+              theme.fg("dim", "Type to search · ↑↓ navigate · enter select · esc back to profiles"),
               1,
               0,
             ).render(width),

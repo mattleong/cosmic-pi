@@ -147,6 +147,100 @@ describe("/subagents command and profile settings", () => {
     expect(managerActions.patchProfile).not.toHaveBeenCalled();
   });
 
+  it("navigates back from model to profile and from profile to scope", async () => {
+    const managerActions = actions();
+    const run = register(managerActions);
+    const worker = _profileSettingsTest.profileSummary(inspection(), "worker");
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("Global · /agent/pi-subagents.json")
+      .mockResolvedValueOnce(worker)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce("Project · /repo/.pi/pi-subagents.json")
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
+    const custom = vi.fn().mockResolvedValueOnce(undefined);
+
+    await run("profiles", baseContext({ select, custom, notify: vi.fn() }));
+
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(select.mock.calls.map(([title]) => title)).toEqual([
+      "Subagent profile settings · choose scope · esc close",
+      expect.stringContaining("Global profiles"),
+      expect.stringContaining("Global profiles"),
+      "Subagent profile settings · choose scope · esc close",
+      expect.stringContaining("Project profiles"),
+      "Subagent profile settings · choose scope · esc close",
+    ]);
+    expect(managerActions.patchProfile).not.toHaveBeenCalled();
+  });
+
+  it("returns from effort selection to the same profile's model picker", async () => {
+    const managerActions = actions();
+    const run = register(managerActions);
+    const worker = _profileSettingsTest.profileSummary(inspection(), "worker");
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("Global · /agent/pi-subagents.json")
+      .mockResolvedValueOnce(worker)
+      .mockResolvedValueOnce(undefined);
+    const custom = vi.fn().mockResolvedValueOnce("pi/zai/plain").mockResolvedValueOnce(undefined);
+
+    await run("profiles", baseContext({ select, custom, notify: vi.fn() }));
+
+    expect(select.mock.calls[2]?.[0]).toContain("Profile: worker · Effort");
+    expect(custom).toHaveBeenCalledTimes(2);
+    expect(managerActions.patchProfile).not.toHaveBeenCalled();
+  });
+
+  it("shows the active profile and scope in the model picker", async () => {
+    const managerActions = actions();
+    const run = register(managerActions);
+    const worker = _profileSettingsTest.profileSummary(inspection(), "worker");
+    const custom = vi
+      .fn()
+      .mockImplementationOnce(
+        (
+          factory: (
+            tui: { requestRender: () => void },
+            theme: { fg: (_color: string, text: string) => string; bold: (text: string) => string },
+            keybindings: { matches: () => boolean },
+            done: (value: string | null) => void,
+          ) => { render: (width: number) => string[] },
+        ) => {
+          const component = factory(
+            { requestRender: vi.fn() },
+            { fg: (_color, text) => text, bold: (text) => text },
+            { matches: () => false },
+            vi.fn(),
+          );
+          const rendered = component.render(120).join("\n");
+          expect(rendered).toContain("Profile: worker · Select model");
+          expect(rendered).toContain("Scope: Global · /agent/pi-subagents.json");
+          expect(rendered).toContain("esc back to profiles");
+          return Promise.resolve("disabled");
+        },
+      );
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("Global · /agent/pi-subagents.json")
+      .mockResolvedValueOnce(worker);
+
+    await run(
+      "profiles",
+      baseContext({
+        select,
+        custom,
+        confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
+        notify: vi.fn(),
+      }),
+    );
+
+    expect(managerActions.patchProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: "worker", route: "disabled" }),
+    );
+  });
+
   it("protects existing ordered routes as read-only", async () => {
     const value = inspection({
       version: 2,
@@ -349,6 +443,7 @@ describe("/subagents command and profile settings", () => {
       notify: vi.fn(),
     });
     await run("profiles", ctx);
+    expect(select.mock.calls[2]?.[0]).toContain("Profile: worker · Effort");
     expect(managerActions.patchProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         scope: "global",
@@ -404,12 +499,12 @@ describe("/subagents command and profile settings", () => {
           .fn()
           .mockResolvedValueOnce("Global · /agent/pi-subagents.json")
           .mockResolvedValueOnce(worker),
-        custom: vi.fn().mockResolvedValue("pi/zai/plain"),
+        custom: vi.fn().mockResolvedValueOnce("pi/zai/plain").mockResolvedValueOnce(undefined),
         confirm: declineConfirm,
         notify: vi.fn(),
       }),
     );
-    expect(declineConfirm).toHaveBeenCalledWith("Discouraged model", expect.any(String));
+    expect(declineConfirm).toHaveBeenCalledWith("Discouraged model for worker", expect.any(String));
     expect(declineActions.patchProfile).not.toHaveBeenCalled();
 
     const acceptActions = actions(value);

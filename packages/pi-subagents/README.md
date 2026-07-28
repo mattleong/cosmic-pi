@@ -101,7 +101,7 @@ The second form keeps reviewer guidance but explicitly overrides profile routing
 ## Commands
 
 - `/subagents` opens the responsive fleet inspector in interactive TUI mode.
-- `/subagents profiles` opens TUI-only Global/trusted-Project profile settings, shows both scope paths, and saves one staged single-candidate edit atomically before offering reload.
+- `/subagents profiles` opens TUI-only Global/trusted-Project profile settings, shows both scope paths, and saves one staged single-candidate edit atomically before offering reload. Escape moves back one step (effort → model → profile → scope) instead of abandoning the whole flow; the model picker keeps the active profile, scope, and settings path visible.
 
 Fleet controls:
 

@@ -25,8 +25,8 @@
 - `src/tools/subagent.ts` — the focused agent-facing tool suite (`models`, `start`, `list`, `status`, `await`, `send`, `reply`, lifecycle, and rename), with strict non-overlapping parameter contracts, a discriminated lifecycle schema, final model-output bounding, partial-failure projection with machine-actionable failure codes, and cooperative `pi-code-previews` shell rendering.
 - `src/tools/details.ts` — versioned deeply frozen start/await card snapshots, bounded persisted fields, tolerant legacy decoding, and hostile/malformed-detail fallback support.
 - `src/ui/session-output.ts` — shared width-aware child-session presentation for fleet details, with grouped activity, Markdown final reports, and optional technical metadata.
-- `src/settings/controller.ts` — `/subagents` fleet dispatch plus TUI-only `/subagents profiles` orchestration for Global/trusted-Project scope selection, staged single-route edits, discouraged confirmation, atomic save, and reload warnings.
-- `src/settings/ui/model-picker.ts` — pure searchable model-choice construction plus the TUI picker. Denied models are omitted; authenticated Pi capability metadata, Parent capability, Claude readiness caveats, current markers, and capability-filtered efforts are presented.
+- `src/settings/controller.ts` — `/subagents` fleet dispatch plus TUI-only `/subagents profiles` orchestration for a reversible scope → profile → model → effort flow, staged single-route edits, discouraged confirmation, atomic save, and reload warnings.
+- `src/settings/ui/model-picker.ts` — pure searchable model-choice construction plus the TUI picker. The picker keeps the edited profile, scope, and settings path visible and treats cancel as back-to-profile. Denied models are omitted; authenticated Pi capability metadata, Parent capability, Claude readiness caveats, current markers, and capability-filtered efforts are presented.
 - `src/ui/` — pure responsive fleet presentation, run-state glyph/color projection, scroll projection, and terminal-text sanitization. Fixed-width activity frames and responsive grouped footer fitting come from `pi-cosmic-ui/manager`, shared with `/ps`.
 
 ## Ownership
