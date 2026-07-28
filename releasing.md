@@ -1,6 +1,6 @@
 # Releasing cosmic-pi
 
-All workspace packages use the same version. The public `pi-background-terminals`, `pi-better-openai`, `pi-better-xai`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, and `pi-subagents` packages are published together; private `pi-advisor` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm.
+All workspace packages use the same version. The public `pi-background-terminals`, `pi-better-openai`, `pi-better-xai`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-advisor` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm.
 
 ## One-time setup
 
@@ -14,6 +14,7 @@ Before the first release:
    - `pi-code-previews`
    - `pi-cosmic-core`
    - `pi-cosmic-ui`
+   - `pi-directory-models`
    - `pi-subagents`
 3. For each npm package, set the trusted publisher to:
    - **Organization or user:** `mattleong`
@@ -90,10 +91,11 @@ npm view pi-better-xai version
 npm view pi-code-previews version
 npm view pi-cosmic-core version
 npm view pi-cosmic-ui version
+npm view pi-directory-models version
 npm view pi-subagents version
 ```
 
-All seven commands should report the release version. npm provenance should also appear on each package version page.
+All eight commands should report the release version. npm provenance should also appear on each package version page.
 
 ## Retry a failed release
 

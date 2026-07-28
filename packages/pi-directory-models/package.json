@@ -1,0 +1,75 @@
+{
+  "name": "pi-directory-models",
+  "version": "0.2.0",
+  "description": "Remember Pi model and thinking preferences per working directory.",
+  "keywords": [
+    "model",
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "preferences",
+    "workspace"
+  ],
+  "homepage": "https://github.com/mattleong/cosmic-pi/tree/main/packages/pi-directory-models#readme",
+  "bugs": {
+    "url": "https://github.com/mattleong/cosmic-pi/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mattleong/cosmic-pi.git",
+    "directory": "packages/pi-directory-models"
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "README.md",
+    "ARCHITECTURE.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "validate": "pnpm check && pnpm test",
+    "pretypecheck": "pnpm --filter pi-cosmic-core build",
+    "typecheck": "tsc --noEmit",
+    "effect:diagnostics": "effect-language-service diagnostics --project tsconfig.json",
+    "lint": "oxlint --deny-warnings .",
+    "lint:fix": "oxlint --fix .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "pretest": "pnpm --filter pi-cosmic-core build",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm validate",
+    "pack:dry": "pnpm pack --dry-run"
+  },
+  "dependencies": {
+    "effect": "catalog:",
+    "pi-cosmic-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "catalog:"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
