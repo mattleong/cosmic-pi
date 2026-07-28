@@ -8,6 +8,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import type { TSchema } from "typebox";
+import { Check } from "typebox/value";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
@@ -315,18 +317,62 @@ describe("subagent tool", () => {
       "subagent_rename",
     ])
       expect(schema(name)?.additionalProperties).toBe(false);
+    type StartVariantSchema = {
+      readonly additionalProperties?: boolean;
+      readonly properties?: {
+        readonly backend?: {
+          readonly const?: string;
+          readonly enum?: ReadonlyArray<string>;
+        };
+        readonly model?: unknown;
+        readonly task?: { readonly pattern?: string };
+      };
+    };
     const startSchema = schema("subagent_start") as {
       readonly properties?: {
         readonly agents?: {
-          readonly items?: {
-            readonly additionalProperties?: boolean;
-            readonly properties?: { readonly task?: { readonly pattern?: string } };
-          };
+          readonly items?: { readonly anyOf?: ReadonlyArray<StartVariantSchema> };
         };
       };
     };
-    expect(startSchema.properties?.agents?.items?.additionalProperties).toBe(false);
-    expect(startSchema.properties?.agents?.items?.properties?.task?.pattern).toBe(".*\\S.*");
+    const startVariants = startSchema.properties?.agents?.items?.anyOf ?? [];
+    const automatic = startVariants.find(
+      (variant) => variant.properties?.backend?.const === "auto",
+    );
+    const explicit = startVariants.find((variant) =>
+      variant.properties?.backend?.enum?.includes("pi"),
+    );
+    expect(startVariants).toHaveLength(2);
+    expect(startVariants.every((variant) => variant.additionalProperties === false)).toBe(true);
+    expect(startVariants.every((variant) => variant.properties?.task?.pattern === ".*\\S.*")).toBe(
+      true,
+    );
+    expect(automatic?.properties).not.toHaveProperty("model");
+    expect(explicit?.properties?.backend?.enum).toEqual(["pi", "claude-cli"]);
+    expect(explicit?.properties).toHaveProperty("model");
+    const startParameters = tools.get("subagent_start")?.parameters as TSchema;
+    expect(
+      Check(startParameters, {
+        agents: [{ backend: "auto", task: "Inspect", writeIntent: "read-only" }],
+      }),
+    ).toBe(true);
+    expect(
+      Check(startParameters, {
+        agents: [{ backend: "auto", model: "/", task: "Inspect", writeIntent: "read-only" }],
+      }),
+    ).toBe(false);
+    expect(
+      Check(startParameters, {
+        agents: [
+          {
+            backend: "pi",
+            model: "openai-codex/gpt-5.6-sol",
+            task: "Inspect",
+            writeIntent: "read-only",
+          },
+        ],
+      }),
+    ).toBe(true);
     expect(tools.get("subagent_start")?.description).toContain("at most one foreground agent");
     expect(tools.get("subagent_status")?.description).toContain("backend capabilities");
     expect(tools.get("subagent_send")?.description).toContain(
@@ -2911,16 +2957,21 @@ describe("subagent tool", () => {
     const startSchema = startTool?.parameters as
       | {
           readonly properties?: {
-            readonly agents?: { readonly items?: { readonly required?: ReadonlyArray<string> } };
+            readonly agents?: {
+              readonly items?: {
+                readonly anyOf?: ReadonlyArray<{ readonly required?: ReadonlyArray<string> }>;
+              };
+            };
           };
         }
       | undefined;
 
-    expect(startSchema?.properties?.agents?.items?.required).toEqual([
-      "task",
-      "backend",
-      "writeIntent",
-    ]);
+    const startVariants = startSchema?.properties?.agents?.items?.anyOf ?? [];
+    expect(startVariants).toHaveLength(2);
+    for (const variant of startVariants) {
+      expect(variant.required).toHaveLength(3);
+      expect(variant.required).toEqual(expect.arrayContaining(["task", "backend", "writeIntent"]));
+    }
     const piModels = await modelsTool?.execute(
       "call",
       { query: "sol" },

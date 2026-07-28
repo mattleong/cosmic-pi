@@ -5,7 +5,7 @@ Session-scoped foreground and background subagents for pi.
 ## Features
 
 - Seven deterministic task profiles: `scout`, `researcher`, `planner`, `worker`, `reviewer`, `oracle`, and `delegate`. Profiles inject concise role guidance and route an ordered model policy without heuristic scoring.
-- Required backend selection with `auto`, `pi`, and `claude-cli`: `auto` resolves the selected profile (or `defaultProfile`), while concrete backends preserve explicit model overrides and retain any selected profile guidance.
+- Required backend selection with `auto`, `pi`, and `claude-cli`: the `auto` launch variant structurally omits `model` and resolves the selected profile (or `defaultProfile`), while concrete backends accept explicit model overrides and retain any selected profile guidance.
 - Fresh or forked Pi child sessions. Only `oracle` defaults to forked context; every other profile defaults to fresh. Claude currently supports fresh context only, and oracle never silently degrades when its parent branch cannot be forked.
 - Parent-model inheritance with role-specific profile effort defaults, plus per-run model and thinking-effort overrides for Pi and Claude aliases/full model IDs for `claude-cli`.
 - One static, preflight-only discovery surface: `subagent_models` shows the configured default profile, profile descriptions, context and effort defaults, and ordered candidate eligibility, plus exact explicit `backend` and `model` selectors. Candidate eligibility is evaluated with each profile's default context. Runtime authentication and readiness are checked at launch; denied selector lines are hidden and discouraged lines are marked explicit-only.
@@ -96,7 +96,7 @@ Examples:
 }
 ```
 
-The second form keeps reviewer guidance but explicitly overrides profile routing. Because it also sets `effort`, that value overrides reviewer’s built-in `high` default. `backend: "auto"` cannot combine with `model`. `writeIntent` remains required for every launch.
+The second form keeps reviewer guidance but explicitly overrides profile routing. Because it also sets `effort`, that value overrides reviewer’s built-in `high` default. The `backend: "auto"` launch variant does not expose a `model` field; configured profile candidates still select its model internally. `writeIntent` remains required for every launch.
 
 ## Commands
 

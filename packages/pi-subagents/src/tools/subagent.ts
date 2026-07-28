@@ -103,66 +103,83 @@ const runIdOptions = {
 } as const;
 const RunIdParameter = Type.String(runIdOptions);
 
-const StartSpecParameters = Type.Object(
-  {
-    task: Type.String({
-      description:
-        "Self-contained task: include relevant paths, constraints, evidence to inspect, and the required deliverable.",
+const StartSpecCommonProperties = {
+  task: Type.String({
+    description:
+      "Self-contained task: include relevant paths, constraints, evidence to inspect, and the required deliverable.",
+    minLength: 1,
+    maxLength: MAX_TASK_CHARS,
+    pattern: NONBLANK_PATTERN,
+  }),
+  name: Type.Optional(
+    Type.String({
+      description: "Optional nonblank display name.",
       minLength: 1,
-      maxLength: MAX_TASK_CHARS,
+      maxLength: MAX_NAME_CHARS,
       pattern: NONBLANK_PATTERN,
     }),
-    name: Type.Optional(
-      Type.String({
-        description: "Optional nonblank display name.",
-        minLength: 1,
-        maxLength: MAX_NAME_CHARS,
-        pattern: NONBLANK_PATTERN,
-      }),
-    ),
-    execution: Type.Optional(
-      StringEnum(["foreground", "background"] as const, {
-        description:
-          "Launch behavior; defaults to background. Foreground blocks subagent_start until the run finishes, pauses, or asks a parent question. Use at most one foreground agent per start call.",
-      }),
-    ),
-    context: Type.Optional(
-      StringEnum(["fresh", "fork"] as const, {
-        description:
-          'Child context. Explicit values override the profile default. Only oracle defaults to "fork"; every other profile defaults to "fresh". Fork requires backend "pi" and a persisted parent leaf.',
-      }),
-    ),
-    profile: Type.Optional(
-      StringEnum(PROFILE_IDS, {
-        description:
-          "Behavior and automatic model-routing profile. Explicit pi/claude-cli backend and model values override routing while retaining profile guidance.",
-      }),
-    ),
-    backend: StringEnum(["auto", "pi", "claude-cli"] as const, {
+  ),
+  execution: Type.Optional(
+    StringEnum(["foreground", "background"] as const, {
       description:
-        'Execution backend. "auto" deterministically resolves the selected profile (or configured defaultProfile) and cannot combine with model. "pi" and "claude-cli" preserve explicit launch behavior.',
+        "Launch behavior; defaults to background. Foreground blocks subagent_start until the run finishes, pauses, or asks a parent question. Use at most one foreground agent per start call.",
     }),
-    writeIntent: StringEnum(["writer", "read-only"] as const, {
-      description: "Only one shared-cwd writer may be active.",
+  ),
+  context: Type.Optional(
+    StringEnum(["fresh", "fork"] as const, {
+      description:
+        'Child context. Explicit values override the profile default. Only oracle defaults to "fork"; every other profile defaults to "fresh". Fork requires backend "pi" and a persisted parent leaf.',
     }),
-    model: Type.Optional(
-      Type.String({
-        description:
-          'Explicit model override. Invalid with backend "auto". For backend "pi": a canonical provider/model value exactly as listed by subagent_models (omit to inherit the parent model); a bare model ID is accepted only when unique. For backend "claude-cli": a Claude alias or full Claude model ID; Claude defaults to sonnet.',
-        minLength: 1,
-        maxLength: 512,
-        pattern: NONBLANK_PATTERN,
-      }),
-    ),
-    effort: Type.Optional(
-      StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, {
-        description:
-          "Explicit thinking-effort override. Omit to use the candidate effort, then the profile default effort, then the parent effort. claude-cli supports low through max only; off and minimal are rejected.",
-      }),
-    ),
-  },
-  strictObjectOptions,
+  ),
+  profile: Type.Optional(
+    StringEnum(PROFILE_IDS, {
+      description:
+        "Behavior and automatic model-routing profile. Explicit pi/claude-cli backend and model values override routing while retaining profile guidance.",
+    }),
+  ),
+  writeIntent: StringEnum(["writer", "read-only"] as const, {
+    description: "Only one shared-cwd writer may be active.",
+  }),
+  effort: Type.Optional(
+    StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, {
+      description:
+        "Explicit thinking-effort override. Omit to use the candidate effort, then the profile default effort, then the parent effort. claude-cli supports low through max only; off and minimal are rejected.",
+    }),
+  ),
+} as const;
+
+const ExplicitModelParameter = Type.Optional(
+  Type.String({
+    description:
+      'Explicit model override. For backend "pi": a canonical provider/model value exactly as listed by subagent_models (omit to inherit the parent model); a bare model ID is accepted only when unique. For backend "claude-cli": a Claude alias or full Claude model ID; Claude defaults to sonnet.',
+    minLength: 1,
+    maxLength: 512,
+    pattern: NONBLANK_PATTERN,
+  }),
 );
+
+const StartSpecParameters = Type.Union([
+  Type.Object(
+    {
+      ...StartSpecCommonProperties,
+      backend: Type.Literal("auto", {
+        description:
+          "Resolve the selected profile or configured defaultProfile. This variant intentionally has no model field.",
+      }),
+    },
+    strictObjectOptions,
+  ),
+  Type.Object(
+    {
+      ...StartSpecCommonProperties,
+      backend: StringEnum(["pi", "claude-cli"] as const, {
+        description: "Use an explicit backend, optionally with an explicit model override.",
+      }),
+      model: ExplicitModelParameter,
+    },
+    strictObjectOptions,
+  ),
+]);
 
 const RunIdsParameters = Type.Array(RunIdParameter, {
   description: "Target run IDs.",
@@ -1680,7 +1697,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_start",
     label: "Start Subagents",
     description:
-      "Launch one to twelve session-scoped subagents from one agents array. Every fresh task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. Backend is required: use auto for deterministic profile routing or pi/claude-cli for an explicit override. Background is the default; at most one foreground agent is allowed. Successful launches remain active when a peer launch fails.",
+      "Launch one to twelve session-scoped subagents from one agents array. Every fresh task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. Backend is required: use auto without a model for deterministic profile routing, or pi/claude-cli for an explicit override. Background is the default; at most one foreground agent is allowed. Successful launches remain active when a peer launch fails.",
     promptSnippet: "Launch delegated subagents using a task profile and explicit write intent",
     promptGuidelines: [
       "Use subagent_start for delegated work that can proceed independently; make every fresh task self-contained with relevant paths, constraints, evidence, and its expected deliverable. Background is the default, and each call accepts at most one foreground agent.",
@@ -1689,7 +1706,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
       "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",
       "Use subagent_models to inspect profile routing or explicit launch-ready selectors; never substitute an arbitrary model when a profile has no eligible candidate.",
-      'Backend "auto" cannot combine with model. Explicit backend "pi" takes an authenticated canonical provider/model (or inherits the parent); "claude-cli" takes only a Claude alias or full Claude model ID.',
+      'Backend "auto" routes exclusively through profile settings and must omit model entirely. To choose a model for one launch, use explicit backend "pi" with an authenticated canonical provider/model (or omit model to inherit the parent), or "claude-cli" with a Claude alias/full model ID.',
       "Choose backend pi when the child may need mid-turn guidance, interruption, or parent questions; claude-cli supports await, stop, local rename, and resume after completion but not those interactive controls.",
     ],
     parameters: StartParameters,
