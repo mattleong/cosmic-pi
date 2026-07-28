@@ -643,8 +643,8 @@ describe("subagent tool", () => {
       context: "fresh",
       model: "openai-codex/gpt-5.6-sol",
       selection: {
-        source: "profile-parent-fallback",
-        reason: "Profile delegate explicitly fell back to the parent model.",
+        source: "profile-parent-candidate",
+        reason: "Profile delegate selected parent candidate 1.",
         skippedCandidates: [],
       },
     });
@@ -688,7 +688,7 @@ describe("subagent tool", () => {
       expect(request.effortWasExplicit).toBe(false);
       expect(request.profileGuidance?.length).toBeGreaterThan(20);
       expect(request.selection).toMatchObject({
-        source: "profile-parent-fallback",
+        source: "profile-parent-candidate",
         skippedCandidates: [],
       });
     }
@@ -712,7 +712,7 @@ describe("subagent tool", () => {
     expect(requests[0]).toMatchObject({
       profile: "reviewer",
       context: "fresh",
-      selection: { source: "profile-parent-fallback" },
+      selection: { source: "profile-parent-candidate" },
     });
     expect(requests[0]?.profileGuidance).toContain("independent reviewer");
   });
@@ -766,13 +766,10 @@ describe("subagent tool", () => {
     const profiles = profileServiceFor({
       discouraged: [{ backend: "pi", model: "openai/gpt-first" }],
       profiles: {
-        reviewer: {
-          candidates: [
-            { source: "model", backend: "pi", model: "openai/gpt-first" },
-            { source: "model", backend: "pi", model: "openai/gpt-second", effort: "xhigh" },
-          ],
-          fallback: "fail",
-        },
+        reviewer: [
+          { model: "pi/openai/gpt-first", effort: "default" },
+          { model: "pi/openai/gpt-second", effort: "xhigh" },
+        ],
       },
     });
     const ctx = registryContext([
@@ -818,14 +815,11 @@ describe("subagent tool", () => {
     let preflightCalls = 0;
     const profiles = profileServiceFor({
       profiles: {
-        reviewer: {
-          candidates: [
-            { source: "model", backend: "claude-cli", model: "fable" },
-            { source: "model", backend: "claude-cli", model: "opus" },
-            { source: "model", backend: "pi", model: "openai-codex/gpt-5.6-sol" },
-          ],
-          fallback: "fail",
-        },
+        reviewer: [
+          { model: "claude-cli/fable", effort: "default" },
+          { model: "claude-cli/opus", effort: "default" },
+          { model: "pi/openai-codex/gpt-5.6-sol", effort: "default" },
+        ],
       },
     });
     const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles, {
@@ -886,13 +880,10 @@ describe("subagent tool", () => {
   it("does not fall through to another candidate after the selected start reaches the service", async () => {
     const profiles = profileServiceFor({
       profiles: {
-        reviewer: {
-          candidates: [
-            { source: "model", backend: "claude-cli", model: "fable" },
-            { source: "model", backend: "pi", model: "openai-codex/gpt-5.6-sol" },
-          ],
-          fallback: "fail",
-        },
+        reviewer: [
+          { model: "claude-cli/fable", effort: "default" },
+          { model: "pi/openai-codex/gpt-5.6-sol", effort: "default" },
+        ],
       },
     });
     let starts = 0;
@@ -941,13 +932,10 @@ describe("subagent tool", () => {
     let preflightCalls = 0;
     const profiles = profileServiceFor({
       profiles: {
-        reviewer: {
-          candidates: [
-            { source: "model", backend: "claude-cli", model: "fable" },
-            { source: "model", backend: "pi", model: "openai-codex/gpt-5.6-sol" },
-          ],
-          fallback: "fail",
-        },
+        reviewer: [
+          { model: "claude-cli/fable", effort: "default" },
+          { model: "pi/openai-codex/gpt-5.6-sol", effort: "default" },
+        ],
       },
     });
     const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles, {
@@ -1227,9 +1215,7 @@ describe("subagent tool", () => {
 
   it("returns model-visible profile_unknown and profile_no_eligible_model codes", async () => {
     const requests: StartSubagentRequest[] = [];
-    const emptyRoute = profileServiceFor({
-      profiles: { reviewer: { candidates: [], fallback: "fail" } },
-    });
+    const emptyRoute = profileServiceFor({ profiles: { reviewer: "disabled" } });
     const tool = captureSubagentTools(startCapturingService(requests), ["read"], emptyRoute).get(
       "subagent_start",
     );
@@ -2449,7 +2435,7 @@ describe("subagent tool", () => {
     const text = models?.content[0]?.text ?? "";
     expect(text).toContain("Configured default profile: reviewer");
     expect(text).toContain("reviewer · context=fresh · effort=high");
-    expect(text).toContain("parent fallback · skipped");
+    expect(text).toContain("parent:default · skipped");
     expect(text).not.toContain("backend=pi model=openai-codex/gpt-5.6-sol");
     expect(text).toContain(
       "backend=claude-cli model=fable · Claude Fable (CLI alias) · reasoning · efforts=low,medium,high,xhigh,max · discouraged (explicit selection only)",
@@ -2465,13 +2451,10 @@ describe("subagent tool", () => {
     const requests: StartSubagentRequest[] = [];
     const profiles = profileServiceFor({
       profiles: {
-        worker: {
-          candidates: [
-            { source: "model", backend: "pi", model: "zai/no-reasoning", effort: "high" },
-            { source: "model", backend: "pi", model: "openai/reasoning", effort: "high" },
-          ],
-          fallback: "fail",
-        },
+        worker: [
+          { model: "pi/zai/no-reasoning", effort: "high" },
+          { model: "pi/openai/reasoning", effort: "high" },
+        ],
       },
     });
     const ctx = registryContext([
@@ -2586,8 +2569,8 @@ describe("subagent tool", () => {
       .get("subagent_models")
       ?.execute("call", { profile: "oracle" }, undefined, undefined, ephemeral);
     const text = models?.content[0]?.text ?? "";
-    expect(text).toContain("oracle · context=fork · effort=high · fallback=parent");
-    expect(text).toContain("parent fallback · skipped");
+    expect(text).toContain("oracle · context=fork · effort=high");
+    expect(text).toContain("parent:default · skipped");
     expect(text).toContain("Forked context requires a persisted parent session");
   });
 
@@ -2614,20 +2597,22 @@ describe("subagent tool", () => {
     );
   });
 
-  it("renders a duplicate parent fallback as skipped instead of a second eligible route", async () => {
+  it("renders explicitly repeated parent candidates in declared order", async () => {
     const profiles = profileServiceFor({
       profiles: {
-        delegate: { candidates: [{ source: "parent" }], fallback: "parent" },
+        delegate: [
+          { model: "parent", effort: "default" },
+          { model: "parent", effort: "high" },
+        ],
       },
     });
     const models = await captureSubagentTools(startCapturingService([]), ["read"], profiles)
       .get("subagent_models")
       ?.execute("call", { profile: "delegate" }, undefined, undefined, context);
     const text = models?.content[0]?.text ?? "";
-    expect(text).toContain("1. parent model · eligible");
-    expect(text).toContain(
-      "2. parent fallback · skipped · Parent fallback duplicates an earlier parent-model candidate.",
-    );
+    expect(text).toContain("1. parent:default · eligible");
+    expect(text).toContain("2. parent:high · eligible");
+    expect(text).not.toContain("fallback");
   });
 
   it("renders parent_model_missing skips when no parent model is active", async () => {
@@ -2639,23 +2624,19 @@ describe("subagent tool", () => {
       .get("subagent_models")
       ?.execute("call", { profile: "delegate" }, undefined, undefined, noParent);
     const text = models?.content[0]?.text ?? "";
-    expect(text).toContain("parent fallback · skipped · No active parent model is available.");
+    expect(text).toContain("parent:default · skipped · No active parent model is available.");
   });
 
   it("bounds aggregate profile and selector discovery output", async () => {
-    const selector = `provider/${"x".repeat(247)}`;
+    const selector = `provider/${"x".repeat(244)}`;
     const profiles = profileServiceFor({
       profiles: Object.fromEntries(
         PROFILE_IDS.map((profile) => [
           profile,
-          {
-            candidates: Array.from({ length: 32 }, () => ({
-              source: "model",
-              backend: "pi",
-              model: selector,
-            })),
-            fallback: "fail",
-          },
+          Array.from({ length: 32 }, () => ({
+            model: `pi/${selector}`,
+            effort: "default",
+          })),
         ]),
       ),
     });

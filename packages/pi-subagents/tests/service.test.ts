@@ -392,7 +392,7 @@ describe("SubagentService", () => {
           profile: "reviewer",
           profileGuidance: "Act as an independent reviewer.",
           selection: {
-            source: "profile-parent-fallback",
+            source: "profile-parent-candidate",
             reason: "Profile reviewer explicitly fell back to the parent model.",
             skippedCandidates: [],
           },
@@ -400,7 +400,7 @@ describe("SubagentService", () => {
       );
       expect(started).toMatchObject({
         profile: "reviewer",
-        selection: { source: "profile-parent-fallback" },
+        selection: { source: "profile-parent-candidate" },
       });
       expect(fake.controls[0]?.launch.systemPrompt).toContain("assigned profile is reviewer");
       expect(fake.controls[0]?.launch.systemPrompt).toContain("independent reviewer");

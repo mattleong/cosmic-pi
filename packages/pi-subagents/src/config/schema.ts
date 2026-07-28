@@ -1,16 +1,17 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
+  PROFILE_CANDIDATE_EFFORTS,
   PROFILE_IDS,
+  type DeclaredProfileRoute,
   type ModelPolicySelector,
   type ProfileCandidate,
-  type ProfileFallback,
   type ProfileId,
-  type ProfileRoute,
 } from "../profiles/model.ts";
+import { isClaudeModelSelector } from "../run/model.ts";
 
 export const SUBAGENT_CONFIG_BASENAME = "pi-subagents.json";
-export const SUBAGENT_CONFIG_VERSION = 1;
+export const SUBAGENT_CONFIG_VERSION = 2;
 export const MAX_POLICY_SELECTORS = 256;
 export const MAX_PROFILE_CANDIDATES = 32;
 export const MAX_MODEL_SELECTOR_CHARS = 256;
@@ -20,35 +21,20 @@ export interface SubagentConfigFile {
   readonly defaultProfile?: ProfileId | undefined;
   readonly denied?: ReadonlyArray<ModelPolicySelector> | undefined;
   readonly discouraged?: ReadonlyArray<ModelPolicySelector> | undefined;
-  readonly profiles?: Partial<Readonly<Record<ProfileId, ProfileRoute>>> | undefined;
+  readonly profiles?: Partial<Readonly<Record<ProfileId, DeclaredProfileRoute>>> | undefined;
 }
 
 export interface DecodedSubagentConfig {
   readonly file: SubagentConfigFile;
   /** Redacted structural paths only; values and parser details are never retained. */
   readonly diagnostics: ReadonlyArray<string>;
-  /**
-   * Profile routes that were declared in the document but were not decodable as a route object.
-   * Present-invalid routes are distinguished from absent routes so a trusted-project override can
-   * fail closed instead of silently reopening the route it was meant to replace.
-   */
   readonly invalidProfileRoutes: ReadonlyArray<ProfileId>;
-  /** True when the document declares a version other than SUBAGENT_CONFIG_VERSION. */
   readonly unsupportedVersion: boolean;
 }
 
 export const ProfileIdSchema = Schema.Literals(PROFILE_IDS);
-export const ProfileFallbackSchema = Schema.Literals(["fail", "parent"] as const);
 export const ProfileBackendSchema = Schema.Literals(["pi", "claude-cli"] as const);
-export const ProfileEffortSchema = Schema.Literals([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const);
+export const ProfileEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
 
 const hasNoTerminalControls = Schema.makeFilter((value: string) => {
   for (let index = 0; index < value.length; index += 1) {
@@ -67,21 +53,10 @@ export const ModelPolicySelectorSchema = Schema.Struct({
   backend: ProfileBackendSchema,
   model: NonEmptyStringSchema,
 });
-// A claude-cli candidate pinned to effort off/minimal can never become eligible, so it is
-// rejected while decoding instead of being accepted and skipped on every resolution.
-const claudeCandidateEffortIsLaunchable = Schema.makeFilter(
-  (candidate: { readonly backend: "pi" | "claude-cli"; readonly effort?: string | undefined }) =>
-    candidate.backend !== "claude-cli" ||
-    (candidate.effort !== "off" && candidate.effort !== "minimal"),
-);
-const ModelCandidateSchema = Schema.Struct({
-  source: Schema.Literal("model"),
-  backend: ProfileBackendSchema,
+const CandidateShapeSchema = Schema.Struct({
   model: NonEmptyStringSchema,
-  effort: Schema.optional(ProfileEffortSchema),
-}).check(claudeCandidateEffortIsLaunchable);
-const ParentCandidateSchema = Schema.Struct({ source: Schema.Literal("parent") });
-export const ProfileCandidateSchema = Schema.Union([ModelCandidateSchema, ParentCandidateSchema]);
+  effort: ProfileEffortSchema,
+});
 
 const ownKeysAre = (
   record: Readonly<Record<string, unknown>>,
@@ -94,8 +69,6 @@ const ownKeysAre = (
   }
 };
 
-// Configuration arrives from parsed JSON, but this boundary deliberately performs no recursive
-// Schema record decode before hostile arrays have been capped.
 const decodedRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Readonly<Record<string, unknown>>)
@@ -133,37 +106,18 @@ const decodeField = <A>(
   return decoded.value;
 };
 
-const normalizedSelector = (selector: ModelPolicySelector): ModelPolicySelector => ({
-  backend: selector.backend,
-  model: selector.model.trim(),
-});
-
-const normalizedCandidate = (candidate: ProfileCandidate): ProfileCandidate =>
-  candidate.source === "parent"
-    ? candidate
-    : {
-        ...candidate,
-        model: candidate.model.trim(),
-      };
-
-const decodeArrayItems = <A>(
+const decodePolicyItems = (
   value: unknown,
-  schema: Schema.Decoder<A>,
   path: string,
   diagnostics: string[],
-  normalize: (value: A) => A,
-  maximum: number,
-  allowedKeys: (record: Readonly<Record<string, unknown>>) => ReadonlySet<string>,
-): ReadonlyArray<A> => {
+): ReadonlyArray<ModelPolicySelector> => {
   if (!Array.isArray(value)) {
     if (value !== undefined) diagnostics.push(path);
     return [];
   }
-  if (value.length > maximum) diagnostics.push(`${path}[${maximum}+]`);
-  // Index only the bounded prefix. Array.prototype/schema transforms can inspect every element or
-  // invoke species accessors before a later slice, defeating the boundary.
-  const decodedItems: A[] = [];
-  for (let index = 0; index < Math.min(value.length, maximum); index += 1) {
+  if (value.length > MAX_POLICY_SELECTORS) diagnostics.push(`${path}[${MAX_POLICY_SELECTORS}+]`);
+  const result: ModelPolicySelector[] = [];
+  for (let index = 0; index < Math.min(value.length, MAX_POLICY_SELECTORS); index += 1) {
     let item: unknown;
     try {
       item = value[index];
@@ -172,64 +126,87 @@ const decodeArrayItems = <A>(
       continue;
     }
     const record = decodedRecord(item);
-    if (!record || !ownKeysAre(record, allowedKeys(record))) {
+    const decoded = record
+      ? Schema.decodeUnknownOption(ModelPolicySelectorSchema)(record)
+      : Option.none();
+    if (!record || !ownKeysAre(record, new Set(["backend", "model"])) || Option.isNone(decoded)) {
       diagnostics.push(`${path}[${index}]`);
       continue;
     }
-    const decoded = Schema.decodeUnknownOption(schema)(record);
-    if (Option.isNone(decoded)) {
-      diagnostics.push(`${path}[${index}]`);
-      continue;
-    }
-    decodedItems.push(normalize(decoded.value));
+    result.push({ backend: decoded.value.backend, model: decoded.value.model.trim() });
   }
-  return decodedItems;
+  return result;
 };
 
-const SELECTOR_KEYS = new Set(["backend", "model"]);
-const MODEL_CANDIDATE_KEYS = new Set(["source", "backend", "model", "effort"]);
-const PARENT_CANDIDATE_KEYS = new Set(["source"]);
-const selectorKeys = () => SELECTOR_KEYS;
-const candidateKeys = (record: Readonly<Record<string, unknown>>) =>
-  record.source === "parent" ? PARENT_CANDIDATE_KEYS : MODEL_CANDIDATE_KEYS;
+/** Syntax-only canonical selector validation. Catalog availability remains a launch-time boundary. */
+export const isCanonicalProfileModelSelector = (selector: string): boolean => {
+  const value = selector.trim();
+  if (value.length === 0 || value.length > MAX_MODEL_SELECTOR_CHARS) return false;
+  if (value === "parent") return true;
+  if (value.startsWith("claude-cli/"))
+    return isClaudeModelSelector(value.slice("claude-cli/".length));
+  if (!value.startsWith("pi/")) return false;
+  const canonical = value.slice(3);
+  const slash = canonical.indexOf("/");
+  if (slash <= 0 || slash >= canonical.length - 1 || /\s/.test(canonical)) return false;
+  const provider = canonical.slice(0, slash);
+  const model = canonical.slice(slash + 1);
+  return (
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(provider) &&
+    /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model) &&
+    model.split("/").every((segment) => segment !== "." && segment !== ".." && segment.length > 0)
+  );
+};
+
+const decodeCandidate = (value: unknown): ProfileCandidate | undefined => {
+  const record = decodedRecord(value);
+  if (!record || !ownKeysAre(record, new Set(["model", "effort"]))) return undefined;
+  const decoded = Schema.decodeUnknownOption(CandidateShapeSchema)(record);
+  if (Option.isNone(decoded)) return undefined;
+  const model = decoded.value.model.trim();
+  return isCanonicalProfileModelSelector(model)
+    ? { model, effort: decoded.value.effort }
+    : undefined;
+};
 
 const decodeRoute = (
   value: unknown,
   path: string,
   diagnostics: string[],
-): ProfileRoute | undefined => {
-  const record = decodedRecord(value);
-  if (!record) {
-    diagnostics.push(path);
+): DeclaredProfileRoute | undefined => {
+  if (value === "disabled") return value;
+  if (!Array.isArray(value)) {
+    const candidate = decodeCandidate(value);
+    if (!candidate) diagnostics.push(path);
+    return candidate;
+  }
+  if (value.length === 0 || value.length > MAX_PROFILE_CANDIDATES) {
+    diagnostics.push(
+      value.length > MAX_PROFILE_CANDIDATES ? `${path}[${MAX_PROFILE_CANDIDATES}+]` : path,
+    );
     return undefined;
   }
-  if (!ownKeysAre(record, new Set(["candidates", "fallback"])))
-    diagnostics.push(`${path}.<unknown>`);
-  const candidatesField = readField(record, "candidates", `${path}.candidates`, diagnostics);
-  const fallback = decodeField(
-    record,
-    "fallback",
-    ProfileFallbackSchema,
-    `${path}.fallback`,
-    diagnostics,
-  );
-  const candidates = decodeArrayItems(
-    candidatesField.value,
-    ProfileCandidateSchema,
-    `${path}.candidates`,
-    diagnostics,
-    normalizedCandidate,
-    MAX_PROFILE_CANDIDATES,
-    candidateKeys,
-  );
-  return {
-    candidates,
-    // A configured route never gains an implicit parent fallback.
-    fallback: (fallback ?? "fail") as ProfileFallback,
-  };
+  const candidates: ProfileCandidate[] = [];
+  let invalid = false;
+  for (let index = 0; index < Math.min(value.length, MAX_PROFILE_CANDIDATES); index += 1) {
+    let item: unknown;
+    try {
+      item = value[index];
+    } catch {
+      diagnostics.push(`${path}[${index}]`);
+      invalid = true;
+      continue;
+    }
+    const candidate = decodeCandidate(item);
+    if (!candidate) {
+      diagnostics.push(`${path}[${index}]`);
+      invalid = true;
+    } else candidates.push(candidate);
+  }
+  return invalid ? undefined : candidates;
 };
 
-/** Field- and item-tolerant unknown-boundary decode for one global or project document. */
+/** Field-tolerant v2 unknown-boundary decode for one global or project document. */
 export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedSubagentConfig {
   const diagnostics: string[] = [];
   const decodedRoot = decodedRecord(input);
@@ -254,44 +231,30 @@ export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedS
   const deniedField = readField(rawRoot, "denied", `${scope}.denied`, diagnostics);
   const discouragedField = readField(rawRoot, "discouraged", `${scope}.discouraged`, diagnostics);
   const profilesField = readField(rawRoot, "profiles", `${scope}.profiles`, diagnostics);
-
-  const denied = decodeArrayItems(
-    deniedField.value,
-    ModelPolicySelectorSchema,
-    `${scope}.denied`,
-    diagnostics,
-    normalizedSelector,
-    MAX_POLICY_SELECTORS,
-    selectorKeys,
-  );
-  const discouraged = decodeArrayItems(
+  const denied = decodePolicyItems(deniedField.value, `${scope}.denied`, diagnostics);
+  const discouraged = decodePolicyItems(
     discouragedField.value,
-    ModelPolicySelectorSchema,
     `${scope}.discouraged`,
     diagnostics,
-    normalizedSelector,
-    MAX_POLICY_SELECTORS,
-    selectorKeys,
   );
+
   const decodedProfiles = decodedRecord(profilesField.value);
   if (profilesField.present && !decodedProfiles) diagnostics.push(`${scope}.profiles`);
   const profileRecord = decodedProfiles ?? {};
-  const profiles: Partial<Record<ProfileId, ProfileRoute>> = {};
+  const profiles: Partial<Record<ProfileId, DeclaredProfileRoute>> = {};
   const invalidProfileRoutes: ProfileId[] = [];
   for (const id of PROFILE_IDS) {
     const field = readField(profileRecord, id, `${scope}.profiles.${id}`, diagnostics);
     if (!field.present) continue;
     const route = decodeRoute(field.value, `${scope}.profiles.${id}`, diagnostics);
-    if (route) profiles[id] = route;
-    else invalidProfileRoutes.push(id);
+    if (route === undefined) invalidProfileRoutes.push(id);
+    else profiles[id] = route;
   }
   if (!ownKeysAre(profileRecord, new Set<string>(PROFILE_IDS)))
     diagnostics.push(`${scope}.profiles.<unknown>`);
 
-  // Presence is semantic: malformed, null, boolean, string, and fractional declarations all
-  // fail activation closed rather than being recovered as an ordinary field typo.
   const version = versionField.value;
-  const unsupportedVersion = versionField.present && versionField.value !== SUBAGENT_CONFIG_VERSION;
+  const unsupportedVersion = version !== SUBAGENT_CONFIG_VERSION;
   if (unsupportedVersion) diagnostics.push(`${scope}.version`);
 
   return {

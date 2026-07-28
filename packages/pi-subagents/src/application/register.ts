@@ -13,6 +13,7 @@ import {
 } from "pi-cosmic-core";
 import { makeHostNotifier } from "../boundary/host-notifier.ts";
 import { makeSubagentProjectionBridge } from "../boundary/host-ui.ts";
+import { SubagentConfigStore } from "../config/store.ts";
 import {
   makeSubagentLayer,
   type SubagentApplication,
@@ -75,6 +76,7 @@ export function registerSubagentApplication(
   const bridge = makeSubagentProjectionBridge();
   const notify = makeHostNotifier(pi);
   let currentContext: ExtensionContext | undefined;
+  let currentActivation: CapturedActivation | undefined;
   let startupFailureTools: ReadonlyArray<string> = [];
   let preparationGeneration = 0;
   let hasRegisteredTools = false;
@@ -108,6 +110,7 @@ export function registerSubagentApplication(
       ),
     onActivated: (activation) => {
       currentContext = activation.ctx;
+      currentActivation = activation;
       bridge.setContext(activation.ctx);
       reactivateSubagentTools(pi, startupFailureTools);
       startupFailureTools = [];
@@ -115,6 +118,7 @@ export function registerSubagentApplication(
     onDeactivated: () => {
       rememberDisabledTools(deactivateSubagentTools(pi));
       currentContext = undefined;
+      currentActivation = undefined;
       notify.reset();
       bridge.clear();
     },
@@ -142,6 +146,26 @@ export function registerSubagentApplication(
       run(SubagentService.use((service) => service.reply(id, message))).then(() => undefined),
     rename: (id, name) =>
       run(SubagentService.use((service) => service.rename(id, name))).then(() => undefined),
+    inspectProfiles: (projectTrusted) => {
+      const activation = currentActivation;
+      if (!activation)
+        return Promise.reject(new Error("Subagents are not active; run /reload and try again."));
+      return run(
+        Effect.flatMap(SubagentConfigStore, (store) =>
+          store.inspect(activation.cwd, activation.agentDirectory, projectTrusted),
+        ),
+      );
+    },
+    patchProfile: (patch) => {
+      const activation = currentActivation;
+      if (!activation)
+        return Promise.reject(new Error("Subagents are not active; run /reload and try again."));
+      return run(
+        Effect.flatMap(SubagentConfigStore, (store) =>
+          store.patchProfile(activation.cwd, activation.agentDirectory, patch),
+        ),
+      );
+    },
   });
 
   const prepareActivation = (ctx: ExtensionContext): Promise<void> => {

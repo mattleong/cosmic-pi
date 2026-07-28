@@ -370,7 +370,10 @@ const decodeSelection = (value: unknown): SubagentSelectionProvenance | undefine
     return undefined;
   const candidateIndex = finiteNumber(record.candidateIndex);
   return {
-    source: record.source as SubagentSelectionSource,
+    // Defensive legacy card decoding: v1 parent-fallback provenance projects as a parent candidate.
+    source: (record.source === "profile-parent-fallback"
+      ? "profile-parent-candidate"
+      : record.source) as SubagentSelectionSource,
     ...(candidateIndex === undefined ? {} : { candidateIndex }),
     reason: clean(record.reason, MAX_CARD_PROVENANCE_CHARS),
     skippedCandidates: decodeSkipped(record.skippedCandidates),

@@ -2,9 +2,11 @@ import { freezeSnapshot } from "pi-cosmic-core";
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
 import {
   PROFILE_IDS,
+  type DeclaredProfileRoute,
   type ModelPolicySelector,
   type ProfileId,
   type ProfileRoute,
+  type ProfileRouteSource,
 } from "../profiles/model.ts";
 import type { SubagentBackend } from "../run/model.ts";
 import type { DecodedSubagentConfig } from "./schema.ts";
@@ -19,6 +21,7 @@ export interface ResolvedSubagentConfig {
   readonly denied: ReadonlyArray<ModelPolicySelector>;
   readonly discouraged: ReadonlyArray<ModelPolicySelector>;
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
+  readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
   readonly diagnostics: ReadonlyArray<string>;
 }
 
@@ -43,8 +46,14 @@ const unionSelectors = (
   return result;
 };
 
+const normalizeRoute = (route: DeclaredProfileRoute): ProfileRoute => ({
+  candidates:
+    route === "disabled"
+      ? []
+      : (Array.isArray(route) ? route : [route]).map((candidate) => ({ ...candidate })),
+});
+
 const cloneRoute = (route: ProfileRoute): ProfileRoute => ({
-  fallback: route.fallback,
   candidates: route.candidates.map((candidate) => ({ ...candidate })),
 });
 
@@ -58,26 +67,28 @@ export interface ResolveSubagentConfigInput {
   readonly project?: DecodedSubagentConfig | undefined;
 }
 
-/**
- * Merge semantics are intentionally policy-safe: project denies and discouragements are additive,
- * while a project route atomically replaces the matching global route. Built-ins fill only routes
- * absent from both documents. A trusted-project route that is declared but undecodable fails
- * closed for that profile (no candidates, `fail` fallback) instead of silently reopening the
- * global or built-in route it was meant to replace; sibling routes and additive policy are
- * unaffected. A malformed global route with no project override behaves like an absent route and
- * falls back to the neutral built-in.
- */
+/** Project routes replace global routes atomically; project policy remains additive. */
 export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
   const project = input.projectTrusted ? input.project : undefined;
   const profiles = {} as Record<ProfileId, ProfileRoute>;
+  const profileSources = {} as Record<ProfileId, ProfileRouteSource>;
   for (const id of PROFILE_IDS) {
-    profiles[id] = project?.invalidProfileRoutes.includes(id)
-      ? { candidates: [], fallback: "fail" }
-      : cloneRoute(
-          project?.file.profiles?.[id] ??
-            input.global.file.profiles?.[id] ??
-            BUILTIN_PROFILE_ROUTES[id],
-        );
+    if (project?.invalidProfileRoutes.includes(id)) {
+      profiles[id] = { candidates: [] };
+      profileSources[id] = "project-invalid";
+    } else if (project?.file.profiles?.[id] !== undefined) {
+      profiles[id] = normalizeRoute(project.file.profiles[id]);
+      profileSources[id] = "project";
+    } else if (input.global.invalidProfileRoutes.includes(id)) {
+      profiles[id] = { candidates: [] };
+      profileSources[id] = "global-invalid";
+    } else if (input.global.file.profiles?.[id] !== undefined) {
+      profiles[id] = normalizeRoute(input.global.file.profiles[id]);
+      profileSources[id] = "global";
+    } else {
+      profiles[id] = cloneRoute(BUILTIN_PROFILE_ROUTES[id]);
+      profileSources[id] = "builtin";
+    }
   }
   return freezeSnapshot({
     globalConfigPath: input.globalConfigPath,
@@ -90,6 +101,7 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     denied: unionSelectors(input.global.file.denied, project?.file.denied),
     discouraged: unionSelectors(input.global.file.discouraged, project?.file.discouraged),
     profiles,
+    profileSources,
     diagnostics: [...input.global.diagnostics, ...(project?.diagnostics ?? [])],
   });
 }
@@ -103,14 +115,12 @@ const selectorMatches = (
   const policyModel = selector.model.trim().toLowerCase();
   const selectedModel = model.trim().toLowerCase();
   if (policyModel === selectedModel) return true;
-  // A bare Pi policy selector intentionally applies to that model ID across providers.
   if (
     backend === "pi" &&
     !policyModel.includes("/") &&
     selectedModel.slice(selectedModel.lastIndexOf("/") + 1) === policyModel
   )
     return true;
-  // Claude aliases and versioned IDs must not bypass a deny for the same model family.
   if (backend === "claude-cli") {
     for (const alias of ["fable", "sonnet", "opus", "haiku"]) {
       if (

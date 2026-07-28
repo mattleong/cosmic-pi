@@ -341,7 +341,6 @@ export interface SubagentProfileView {
   readonly description: string;
   readonly defaultContext: "fresh" | "fork";
   readonly defaultEffort?: SubagentEffort | undefined;
-  readonly fallback: "fail" | "parent";
   readonly candidates: ReadonlyArray<ProfileCandidateDiscovery>;
 }
 
@@ -445,7 +444,7 @@ const formatRun = (run: SubagentRunView, detailed = false): string => {
     ...run.selection.skippedCandidates.map((candidate) =>
       field(
         "Skipped",
-        `${candidate.candidateIndex === undefined ? "fallback" : `candidate ${candidate.candidateIndex + 1}`} [${candidate.code}]: ${candidate.reason}`,
+        `${candidate.candidateIndex === undefined ? "route" : `candidate ${candidate.candidateIndex + 1}`} [${candidate.code}]: ${candidate.reason}`,
       ),
     ),
     run.selection.warning ? field("Policy", run.selection.warning) : undefined,
@@ -611,25 +610,12 @@ const profileDiscovery = (
         reason: attempt?.reason ?? omitted?.reason ?? "Candidate was not eligible.",
       };
     });
-    if (route.fallback === "parent") {
-      const attempt = attempts.find((value) => value.source === "profile-parent-fallback");
-      const omitted = skipped.find(
-        (value) => value.candidateIndex === undefined && value.candidate === "parent fallback",
-      );
-      candidates.push({
-        order: route.candidates.length + 1,
-        candidate: "parent fallback",
-        status: attempt ? "eligible" : "skipped",
-        reason: attempt?.reason ?? omitted?.reason ?? "Parent fallback was not eligible.",
-      });
-    }
     return [
       {
         id: definition.id,
         description: definition.description,
         defaultContext: definition.defaultContext,
         ...(definition.defaultEffort ? { defaultEffort: definition.defaultEffort } : {}),
-        fallback: route.fallback,
         candidates,
       },
     ];
@@ -645,13 +631,13 @@ const formatProfileDiscovery = (
     "Candidate eligibility below is evaluated with each profile's default context; an explicit context override at launch (for example oracle with context=fresh) can change which candidates are eligible.",
     `Configured default profile: ${defaultProfile}`,
     ...profiles.flatMap((profile) => [
-      `${profile.id} · context=${profile.defaultContext} · effort=${profile.defaultEffort ?? "inherit"} · fallback=${profile.fallback} · ${profile.description}`,
+      `${profile.id} · context=${profile.defaultContext} · effort=${profile.defaultEffort ?? "inherit"} · ${profile.description}`,
       ...(profile.candidates.length > 0
         ? profile.candidates.map(
             (candidate) =>
               `  ${candidate.order}. ${candidate.candidate} · ${candidate.status} · ${candidate.reason}`,
           )
-        : ["  no configured candidates"]),
+        : ["  disabled · no candidates"]),
     ]),
   ].join("\n");
 
@@ -1682,7 +1668,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_models",
     label: "Subagent Models",
     description:
-      "Static preflight-only discovery of deterministic subagent profiles and accepted explicit model selectors. Profile candidates retain declared first-to-last order, skips, and fallback; runtime auth/model readiness is checked only at launch. Denied selectors are hidden, discouraged selectors are explicit-only, and all search terms must match.",
+      "Static preflight-only discovery of deterministic subagent profiles and accepted explicit model selectors. Profile candidates retain declared first-to-last order; runtime auth/model readiness is checked only at launch. Denied selectors are hidden, discouraged selectors are explicit-only, and all search terms must match.",
     parameters: ModelsParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "models" }, signal, onUpdate, ctx),

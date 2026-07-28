@@ -58,8 +58,10 @@ export const PROFILE_DEFINITIONS: Readonly<Record<ProfileId, ProfileDefinition>>
   },
 };
 
-/** Built-ins are deliberately model-neutral: each route explicitly falls back to the parent. */
-const neutralRoute = (): ProfileRoute => ({ candidates: [], fallback: "parent" });
+/** Built-ins are deliberately model-neutral and inherit the active parent model. */
+const neutralRoute = (): ProfileRoute => ({
+  candidates: [{ model: "parent", effort: "default" }],
+});
 export const BUILTIN_PROFILE_ROUTES: Readonly<Record<ProfileId, ProfileRoute>> = {
   scout: neutralRoute(),
   researcher: neutralRoute(),

@@ -30,13 +30,12 @@ export interface ProfileResolutionEnvironment {
 export interface ProfileCandidateAttempt {
   readonly profile: ProfileId;
   readonly source: Exclude<SubagentSelectionSource, "explicit">;
-  readonly candidateIndex?: number | undefined;
+  readonly candidateIndex: number;
   readonly backend: SubagentBackend;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
   readonly reason: string;
-  /** Pure-policy skips encountered after the prior attempt and before this attempt. */
   readonly skippedBefore?: ReadonlyArray<SkippedProfileCandidate> | undefined;
 }
 
@@ -45,9 +44,7 @@ export interface ProfileResolutionPlan {
   readonly profile: ProfileId;
   readonly context: SubagentContextMode;
   readonly attempts: ReadonlyArray<ProfileCandidateAttempt>;
-  /** Every pure-policy skip, for discovery. */
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
-  /** Pure-policy skips after the last eligible attempt, used only if all attempts fail pre-start. */
   readonly trailingSkippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
 }
 
@@ -62,21 +59,14 @@ export interface ProfileResolutionFailure {
 export type ProfileResolution = ProfileResolutionPlan | ProfileResolutionFailure;
 
 export const profileCandidateLabel = (candidate: ProfileCandidate): string =>
-  candidate.source === "parent"
-    ? "parent model"
-    : `${candidate.backend}/${candidate.model}${candidate.effort ? `:${candidate.effort}` : ""}`;
+  `${candidate.model}:${candidate.effort}`;
 
 const skip = (
   candidate: string,
   code: string,
   reason: string,
-  candidateIndex?: number,
-): SkippedProfileCandidate => ({
-  ...(candidateIndex === undefined ? {} : { candidateIndex }),
-  candidate,
-  code,
-  reason,
-});
+  candidateIndex: number,
+): SkippedProfileCandidate => ({ candidateIndex, candidate, code, reason });
 
 const unsupportedPiEffort = (
   environment: ProfileResolutionEnvironment,
@@ -84,7 +74,7 @@ const unsupportedPiEffort = (
   id: string,
   effort: SubagentEffort | undefined,
   label: string,
-  candidateIndex?: number,
+  candidateIndex: number,
 ): SkippedProfileCandidate | undefined => {
   if (effort === undefined) return undefined;
   const model = environment.availablePiModels.find(
@@ -104,7 +94,7 @@ const automaticPolicySkip = (
   backend: SubagentBackend,
   model: string,
   label: string,
-  candidateIndex?: number,
+  candidateIndex: number,
 ): SkippedProfileCandidate | undefined => {
   const policy = modelPolicyFor(config, backend, model);
   if (policy === "denied")
@@ -129,69 +119,12 @@ interface CandidateResult {
   readonly skipped?: SkippedProfileCandidate | undefined;
 }
 
-const resolveParent = (
-  profile: ProfileId,
-  source: "profile-parent-candidate" | "profile-parent-fallback",
-  candidateIndex: number | undefined,
-  label: string,
-  config: ResolvedSubagentConfig,
-  environment: ProfileResolutionEnvironment,
-  profileDefaultEffort: SubagentEffort | undefined,
-  effortOverride: SubagentEffort | undefined,
-): CandidateResult => {
-  const parent = environment.parentModel;
-  if (!parent)
-    return {
-      skipped: skip(
-        label,
-        "parent_model_missing",
-        "No active parent model is available.",
-        candidateIndex,
-      ),
-    };
-  const resolved = resolvePiModelSelector(parent.model, environment.availablePiModels);
-  if (resolved.kind !== "resolved")
-    return {
-      skipped: skip(
-        label,
-        resolved.kind === "ambiguous" ? "parent_model_ambiguous" : "parent_model_unavailable",
-        resolved.kind === "ambiguous"
-          ? `Parent model is ambiguous: ${resolved.candidates.join(", ")}.`
-          : `Parent model is unavailable${resolved.nearMatches.length > 0 ? `; close matches: ${resolved.nearMatches.join(", ")}` : ""}.`,
-        candidateIndex,
-      ),
-    };
-  const model = `${resolved.provider}/${resolved.id}`;
-  const policySkip = automaticPolicySkip(config, "pi", model, label, candidateIndex);
-  if (policySkip) return { skipped: policySkip };
-  const effortSkip = unsupportedPiEffort(
-    environment,
-    resolved.provider,
-    resolved.id,
-    effortOverride,
-    label,
-    candidateIndex,
-  );
-  if (effortSkip) return { skipped: effortSkip };
-  return {
-    attempt: {
-      profile,
-      source,
-      ...(candidateIndex === undefined ? {} : { candidateIndex }),
-      backend: "pi",
-      model,
-      effort: effortOverride ?? profileDefaultEffort ?? parent.effort,
-      // Profile defaults are soft preferences; only a per-call effort is a hard requirement here.
-      effortWasExplicit: effortOverride !== undefined,
-      reason:
-        source === "profile-parent-fallback"
-          ? `Profile ${profile} explicitly fell back to the parent model.`
-          : `Profile ${profile} selected its parent-model candidate.`,
-    },
-  };
-};
+const softEffort = (
+  profileDefault: SubagentEffort | undefined,
+  parent: ParentProfileModel | undefined,
+): SubagentEffort => profileDefault ?? parent?.effort ?? "high";
 
-const resolveConfiguredCandidate = (
+const resolveCandidate = (
   profile: ProfileId,
   candidate: ProfileCandidate,
   candidateIndex: number,
@@ -202,18 +135,61 @@ const resolveConfiguredCandidate = (
   effortOverride?: SubagentEffort,
 ): CandidateResult => {
   const label = profileCandidateLabel(candidate);
-  if (candidate.source === "parent")
-    return resolveParent(
-      profile,
-      "profile-parent-candidate",
-      candidateIndex,
-      label,
-      config,
+  const configuredEffort = candidate.effort === "default" ? undefined : candidate.effort;
+  const hardEffort = effortOverride ?? configuredEffort;
+  const selectedEffort = hardEffort ?? softEffort(profileDefaultEffort, environment.parentModel);
+
+  if (candidate.model === "parent") {
+    const parent = environment.parentModel;
+    if (!parent)
+      return {
+        skipped: skip(
+          label,
+          "parent_model_missing",
+          "No active parent model is available.",
+          candidateIndex,
+        ),
+      };
+    const resolved = resolvePiModelSelector(parent.model, environment.availablePiModels);
+    if (resolved.kind !== "resolved")
+      return {
+        skipped: skip(
+          label,
+          resolved.kind === "ambiguous" ? "parent_model_ambiguous" : "parent_model_unavailable",
+          resolved.kind === "ambiguous"
+            ? `Parent model is ambiguous: ${resolved.candidates.join(", ")}.`
+            : `Parent model is unavailable${resolved.nearMatches.length > 0 ? `; close matches: ${resolved.nearMatches.join(", ")}` : ""}.`,
+          candidateIndex,
+        ),
+      };
+    const model = `${resolved.provider}/${resolved.id}`;
+    const policySkip = automaticPolicySkip(config, "pi", model, label, candidateIndex);
+    if (policySkip) return { skipped: policySkip };
+    const effortSkip = unsupportedPiEffort(
       environment,
-      profileDefaultEffort,
-      effortOverride,
+      resolved.provider,
+      resolved.id,
+      hardEffort,
+      label,
+      candidateIndex,
     );
-  if (candidate.backend === "claude-cli") {
+    if (effortSkip) return { skipped: effortSkip };
+    return {
+      attempt: {
+        profile,
+        source: "profile-parent-candidate",
+        candidateIndex,
+        backend: "pi",
+        model,
+        effort: selectedEffort,
+        effortWasExplicit: hardEffort !== undefined,
+        reason: `Profile ${profile} selected parent candidate ${candidateIndex + 1}.`,
+      },
+    };
+  }
+
+  if (candidate.model.startsWith("claude-cli/")) {
+    const model = candidate.model.slice("claude-cli/".length);
     if (!environment.projectTrusted)
       return {
         skipped: skip(
@@ -232,7 +208,7 @@ const resolveConfiguredCandidate = (
           candidateIndex,
         ),
       };
-    if (!isClaudeModelSelector(candidate.model))
+    if (!isClaudeModelSelector(model))
       return {
         skipped: skip(
           label,
@@ -241,9 +217,6 @@ const resolveConfiguredCandidate = (
           candidateIndex,
         ),
       };
-    // Only per-call and candidate-configured efforts are hard requirements; profile defaults and
-    // inherited parent effort are soft preferences coerced into Claude's supported range.
-    const hardEffort = effortOverride ?? candidate.effort;
     if (hardEffort === "off" || hardEffort === "minimal")
       return {
         skipped: skip(
@@ -253,39 +226,29 @@ const resolveConfiguredCandidate = (
           candidateIndex,
         ),
       };
-    const policySkip = automaticPolicySkip(
-      config,
-      candidate.backend,
-      candidate.model,
-      label,
-      candidateIndex,
-    );
+    const policySkip = automaticPolicySkip(config, "claude-cli", model, label, candidateIndex);
     if (policySkip) return { skipped: policySkip };
-    const softEffort = profileDefaultEffort ?? environment.parentModel?.effort ?? "high";
+    const effort =
+      hardEffort ??
+      (selectedEffort === "off" || selectedEffort === "minimal" ? "low" : selectedEffort);
     return {
       attempt: {
         profile,
         source: "profile-candidate",
         candidateIndex,
-        backend: candidate.backend,
-        model: candidate.model,
-        effort:
-          hardEffort ?? (softEffort === "off" || softEffort === "minimal" ? "low" : softEffort),
+        backend: "claude-cli",
+        model,
+        effort,
         effortWasExplicit: hardEffort !== undefined,
         reason: `Profile ${profile} selected configured candidate ${candidateIndex + 1}.`,
       },
     };
   }
 
-  const configuredPolicySkip = automaticPolicySkip(
-    config,
-    "pi",
-    candidate.model,
-    label,
-    candidateIndex,
-  );
+  const selector = candidate.model.slice("pi/".length);
+  const configuredPolicySkip = automaticPolicySkip(config, "pi", selector, label, candidateIndex);
   if (configuredPolicySkip) return { skipped: configuredPolicySkip };
-  const resolved = resolvePiModelSelector(candidate.model, environment.availablePiModels);
+  const resolved = resolvePiModelSelector(selector, environment.availablePiModels);
   if (resolved.kind !== "resolved")
     return {
       skipped: skip(
@@ -300,7 +263,6 @@ const resolveConfiguredCandidate = (
   const model = `${resolved.provider}/${resolved.id}`;
   const policySkip = automaticPolicySkip(config, "pi", model, label, candidateIndex);
   if (policySkip) return { skipped: policySkip };
-  const hardEffort = effortOverride ?? candidate.effort;
   const effortSkip = unsupportedPiEffort(
     environment,
     resolved.provider,
@@ -317,14 +279,8 @@ const resolveConfiguredCandidate = (
       candidateIndex,
       backend: "pi",
       model,
-      effort:
-        effortOverride ??
-        candidate.effort ??
-        profileDefaultEffort ??
-        environment.parentModel?.effort ??
-        "high",
-      // Profile defaults stay soft so non-reasoning Pi models report their effective level.
-      effortWasExplicit: effortOverride !== undefined || candidate.effort !== undefined,
+      effort: selectedEffort,
+      effortWasExplicit: hardEffort !== undefined,
       reason: `Profile ${profile} selected configured candidate ${candidateIndex + 1}.`,
     },
   };
@@ -348,35 +304,36 @@ export function resolveProfilePlan(
   const definition = profileDefinition(requestedProfile);
   const context = contextOverride ?? definition.defaultContext;
   const route = config.profiles[requestedProfile];
+  if (route.candidates.length === 0) {
+    const source = config.profileSources[requestedProfile];
+    const message =
+      source === "global-invalid" || source === "project-invalid"
+        ? `Profile ${requestedProfile} has an invalid ${source === "project-invalid" ? "project" : "global"} route and fails closed; repair ${source === "project-invalid" ? config.projectConfigPath : config.globalConfigPath}.`
+        : `Profile ${requestedProfile} is disabled and has no eligible model.`;
+    return {
+      kind: "failed",
+      code: "profile_no_eligible_model",
+      profile: requestedProfile,
+      message,
+      skippedCandidates: [],
+    };
+  }
   if (context === "fork" && !environment.forkAvailable) {
-    const unavailable = [
-      // Claude candidates can never run forked context, so they keep that more specific reason
-      // even when the parent session additionally lacks a stable persisted leaf.
-      ...route.candidates.map((candidate, candidateIndex) =>
-        candidate.source === "model" && candidate.backend === "claude-cli"
-          ? skip(
-              profileCandidateLabel(candidate),
-              "claude_context_unsupported",
-              "Claude CLI candidates cannot use forked Pi context.",
-              candidateIndex,
-            )
-          : skip(
-              profileCandidateLabel(candidate),
-              "fork_context_unavailable",
-              "Forked context requires a persisted parent session with a stable leaf.",
-              candidateIndex,
-            ),
-      ),
-      ...(route.fallback === "parent"
-        ? [
-            skip(
-              "parent fallback",
-              "fork_context_unavailable",
-              "Forked context requires a persisted parent session with a stable leaf.",
-            ),
-          ]
-        : []),
-    ];
+    const unavailable = route.candidates.map((candidate, candidateIndex) =>
+      candidate.model.startsWith("claude-cli/")
+        ? skip(
+            candidate.model,
+            "claude_context_unsupported",
+            "Claude CLI candidates cannot use forked Pi context.",
+            candidateIndex,
+          )
+        : skip(
+            candidate.model,
+            "fork_context_unavailable",
+            "Forked context requires a persisted parent session with a stable leaf.",
+            candidateIndex,
+          ),
+    );
     return {
       kind: "failed",
       code: "profile_no_eligible_model",
@@ -385,10 +342,21 @@ export function resolveProfilePlan(
       skippedCandidates: unavailable,
     };
   }
+
   const attempts: ProfileCandidateAttempt[] = [];
   const skippedCandidates: SkippedProfileCandidate[] = [];
   let pendingSkipped: SkippedProfileCandidate[] = [];
-  const collect = (result: CandidateResult) => {
+  route.candidates.forEach((candidate, candidateIndex) => {
+    const result = resolveCandidate(
+      requestedProfile,
+      candidate,
+      candidateIndex,
+      context,
+      config,
+      environment,
+      definition.defaultEffort,
+      effortOverride,
+    );
     if (result.attempt) {
       attempts.push({ ...result.attempt, skippedBefore: pendingSkipped });
       pendingSkipped = [];
@@ -397,44 +365,7 @@ export function resolveProfilePlan(
       skippedCandidates.push(result.skipped);
       pendingSkipped.push(result.skipped);
     }
-  };
-  route.candidates.forEach((candidate, candidateIndex) => {
-    collect(
-      resolveConfiguredCandidate(
-        requestedProfile,
-        candidate,
-        candidateIndex,
-        context,
-        config,
-        environment,
-        definition.defaultEffort,
-        effortOverride,
-      ),
-    );
   });
-  if (route.fallback === "parent") {
-    if (route.candidates.some((candidate) => candidate.source === "parent"))
-      collect({
-        skipped: skip(
-          "parent fallback",
-          "duplicate_parent_fallback",
-          "Parent fallback duplicates an earlier parent-model candidate.",
-        ),
-      });
-    else
-      collect(
-        resolveParent(
-          requestedProfile,
-          "profile-parent-fallback",
-          undefined,
-          "parent fallback",
-          config,
-          environment,
-          definition.defaultEffort,
-          effortOverride,
-        ),
-      );
-  }
   if (attempts.length > 0)
     return {
       kind: "resolved",
@@ -444,12 +375,11 @@ export function resolveProfilePlan(
       skippedCandidates,
       trailingSkippedCandidates: pendingSkipped,
     };
-  const reasons = skippedCandidates.map((candidate) => candidate.reason);
   return {
     kind: "failed",
     code: "profile_no_eligible_model",
     profile: requestedProfile,
-    message: `Profile ${requestedProfile} has no eligible model.${reasons.length > 0 ? ` ${reasons.join(" ")}` : " Its route has no candidates and fallback is fail."}`,
+    message: `Profile ${requestedProfile} has no eligible model.${skippedCandidates.length > 0 ? ` ${skippedCandidates.map((candidate) => candidate.reason).join(" ")}` : ""}`,
     skippedCandidates,
   };
 }
