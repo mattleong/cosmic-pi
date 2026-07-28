@@ -31,6 +31,7 @@ import {
   type SubagentSessionEnvironment,
   type SubagentStartBoundaries,
 } from "../boundary/host-profile-resolution.ts";
+import { startHostUiTicker } from "../boundary/host-ui.ts";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
 import { profileCandidateLabel } from "../profiles/resolve.ts";
@@ -351,6 +352,7 @@ export type SubagentToolDetails = CompactSubagentToolDetails | SubagentStartAwai
 export interface SubagentToolRuntime {
   readonly boundaries?: SubagentToolBoundaries | undefined;
   readonly environment: SubagentSessionEnvironment;
+  readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, SubagentService | SubagentProfileService>,
     signal?: AbortSignal,
@@ -763,6 +765,42 @@ class AwaitProgressComponent implements Component {
     // Rendering is derived from the current clock frame.
   }
 }
+
+interface SubagentToolRendererState extends Record<string, unknown> {
+  piSubagentsAwaitTicker?: (() => void) | undefined;
+}
+
+interface SubagentToolRenderContext {
+  readonly state: SubagentToolRendererState;
+  readonly invalidate: () => void;
+}
+
+const syncAwaitProgressTicker = (
+  details: SubagentStartAwaitCardDetails | undefined,
+  isPartial: boolean,
+  context: SubagentToolRenderContext | undefined,
+  startTicker: (intervalMs: number, tick: () => void) => () => void,
+): void => {
+  if (!context?.state) return;
+  const shouldAnimate =
+    isPartial &&
+    details?.action === "await" &&
+    details.cancelled !== true &&
+    details.cards.some((run) => run.state === "starting" || run.state === "running");
+  if (shouldAnimate) {
+    if (!context.state.piSubagentsAwaitTicker)
+      context.state.piSubagentsAwaitTicker = startTicker(160, context.invalidate);
+    return;
+  }
+  const stop = context.state.piSubagentsAwaitTicker;
+  if (!stop) return;
+  context.state.piSubagentsAwaitTicker = undefined;
+  try {
+    stop();
+  } catch {
+    // Renderer teardown is best effort while the host tool row is settling.
+  }
+};
 
 const effortColor = (
   effort: SubagentEffort,
@@ -1685,11 +1723,21 @@ const renderSubagentResult = (
 };
 
 export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRuntime): void {
+  const startUiTicker = runtime.startUiTicker ?? startHostUiTicker;
   const sharedRenderResult = (
     result: Parameters<typeof renderSubagentResult>[0],
     options: { readonly isPartial: boolean; readonly expanded: boolean },
     theme: Theme,
-  ) => renderSubagentResult(result, options.isPartial, options.expanded, theme);
+    context?: SubagentToolRenderContext,
+  ) => {
+    syncAwaitProgressTicker(
+      decodeStartAwaitCardDetails(result.details),
+      options.isPartial,
+      context,
+      startUiTicker,
+    );
+    return renderSubagentResult(result, options.isPartial, options.expanded, theme);
+  };
 
   const models = defineTool({
     name: "subagent_models",

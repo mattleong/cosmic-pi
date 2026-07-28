@@ -32,6 +32,7 @@ import {
   type SubagentServiceShape,
 } from "../src/run/service.ts";
 import { subagentServiceDouble } from "./subagent-service-double.ts";
+import { makeStartAwaitCardDetails } from "../src/tools/details.ts";
 import {
   awaitResultBanner,
   registerSubagentTools,
@@ -40,6 +41,7 @@ import {
   renderStartAwaitOverviewComponent,
   type SubagentToolBoundaries,
   type SubagentToolDetails,
+  type SubagentToolRuntime,
 } from "../src/tools/subagent.ts";
 
 interface CapturedTool {
@@ -123,6 +125,7 @@ const captureSubagentTools = (
   boundaries?: SubagentToolBoundaries,
   environment = { cwd: "/project", projectTrusted: true },
   thinkingLevel: unknown = "high",
+  startUiTicker?: SubagentToolRuntime["startUiTicker"],
 ): ReadonlyMap<string, CapturedTool> => {
   const tools = new Map<string, CapturedTool>();
   const pi = {
@@ -135,6 +138,7 @@ const captureSubagentTools = (
   } as unknown as ExtensionAPI;
   registerSubagentTools(pi, {
     ...(boundaries ? { boundaries } : {}),
+    ...(startUiTicker ? { startUiTicker } : {}),
     environment,
     run: (effect, signal) =>
       Effect.runPromise(
@@ -442,6 +446,75 @@ describe("subagent tool", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("owns a repaint ticker while partial await cards contain animated runs", () => {
+    let tick: (() => void) | undefined;
+    const stop = vi.fn();
+    const startUiTicker = vi.fn((_intervalMs: number, next: () => void) => {
+      tick = next;
+      return stop;
+    });
+    const awaitTool = captureSubagentTools(
+      {} as SubagentServiceShape,
+      ["read"],
+      defaultProfileService,
+      undefined,
+      { cwd: "/project", projectTrusted: true },
+      "high",
+      startUiTicker,
+    ).get("subagent_await");
+    const invalidate = vi.fn();
+    const state: Record<string, unknown> = {};
+    const renderContext = {
+      args: { runIds: ["agent-1"], until: "all_finished", timeoutSeconds: 0 },
+      toolCallId: "await-call",
+      invalidate,
+      lastComponent: undefined,
+      state,
+      cwd: "/project",
+      executionStarted: true,
+      argsComplete: true,
+      isPartial: true,
+      expanded: false,
+      showImages: false,
+      isError: false,
+    };
+    const runningDetails = makeStartAwaitCardDetails({
+      action: "await",
+      runs: [view()],
+      awaitUntil: "all_finished",
+    });
+    const partial = { content: [{ type: "text", text: "Waiting" }], details: runningDetails };
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+
+    awaitTool?.renderResult?.(partial, { expanded: false, isPartial: true }, theme, renderContext);
+    awaitTool?.renderResult?.(partial, { expanded: false, isPartial: true }, theme, renderContext);
+
+    expect(startUiTicker).toHaveBeenCalledOnce();
+    expect(startUiTicker).toHaveBeenCalledWith(160, expect.any(Function));
+    tick?.();
+    expect(invalidate).toHaveBeenCalledOnce();
+
+    awaitTool?.renderResult?.(
+      {
+        content: [{ type: "text", text: "Cancelled" }],
+        details: makeStartAwaitCardDetails({
+          action: "await",
+          runs: [view()],
+          awaitUntil: "all_finished",
+          cancelled: true,
+        }),
+      },
+      { expanded: false, isPartial: true },
+      theme,
+      renderContext,
+    );
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state.piSubagentsAwaitTicker).toBeUndefined();
   });
 
   it("projects timeout, cancellation, and first-finished await outcomes", () => {
