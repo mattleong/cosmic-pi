@@ -227,6 +227,124 @@ describe("subagent profile configuration and resolution", () => {
     expect(decoded.diagnostics).toContain("global.denied[256+]");
   });
 
+  it("rejects claude-cli candidates pinned to off/minimal effort while decoding", () => {
+    const decoded = decodeSubagentConfig(
+      {
+        profiles: {
+          reviewer: {
+            candidates: [
+              { source: "model", backend: "claude-cli", model: "fable", effort: "off" },
+              { source: "model", backend: "claude-cli", model: "opus", effort: "minimal" },
+              { source: "model", backend: "claude-cli", model: "sonnet", effort: "low" },
+              { source: "model", backend: "pi", model: "openai/gpt-review", effort: "off" },
+            ],
+            fallback: "fail",
+          },
+        },
+      },
+      "global",
+    );
+    // Claude CLI can never run off/minimal, so such candidates are invalid configuration instead
+    // of permanently skipped route entries; Pi off-effort candidates remain valid.
+    expect(decoded.file.profiles?.reviewer?.candidates).toEqual([
+      { source: "model", backend: "claude-cli", model: "sonnet", effort: "low" },
+      { source: "model", backend: "pi", model: "openai/gpt-review", effort: "off" },
+    ]);
+    expect(decoded.diagnostics).toEqual(
+      expect.arrayContaining([
+        "global.profiles.reviewer.candidates[0]",
+        "global.profiles.reviewer.candidates[1]",
+      ]),
+    );
+    expect(decoded.diagnostics.join(" ")).not.toContain("fable");
+
+    const config = resolved(
+      {},
+      {
+        profiles: {
+          worker: {
+            candidates: [
+              { source: "model", backend: "claude-cli", model: "fable", effort: "minimal" },
+            ],
+            fallback: "parent",
+          },
+        },
+      },
+    );
+    expect(config.profiles.worker).toEqual({ candidates: [], fallback: "parent" });
+    expect(config.diagnostics).toContain("project.profiles.worker.candidates[0]");
+  });
+
+  it("fails a declared-but-invalid trusted project route closed instead of reopening the global route", () => {
+    const globalDocument = {
+      denied: [{ backend: "pi", model: "openai/legacy" }],
+      profiles: {
+        reviewer: {
+          candidates: [{ source: "model", backend: "pi", model: "openai/global" }],
+          fallback: "parent",
+        },
+        worker: {
+          candidates: [{ source: "model", backend: "pi", model: "openai/global" }],
+          fallback: "parent",
+        },
+      },
+    };
+    const config = resolved(globalDocument, {
+      denied: [{ backend: "pi", model: "openai/project" }],
+      profiles: {
+        reviewer: "broken",
+        planner: {
+          candidates: [{ source: "model", backend: "pi", model: "openai/project" }],
+          fallback: "fail",
+        },
+      },
+    });
+    // The declared-but-undecodable project override fails closed for that route only.
+    expect(config.profiles.reviewer).toEqual({ candidates: [], fallback: "fail" });
+    expect(resolveProfilePlan("reviewer", config, environment)).toMatchObject({
+      kind: "failed",
+      code: "profile_no_eligible_model",
+    });
+    // An absent project route still uses the global route, and valid sibling project routes plus
+    // additive denies are unaffected.
+    expect(config.profiles.worker).toEqual({
+      candidates: [{ source: "model", backend: "pi", model: "openai/global" }],
+      fallback: "parent",
+    });
+    expect(config.profiles.planner).toEqual({
+      candidates: [{ source: "model", backend: "pi", model: "openai/project" }],
+      fallback: "fail",
+    });
+    expect(config.denied).toEqual([
+      { backend: "pi", model: "openai/legacy" },
+      { backend: "pi", model: "openai/project" },
+    ]);
+    expect(config.diagnostics).toContain("project.profiles.reviewer");
+    expect(config.diagnostics.join(" ")).not.toContain("broken");
+
+    // Untrusted project semantics are never read, so an invalid untrusted route changes nothing.
+    const untrusted = resolved(globalDocument, { profiles: { reviewer: "broken" } }, false);
+    expect(untrusted.profiles.reviewer).toEqual({
+      candidates: [{ source: "model", backend: "pi", model: "openai/global" }],
+      fallback: "parent",
+    });
+  });
+
+  it("distinguishes absent from present-invalid routes and keeps global invalid routes neutral", () => {
+    const decoded = decodeSubagentConfig(
+      { profiles: { reviewer: null, worker: { candidates: [], fallback: "fail" } } },
+      "project",
+    );
+    expect(decoded.invalidProfileRoutes).toEqual(["reviewer"]);
+    expect(decoded.file.profiles?.worker).toEqual({ candidates: [], fallback: "fail" });
+    expect(decodeSubagentConfig({}, "project").invalidProfileRoutes).toEqual([]);
+    // A malformed global route without a project override behaves like an absent route and falls
+    // back to the neutral built-in instead of failing closed.
+    const globalInvalid = resolved({ profiles: { reviewer: 42 } });
+    expect(globalInvalid.profiles.reviewer).toEqual({ candidates: [], fallback: "parent" });
+    expect(globalInvalid.diagnostics).toContain("global.profiles.reviewer");
+  });
+
   it("unions project policy while project routes atomically replace global routes", () => {
     const config = resolved(
       {
@@ -491,7 +609,9 @@ describe("subagent profile configuration and resolution", () => {
       ),
     );
     const telemetry = JSON.stringify(captured.entries);
-    expect(telemetry).toContain("Ignored invalid Subagents configuration fields");
+    expect(telemetry).toContain(
+      "Invalid Subagents configuration fields were ignored or failed closed",
+    );
     expect(telemetry).toContain("global.discouraged");
     expect(telemetry).not.toContain("not-an-array");
   });

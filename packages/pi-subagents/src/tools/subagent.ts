@@ -642,6 +642,7 @@ const formatProfileDiscovery = (
 ): string =>
   [
     "Static profile preflight (backend=auto evaluates ordered candidates first-to-last; explicit backend/model overrides routing but retains guidance)",
+    "Candidate eligibility below is evaluated with each profile's default context; an explicit context override at launch (for example oracle with context=fresh) can change which candidates are eligible.",
     `Configured default profile: ${defaultProfile}`,
     ...profiles.flatMap((profile) => [
       `${profile.id} · context=${profile.defaultContext} · effort=${profile.defaultEffort ?? "inherit"} · fallback=${profile.fallback} · ${profile.description}`,

@@ -115,4 +115,24 @@ describe("model catalog", () => {
     expect(claudeCliModelConflict("claude-opus-5", available)).toBeUndefined();
     expect(claudeCliModelConflict("claude-opus-5-20260115", available)).toBeUndefined();
   });
+
+  it("detects bare Pi IDs case-insensitively with exact-case matches winning", () => {
+    const available = [
+      { provider: "openai-codex", id: "gpt-5.6-sol" },
+      { provider: "casing-a", id: "Model-X" },
+      { provider: "casing-b", id: "model-x" },
+    ];
+    // Aligned with resolvePiModelSelector: a differently cased bare Pi ID is still a Pi selector.
+    expect(claudeCliModelConflict("GPT-5.6-SOL", available)).toMatchObject({
+      code: "backend_model_mismatch",
+      message: expect.stringContaining("openai-codex/gpt-5.6-sol"),
+    });
+    // Exact-case matches win before the case-insensitive fallback widens to every casing.
+    expect(claudeCliModelConflict("Model-X", available)?.message).toContain(
+      'model "casing-a/Model-X"',
+    );
+    expect(claudeCliModelConflict("MODEL-X", available)?.message).toContain(
+      "casing-a/Model-X, casing-b/model-x",
+    );
+  });
 });

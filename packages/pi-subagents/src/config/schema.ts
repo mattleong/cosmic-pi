@@ -27,6 +27,12 @@ export interface DecodedSubagentConfig {
   readonly file: SubagentConfigFile;
   /** Redacted structural paths only; values and parser details are never retained. */
   readonly diagnostics: ReadonlyArray<string>;
+  /**
+   * Profile routes that were declared in the document but were not decodable as a route object.
+   * Present-invalid routes are distinguished from absent routes so a trusted-project override can
+   * fail closed instead of silently reopening the route it was meant to replace.
+   */
+  readonly invalidProfileRoutes: ReadonlyArray<ProfileId>;
   /** True when the document declares a version other than SUBAGENT_CONFIG_VERSION. */
   readonly unsupportedVersion: boolean;
 }
@@ -61,12 +67,19 @@ export const ModelPolicySelectorSchema = Schema.Struct({
   backend: ProfileBackendSchema,
   model: NonEmptyStringSchema,
 });
+// A claude-cli candidate pinned to effort off/minimal can never become eligible, so it is
+// rejected while decoding instead of being accepted and skipped on every resolution.
+const claudeCandidateEffortIsLaunchable = Schema.makeFilter(
+  (candidate: { readonly backend: "pi" | "claude-cli"; readonly effort?: string | undefined }) =>
+    candidate.backend !== "claude-cli" ||
+    (candidate.effort !== "off" && candidate.effort !== "minimal"),
+);
 const ModelCandidateSchema = Schema.Struct({
   source: Schema.Literal("model"),
   backend: ProfileBackendSchema,
   model: NonEmptyStringSchema,
   effort: Schema.optional(ProfileEffortSchema),
-});
+}).check(claudeCandidateEffortIsLaunchable);
 const ParentCandidateSchema = Schema.Struct({ source: Schema.Literal("parent") });
 export const ProfileCandidateSchema = Schema.Union([ModelCandidateSchema, ParentCandidateSchema]);
 
@@ -264,11 +277,13 @@ export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedS
   if (profilesField.present && !decodedProfiles) diagnostics.push(`${scope}.profiles`);
   const profileRecord = decodedProfiles ?? {};
   const profiles: Partial<Record<ProfileId, ProfileRoute>> = {};
+  const invalidProfileRoutes: ProfileId[] = [];
   for (const id of PROFILE_IDS) {
     const field = readField(profileRecord, id, `${scope}.profiles.${id}`, diagnostics);
     if (!field.present) continue;
     const route = decodeRoute(field.value, `${scope}.profiles.${id}`, diagnostics);
     if (route) profiles[id] = route;
+    else invalidProfileRoutes.push(id);
   }
   if (!ownKeysAre(profileRecord, new Set<string>(PROFILE_IDS)))
     diagnostics.push(`${scope}.profiles.<unknown>`);
@@ -288,6 +303,7 @@ export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedS
       ...(Object.keys(profiles).length > 0 ? { profiles } : {}),
     },
     diagnostics: [...new Set(diagnostics)],
+    invalidProfileRoutes,
     unsupportedVersion,
   };
 }

@@ -190,7 +190,12 @@ export const claudeCliModelConflict = (
   }
   if (CLAUDE_CLI_ALIASES.has(trimmed) || trimmed.toLowerCase().startsWith("claude"))
     return undefined;
-  const bareMatches = availablePi.filter((model) => model.id === trimmed);
+  // Bare-ID detection mirrors resolvePiModelSelector: exact matches win, then case-insensitive.
+  const exactBareMatches = availablePi.filter((model) => model.id === trimmed);
+  const bareMatches =
+    exactBareMatches.length > 0
+      ? exactBareMatches
+      : availablePi.filter((model) => model.id.toLowerCase() === trimmed.toLowerCase());
   if (bareMatches.length > 0) {
     const candidates = bareMatches.map(canonicalPiModelId).sort();
     return {

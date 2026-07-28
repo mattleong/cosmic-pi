@@ -61,17 +61,23 @@ export interface ResolveSubagentConfigInput {
 /**
  * Merge semantics are intentionally policy-safe: project denies and discouragements are additive,
  * while a project route atomically replaces the matching global route. Built-ins fill only routes
- * absent from both documents.
+ * absent from both documents. A trusted-project route that is declared but undecodable fails
+ * closed for that profile (no candidates, `fail` fallback) instead of silently reopening the
+ * global or built-in route it was meant to replace; sibling routes and additive policy are
+ * unaffected. A malformed global route with no project override behaves like an absent route and
+ * falls back to the neutral built-in.
  */
 export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
   const project = input.projectTrusted ? input.project : undefined;
   const profiles = {} as Record<ProfileId, ProfileRoute>;
   for (const id of PROFILE_IDS) {
-    profiles[id] = cloneRoute(
-      project?.file.profiles?.[id] ??
-        input.global.file.profiles?.[id] ??
-        BUILTIN_PROFILE_ROUTES[id],
-    );
+    profiles[id] = project?.invalidProfileRoutes.includes(id)
+      ? { candidates: [], fallback: "fail" }
+      : cloneRoute(
+          project?.file.profiles?.[id] ??
+            input.global.file.profiles?.[id] ??
+            BUILTIN_PROFILE_ROUTES[id],
+        );
   }
   return freezeSnapshot({
     globalConfigPath: input.globalConfigPath,

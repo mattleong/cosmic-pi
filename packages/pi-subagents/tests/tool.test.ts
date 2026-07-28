@@ -19,7 +19,11 @@ import {
   SubagentNotFoundError,
   SubagentProcessError,
 } from "../src/run/errors.ts";
-import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
+import {
+  decodeSubagentEffort,
+  type StartSubagentRequest,
+  type SubagentRunView,
+} from "../src/run/model.ts";
 import {
   SubagentService,
   type SubagentAwaitUntil,
@@ -115,6 +119,7 @@ const captureSubagentTools = (
   profileService = defaultProfileService,
   boundaries?: SubagentToolBoundaries,
   environment = { cwd: "/project", projectTrusted: true },
+  thinkingLevel: unknown = "high",
 ): ReadonlyMap<string, CapturedTool> => {
   const tools = new Map<string, CapturedTool>();
   const pi = {
@@ -122,7 +127,7 @@ const captureSubagentTools = (
       const tool = definition as CapturedTool;
       tools.set(tool.name, tool);
     },
-    getThinkingLevel: () => "high",
+    getThinkingLevel: () => thinkingLevel,
     getActiveTools: () => [...activeTools],
   } as unknown as ExtensionAPI;
   registerSubagentTools(pi, {
@@ -938,12 +943,7 @@ describe("subagent tool", () => {
       profiles: {
         reviewer: {
           candidates: [
-            {
-              source: "model",
-              backend: "claude-cli",
-              model: "fable",
-              effort: "off",
-            },
+            { source: "model", backend: "claude-cli", model: "fable" },
             { source: "model", backend: "pi", model: "openai-codex/gpt-5.6-sol" },
           ],
           fallback: "fail",
@@ -1055,6 +1055,174 @@ describe("subagent tool", () => {
       },
     });
     expect(result?.content[0]?.text).toContain("discouraged by policy");
+  });
+
+  it("denies explicit selectors before any registry auth lookup or Claude preflight work", async () => {
+    const requests: StartSubagentRequest[] = [];
+    let findCalls = 0;
+    let authStatusCalls = 0;
+    let apiKeyCalls = 0;
+    let preflightCalls = 0;
+    const profiles = profileServiceFor({
+      denied: [
+        { backend: "pi", model: "openai-codex/gpt-5.6-sol" },
+        { backend: "claude-cli", model: "fable" },
+      ],
+    });
+    const spyContext = {
+      ...(context as unknown as Record<string, unknown>),
+      modelRegistry: {
+        getAvailable: () => [
+          { provider: "openai-codex", id: "gpt-5.6-sol", name: "GPT 5.6 Sol", reasoning: true },
+        ],
+        find: () => {
+          findCalls += 1;
+          return { provider: "openai-codex", id: "gpt-5.6-sol", reasoning: true };
+        },
+        hasConfiguredAuth: () => true,
+        getProviderAuthStatus: () => {
+          authStatusCalls += 1;
+          return { configured: true, source: "runtime" };
+        },
+        getApiKeyAndHeaders: () => {
+          apiKeyCalls += 1;
+          return Promise.resolve({ ok: true, apiKey: "runtime-key" });
+        },
+      },
+    } as unknown as ExtensionContext;
+    const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles, {
+      ensureClaudeReady: () => {
+        preflightCalls += 1;
+        return Effect.void;
+      },
+    }).get("subagent_start");
+
+    const result = await tool?.execute(
+      "call",
+      {
+        agents: [
+          {
+            task: "Probe",
+            backend: "pi",
+            model: "openai-codex/gpt-5.6-sol",
+            writeIntent: "read-only",
+          },
+          // Backend-only launch whose deterministic inherited parent model is denied.
+          { task: "Probe", backend: "pi", writeIntent: "read-only" },
+          { task: "Probe", backend: "claude-cli", model: "fable", writeIntent: "read-only" },
+          // Bare selector that only the resolved canonical model matches against the deny list;
+          // the deny must still fire before registry auth lookups.
+          { task: "Probe", backend: "pi", model: "gpt-5.6-sol", writeIntent: "read-only" },
+        ],
+      },
+      undefined,
+      undefined,
+      spyContext,
+    );
+
+    expect(requests).toEqual([]);
+    expect(result?.details).toMatchObject({
+      startFailures: [
+        { index: 0, code: "model_denied" },
+        { index: 1, code: "model_denied" },
+        { index: 2, code: "model_denied" },
+        { index: 3, code: "model_denied" },
+      ],
+    });
+    expect(findCalls).toBe(0);
+    expect(authStatusCalls).toBe(0);
+    expect(apiKeyCalls).toBe(0);
+    expect(preflightCalls).toBe(0);
+  });
+
+  it("clamps unknown host thinking levels to high instead of forwarding them to children", async () => {
+    expect(decodeSubagentEffort("xhigh")).toBe("xhigh");
+    expect(decodeSubagentEffort(" MAX ")).toBe("max");
+    expect(decodeSubagentEffort("ultra")).toBeUndefined();
+    expect(decodeSubagentEffort(42)).toBeUndefined();
+    expect(decodeSubagentEffort(undefined)).toBeUndefined();
+
+    const startWithLevel = async (thinkingLevel: unknown) => {
+      const requests: StartSubagentRequest[] = [];
+      const tool = captureSubagentTools(
+        startCapturingService(requests),
+        ["read"],
+        defaultProfileService,
+        undefined,
+        { cwd: "/project", projectTrusted: true },
+        thinkingLevel,
+      ).get("subagent_start");
+      await tool?.execute(
+        "call",
+        {
+          agents: [
+            // Profile-environment inheritance path (delegate inherits the parent effort).
+            { backend: "auto", profile: "delegate", task: "Probe", writeIntent: "read-only" },
+            // Explicit-launch inheritance path.
+            { backend: "pi", task: "Probe", writeIntent: "read-only" },
+          ],
+        },
+        undefined,
+        undefined,
+        context,
+      );
+      return requests.map((request) => request.effort);
+    };
+
+    expect(await startWithLevel("low")).toEqual(["low", "low"]);
+    // Future or malformed host levels clamp to the shared "high" inheritance default.
+    expect(await startWithLevel("ultra")).toEqual(["high", "high"]);
+    expect(await startWithLevel(42)).toEqual(["high", "high"]);
+    expect(await startWithLevel(" MEDIUM ")).toEqual(["medium", "medium"]);
+  });
+
+  it("distinguishes backend-only overrides from explicit backend+model overrides in provenance", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const tool = captureSubagentTools(startCapturingService(requests), ["read"], undefined, {
+      ensureClaudeReady: () => Effect.void,
+    }).get("subagent_start");
+
+    await tool?.execute(
+      "call",
+      {
+        agents: [
+          { task: "Probe", backend: "pi", writeIntent: "read-only" },
+          {
+            task: "Probe",
+            backend: "pi",
+            model: "openai-codex/gpt-5.6-sol",
+            writeIntent: "read-only",
+          },
+          { task: "Probe", backend: "pi", profile: "reviewer", writeIntent: "read-only" },
+          { task: "Probe", backend: "claude-cli", writeIntent: "read-only" },
+          {
+            task: "Probe",
+            backend: "claude-cli",
+            model: "fable",
+            profile: "reviewer",
+            writeIntent: "read-only",
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(requests.map((request) => request.selection?.reason)).toEqual([
+      "Explicit backend selection; the parent session model was inherited.",
+      "Explicit backend/model selection.",
+      "Explicit backend routing overrode profile reviewer; the parent session model was inherited, and profile guidance was retained.",
+      "Explicit backend selection; Claude CLI defaulted to the sonnet alias.",
+      "Explicit backend/model routing overrode profile reviewer; profile guidance was retained.",
+    ]);
+    expect(requests.map((request) => request.model)).toEqual([
+      "openai-codex/gpt-5.6-sol",
+      "openai-codex/gpt-5.6-sol",
+      "openai-codex/gpt-5.6-sol",
+      "sonnet",
+      "fable",
+    ]);
   });
 
   it("returns model-visible profile_unknown and profile_no_eligible_model codes", async () => {
@@ -2421,6 +2589,29 @@ describe("subagent tool", () => {
     expect(text).toContain("oracle · context=fork · effort=high · fallback=parent");
     expect(text).toContain("parent fallback · skipped");
     expect(text).toContain("Forked context requires a persisted parent session");
+  });
+
+  it("states that discovery eligibility uses each profile's default context and can change with an override", async () => {
+    const ephemeral = {
+      ...(context as unknown as Record<string, unknown>),
+      sessionManager: {
+        ...context.sessionManager,
+        getSessionFile: () => undefined,
+        getLeafEntry: () => undefined,
+      },
+    } as unknown as ExtensionContext;
+    const models = await captureSubagentTools(startCapturingService([]))
+      .get("subagent_models")
+      ?.execute("call", { profile: "oracle" }, undefined, undefined, ephemeral);
+    const text = models?.content[0]?.text ?? "";
+    // Oracle's skips below reflect its default fork context; an explicit context=fresh launch can
+    // still be eligible, and the output must say so.
+    expect(text).toContain(
+      "Candidate eligibility below is evaluated with each profile's default context",
+    );
+    expect(text).toContain(
+      "an explicit context override at launch (for example oracle with context=fresh) can change which candidates are eligible",
+    );
   });
 
   it("renders a duplicate parent fallback as skipped instead of a second eligible route", async () => {

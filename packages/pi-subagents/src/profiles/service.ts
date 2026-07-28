@@ -61,7 +61,7 @@ export const subagentProfileServiceLayer = (options: SubagentProfileLayerOptions
       const config = yield* store.load(options.cwd, options.agentDirectory, options.projectTrusted);
       if (config.diagnostics.length > 0)
         yield* Effect.logWarning(
-          `Ignored invalid Subagents configuration fields: ${config.diagnostics.join(", ")}.`,
+          `Invalid Subagents configuration fields were ignored or failed closed: ${config.diagnostics.join(", ")}.`,
         );
       return makeSubagentProfileService(config);
     }),

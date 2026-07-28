@@ -23,7 +23,25 @@ export type SubagentCapability =
   | "parent-contact"
   | "peer-notice"
   | "native-fork";
-export type SubagentEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export const SUBAGENT_EFFORTS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type SubagentEffort = (typeof SUBAGENT_EFFORTS)[number];
+
+/** Decodes an untyped host-reported thinking level; unknown or malformed values are rejected. */
+export const decodeSubagentEffort = (value: unknown): SubagentEffort | undefined => {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  return (SUBAGENT_EFFORTS as ReadonlyArray<string>).includes(normalized)
+    ? (normalized as SubagentEffort)
+    : undefined;
+};
 
 export const PI_SUBAGENT_CAPABILITIES = [
   "steer",

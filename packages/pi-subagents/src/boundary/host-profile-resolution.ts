@@ -6,6 +6,7 @@ import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/coord
 import { InvalidSubagentRequestError, type SubagentProcessError } from "../run/errors.ts";
 import { claudeCliModelConflict, resolvePiModelSelector } from "../run/model-catalog.ts";
 import {
+  decodeSubagentEffort,
   isClaudeModelSelector,
   type StartSubagentRequest,
   type SubagentBackend,
@@ -56,11 +57,18 @@ const stableParentLeaf = (ctx: ExtensionContext): string | undefined => {
   return leaf.id;
 };
 
+const deniedModelError = (backend: SubagentBackend, model: string) =>
+  new InvalidSubagentRequestError({
+    code: "model_denied",
+    message: `Model ${backend}/${model} is denied by Subagents policy and cannot be started.`,
+  });
+
 const resolvePiModel = (
   selector: string | undefined,
   effort: SubagentEffort,
   effortWasExplicit: boolean,
   ctx: ExtensionContext,
+  isPiModelDenied: (model: string) => boolean,
 ): Effect.Effect<
   { readonly model: string; readonly runtimeApiKey?: string | undefined },
   InvalidSubagentRequestError
@@ -97,6 +105,9 @@ const resolvePiModel = (
       id = inherited.id;
     }
     const modelId = `${provider}/${id}`;
+    // Deterministic hard-deny on the resolved canonical model before any registry auth lookup or
+    // runtime API-key resolution; the start path rechecks the deny as defense in depth.
+    if (isPiModelDenied(modelId)) return yield* deniedModelError("pi", modelId);
     const model = ctx.modelRegistry.find(provider, id);
     if (!model || !ctx.modelRegistry.hasConfiguredAuth(model))
       return yield* new InvalidSubagentRequestError({
@@ -133,6 +144,13 @@ interface ResolvedConcreteModel {
   readonly runtimeApiKey?: string | undefined;
 }
 
+/**
+ * Host thinking levels arrive untyped. Unknown or malformed values clamp to the shared "high"
+ * inheritance default so an unrecognized level is never forwarded to a Pi or Claude child.
+ */
+const inheritedParentEffort = (pi: ExtensionAPI): SubagentEffort =>
+  decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
+
 export const hostProfileEnvironment = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -147,7 +165,7 @@ export const hostProfileEnvironment = (
     ? {
         parentModel: {
           model: `${ctx.model.provider}/${ctx.model.id}`,
-          effort: pi.getThinkingLevel() as SubagentEffort,
+          effort: inheritedParentEffort(pi),
         },
       }
     : {}),
@@ -162,10 +180,17 @@ const resolveConcreteModel = (
   effortWasExplicit: boolean,
   projectTrusted: boolean,
   ctx: ExtensionContext,
+  isPiModelDenied: (model: string) => boolean,
 ): Effect.Effect<ResolvedConcreteModel, InvalidSubagentRequestError> =>
   Effect.gen(function* () {
     if (backend === "pi") {
-      const resolved = yield* resolvePiModel(selector, effort, effortWasExplicit, ctx);
+      const resolved = yield* resolvePiModel(
+        selector,
+        effort,
+        effortWasExplicit,
+        ctx,
+        isPiModelDenied,
+      );
       return { backend, ...resolved, effort, effortWasExplicit };
     }
     if (!projectTrusted)
@@ -269,8 +294,19 @@ export const resolveProfileStart = (
         ),
         Effect.flatMap((exit) => exit),
       );
+    const isPiModelDenied = (model: string): boolean =>
+      profiles.policyFor("pi", model) === "denied";
     if (input.backend !== "auto") {
-      const inheritedEffort = pi.getThinkingLevel() as SubagentEffort;
+      const modelWasExplicit = Boolean(input.model?.trim());
+      // Hard denies are enforced on the deterministic raw selector (or its deterministic
+      // inherited/default value) before any registry auth lookup, runtime API-key resolution, or
+      // Claude preflight; the resolved canonical model is rechecked below as defense in depth.
+      const rawSelector =
+        input.model?.trim() ||
+        (input.backend === "pi" ? ctx.model && `${ctx.model.provider}/${ctx.model.id}` : "sonnet");
+      if (rawSelector && profiles.policyFor(input.backend, rawSelector) === "denied")
+        return yield* deniedModelError(input.backend, rawSelector);
+      const inheritedEffort = inheritedParentEffort(pi);
       const selectedEffort = input.effort ?? definition?.defaultEffort ?? inheritedEffort;
       const effort =
         input.effort === undefined &&
@@ -286,13 +322,10 @@ export const resolveProfileStart = (
         input.effort !== undefined,
         projectTrusted,
         ctx,
+        isPiModelDenied,
       );
       const policy = profiles.policyFor(concrete.backend, concrete.model);
-      if (policy === "denied")
-        return yield* new InvalidSubagentRequestError({
-          code: "model_denied",
-          message: `Model ${concrete.backend}/${concrete.model} is denied by Subagents policy and cannot be started.`,
-        });
+      if (policy === "denied") return yield* deniedModelError(concrete.backend, concrete.model);
       if (concrete.backend === "claude-cli")
         yield* ensureClaudeReady().pipe(
           Effect.mapError(
@@ -303,11 +336,21 @@ export const resolveProfileStart = (
               }),
           ),
         );
+      // Backend-only overrides never claim an explicit model: the model was inherited (pi) or
+      // defaulted (claude-cli), and provenance says which.
+      const inheritedModelNote =
+        input.backend === "pi"
+          ? "the parent session model was inherited"
+          : "Claude CLI defaulted to the sonnet alias";
       selection = {
         source: "explicit",
         reason: selectedProfile
-          ? `Explicit backend/model routing overrode profile ${selectedProfile}; profile guidance was retained.`
-          : "Explicit backend/model selection.",
+          ? modelWasExplicit
+            ? `Explicit backend/model routing overrode profile ${selectedProfile}; profile guidance was retained.`
+            : `Explicit backend routing overrode profile ${selectedProfile}; ${inheritedModelNote}, and profile guidance was retained.`
+          : modelWasExplicit
+            ? "Explicit backend/model selection."
+            : `Explicit backend selection; ${inheritedModelNote}.`,
         skippedCandidates: [],
         ...(policy === "discouraged"
           ? {
@@ -360,6 +403,7 @@ export const resolveProfileStart = (
           effortWasExplicit,
           projectTrusted,
           ctx,
+          isPiModelDenied,
         );
         // Pure backend/model/effort checks must reject before an executable/auth probe is run.
         return concreteAttempt.pipe(
