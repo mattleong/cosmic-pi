@@ -78,7 +78,7 @@ export function renderContextLine(
       progressBar(percent, cells, theme, color),
       theme.fg(
         color,
-        ` ${Math.round(percent)}% used · ${formatTokens(tokens)}/${formatTokens(contextWindow)}`,
+        ` ${Math.round(percent)}% · ${formatTokens(tokens)}/${formatTokens(contextWindow)}`,
       ),
     ].join("");
   }

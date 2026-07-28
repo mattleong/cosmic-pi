@@ -81,7 +81,7 @@ describe("responsive footer layout", () => {
         plainTheme,
         false,
       ),
-    ).toBe("Ctx     ━━━━━━╸─── 62% used · 62k/100k");
+    ).toBe("Ctx     ━━━━━━╸─── 62% · 62k/100k");
     expect(renderOpenAIUsageLine("Usage: 5h: 72% | 7d: 31%", 80, plainTheme, false)).toBe(
       "OpenAI  5h ━━━━━━━╸── 72% | 7d ━━━╸────── 31%",
     );
@@ -105,10 +105,10 @@ describe("responsive footer layout", () => {
     renderOpenAIUsageLine("Usage: 5h: 75% | 7d: 25%", 80, thresholdTheme, false);
     renderXaiUsageLine("Usage: 7d: 75% | mo: 25%", 80, thresholdTheme, false);
 
-    expect(fg.mock.calls).toContainEqual(["error", " 76% used · 76k/100k"]);
-    expect(fg.mock.calls).toContainEqual(["warning", " 75% used · 75k/100k"]);
-    expect(fg.mock.calls).toContainEqual(["warning", " 51% used · 51k/100k"]);
-    expect(fg.mock.calls).toContainEqual(["success", " 50% used · 50k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["error", " 76% · 76k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["warning", " 75% · 75k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["warning", " 51% · 51k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["success", " 50% · 50k/100k"]);
     expect(fg.mock.calls).toContainEqual(["success", "5h "]);
     expect(fg.mock.calls).toContainEqual(["success", " 75%"]);
     expect(fg.mock.calls).toContainEqual(["warning", "7d "]);
