@@ -48,6 +48,41 @@ describe("/ps process manager", () => {
     expect(lines.every((line) => visibleWidth(line) <= 120)).toBe(true);
   });
 
+  it("colors outer borders and panel dividers with theme border colors", () => {
+    const fg = vi.fn((_color: string, text: string) => text);
+    const component = new ProcessManagerComponent({
+      theme: { fg } as unknown as Theme,
+      getProjection: () => projection,
+      getHeight: () => 24,
+      getNow: () => 0,
+      requestRender: vi.fn(),
+      close: vi.fn(),
+      stop: vi.fn(),
+      clear: vi.fn(),
+    });
+    component.render(120);
+    component.render(80);
+
+    const accentChrome = fg.mock.calls
+      .filter(([color]) => color === "borderAccent")
+      .map(([, text]) => text)
+      .join("");
+    const mutedChrome = fg.mock.calls
+      .filter(([color]) => color === "borderMuted")
+      .map(([, text]) => text)
+      .join("");
+
+    expect(accentChrome).toContain("╭");
+    expect(accentChrome).toContain("╮");
+    expect(accentChrome).toContain("╰");
+    expect(accentChrome).toContain("╯");
+    expect(accentChrome).toContain("│");
+    expect(accentChrome).toContain("├");
+    expect(accentChrome).toContain("┤");
+    expect(mutedChrome).toContain("│");
+    expect(mutedChrome).toContain("─");
+  });
+
   it("uses the same grouped responsive footer as the subagent fleet", () => {
     const footer = renderAt(120, 24).at(-1) ?? "";
     expect(footer).toContain("↑↓ Select · C-u/d Scroll");

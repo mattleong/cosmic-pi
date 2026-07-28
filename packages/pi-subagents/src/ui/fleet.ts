@@ -165,10 +165,14 @@ export class SubagentFleetComponent implements Component {
     const active = runs.filter((run) => isActiveRunState(run.state)).length;
     const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
     const title = ` /subagents · ${active} active${waiting ? ` · ${waiting} waiting` : ""} `;
-    const top = `╭${title}${"─".repeat(Math.max(0, safeWidth - visibleWidth(title) - 2))}╮`;
+    const top = `${this.outerBorder("╭")}${this.options.theme.fg("accent", title)}${this.outerBorder(
+      `${"─".repeat(Math.max(0, safeWidth - visibleWidth(title) - 2))}╮`,
+    )}`;
     const help = this.helpText(safeWidth, selected);
     const safeHelp = truncateToWidth(help, Math.max(0, safeWidth - 2), "");
-    const bottom = `╰${"─".repeat(Math.max(0, safeWidth - visibleWidth(safeHelp) - 2))}${safeHelp}╯`;
+    const bottom = `${this.outerBorder(
+      `╰${"─".repeat(Math.max(0, safeWidth - visibleWidth(safeHelp) - 2))}`,
+    )}${safeHelp}${this.outerBorder("╯")}`;
     if (height === 1) return [truncateToWidth(top, safeWidth, "")];
     if (safeWidth === 1) return Array.from({ length: height }, () => " ");
     const bodyHeight = height - 2;
@@ -179,6 +183,14 @@ export class SubagentFleetComponent implements Component {
           ? this.renderStacked(safeWidth, bodyHeight, runs, selected)
           : this.renderNarrow(safeWidth, bodyHeight, runs, selected);
     return [truncateToWidth(top, safeWidth, ""), ...body, truncateToWidth(bottom, safeWidth, "")];
+  }
+
+  private outerBorder(text: string): string {
+    return this.options.theme.fg("borderAccent", text);
+  }
+
+  private innerBorder(text: string): string {
+    return this.options.theme.fg("borderMuted", text);
   }
 
   private runLine(run: SubagentRunView, index: number, width: number): string {
@@ -312,7 +324,9 @@ export class SubagentFleetComponent implements Component {
     return Array.from(
       { length: height },
       (_, index) =>
-        `│${pad(left[index] ?? "", leftWidth)}│${pad(detail[index] ?? "", rightWidth)}│`,
+        `${this.outerBorder("│")}${pad(left[index] ?? "", leftWidth)}${this.innerBorder(
+          "│",
+        )}${pad(detail[index] ?? "", rightWidth)}${this.outerBorder("│")}`,
     );
   }
 
@@ -330,15 +344,13 @@ export class SubagentFleetComponent implements Component {
         this.runLine(run, index, inner),
       ),
     ];
-    const divider = this.options.theme.fg("borderMuted", `├${"─".repeat(inner)}┤`);
+    const divider = `${this.outerBorder("├")}${this.innerBorder("─".repeat(inner))}${this.outerBorder("┤")}`;
     const remaining = Math.max(0, height - list.length - 1);
     const detail = this.detailWindow(this.detailLines(selected, inner), remaining, inner);
-    const lines = [
-      ...list.map((line) => `│${pad(line, inner)}│`),
-      divider,
-      ...detail.map((line) => `│${pad(line, inner)}│`),
-    ];
-    while (lines.length < height) lines.push(`│${" ".repeat(inner)}│`);
+    const frame = (line: string) =>
+      `${this.outerBorder("│")}${pad(line, inner)}${this.outerBorder("│")}`;
+    const lines = [...list.map(frame), divider, ...detail.map(frame)];
+    while (lines.length < height) lines.push(frame(""));
     return lines.slice(0, height);
   }
 
@@ -359,8 +371,10 @@ export class SubagentFleetComponent implements Component {
       this.detailMaxScroll = 0;
       this.detailLineCount = 0;
     }
-    const rendered = lines.slice(0, height).map((line) => `│${pad(line, inner)}│`);
-    while (rendered.length < height) rendered.push(`│${" ".repeat(inner)}│`);
+    const frame = (line: string) =>
+      `${this.outerBorder("│")}${pad(line, inner)}${this.outerBorder("│")}`;
+    const rendered = lines.slice(0, height).map(frame);
+    while (rendered.length < height) rendered.push(frame(""));
     return rendered;
   }
 

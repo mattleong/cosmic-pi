@@ -75,6 +75,7 @@ const makeComponent = (
   height: number,
   currentProjection: SubagentProjection = projection,
   getNow: () => number = () => 20_000,
+  currentTheme: Theme = theme,
 ) => {
   const actions = {
     stop: vi.fn(),
@@ -84,7 +85,7 @@ const makeComponent = (
     rename: vi.fn(),
   };
   const component = new SubagentFleetComponent({
-    theme,
+    theme: currentTheme,
     getProjection: () => currentProjection,
     getHeight: () => height,
     getNow,
@@ -107,6 +108,32 @@ describe("/subagents fleet UI", () => {
     expect(lines).toHaveLength(height);
     expect(lines.join("\n")).toContain("auth-reader");
     expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+  });
+
+  it("colors outer borders and panel dividers with theme border colors", () => {
+    const fg = vi.fn((_color: string, text: string) => text);
+    const currentTheme = { fg, bold: (text: string) => text } as unknown as Theme;
+    const { component } = makeComponent(120, 24, projection, () => 20_000, currentTheme);
+    component.render(80);
+
+    const accentChrome = fg.mock.calls
+      .filter(([color]) => color === "borderAccent")
+      .map(([, text]) => text)
+      .join("");
+    const mutedChrome = fg.mock.calls
+      .filter(([color]) => color === "borderMuted")
+      .map(([, text]) => text)
+      .join("");
+
+    expect(accentChrome).toContain("╭");
+    expect(accentChrome).toContain("╮");
+    expect(accentChrome).toContain("╰");
+    expect(accentChrome).toContain("╯");
+    expect(accentChrome).toContain("│");
+    expect(accentChrome).toContain("├");
+    expect(accentChrome).toContain("┤");
+    expect(mutedChrome).toContain("│");
+    expect(mutedChrome).toContain("─");
   });
 
   it("groups navigation, available actions, and global footer controls", () => {

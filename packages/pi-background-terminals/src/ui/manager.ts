@@ -202,9 +202,13 @@ export class ProcessManagerComponent implements Component {
     const active = jobs.filter((job) => isActiveJobState(job.state)).length;
     const failed = jobs.filter((job) => job.state === "failed" || job.state === "timed_out").length;
     const title = ` /ps · ${active} active${failed ? ` · ${failed} failed` : ""} `;
-    const top = `╭${title}${"─".repeat(Math.max(0, safeWidth - visibleWidth(title) - 2))}╮`;
+    const top = `${this.outerBorder("╭")}${this.options.theme.fg("accent", title)}${this.outerBorder(
+      `${"─".repeat(Math.max(0, safeWidth - visibleWidth(title) - 2))}╮`,
+    )}`;
     const footerText = this.helpText(safeWidth, jobs, selected);
-    const bottom = `╰${"─".repeat(Math.max(0, safeWidth - visibleWidth(footerText) - 2))}${footerText}╯`;
+    const bottom = `${this.outerBorder(
+      `╰${"─".repeat(Math.max(0, safeWidth - visibleWidth(footerText) - 2))}`,
+    )}${footerText}${this.outerBorder("╯")}`;
     if (height === 1) return [truncateToWidth(top, safeWidth, "")];
     if (safeWidth === 1) return Array.from({ length: height }, () => " ");
 
@@ -216,6 +220,14 @@ export class ProcessManagerComponent implements Component {
           ? this.renderStacked(safeWidth, bodyHeight, jobs, selected)
           : this.renderNarrow(safeWidth, bodyHeight, jobs, selected);
     return [truncateToWidth(top, safeWidth, ""), ...body, truncateToWidth(bottom, safeWidth, "")];
+  }
+
+  private outerBorder(text: string): string {
+    return this.options.theme.fg("borderAccent", text);
+  }
+
+  private innerBorder(text: string): string {
+    return this.options.theme.fg("borderMuted", text);
   }
 
   private helpText(
@@ -354,7 +366,9 @@ export class ProcessManagerComponent implements Component {
     return Array.from(
       { length: height },
       (_, index) =>
-        `│${padToWidth(left[index] ?? "", leftWidth)}│${padToWidth(detail[index] ?? "", rightWidth)}│`,
+        `${this.outerBorder("│")}${padToWidth(left[index] ?? "", leftWidth)}${this.innerBorder(
+          "│",
+        )}${padToWidth(detail[index] ?? "", rightWidth)}${this.outerBorder("│")}`,
     );
   }
 
@@ -372,15 +386,13 @@ export class ProcessManagerComponent implements Component {
         this.jobLine(job, index, inner),
       ),
     ];
-    const divider = this.options.theme.fg("borderMuted", `├${"─".repeat(inner)}┤`);
+    const divider = `${this.outerBorder("├")}${this.innerBorder("─".repeat(inner))}${this.outerBorder("┤")}`;
     const remaining = Math.max(0, height - list.length - 1);
     const detail = this.detailWindow(this.detailLines(selected), remaining, inner);
-    const content = [
-      ...list.map((line) => `│${padToWidth(line, inner)}│`),
-      divider,
-      ...detail.map((line) => `│${padToWidth(line, inner)}│`),
-    ];
-    while (content.length < height) content.push(`│${" ".repeat(inner)}│`);
+    const frame = (line: string) =>
+      `${this.outerBorder("│")}${padToWidth(line, inner)}${this.outerBorder("│")}`;
+    const content = [...list.map(frame), divider, ...detail.map(frame)];
+    while (content.length < height) content.push(frame(""));
     return content.slice(0, height);
   }
 
@@ -401,8 +413,10 @@ export class ProcessManagerComponent implements Component {
       this.detailMaxScroll = 0;
       this.detailLineCount = 0;
     }
-    const rendered = lines.slice(0, height).map((line) => `│${padToWidth(line, inner)}│`);
-    while (rendered.length < height) rendered.push(`│${" ".repeat(inner)}│`);
+    const frame = (line: string) =>
+      `${this.outerBorder("│")}${padToWidth(line, inner)}${this.outerBorder("│")}`;
+    const rendered = lines.slice(0, height).map(frame);
+    while (rendered.length < height) rendered.push(frame(""));
     return rendered;
   }
 
