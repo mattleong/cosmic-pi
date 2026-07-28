@@ -17,7 +17,7 @@ const projection: SubagentProjection = {
       task: "Review authentication",
       selection: {
         source: "explicit",
-        reason: "Explicit backend/model selection.",
+        reason: "Explicit model selection.",
         skippedCandidates: [],
       },
       cwd: "/project",

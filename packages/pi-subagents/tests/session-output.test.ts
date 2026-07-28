@@ -23,7 +23,7 @@ const runView = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => (
   task: "Inspect **preview rendering**.",
   selection: {
     source: "explicit",
-    reason: "Explicit backend/model selection.",
+    reason: "Explicit model selection.",
     skippedCandidates: [],
   },
   cwd: "/project",

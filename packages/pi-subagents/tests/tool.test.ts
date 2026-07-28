@@ -50,6 +50,7 @@ interface CapturedTool {
   readonly renderResult?: (...args: ReadonlyArray<unknown>) => unknown;
   readonly promptGuidelines?: ReadonlyArray<string>;
   readonly parameters?: unknown;
+  readonly prepareArguments?: (args: unknown) => unknown;
   readonly execute: (
     id: string,
     input: unknown,
@@ -73,7 +74,7 @@ const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   task: "Review auth",
   selection: {
     source: "explicit",
-    reason: "Explicit backend/model selection.",
+    reason: "Explicit model selection.",
     skippedCandidates: [],
   },
   cwd: "/project",
@@ -317,62 +318,59 @@ describe("subagent tool", () => {
       "subagent_rename",
     ])
       expect(schema(name)?.additionalProperties).toBe(false);
-    type StartVariantSchema = {
-      readonly additionalProperties?: boolean;
-      readonly properties?: {
-        readonly backend?: {
-          readonly const?: string;
-          readonly enum?: ReadonlyArray<string>;
-        };
-        readonly model?: unknown;
-        readonly task?: { readonly pattern?: string };
-      };
-    };
     const startSchema = schema("subagent_start") as {
       readonly properties?: {
         readonly agents?: {
-          readonly items?: { readonly anyOf?: ReadonlyArray<StartVariantSchema> };
+          readonly items?: {
+            readonly additionalProperties?: boolean;
+            readonly properties?: Readonly<
+              Record<string, { readonly pattern?: string; readonly description?: string }>
+            >;
+            readonly required?: ReadonlyArray<string>;
+          };
         };
       };
     };
-    const startVariants = startSchema.properties?.agents?.items?.anyOf ?? [];
-    const automatic = startVariants.find(
-      (variant) => variant.properties?.backend?.const === "auto",
-    );
-    const explicit = startVariants.find((variant) =>
-      variant.properties?.backend?.enum?.includes("pi"),
-    );
-    expect(startVariants).toHaveLength(2);
-    expect(startVariants.every((variant) => variant.additionalProperties === false)).toBe(true);
-    expect(startVariants.every((variant) => variant.properties?.task?.pattern === ".*\\S.*")).toBe(
-      true,
-    );
-    expect(automatic?.properties).not.toHaveProperty("model");
-    expect(explicit?.properties?.backend?.enum).toEqual(["pi", "claude-cli"]);
-    expect(explicit?.properties).toHaveProperty("model");
-    const startParameters = tools.get("subagent_start")?.parameters as TSchema;
+    const startItem = startSchema.properties?.agents?.items;
+    expect(startItem?.additionalProperties).toBe(false);
+    expect(startItem?.required).toEqual(["task"]);
+    expect(startItem?.properties?.task?.pattern).toBe(".*\\S.*");
+    expect(startItem?.properties).not.toHaveProperty("backend");
+    expect(startItem?.properties?.model?.pattern).toContain("pi\\/");
+    expect(startItem?.properties?.model?.pattern).toContain("claude-cli\\/");
+    const startTool = tools.get("subagent_start");
+    const startParameters = startTool?.parameters as TSchema;
+    expect(Check(startParameters, { agents: [{ profile: "scout", task: "Inspect" }] })).toBe(true);
     expect(
       Check(startParameters, {
-        agents: [{ backend: "auto", task: "Inspect", writeIntent: "read-only" }],
+        agents: [{ model: "pi/openai-codex/gpt-5.6-sol", profile: "scout", task: "Inspect" }],
       }),
     ).toBe(true);
     expect(
       Check(startParameters, {
-        agents: [{ backend: "auto", model: "/", task: "Inspect", writeIntent: "read-only" }],
+        agents: [{ model: "claude-cli/sonnet", profile: "reviewer", task: "Inspect" }],
+      }),
+    ).toBe(true);
+    expect(
+      Check(startParameters, {
+        agents: [{ backend: "auto", profile: "scout", task: "Inspect" }],
       }),
     ).toBe(false);
     expect(
       Check(startParameters, {
-        agents: [
-          {
-            backend: "pi",
-            model: "openai-codex/gpt-5.6-sol",
-            task: "Inspect",
-            writeIntent: "read-only",
-          },
-        ],
+        agents: [{ model: "openai-codex/gpt-5.6-sol", profile: "scout", task: "Inspect" }],
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(() =>
+      startTool?.prepareArguments?.({
+        agents: [{ backend: "auto", profile: "scout", task: "Inspect" }],
+      }),
+    ).toThrow("backend is no longer accepted");
+    expect(() =>
+      startTool?.prepareArguments?.({
+        agents: [{ model: "/", profile: "scout", task: "Inspect" }],
+      }),
+    ).toThrow('model must be "pi/provider/model-id"');
     expect(tools.get("subagent_start")?.description).toContain("at most one foreground agent");
     expect(tools.get("subagent_status")?.description).toContain("backend capabilities");
     expect(tools.get("subagent_send")?.description).toContain(
@@ -396,7 +394,7 @@ describe("subagent tool", () => {
       .get("subagent_models")
       ?.execute("call", { action: "start", query: "fable" }, undefined, undefined, context);
     expect(models?.details).toMatchObject({ action: "models" });
-    expect(models?.content[0]?.text).toContain("backend=claude-cli model=fable");
+    expect(models?.content[0]?.text).toContain("model=claude-cli/fable");
   });
 
   it("color-codes agent names by state while await is in progress", () => {
@@ -609,7 +607,7 @@ describe("subagent tool", () => {
     expect(expanded).toContain("spawn failed");
   });
 
-  it("uses fresh/background defaults, inherits model effort, and strips recursive tools", async () => {
+  it("uses short-form profile defaults, inherits model effort, and strips recursive tools", async () => {
     let request: StartSubagentRequest | undefined;
     const service = subagentServiceDouble({
       start: (input) => Effect.sync(() => ((request = input), view())),
@@ -640,7 +638,7 @@ describe("subagent tool", () => {
     const result = await tool?.execute(
       "call",
       {
-        agents: [{ backend: "pi", task: "Review auth", writeIntent: "read-only" }],
+        agents: [{ task: "Review auth" }],
       },
       undefined,
       undefined,
@@ -653,7 +651,7 @@ describe("subagent tool", () => {
     expect(tool?.renderResult).toBeTypeOf("function");
     expect(tool?.promptGuidelines?.join(" ")).toContain("one writer");
     expect(tool?.promptGuidelines?.join(" ")).toContain(
-      "claude-cli supports await, stop, local rename, and resume after completion",
+      '"claude-cli/…" supports await, stop, local rename, and resume after completion',
     );
     expect(result?.content[0]?.text).toContain("agent-1");
     expect(request).toMatchObject({
@@ -668,7 +666,7 @@ describe("subagent tool", () => {
     });
   });
 
-  it("routes backend auto through the neutral delegate profile and records provenance", async () => {
+  it("routes the short form through the neutral delegate profile and records provenance", async () => {
     const requests: StartSubagentRequest[] = [];
     const tool = captureSubagentTools(startCapturingService(requests), ["read"]).get(
       "subagent_start",
@@ -676,7 +674,7 @@ describe("subagent tool", () => {
 
     await tool?.execute(
       "call",
-      { agents: [{ backend: "auto", task: "Inspect auth", writeIntent: "read-only" }] },
+      { agents: [{ task: "Inspect auth" }] },
       undefined,
       undefined,
       context,
@@ -705,10 +703,8 @@ describe("subagent tool", () => {
       "call",
       {
         agents: PROFILE_IDS.map((profile) => ({
-          backend: "auto" as const,
           profile,
           task: `Smoke test ${profile}`,
-          writeIntent: "read-only" as const,
         })),
       },
       undefined,
@@ -726,10 +722,20 @@ describe("subagent tool", () => {
       oracle: "high",
       delegate: "high",
     } as const;
+    const expectedIntent = {
+      scout: "read-only",
+      researcher: "read-only",
+      planner: "read-only",
+      worker: "writer",
+      reviewer: "read-only",
+      oracle: "read-only",
+      delegate: "read-only",
+    } as const;
     for (const request of requests) {
       expect(request.backend).toBe("pi");
       expect(request.context).toBe(request.profile === "oracle" ? "fork" : "fresh");
       expect(request.effort).toBe(expectedEffort[request.profile ?? "delegate"]);
+      expect(request.writeIntent).toBe(expectedIntent[request.profile ?? "delegate"]);
       // Built-in profile effort defaults are soft preferences, never hard requirements.
       expect(request.effortWasExplicit).toBe(false);
       expect(request.profileGuidance?.length).toBeGreaterThan(20);
@@ -740,20 +746,14 @@ describe("subagent tool", () => {
     }
   });
 
-  it("uses the configured default profile when backend auto omits profile", async () => {
+  it("uses the configured default profile when the short form omits profile", async () => {
     const requests: StartSubagentRequest[] = [];
     const profiles = profileServiceFor({ defaultProfile: "reviewer" });
     const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles).get(
       "subagent_start",
     );
 
-    await tool?.execute(
-      "call",
-      { agents: [{ backend: "auto", task: "Review", writeIntent: "read-only" }] },
-      undefined,
-      undefined,
-      context,
-    );
+    await tool?.execute("call", { agents: [{ task: "Review" }] }, undefined, undefined, context);
 
     expect(requests[0]).toMatchObject({
       profile: "reviewer",
@@ -771,8 +771,8 @@ describe("subagent tool", () => {
       "call",
       {
         agents: [
-          { backend: "auto", profile: "reviewer", task: "Review", writeIntent: "read-only" },
-          { backend: "auto", profile: "oracle", task: "Advise", writeIntent: "read-only" },
+          { profile: "reviewer", task: "Review" },
+          { profile: "oracle", task: "Advise" },
         ],
       },
       undefined,
@@ -796,7 +796,7 @@ describe("subagent tool", () => {
     const failed = await tool?.execute(
       "call",
       {
-        agents: [{ backend: "auto", profile: "oracle", task: "Advise", writeIntent: "read-only" }],
+        agents: [{ profile: "oracle", task: "Advise" }],
       },
       undefined,
       undefined,
@@ -835,9 +835,7 @@ describe("subagent tool", () => {
     await tool?.execute(
       "call",
       {
-        agents: [
-          { backend: "auto", profile: "reviewer", task: "Review", writeIntent: "read-only" },
-        ],
+        agents: [{ profile: "reviewer", task: "Review" }],
       },
       undefined,
       undefined,
@@ -884,15 +882,7 @@ describe("subagent tool", () => {
     await tool?.execute(
       "call",
       {
-        agents: [
-          {
-            backend: "auto",
-            profile: "reviewer",
-            task: "Review",
-            effort: "max",
-            writeIntent: "read-only",
-          },
-        ],
+        agents: [{ profile: "reviewer", task: "Review", effort: "max" }],
       },
       undefined,
       undefined,
@@ -954,14 +944,7 @@ describe("subagent tool", () => {
       ?.execute(
         "call",
         {
-          agents: [
-            {
-              backend: "auto",
-              profile: "reviewer",
-              task: "Review",
-              writeIntent: "read-only",
-            },
-          ],
+          agents: [{ profile: "reviewer", task: "Review" }],
         },
         undefined,
         undefined,
@@ -994,15 +977,7 @@ describe("subagent tool", () => {
     await tool?.execute(
       "call",
       {
-        agents: [
-          {
-            backend: "auto",
-            profile: "reviewer",
-            task: "Review with Claude",
-            effort: "high",
-            writeIntent: "read-only",
-          },
-        ],
+        agents: [{ profile: "reviewer", task: "Review with Claude", effort: "high" }],
       },
       undefined,
       undefined,
@@ -1011,15 +986,7 @@ describe("subagent tool", () => {
     await tool?.execute(
       "call",
       {
-        agents: [
-          {
-            backend: "auto",
-            profile: "reviewer",
-            task: "Review without Claude",
-            effort: "off",
-            writeIntent: "read-only",
-          },
-        ],
+        agents: [{ profile: "reviewer", task: "Review without Claude", effort: "off" }],
       },
       undefined,
       undefined,
@@ -1051,7 +1018,13 @@ describe("subagent tool", () => {
     const denied = await deniedTool?.execute(
       "call",
       {
-        agents: [{ backend: "pi", profile: "reviewer", task: "Review", writeIntent: "read-only" }],
+        agents: [
+          {
+            model: "pi/openai-codex/gpt-5.6-sol",
+            profile: "reviewer",
+            task: "Review",
+          },
+        ],
       },
       undefined,
       undefined,
@@ -1072,7 +1045,13 @@ describe("subagent tool", () => {
     const result = await tool?.execute(
       "call",
       {
-        agents: [{ backend: "pi", profile: "reviewer", task: "Review", writeIntent: "read-only" }],
+        agents: [
+          {
+            model: "pi/openai-codex/gpt-5.6-sol",
+            profile: "reviewer",
+            task: "Review",
+          },
+        ],
       },
       undefined,
       undefined,
@@ -1091,7 +1070,7 @@ describe("subagent tool", () => {
     expect(result?.content[0]?.text).toContain("discouraged by policy");
   });
 
-  it("denies explicit selectors before any registry auth lookup or Claude preflight work", async () => {
+  it("denies explicit selectors and automatic routes before auth or Claude preflight work", async () => {
     const requests: StartSubagentRequest[] = [];
     let findCalls = 0;
     let authStatusCalls = 0;
@@ -1135,18 +1114,10 @@ describe("subagent tool", () => {
       "call",
       {
         agents: [
-          {
-            task: "Probe",
-            backend: "pi",
-            model: "openai-codex/gpt-5.6-sol",
-            writeIntent: "read-only",
-          },
-          // Backend-only launch whose deterministic inherited parent model is denied.
-          { task: "Probe", backend: "pi", writeIntent: "read-only" },
-          { task: "Probe", backend: "claude-cli", model: "fable", writeIntent: "read-only" },
-          // Bare selector that only the resolved canonical model matches against the deny list;
-          // the deny must still fire before registry auth lookups.
-          { task: "Probe", backend: "pi", model: "gpt-5.6-sol", writeIntent: "read-only" },
+          { task: "Probe", model: "pi/openai-codex/gpt-5.6-sol" },
+          // Automatic routing rejects its denied parent candidate before launch.
+          { task: "Probe" },
+          { task: "Probe", model: "claude-cli/fable" },
         ],
       },
       undefined,
@@ -1158,9 +1129,8 @@ describe("subagent tool", () => {
     expect(result?.details).toMatchObject({
       startFailures: [
         { index: 0, code: "model_denied" },
-        { index: 1, code: "model_denied" },
+        { index: 1, code: "profile_no_eligible_model" },
         { index: 2, code: "model_denied" },
-        { index: 3, code: "model_denied" },
       ],
     });
     expect(findCalls).toBe(0);
@@ -1191,9 +1161,9 @@ describe("subagent tool", () => {
         {
           agents: [
             // Profile-environment inheritance path (delegate inherits the parent effort).
-            { backend: "auto", profile: "delegate", task: "Probe", writeIntent: "read-only" },
-            // Explicit-launch inheritance path.
-            { backend: "pi", task: "Probe", writeIntent: "read-only" },
+            { profile: "delegate", task: "Probe" },
+            // Explicit-model path retains the delegate profile effort default.
+            { model: "pi/openai-codex/gpt-5.6-sol", task: "Probe" },
           ],
         },
         undefined,
@@ -1210,7 +1180,7 @@ describe("subagent tool", () => {
     expect(await startWithLevel(" MEDIUM ")).toEqual(["medium", "medium"]);
   });
 
-  it("distinguishes backend-only overrides from explicit backend+model overrides in provenance", async () => {
+  it("distinguishes automatic profile routing from explicit one-field model overrides", async () => {
     const requests: StartSubagentRequest[] = [];
     const tool = captureSubagentTools(startCapturingService(requests), ["read"], undefined, {
       ensureClaudeReady: () => Effect.void,
@@ -1220,22 +1190,15 @@ describe("subagent tool", () => {
       "call",
       {
         agents: [
-          { task: "Probe", backend: "pi", writeIntent: "read-only" },
+          { task: "Probe" },
+          { task: "Probe", profile: "reviewer" },
+          { task: "Probe", model: "pi/openai-codex/gpt-5.6-sol" },
           {
             task: "Probe",
-            backend: "pi",
-            model: "openai-codex/gpt-5.6-sol",
-            writeIntent: "read-only",
-          },
-          { task: "Probe", backend: "pi", profile: "reviewer", writeIntent: "read-only" },
-          { task: "Probe", backend: "claude-cli", writeIntent: "read-only" },
-          {
-            task: "Probe",
-            backend: "claude-cli",
-            model: "fable",
+            model: "pi/openai-codex/gpt-5.6-sol",
             profile: "reviewer",
-            writeIntent: "read-only",
           },
+          { task: "Probe", model: "claude-cli/fable", profile: "reviewer" },
         ],
       },
       undefined,
@@ -1244,18 +1207,25 @@ describe("subagent tool", () => {
     );
 
     expect(requests.map((request) => request.selection?.reason)).toEqual([
-      "Explicit backend selection; the parent session model was inherited.",
-      "Explicit backend/model selection.",
-      "Explicit backend routing overrode profile reviewer; the parent session model was inherited, and profile guidance was retained.",
-      "Explicit backend selection; Claude CLI defaulted to the sonnet alias.",
-      "Explicit backend/model routing overrode profile reviewer; profile guidance was retained.",
+      "Profile delegate selected parent candidate 1.",
+      "Profile reviewer selected parent candidate 1.",
+      "Explicit model selection overrode profile delegate routing; profile guidance and defaults were retained.",
+      "Explicit model selection overrode profile reviewer routing; profile guidance and defaults were retained.",
+      "Explicit model selection overrode profile reviewer routing; profile guidance and defaults were retained.",
     ]);
     expect(requests.map((request) => request.model)).toEqual([
       "openai-codex/gpt-5.6-sol",
       "openai-codex/gpt-5.6-sol",
       "openai-codex/gpt-5.6-sol",
-      "sonnet",
+      "openai-codex/gpt-5.6-sol",
       "fable",
+    ]);
+    expect(requests.map((request) => request.writeIntent)).toEqual([
+      "read-only",
+      "read-only",
+      "read-only",
+      "read-only",
+      "read-only",
     ]);
   });
 
@@ -1269,8 +1239,8 @@ describe("subagent tool", () => {
       "call",
       {
         agents: [
-          { backend: "auto", profile: "future", task: "Unknown", writeIntent: "read-only" },
-          { backend: "auto", profile: "reviewer", task: "Review", writeIntent: "read-only" },
+          { profile: "future", task: "Unknown" },
+          { profile: "reviewer", task: "Review" },
         ],
       },
       undefined,
@@ -1288,7 +1258,7 @@ describe("subagent tool", () => {
     expect(result?.content[0]?.text).toContain("[profile_no_eligible_model]");
   });
 
-  it("rejects a model combined with backend auto before any launch", async () => {
+  it("rejects a non-canonical explicit model selector before any launch", async () => {
     const requests: StartSubagentRequest[] = [];
     const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
     const result = await tool?.execute(
@@ -1296,11 +1266,9 @@ describe("subagent tool", () => {
       {
         agents: [
           {
-            backend: "auto",
             profile: "worker",
             model: "openai-codex/gpt-5.6-sol",
             task: "Implement",
-            writeIntent: "writer",
           },
         ],
       },
@@ -1310,7 +1278,7 @@ describe("subagent tool", () => {
     );
     expect(requests).toEqual([]);
     expect(result?.details).toMatchObject({
-      startFailures: [{ code: "auto_model_conflict" }],
+      startFailures: [{ code: "model_selector_invalid" }],
     });
   });
 
@@ -1362,26 +1330,14 @@ describe("subagent tool", () => {
       "call",
       {
         agents: [
-          {
-            task: "Review auth",
-            name: "auth",
-            backend: "pi",
-            writeIntent: "read-only",
-          },
-          {
-            task: "Fail launch",
-            name: "broken",
-            backend: "pi",
-            writeIntent: "read-only",
-          },
+          { task: "Review auth", name: "auth" },
+          { task: "Fail launch", name: "broken" },
           {
             task: "Review storage",
             name: "storage",
-            backend: "claude-cli",
-            model: "opus",
+            model: "claude-cli/opus",
             execution: "foreground",
             effort: "medium",
-            writeIntent: "read-only",
           },
         ],
       },
@@ -1424,18 +1380,8 @@ describe("subagent tool", () => {
         "call",
         {
           agents: [
-            {
-              task: "Review auth",
-              backend: "pi",
-              execution: "foreground",
-              writeIntent: "read-only",
-            },
-            {
-              task: "Review storage",
-              backend: "pi",
-              execution: "foreground",
-              writeIntent: "read-only",
-            },
+            { task: "Review auth", execution: "foreground" },
+            { task: "Review storage", execution: "foreground" },
           ],
         },
         undefined,
@@ -1454,14 +1400,7 @@ describe("subagent tool", () => {
     await tool?.execute(
       "call",
       {
-        agents: [
-          {
-            task: "Review auth",
-            backend: "pi",
-            execution: "foreground",
-            writeIntent: "read-only",
-          },
-        ],
+        agents: [{ task: "Review auth", execution: "foreground" }],
       },
       undefined,
       (result) => updates.push(result.content[0]?.text ?? ""),
@@ -1478,7 +1417,7 @@ describe("subagent tool", () => {
     const result = await tool?.execute(
       "call",
       {
-        agents: [{ task: "Review auth", backend: "pi", writeIntent: "read-only" }],
+        agents: [{ task: "Review auth" }],
       },
       undefined,
       () => {
@@ -1510,8 +1449,6 @@ describe("subagent tool", () => {
       {
         agents: Array.from({ length: 12 }, (_, index) => ({
           task: `Review area ${index + 1}`,
-          backend: "pi" as const,
-          writeIntent: "read-only" as const,
         })),
       },
       undefined,
@@ -1567,14 +1504,7 @@ describe("subagent tool", () => {
       ?.execute(
         "call",
         {
-          agents: [
-            {
-              task: "Report",
-              backend: "pi",
-              execution: "foreground",
-              writeIntent: "read-only",
-            },
-          ],
+          agents: [{ task: "Report", execution: "foreground" }],
         },
         undefined,
         undefined,
@@ -1620,9 +1550,7 @@ describe("subagent tool", () => {
     const agents = Array.from({ length: 12 }, (_, index) => ({
       task: `Task ${index + 1}`,
       name: `run-${index + 1}`,
-      backend: "pi" as const,
       execution: index === 0 ? ("foreground" as const) : ("background" as const),
-      writeIntent: "read-only" as const,
     }));
     const result = await captureSubagentTools(service)
       .get("subagent_start")
@@ -1648,14 +1576,7 @@ describe("subagent tool", () => {
       ?.execute(
         "call",
         {
-          agents: [
-            {
-              task: "Cancel",
-              backend: "pi",
-              execution: "foreground",
-              writeIntent: "read-only",
-            },
-          ],
+          agents: [{ task: "Cancel", execution: "foreground" }],
         },
         controller.signal,
         undefined,
@@ -1686,8 +1607,6 @@ describe("subagent tool", () => {
         {
           agents: Array.from({ length: 13 }, (_, index) => ({
             task: `Review area ${index + 1}`,
-            backend: "pi" as const,
-            writeIntent: "read-only" as const,
           })),
         },
         undefined,
@@ -1728,14 +1647,7 @@ describe("subagent tool", () => {
     const result = await tool?.execute(
       "call",
       {
-        agents: [
-          {
-            backend: "claude-cli",
-            model: "opus",
-            task: "Review auth",
-            writeIntent: "read-only",
-          },
-        ],
+        agents: [{ model: "claude-cli/opus", task: "Review auth" }],
       },
       undefined,
       undefined,
@@ -1780,7 +1692,7 @@ describe("subagent tool", () => {
     await tool?.execute(
       "call",
       {
-        agents: [{ backend: "pi", task: "Review auth", writeIntent: "read-only" }],
+        agents: [{ task: "Review auth" }],
       },
       undefined,
       undefined,
@@ -2415,8 +2327,6 @@ describe("subagent tool", () => {
       {
         agents: Array.from({ length: 12 }, (_, index) => ({
           task: `Fail ${index + 1}`,
-          backend: "pi" as const,
-          writeIntent: "read-only" as const,
         })),
       },
       undefined,
@@ -2454,9 +2364,7 @@ describe("subagent tool", () => {
       const started = await tools.get("subagent_start")?.execute(
         "call",
         {
-          agents: [
-            { task: "Probe", backend: model.backend, model: model.id, writeIntent: "read-only" },
-          ],
+          agents: [{ task: "Probe", model: `${model.backend}/${model.id}` }],
         },
         undefined,
         undefined,
@@ -2480,11 +2388,11 @@ describe("subagent tool", () => {
       ?.execute("call", { profile: "reviewer" }, undefined, undefined, context);
     const text = models?.content[0]?.text ?? "";
     expect(text).toContain("Configured default profile: reviewer");
-    expect(text).toContain("reviewer · context=fresh · effort=high");
+    expect(text).toContain("reviewer · context=fresh · intent=read-only · effort=high");
     expect(text).toContain("parent:default · skipped");
-    expect(text).not.toContain("backend=pi model=openai-codex/gpt-5.6-sol");
+    expect(text).not.toContain("model=pi/openai-codex/gpt-5.6-sol");
     expect(text).toContain(
-      "backend=claude-cli model=fable · Claude Fable (CLI alias) · reasoning · efforts=low,medium,high,xhigh,max · discouraged (explicit selection only)",
+      "model=claude-cli/fable · Claude Fable (CLI alias) · reasoning · efforts=low,medium,high,xhigh,max · discouraged (explicit selection only)",
     );
     expect(models?.details as SubagentToolDetails | undefined).toMatchObject({
       version: 1,
@@ -2516,7 +2424,7 @@ describe("subagent tool", () => {
     const started = await tools.get("subagent_start")?.execute(
       "call",
       {
-        agents: [{ backend: "auto", profile: "worker", task: "Work", writeIntent: "read-only" }],
+        agents: [{ profile: "worker", task: "Work", writeIntent: "read-only" }],
       },
       undefined,
       undefined,
@@ -2563,17 +2471,11 @@ describe("subagent tool", () => {
     const models = await tools
       .get("subagent_models")
       ?.execute("call", {}, undefined, undefined, mutable);
-    expect(models?.content[0]?.text).not.toContain("backend=claude-cli");
+    expect(models?.content[0]?.text).not.toContain("model=claude-cli/");
     await tools.get("subagent_start")?.execute(
       "call",
       {
-        agents: [
-          {
-            task: "Use captured environment",
-            backend: "pi",
-            writeIntent: "read-only",
-          },
-        ],
+        agents: [{ task: "Use captured environment" }],
       },
       undefined,
       undefined,
@@ -2599,7 +2501,7 @@ describe("subagent tool", () => {
       .get("subagent_models")
       ?.execute("call", {}, undefined, undefined, untrusted);
     expect(modelViews(models).map((model) => model.backend)).toEqual(["pi"]);
-    expect(models?.content[0]?.text).not.toContain("backend=claude-cli");
+    expect(models?.content[0]?.text).not.toContain("model=claude-cli/");
   });
 
   it("marks oracle routing unavailable when the parent cannot be forked", async () => {
@@ -2615,7 +2517,7 @@ describe("subagent tool", () => {
       .get("subagent_models")
       ?.execute("call", { profile: "oracle" }, undefined, undefined, ephemeral);
     const text = models?.content[0]?.text ?? "";
-    expect(text).toContain("oracle · context=fork · effort=high");
+    expect(text).toContain("oracle · context=fork · intent=read-only · effort=high");
     expect(text).toContain("parent:default · skipped");
     expect(text).toContain("Forked context requires a persisted parent session");
   });
@@ -2764,7 +2666,7 @@ describe("subagent tool", () => {
     expect(exact?.content[0]?.text).not.toContain("matching selectors; narrow query");
   });
 
-  it("rejects duplicate bare Pi model IDs with canonical candidates instead of picking one", async () => {
+  it("uses canonical Pi provider selectors without guessing across duplicate model IDs", async () => {
     const requests: StartSubagentRequest[] = [];
     const service = startCapturingService(requests);
     const ctx = registryContext([
@@ -2774,35 +2676,28 @@ describe("subagent tool", () => {
     ]);
     const tool = captureSubagentTools(service, ["read"]).get("subagent_start");
 
-    const ambiguous = await tool?.execute(
-      "call",
-      { agents: [{ task: "Probe", backend: "pi", model: "gpt-5.5", writeIntent: "read-only" }] },
-      undefined,
-      undefined,
-      ctx,
-    );
-    expect(requests).toHaveLength(0);
-    expect(ambiguous?.details).toMatchObject({
-      startFailures: [{ index: 0, code: "pi_model_ambiguous" }],
-    });
-    expect(ambiguous?.content[0]?.text).toContain("openai/gpt-5.5, openrouter/gpt-5.5");
-
     await tool?.execute(
       "call",
       {
         agents: [
-          { task: "Probe", backend: "pi", model: "claude-opus-5", writeIntent: "read-only" },
+          { task: "Probe", model: "pi/openai/gpt-5.5" },
+          { task: "Probe", model: "pi/openrouter/gpt-5.5" },
+          { task: "Probe", model: "pi/anthropic/claude-opus-5" },
         ],
       },
       undefined,
       undefined,
       ctx,
     );
-    expect(requests.map((request) => request.model)).toEqual(["anthropic/claude-opus-5"]);
+    expect(requests.map((request) => request.model)).toEqual([
+      "openai/gpt-5.5",
+      "openrouter/gpt-5.5",
+      "anthropic/claude-opus-5",
+    ]);
 
     const unknown = await tool?.execute(
       "call",
-      { agents: [{ task: "Probe", backend: "pi", model: "gpt-5.9", writeIntent: "read-only" }] },
+      { agents: [{ task: "Probe", model: "pi/openai/gpt-5.9" }] },
       undefined,
       undefined,
       ctx,
@@ -2810,10 +2705,10 @@ describe("subagent tool", () => {
     expect(unknown?.details).toMatchObject({
       startFailures: [{ index: 0, code: "pi_model_unknown" }],
     });
-    expect(requests).toHaveLength(1);
+    expect(requests).toHaveLength(3);
   });
 
-  it("fails claude-cli launches that use Pi model selectors before any start", async () => {
+  it("rejects prefixed Claude selectors that resolve to Pi or invalid Claude models", async () => {
     const requests: StartSubagentRequest[] = [];
     const service = startCapturingService(requests);
     const ctx = registryContext([
@@ -2825,15 +2720,9 @@ describe("subagent tool", () => {
       "call",
       {
         agents: [
-          {
-            task: "Probe",
-            backend: "claude-cli",
-            model: "openai-codex/gpt-5.6-sol",
-            writeIntent: "read-only",
-          },
-          { task: "Probe", backend: "claude-cli", model: "gpt-5.6-sol", writeIntent: "read-only" },
-          { task: "Probe", backend: "claude-cli", model: "Opus 5", writeIntent: "read-only" },
-          { task: "Probe", backend: "claude-cli", model: "gpt-4o", writeIntent: "read-only" },
+          { task: "Probe", model: "claude-cli/gpt-5.6-sol" },
+          { task: "Probe", model: "claude-cli/Opus 5" },
+          { task: "Probe", model: "claude-cli/gpt-4o" },
         ],
       },
       undefined,
@@ -2845,9 +2734,8 @@ describe("subagent tool", () => {
     expect(result?.details).toMatchObject({
       startFailures: [
         { index: 0, code: "backend_model_mismatch" },
-        { index: 1, code: "backend_model_mismatch" },
+        { index: 1, code: "model_selector_invalid" },
         { index: 2, code: "claude_model_invalid" },
-        { index: 3, code: "claude_model_invalid" },
       ],
     });
     expect(result?.content[0]?.text).toContain('backend "pi"');
@@ -2883,15 +2771,7 @@ describe("subagent tool", () => {
     const result = await tool?.execute(
       "call",
       {
-        agents: [
-          {
-            task: "Probe",
-            backend: "claude-cli",
-            model: "sonnet",
-            context: "fork",
-            writeIntent: "read-only",
-          },
-        ],
+        agents: [{ task: "Probe", model: "claude-cli/sonnet", context: "fork" }],
       },
       undefined,
       undefined,
@@ -2919,20 +2799,8 @@ describe("subagent tool", () => {
       "call",
       {
         agents: [
-          {
-            task: "Probe",
-            backend: "claude-cli",
-            model: "sonnet",
-            context: "fork",
-            writeIntent: "read-only",
-          },
-          {
-            task: "Probe",
-            backend: "claude-cli",
-            model: "sonnet",
-            effort: "off",
-            writeIntent: "read-only",
-          },
+          { task: "Probe", model: "claude-cli/sonnet", context: "fork" },
+          { task: "Probe", model: "claude-cli/sonnet", effort: "off" },
         ],
       },
       undefined,
@@ -2950,7 +2818,7 @@ describe("subagent tool", () => {
     expect(preflightCalls).toBe(0);
   });
 
-  it("requires launch policy fields in-schema and lists models without a runtime", async () => {
+  it("requires only task in-schema and lists canonical models without a runtime", async () => {
     const tools = captureSubagentTools({} as SubagentServiceShape);
     const modelsTool = tools.get("subagent_models");
     const startTool = tools.get("subagent_start");
@@ -2958,20 +2826,13 @@ describe("subagent tool", () => {
       | {
           readonly properties?: {
             readonly agents?: {
-              readonly items?: {
-                readonly anyOf?: ReadonlyArray<{ readonly required?: ReadonlyArray<string> }>;
-              };
+              readonly items?: { readonly required?: ReadonlyArray<string> };
             };
           };
         }
       | undefined;
 
-    const startVariants = startSchema?.properties?.agents?.items?.anyOf ?? [];
-    expect(startVariants).toHaveLength(2);
-    for (const variant of startVariants) {
-      expect(variant.required).toHaveLength(3);
-      expect(variant.required).toEqual(expect.arrayContaining(["task", "backend", "writeIntent"]));
-    }
+    expect(startSchema?.properties?.agents?.items?.required).toEqual(["task"]);
     const piModels = await modelsTool?.execute(
       "call",
       { query: "sol" },
@@ -2979,8 +2840,8 @@ describe("subagent tool", () => {
       undefined,
       context,
     );
-    expect(piModels?.content[0]?.text).toContain("backend=pi model=openai-codex/gpt-5.6-sol");
-    expect(piModels?.content[0]?.text).not.toContain("model=fable");
+    expect(piModels?.content[0]?.text).toContain("model=pi/openai-codex/gpt-5.6-sol");
+    expect(piModels?.content[0]?.text).not.toContain("model=claude-cli/fable");
     const claudeModels = await modelsTool?.execute(
       "call",
       { query: "fable" },
@@ -2988,6 +2849,6 @@ describe("subagent tool", () => {
       undefined,
       context,
     );
-    expect(claudeModels?.content[0]?.text).toContain("backend=claude-cli model=fable");
+    expect(claudeModels?.content[0]?.text).toContain("model=claude-cli/fable");
   });
 });

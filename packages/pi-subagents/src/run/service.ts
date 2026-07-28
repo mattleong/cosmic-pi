@@ -1059,7 +1059,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               ...(request.profile ? { profile: request.profile } : {}),
               selection: request.selection ?? {
                 source: "explicit",
-                reason: "Explicit backend/model selection.",
+                reason: "Explicit model selection.",
                 skippedCandidates: [],
               },
               cwd: request.cwd,

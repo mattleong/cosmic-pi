@@ -4,7 +4,11 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/coordination.ts";
 import { InvalidSubagentRequestError, type SubagentProcessError } from "../run/errors.ts";
-import { claudeCliModelConflict, resolvePiModelSelector } from "../run/model-catalog.ts";
+import {
+  claudeCliModelConflict,
+  parseExplicitSubagentModelSelector,
+  resolvePiModelSelector,
+} from "../run/model-catalog.ts";
 import {
   decodeSubagentEffort,
   isClaudeModelSelector,
@@ -30,9 +34,9 @@ export interface SubagentProfileStartSpec {
   readonly execution?: SubagentExecution | undefined;
   readonly context?: SubagentContextMode | undefined;
   readonly profile?: string | undefined;
-  readonly backend: "auto" | SubagentBackend;
-  readonly writeIntent: SubagentWriteIntent;
+  /** Canonical one-run selector: pi/provider/model-id or claude-cli/alias-or-full-id. */
   readonly model?: string | undefined;
+  readonly writeIntent?: SubagentWriteIntent | undefined;
   readonly effort?: SubagentEffort | undefined;
 }
 
@@ -62,6 +66,26 @@ const deniedModelError = (backend: SubagentBackend, model: string) =>
     code: "model_denied",
     message: `Model ${backend}/${model} is denied by Subagents policy and cannot be started.`,
   });
+
+type LaunchRouting =
+  | { readonly backend: "auto"; readonly model?: undefined }
+  | { readonly backend: SubagentBackend; readonly model: string };
+
+const launchRouting = (
+  selector: string | undefined,
+): Effect.Effect<LaunchRouting, InvalidSubagentRequestError> => {
+  const value = selector?.trim();
+  if (!value) return Effect.succeed({ backend: "auto" });
+  const explicit = parseExplicitSubagentModelSelector(value);
+  if (explicit) return Effect.succeed(explicit);
+  return Effect.fail(
+    new InvalidSubagentRequestError({
+      code: "model_selector_invalid",
+      message:
+        'Explicit model must use "pi/provider/model-id" or "claude-cli/alias-or-full-id". Copy a selector from subagent_models when available; full Claude model IDs are also accepted. Omit model for automatic profile routing.',
+    }),
+  );
+};
 
 const resolvePiModel = (
   selector: string | undefined,
@@ -232,37 +256,35 @@ const dynamicCandidateSkip = (
 
 export const resolveProfileStart = (
   pi: ExtensionAPI,
-  input: SubagentProfileStartSpec,
+  rawInput: SubagentProfileStartSpec,
   ctx: ExtensionContext,
   environment: SubagentSessionEnvironment,
   boundaries: SubagentStartBoundaries,
 ): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError, SubagentProfileService> =>
   Effect.gen(function* () {
     const profiles = yield* SubagentProfileService;
-    const task = input.task.trim();
+    const task = rawInput.task.trim();
     if (!task)
       return yield* new InvalidSubagentRequestError({
         message: "subagent_start requires every agent to have a task.",
       });
-    if (input.backend === "auto" && input.model?.trim())
-      return yield* new InvalidSubagentRequestError({
-        code: "auto_model_conflict",
-        message:
-          'backend "auto" cannot combine with model; use the profile route or choose backend "pi"/"claude-cli" for an explicit model override.',
-      });
 
-    const requestedProfile = input.profile?.trim();
-    const selectedProfile =
-      input.backend === "auto"
-        ? requestedProfile || profiles.config.defaultProfile
-        : requestedProfile;
-    const definition = selectedProfile ? profiles.definition(selectedProfile) : undefined;
-    if (selectedProfile && !definition)
+    const routing = yield* launchRouting(rawInput.model);
+    const requestedProfile = rawInput.profile?.trim();
+    const selectedProfile = requestedProfile || profiles.config.defaultProfile;
+    const definition = profiles.definition(selectedProfile);
+    if (!definition)
       return yield* new InvalidSubagentRequestError({
         code: "profile_unknown",
         message: `Unknown subagent profile "${selectedProfile}". Available profiles: ${PROFILE_IDS.join(", ")}.`,
       });
-    const context = input.context ?? definition?.defaultContext ?? "fresh";
+    const input = {
+      ...rawInput,
+      ...routing,
+      profile: definition.id,
+      writeIntent: rawInput.writeIntent ?? definition.defaultWriteIntent,
+    };
+    const context = input.context ?? definition.defaultContext;
     const projectTrusted = environment.projectTrusted;
     // This backend incompatibility is independent of parent branch state and must win even when
     // that state is ephemeral or malformed. It also precedes every Claude preflight.
@@ -297,17 +319,14 @@ export const resolveProfileStart = (
     const isPiModelDenied = (model: string): boolean =>
       profiles.policyFor("pi", model) === "denied";
     if (input.backend !== "auto") {
-      const modelWasExplicit = Boolean(input.model?.trim());
-      // Hard denies are enforced on the deterministic raw selector (or its deterministic
-      // inherited/default value) before any registry auth lookup, runtime API-key resolution, or
-      // Claude preflight; the resolved canonical model is rechecked below as defense in depth.
-      const rawSelector =
-        input.model?.trim() ||
-        (input.backend === "pi" ? ctx.model && `${ctx.model.provider}/${ctx.model.id}` : "sonnet");
-      if (rawSelector && profiles.policyFor(input.backend, rawSelector) === "denied")
+      // Hard denies are enforced on the deterministic raw selector before registry auth lookup,
+      // runtime API-key resolution, or Claude preflight; the resolved canonical model is rechecked
+      // below as defense in depth.
+      const rawSelector = input.model;
+      if (profiles.policyFor(input.backend, rawSelector) === "denied")
         return yield* deniedModelError(input.backend, rawSelector);
       const inheritedEffort = inheritedParentEffort(pi);
-      const selectedEffort = input.effort ?? definition?.defaultEffort ?? inheritedEffort;
+      const selectedEffort = input.effort ?? definition.defaultEffort ?? inheritedEffort;
       const effort =
         input.effort === undefined &&
         input.backend === "claude-cli" &&
@@ -336,21 +355,9 @@ export const resolveProfileStart = (
               }),
           ),
         );
-      // Backend-only overrides never claim an explicit model: the model was inherited (pi) or
-      // defaulted (claude-cli), and provenance says which.
-      const inheritedModelNote =
-        input.backend === "pi"
-          ? "the parent session model was inherited"
-          : "Claude CLI defaulted to the sonnet alias";
       selection = {
         source: "explicit",
-        reason: selectedProfile
-          ? modelWasExplicit
-            ? `Explicit backend/model routing overrode profile ${selectedProfile}; profile guidance was retained.`
-            : `Explicit backend routing overrode profile ${selectedProfile}; ${inheritedModelNote}, and profile guidance was retained.`
-          : modelWasExplicit
-            ? "Explicit backend/model selection."
-            : `Explicit backend selection; ${inheritedModelNote}.`,
+        reason: `Explicit model selection overrode profile ${selectedProfile} routing; profile guidance and defaults were retained.`,
         skippedCandidates: [],
         ...(policy === "discouraged"
           ? {

@@ -24,12 +24,12 @@ const catalog: ReadonlyArray<SubagentModelView> = [
 ];
 
 describe("model catalog", () => {
-  it("prints launch-ready backend and model values", () => {
+  it("prints launch-ready one-field model selectors", () => {
     expect(launchReadyModelLine(piView("openai-codex", "gpt-5.5", "GPT 5.5"))).toBe(
-      "backend=pi model=openai-codex/gpt-5.5 · GPT 5.5 · reasoning",
+      "model=pi/openai-codex/gpt-5.5 · GPT 5.5 · reasoning",
     );
     expect(launchReadyModelLine(CLAUDE_CLI_ALIAS_MODELS[0]!)).toBe(
-      "backend=claude-cli model=fable · Claude Fable (CLI alias) · reasoning · efforts=low,medium,high,xhigh,max",
+      "model=claude-cli/fable · Claude Fable (CLI alias) · reasoning · efforts=low,medium,high,xhigh,max",
     );
   });
 

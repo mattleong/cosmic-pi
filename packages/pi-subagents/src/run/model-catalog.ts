@@ -2,6 +2,7 @@ import type { SubagentBackend, SubagentEffort, SubagentModelView } from "./model
 
 export const MAX_DISCOVERY_RESULTS = 100;
 const MAX_NEAR_MATCHES = 6;
+export const EXPLICIT_SUBAGENT_MODEL_SELECTOR = /^(?:pi\/[^\s/]+\/[^\s]+|claude-cli\/[^\s/]+)$/;
 
 /**
  * Claude CLI aliases advertised by discovery. Aliases track the installed CLI's current mapping;
@@ -53,9 +54,29 @@ export interface PiCatalogModel {
 export const canonicalPiModelId = (model: PiCatalogModel): string =>
   `${model.provider}/${model.id}`;
 
-/** Model line in the exact `backend` and `model` values `subagent_start` accepts verbatim. */
+export interface ExplicitSubagentModelSelection {
+  readonly backend: SubagentBackend;
+  readonly model: string;
+}
+
+/** Strictly decode one backend-prefixed selector accepted by `subagent_start.model`. */
+export const parseExplicitSubagentModelSelector = (
+  selector: string,
+): ExplicitSubagentModelSelection | undefined => {
+  const value = selector.trim();
+  if (!EXPLICIT_SUBAGENT_MODEL_SELECTOR.test(value)) return undefined;
+  return value.startsWith("pi/")
+    ? { backend: "pi", model: value.slice("pi/".length) }
+    : { backend: "claude-cli", model: value.slice("claude-cli/".length) };
+};
+
+/** Canonical one-field selector accepted by `subagent_start.model`. */
+export const explicitSubagentModelSelector = (model: SubagentModelView): string =>
+  `${model.backend}/${model.id}`;
+
+/** Model line in the exact `model` value `subagent_start` accepts verbatim. */
 export const launchReadyModelLine = (model: SubagentModelView): string =>
-  `backend=${model.backend} model=${model.id} · ${model.name} · ${model.reasoning ? "reasoning" : "no reasoning"}${model.supportedEfforts ? ` · efforts=${model.supportedEfforts.join(",")}` : ""}${model.policy === "discouraged" ? " · discouraged (explicit selection only)" : ""}`;
+  `model=${explicitSubagentModelSelector(model)} · ${model.name} · ${model.reasoning ? "reasoning" : "no reasoning"}${model.supportedEfforts ? ` · efforts=${model.supportedEfforts.join(",")}` : ""}${model.policy === "discouraged" ? " · discouraged (explicit selection only)" : ""}`;
 
 const searchRank = (model: SubagentModelView, terms: ReadonlyArray<string>): number => {
   const id = model.id.toLowerCase();

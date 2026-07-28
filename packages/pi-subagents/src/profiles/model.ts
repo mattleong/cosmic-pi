@@ -1,4 +1,9 @@
-import type { SubagentBackend, SubagentContextMode, SubagentEffort } from "../run/model.ts";
+import type {
+  SubagentBackend,
+  SubagentContextMode,
+  SubagentEffort,
+  SubagentWriteIntent,
+} from "../run/model.ts";
 
 export const PROFILE_IDS = [
   "scout",
@@ -56,6 +61,7 @@ export interface ProfileDefinition {
   readonly description: string;
   readonly guidance: string;
   readonly defaultContext: SubagentContextMode;
+  readonly defaultWriteIntent: SubagentWriteIntent;
   /** Soft built-in preference used by candidates whose effort is `default`. */
   readonly defaultEffort?: SubagentEffort | undefined;
 }
