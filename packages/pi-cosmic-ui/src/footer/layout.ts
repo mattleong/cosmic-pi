@@ -33,8 +33,9 @@ function progressBar(
   tone: ProgressTone,
 ): string {
   const value = clampPercent(percent);
-  const filled = Math.round((value / 100) * cells);
-  return theme.fg(tone, `${"█".repeat(filled)}${"░".repeat(cells - filled)}`);
+  if (value >= 100) return theme.fg(tone, "━".repeat(cells));
+  const filled = Math.floor((value / 100) * cells);
+  return theme.fg(tone, `${"━".repeat(filled)}╸${"─".repeat(cells - filled - 1)}`);
 }
 
 const FOOTER_LABEL_WIDTH = 8;
@@ -69,7 +70,7 @@ export function renderContextLine(
   if (percent === null || percent === undefined) {
     left = footerLabel("Ctx", theme) + theme.fg("syntaxNumber", `?/${formatTokens(contextWindow)}`);
   } else {
-    const cells = compact ? (width < 48 ? 6 : 8) : 12;
+    const cells = compact ? 6 : 10;
     const tokens = usage?.tokens ?? Math.round((percent / 100) * contextWindow);
     const color = contextConsumptionTone(percent);
     left = [
@@ -77,7 +78,7 @@ export function renderContextLine(
       progressBar(percent, cells, theme, color),
       theme.fg(
         color,
-        ` ${Math.round(percent)}% · ${formatTokens(tokens)}/${formatTokens(contextWindow)}`,
+        ` ${Math.round(percent)}% used · ${formatTokens(tokens)}/${formatTokens(contextWindow)}`,
       ),
     ].join("");
   }

@@ -62,12 +62,32 @@ describe("responsive footer layout", () => {
     expect(visibleWidth(usage)).toBeLessThanOrEqual(80);
     expect(usage).toContain("OpenAI");
     expect(usage).toContain("5h");
-    expect(usage).toContain("█");
+    expect(usage).toContain("╸");
     expect(visibleWidth(xaiUsage)).toBeLessThanOrEqual(80);
     expect(xaiUsage).toContain("xAI");
     expect(xaiUsage).toContain("7d");
     expect(xaiUsage).toContain("mo");
-    expect(xaiUsage).toContain("█");
+    expect(xaiUsage).toContain("╸");
+  });
+
+  test("renders thin continuous progress tracks", () => {
+    const plainTheme = { fg: (_color: string, text: string) => text };
+
+    expect(
+      renderContextLine(
+        { contextWindow: 100_000, tokens: 62_000, percent: 62 },
+        [],
+        80,
+        plainTheme,
+        false,
+      ),
+    ).toBe("Ctx     ━━━━━━╸─── 62% used · 62k/100k");
+    expect(renderOpenAIUsageLine("Usage: 5h: 72% | 7d: 31%", 80, plainTheme, false)).toBe(
+      "OpenAI  5h ━━━━━━━╸── 72% | 7d ━━━╸────── 31%",
+    );
+    expect(renderXaiUsageLine("Usage: 7d: 84% | mo: 53%", 80, plainTheme, false)).toBe(
+      "xAI     7d ━━━━━━━━╸─ 84% | mo ━━━━━╸──── 53%",
+    );
   });
 
   test("colors context consumption green through 50% and orange through 75%", () => {
@@ -85,10 +105,10 @@ describe("responsive footer layout", () => {
     renderOpenAIUsageLine("Usage: 5h: 75% | 7d: 25%", 80, thresholdTheme, false);
     renderXaiUsageLine("Usage: 7d: 75% | mo: 25%", 80, thresholdTheme, false);
 
-    expect(fg.mock.calls).toContainEqual(["error", " 76% · 76k/100k"]);
-    expect(fg.mock.calls).toContainEqual(["warning", " 75% · 75k/100k"]);
-    expect(fg.mock.calls).toContainEqual(["warning", " 51% · 51k/100k"]);
-    expect(fg.mock.calls).toContainEqual(["success", " 50% · 50k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["error", " 76% used · 76k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["warning", " 75% used · 75k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["warning", " 51% used · 51k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["success", " 50% used · 50k/100k"]);
     expect(fg.mock.calls).toContainEqual(["success", "5h "]);
     expect(fg.mock.calls).toContainEqual(["success", " 75%"]);
     expect(fg.mock.calls).toContainEqual(["warning", "7d "]);
