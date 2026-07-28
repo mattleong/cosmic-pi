@@ -142,6 +142,33 @@ describe("SubagentConfigStore", () => {
     expect(untrusted.projectConfigExists).toBe(false);
   });
 
+  it("fails closed for every present non-numeric-1 global or project version", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-subagents-config-"));
+    roots.push(root);
+    const agentDirectory = join(root, "agent");
+    const cwd = join(root, "repo");
+    await mkdir(join(cwd, CONFIG_DIR_NAME), { recursive: true });
+    await mkdir(agentDirectory, { recursive: true });
+    const globalPath = join(agentDirectory, "pi-subagents.json");
+    const projectPath = join(cwd, CONFIG_DIR_NAME, "pi-subagents.json");
+
+    for (const version of ["1", "2", null, false, true, 1.5]) {
+      await writeFile(globalPath, JSON.stringify({ version }));
+      await rm(projectPath, { force: true });
+      await expect(load(cwd, agentDirectory, true)).rejects.toMatchObject({
+        operation: "activate",
+        path: globalPath,
+      });
+
+      await writeFile(globalPath, JSON.stringify({ version: 1 }));
+      await writeFile(projectPath, JSON.stringify({ version }));
+      await expect(load(cwd, agentDirectory, true)).rejects.toMatchObject({
+        operation: "activate",
+        path: projectPath,
+      });
+    }
+  });
+
   it("does not inspect an untrusted project document", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-subagents-config-"));
     roots.push(root);

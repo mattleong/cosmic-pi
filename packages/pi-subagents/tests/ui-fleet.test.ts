@@ -167,6 +167,13 @@ describe("/subagents fleet UI", () => {
     expect(component.render(42).join("\n")).not.toBe(top);
   });
 
+  it("hides fleet run IDs until technical mode is enabled", () => {
+    const { component } = makeComponent(80, 24);
+    expect(component.render(80).join("\n")).not.toContain("agent-1");
+    component.handleInput("t");
+    expect(component.render(80).join("\n")).toContain("agent-1");
+  });
+
   it("toggles technical details and responsive shortcut help", () => {
     const { component } = makeComponent(42, 24);
     component.handleInput("\r");
@@ -193,12 +200,12 @@ describe("/subagents fleet UI", () => {
     };
     const { actions, component } = makeComponent(80, 18, twoRuns);
     component.handleInput("x");
-    expect(component.render(80).at(-1)).toContain("Confirm stop agent-1");
+    expect(component.render(80).at(-1)).toContain("Confirm stop auth-reader");
     component.handleInput("j");
-    expect(component.render(80).at(-1)).not.toContain("Confirm stop agent-1");
+    expect(component.render(80).at(-1)).not.toContain("Confirm stop auth-reader");
     component.handleInput("x");
     expect(actions.stop).not.toHaveBeenCalled();
-    expect(component.render(80).at(-1)).toContain("Confirm stop agent-2");
+    expect(component.render(80).at(-1)).toContain("Confirm stop second-reader");
   });
 
   it("shows only supported actions for Claude runs", () => {

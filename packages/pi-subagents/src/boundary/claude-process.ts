@@ -7,7 +7,6 @@
 // @effect-diagnostics effect/preferSchemaOverJson:off
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { StringDecoder } from "node:string_decoder";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -19,11 +18,13 @@ import {
   type SubagentWriteIntent,
 } from "../run/model.ts";
 import { sanitizeDiagnosticText } from "../run/state.ts";
+import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
 import type { ChildLaunchRequest, ChildProcessHandle, ChildWireEvent } from "./child-process.ts";
 import { decodeClaudeInitOption } from "./claude-protocol.ts";
 import { terminateProcessTree } from "./process-tree.ts";
 
 const MAX_STREAM_LINE_BYTES = 4 * 1024 * 1024;
+const MAX_STREAM_QUEUED_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 128 * 1024;
 const EVENT_CAPACITY = 512;
 const MAX_ERROR_STDERR_CHARS = 8 * 1024;
@@ -45,7 +46,7 @@ const BLOCKED_ENV_KEYS = new Set([
   "PI_SUBAGENT_RUNTIME_API_PROVIDER",
 ]);
 
-const processError = (operation: string, error?: unknown) =>
+const processError = (operation: string, error?: unknown, code?: string) =>
   new SubagentProcessError({
     operation,
     message:
@@ -54,6 +55,7 @@ const processError = (operation: string, error?: unknown) =>
         : typeof error === "string"
           ? error
           : `Unable to ${operation} Claude Code process.`,
+    ...(code ? { code } : {}),
   });
 
 const claudeEffort = (effort: SubagentEffort): "low" | "medium" | "high" | "xhigh" | "max" =>
@@ -136,36 +138,6 @@ function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
   };
 }
 
-function appendLineParser(
-  stream: NodeJS.ReadableStream,
-  onLine: (line: string) => void,
-  onOverflow: () => void,
-): () => void {
-  const decoder = new StringDecoder("utf8");
-  let buffered = "";
-  let overflowed = false;
-  const onData = (chunk: Buffer) => {
-    if (overflowed) return;
-    buffered += decoder.write(chunk);
-    if (Buffer.byteLength(buffered, "utf8") > MAX_STREAM_LINE_BYTES) {
-      overflowed = true;
-      buffered = "";
-      onOverflow();
-      return;
-    }
-    while (true) {
-      const index = buffered.indexOf("\n");
-      if (index < 0) break;
-      let line = buffered.slice(0, index);
-      buffered = buffered.slice(index + 1);
-      if (line.endsWith("\r")) line = line.slice(0, -1);
-      if (line) onLine(line);
-    }
-  };
-  stream.on("data", onData);
-  return () => stream.off("data", onData);
-}
-
 export interface ClaudeProcessOptions {
   readonly command?: string | undefined;
   readonly commandArgs?: ReadonlyArray<string> | undefined;
@@ -195,7 +167,8 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
   let spawned = false;
   let settled = false;
   let cleaned = false;
-  let overflowed = false;
+  let eventQueueOverflowed = false;
+  let transportBacklogOverflowed = false;
   let stdinError: Error | undefined;
 
   return yield* Effect.uninterruptible(
@@ -212,13 +185,24 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
         catch: (error) => processError("spawn", error),
       });
 
-      const offer = (event: ChildWireEvent) => {
-        if (Queue.offerUnsafe(events, event) || overflowed) return;
-        overflowed = true;
+      const transportRoom = makeByteBoundedQueueRoom(events, MAX_STREAM_QUEUED_BYTES, () => {
+        transportBacklogOverflowed = true;
+        stderr = `${stderr}\nClaude event backlog exceeded ${MAX_STREAM_QUEUED_BYTES} bytes.`;
+        Queue.offerUnsafe(events, {
+          type: "protocol_error",
+          message: "Claude event backlog exceeded its byte budget.",
+        });
+        void terminateProcessTree(child, "force").catch(() => {});
+      });
+      const offer = (event: ChildWireEvent, bytes = 0) => {
+        if (transportRoom.offer(event, bytes)) return;
+        if (transportBacklogOverflowed || eventQueueOverflowed) return;
+        eventQueueOverflowed = true;
         stderr = `${stderr}\nClaude event queue exceeded ${EVENT_CAPACITY} pending events.`;
         void terminateProcessTree(child, "force").catch(() => {});
       };
       const onLine = (line: string) => {
+        const bytes = Buffer.byteLength(line, "utf8") + 1;
         try {
           const value = JSON.parse(line) as unknown;
           const isInitEnvelope =
@@ -257,7 +241,7 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
               );
             }
           }
-          offer({ type: "claude_message", value });
+          offer({ type: "claude_message", value }, bytes);
         } catch {
           if (!Deferred.isDoneUnsafe(initialized)) {
             Deferred.doneUnsafe(
@@ -269,7 +253,10 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
             void terminateProcessTree(child, "force").catch(() => {});
             return;
           }
-          offer({ type: "protocol_error", message: "Claude emitted malformed stream JSON." });
+          offer(
+            { type: "protocol_error", message: "Claude emitted malformed stream JSON." },
+            bytes,
+          );
         }
       };
       const onStdoutOverflow = () => {
@@ -286,7 +273,12 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
         offer({ type: "protocol_error", message: "Claude stream JSON line exceeded 4 MiB." });
       };
       const detachStdout = child.stdout
-        ? appendLineParser(child.stdout, onLine, onStdoutOverflow)
+        ? attachBoundedLineParser(child.stdout, {
+            maxLineBytes: MAX_STREAM_LINE_BYTES,
+            maxQueuedBytes: MAX_STREAM_QUEUED_BYTES,
+            onLine,
+            onOverflow: onStdoutOverflow,
+          })
         : () => {};
       const onStderr = (chunk: Buffer) => {
         stderr = `${stderr}${chunk.toString("utf8")}`;
@@ -376,26 +368,40 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
           const stdin = child.stdin;
           if (!stdin || stdin.destroyed || stdinError) {
             const message = stdinError?.message ?? "Claude stdin is closed.";
-            resume(Effect.fail(processError("write to", withStderr(message))));
+            resume(
+              Effect.fail(processError("write to", withStderr(message), "transport_not_sent")),
+            );
             return;
           }
           try {
             stdin.write(`${JSON.stringify(value)}\n`, (error) =>
               resume(
                 error
-                  ? Effect.fail(processError("write to", withStderr(error.message)))
+                  ? Effect.fail(
+                      processError(
+                        "write to",
+                        withStderr(error.message),
+                        "transport_outcome_uncertain",
+                      ),
+                    )
                   : Effect.void,
               ),
             );
           } catch (error) {
-            resume(Effect.fail(processError("encode input for", error)));
+            resume(Effect.fail(processError("encode input for", error, "transport_not_sent")));
           }
         }).pipe(
           Effect.timeoutOption(TRANSPORT_WRITE_TIMEOUT),
           Effect.flatMap((outcome) =>
             outcome._tag === "Some"
               ? Effect.void
-              : Effect.fail(processError("write to", "Claude stdin write timed out.")),
+              : Effect.fail(
+                  processError(
+                    "write to",
+                    "Claude stdin write timed out; the frame may already have been accepted.",
+                    "transport_outcome_uncertain",
+                  ),
+                ),
           ),
         );
       const respond = (
@@ -488,6 +494,7 @@ export const acquireClaudeChild = Effect.fn("ClaudeProcess.acquire")(function* (
       return {
         pid,
         events,
+        acknowledge: transportRoom.acknowledge,
         awaitExit: Deferred.await(exited),
         send,
         sendIpc,

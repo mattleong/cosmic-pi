@@ -50,6 +50,28 @@ export interface RunProcessLifecycleDependencies {
 
 const protocolError = (message: string) => new SubagentProtocolError({ message });
 
+const rpcOutcomeCode = (command: string): string => {
+  switch (command) {
+    case "steer":
+      return "guidance_outcome_uncertain";
+    case "abort":
+      return "interrupt_outcome_uncertain";
+    case "set_session_name":
+      return "rename_outcome_uncertain";
+    default:
+      return `${command}_outcome_uncertain`;
+  }
+};
+
+const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): SubagentError =>
+  error._tag === "SubagentProcessError" && error.code === "transport_outcome_uncertain"
+    ? new SubagentProcessError({
+        operation: `execute ${command.type} in`,
+        code: rpcOutcomeCode(command.type),
+        message: `${error.message} Inspect subagent status before retrying ${command.type}.`,
+      })
+    : error;
+
 export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDependencies) {
   const {
     childProcesses,
@@ -97,6 +119,7 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
               ? CLAUDE_INITIALIZATION_TIMEOUT
               : RPC_TIMEOUT;
           const sendAndAwait = Fiber.join(registration.transport).pipe(
+            Effect.mapError((error) => mapTransportUncertainty(command, error)),
             Effect.onInterrupt(() => Fiber.interrupt(registration.transport).pipe(Effect.asVoid)),
             Effect.andThen(Deferred.await(response)),
           );
@@ -114,7 +137,8 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
       if (Option.isNone(outcome))
         return yield* new SubagentProcessError({
           operation: "await RPC response from",
-          message: `Subagent ${record.view.id} did not answer ${command.type}.`,
+          code: rpcOutcomeCode(command.type),
+          message: `Subagent ${record.view.id} did not answer ${command.type}; the command may already have applied. Inspect subagent status before retrying.`,
         });
       if (!outcome.value.success)
         return yield* new SubagentProcessError({
@@ -194,6 +218,7 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
                   )
                 : Effect.void,
             ),
+            Effect.ensuring(Effect.sync(() => process.acknowledge?.(event))),
           ),
         ),
         Effect.catchCause(() => Effect.void),
@@ -234,6 +259,19 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
       error.operation === "await RPC response from" ||
       error.operation === "initialize stream");
 
+  const uncertainInitialization = (
+    record: RunRecord,
+    operation: "start" | "resume",
+    error: SubagentError,
+  ): SubagentError =>
+    record.view.writeIntent === "writer" && record.taskSubmission === "potentially-applied"
+      ? new SubagentProcessError({
+          operation,
+          code: `${operation}_outcome_uncertain`,
+          message: `The Claude writer task frame may have been accepted before startup could be confirmed. The service will not retry it automatically. Inspect the workspace and subagent status before starting or resuming another writer. (${error.message})`,
+        })
+      : error;
+
   const prepareInitializationRetry = (record: RunRecord) =>
     Effect.gen(function* () {
       const priorScope = record.scope;
@@ -252,6 +290,7 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
           record.scope = nextScope;
           record.cleanupPending = false;
           record.process = undefined;
+          record.taskSubmission = "not-sent";
           return true;
         }),
       );
@@ -267,34 +306,56 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
     record: RunRecord,
     retriesRemaining: number,
     claudeBootstrapPrompt: string | undefined,
+    operation: "start" | "resume",
   ) => Effect.Effect<RpcStateData, SubagentError> = (
     record,
     retriesRemaining,
     claudeBootstrapPrompt,
+    operation,
   ) =>
     Effect.gen(function* () {
       yield* installProcess(record);
       if (record.view.backend === "claude-cli") {
         if (claudeBootstrapPrompt === undefined)
           return yield* protocolError("Claude startup requires an initial prompt.");
-        yield* rpc(record, { type: "prompt", message: claudeBootstrapPrompt });
+        yield* rpc(record, { type: "prompt", message: claudeBootstrapPrompt }).pipe(
+          Effect.tap(() =>
+            withLock(
+              Effect.sync(() => {
+                record.taskSubmission = "potentially-applied";
+              }),
+            ),
+          ),
+          Effect.tapError((error) =>
+            error._tag === "SubagentProcessError" && error.code === "transport_not_sent"
+              ? Effect.void
+              : withLock(
+                  Effect.sync(() => {
+                    record.taskSubmission = "potentially-applied";
+                  }),
+                ),
+          ),
+        );
       }
       const stateResponse = yield* rpc(record, { type: "get_state" });
       return yield* decodeRpcStateData(stateResponse.data).pipe(
         Effect.mapError(() => protocolError("Subagent returned invalid startup state.")),
       );
     }).pipe(
-      Effect.catch((error) =>
-        record.view.backend === "claude-cli" &&
-        retriesRemaining > 0 &&
-        isRetryableClaudeInitialization(error)
+      Effect.catch((rawError) => {
+        const error = uncertainInitialization(record, operation, rawError);
+        const mayRetryWriter = record.taskSubmission === "not-sent";
+        return record.view.backend === "claude-cli" &&
+          retriesRemaining > 0 &&
+          isRetryableClaudeInitialization(rawError) &&
+          (record.view.writeIntent === "read-only" || mayRetryWriter)
           ? prepareInitializationRetry(record).pipe(
               Effect.andThen(
-                initializeProcess(record, retriesRemaining - 1, claudeBootstrapPrompt),
+                initializeProcess(record, retriesRemaining - 1, claudeBootstrapPrompt, operation),
               ),
             )
-          : Effect.fail(error),
-      ),
+          : Effect.fail(error);
+      }),
     );
 
   return { rpc, sendPeerNotices, initializeProcess };

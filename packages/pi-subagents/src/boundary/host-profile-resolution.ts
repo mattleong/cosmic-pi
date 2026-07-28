@@ -1,7 +1,7 @@
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import { isProjectTrusted } from "pi-cosmic-core";
 import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/coordination.ts";
 import { InvalidSubagentRequestError, type SubagentProcessError } from "../run/errors.ts";
 import { claudeCliModelConflict, resolvePiModelSelector } from "../run/model-catalog.ts";
@@ -35,6 +35,11 @@ export interface SubagentProfileStartSpec {
   readonly effort?: SubagentEffort | undefined;
 }
 
+export interface SubagentSessionEnvironment {
+  readonly cwd: string;
+  readonly projectTrusted: boolean;
+}
+
 export interface SubagentStartBoundaries {
   readonly ensureClaudeReady: () => Effect.Effect<void, SubagentProcessError>;
 }
@@ -53,6 +58,8 @@ const stableParentLeaf = (ctx: ExtensionContext): string | undefined => {
 
 const resolvePiModel = (
   selector: string | undefined,
+  effort: SubagentEffort,
+  effortWasExplicit: boolean,
   ctx: ExtensionContext,
 ): Effect.Effect<
   { readonly model: string; readonly runtimeApiKey?: string | undefined },
@@ -96,6 +103,12 @@ const resolvePiModel = (
         code: "pi_model_unauthenticated",
         message: `Model is unavailable or unauthenticated: ${modelId}`,
       });
+    const supportedEfforts = getSupportedThinkingLevels(model) as ReadonlyArray<SubagentEffort>;
+    if (effortWasExplicit && !supportedEfforts.includes(effort))
+      return yield* new InvalidSubagentRequestError({
+        code: "pi_effort_unsupported",
+        message: `Pi model ${modelId} does not support required effort ${effort}; supported efforts: ${supportedEfforts.join(", ") || "none"}.`,
+      });
     if (ctx.modelRegistry.getProviderAuthStatus(model.provider).source !== "runtime")
       return { model: `${model.provider}/${model.id}` };
     const auth = yield* Effect.tryPromise({
@@ -123,10 +136,13 @@ interface ResolvedConcreteModel {
 export const hostProfileEnvironment = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
+  projectTrusted: boolean,
 ): ProfileResolutionEnvironment => ({
-  availablePiModels: ctx.modelRegistry
-    .getAvailable()
-    .map((model) => ({ provider: model.provider, id: model.id })),
+  availablePiModels: ctx.modelRegistry.getAvailable().map((model) => ({
+    provider: model.provider,
+    id: model.id,
+    supportedEfforts: getSupportedThinkingLevels(model) as ReadonlyArray<SubagentEffort>,
+  })),
   ...(ctx.model
     ? {
         parentModel: {
@@ -135,7 +151,7 @@ export const hostProfileEnvironment = (
         },
       }
     : {}),
-  projectTrusted: isProjectTrusted(ctx),
+  projectTrusted,
   forkAvailable: Boolean(ctx.sessionManager.getSessionFile() && stableParentLeaf(ctx)),
 });
 
@@ -144,14 +160,15 @@ const resolveConcreteModel = (
   selector: string | undefined,
   effort: SubagentEffort,
   effortWasExplicit: boolean,
+  projectTrusted: boolean,
   ctx: ExtensionContext,
 ): Effect.Effect<ResolvedConcreteModel, InvalidSubagentRequestError> =>
   Effect.gen(function* () {
     if (backend === "pi") {
-      const resolved = yield* resolvePiModel(selector, ctx);
+      const resolved = yield* resolvePiModel(selector, effort, effortWasExplicit, ctx);
       return { backend, ...resolved, effort, effortWasExplicit };
     }
-    if (!isProjectTrusted(ctx))
+    if (!projectTrusted)
       return yield* new InvalidSubagentRequestError({
         code: "claude_untrusted",
         message:
@@ -192,6 +209,7 @@ export const resolveProfileStart = (
   pi: ExtensionAPI,
   input: SubagentProfileStartSpec,
   ctx: ExtensionContext,
+  environment: SubagentSessionEnvironment,
   boundaries: SubagentStartBoundaries,
 ): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError, SubagentProfileService> =>
   Effect.gen(function* () {
@@ -220,6 +238,14 @@ export const resolveProfileStart = (
         message: `Unknown subagent profile "${selectedProfile}". Available profiles: ${PROFILE_IDS.join(", ")}.`,
       });
     const context = input.context ?? definition?.defaultContext ?? "fresh";
+    const projectTrusted = environment.projectTrusted;
+    // This backend incompatibility is independent of parent branch state and must win even when
+    // that state is ephemeral or malformed. It also precedes every Claude preflight.
+    if (input.backend === "claude-cli" && context === "fork")
+      return yield* new InvalidSubagentRequestError({
+        code: "claude_context_unsupported",
+        message: "Claude CLI does not support forked Pi context yet; use context=fresh.",
+      });
     const parentSessionFile = ctx.sessionManager.getSessionFile();
     const parentLeafId = stableParentLeaf(ctx);
     if (context === "fork" && (!parentSessionFile || !parentLeafId))
@@ -244,11 +270,6 @@ export const resolveProfileStart = (
         Effect.flatMap((exit) => exit),
       );
     if (input.backend !== "auto") {
-      if (input.backend === "claude-cli" && context === "fork")
-        return yield* new InvalidSubagentRequestError({
-          code: "claude_context_unsupported",
-          message: "Claude CLI does not support forked Pi context yet; use context=fresh.",
-        });
       const inheritedEffort = pi.getThinkingLevel() as SubagentEffort;
       const selectedEffort = input.effort ?? definition?.defaultEffort ?? inheritedEffort;
       const effort =
@@ -263,6 +284,7 @@ export const resolveProfileStart = (
         effort,
         // Profile effort defaults are soft preferences; only the per-call effort is enforced.
         input.effort !== undefined,
+        projectTrusted,
         ctx,
       );
       const policy = profiles.policyFor(concrete.backend, concrete.model);
@@ -271,6 +293,16 @@ export const resolveProfileStart = (
           code: "model_denied",
           message: `Model ${concrete.backend}/${concrete.model} is denied by Subagents policy and cannot be started.`,
         });
+      if (concrete.backend === "claude-cli")
+        yield* ensureClaudeReady().pipe(
+          Effect.mapError(
+            (error) =>
+              new InvalidSubagentRequestError({
+                code: error.code ?? error._tag,
+                message: error.message,
+              }),
+          ),
+        );
       selection = {
         source: "explicit",
         reason: selectedProfile
@@ -292,7 +324,7 @@ export const resolveProfileStart = (
         });
       const plan = profiles.resolve(
         profile,
-        hostProfileEnvironment(pi, ctx),
+        hostProfileEnvironment(pi, ctx, projectTrusted),
         context,
         input.effort,
       );
@@ -321,10 +353,20 @@ export const resolveProfileStart = (
         const precedingSkips = [...skippedCandidates, ...(attempt.skippedBefore ?? [])];
         const effort = input.effort ?? attempt.effort;
         const effortWasExplicit = input.effort !== undefined || attempt.effortWasExplicit;
-        const readiness = attempt.backend === "claude-cli" ? ensureClaudeReady() : Effect.void;
-        return readiness.pipe(
-          Effect.andThen(
-            resolveConcreteModel(attempt.backend, attempt.model, effort, effortWasExplicit, ctx),
+        const concreteAttempt = resolveConcreteModel(
+          attempt.backend,
+          attempt.model,
+          effort,
+          effortWasExplicit,
+          projectTrusted,
+          ctx,
+        );
+        // Pure backend/model/effort checks must reject before an executable/auth probe is run.
+        return concreteAttempt.pipe(
+          Effect.flatMap((resolved) =>
+            attempt.backend === "claude-cli"
+              ? ensureClaudeReady().pipe(Effect.as(resolved))
+              : Effect.succeed(resolved),
           ),
           Effect.matchEffect({
             onFailure: (error) =>
@@ -358,7 +400,7 @@ export const resolveProfileStart = (
       task,
       ...(definition ? { profile: definition.id, profileGuidance: definition.guidance } : {}),
       selection,
-      cwd: ctx.cwd,
+      cwd: environment.cwd,
       execution: input.execution ?? "background",
       context,
       writeIntent: input.writeIntent,
@@ -373,7 +415,7 @@ export const resolveProfileStart = (
               input.writeIntent,
             )
           : [],
-      projectTrusted: isProjectTrusted(ctx),
+      projectTrusted,
       parentSessionId: ctx.sessionManager.getSessionId(),
       ...(parentSessionFile ? { parentSessionFile } : {}),
       ...(parentLeafId ? { parentLeafId } : {}),

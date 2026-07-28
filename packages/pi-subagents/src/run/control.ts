@@ -152,6 +152,15 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           message: normalized,
         };
         const commit = claimed.process.sendIpc(envelope).pipe(
+          Effect.mapError((error) =>
+            error.code === "transport_outcome_uncertain"
+              ? new SubagentProcessError({
+                  operation: "reply",
+                  code: "reply_outcome_uncertain",
+                  message: `The reply to subagent ${id} may already have applied. Inspect with subagent_status before retrying. (${error.message})`,
+                })
+              : error,
+          ),
           Effect.andThen(Clock.currentTimeMillis),
           Effect.flatMap((now) =>
             withLock(
@@ -175,24 +184,26 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           ),
           // The owner-scoped commit outlives cancellation of the requesting tool.
           // Roll back only when the transport itself reports a definite failure.
-          Effect.onError(() =>
-            withLock(
-              Effect.sync(() => {
-                if (claimed.record.replyPendingRequestId !== claimed.question.requestId) return;
-                claimed.record.replyPendingRequestId = undefined;
-                if (
-                  claimed.record.view.state === "running" &&
-                  claimed.record.view.question === undefined
-                ) {
-                  claimed.record.view = {
-                    ...claimed.record.view,
-                    state: "waiting_for_parent",
-                    question: claimed.question,
-                  };
-                  publish();
-                }
-              }),
-            ),
+          Effect.tapError((error) =>
+            error.code === "reply_outcome_uncertain"
+              ? Effect.void
+              : withLock(
+                  Effect.sync(() => {
+                    if (claimed.record.replyPendingRequestId !== claimed.question.requestId) return;
+                    claimed.record.replyPendingRequestId = undefined;
+                    if (
+                      claimed.record.view.state === "running" &&
+                      claimed.record.view.question === undefined
+                    ) {
+                      claimed.record.view = {
+                        ...claimed.record.view,
+                        state: "waiting_for_parent",
+                        question: claimed.question,
+                      };
+                      publish();
+                    }
+                  }),
+                ),
           ),
         );
         const commitFiber = yield* commit.pipe(
@@ -234,7 +245,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                   if (record.view.state === "paused") return;
                   const responseTimedOut =
                     error._tag === "SubagentProcessError" &&
-                    error.operation === "await RPC response from";
+                    error.code === "interrupt_outcome_uncertain";
                   if (!responseTimedOut && record.pauseOutcome === pauseOutcome) {
                     record.pauseRequested = false;
                     record.pauseOutcome = undefined;
@@ -300,6 +311,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             record.view.state !== "waiting_for_parent" &&
             record.view.state !== "paused"
           ) {
+            record.launch = { ...record.launch, name };
             record.view = { ...record.view, name };
             publish();
             return { record, localView: snapshotView(record.view) };
@@ -322,6 +334,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             return yield* new InvalidSubagentRequestError({
               message: `Subagent ${id} stopped before rename completed.`,
             });
+          selected.record.launch = { ...selected.record.launch, name };
           selected.record.view = { ...selected.record.view, name };
           publish();
           return snapshotView(selected.record.view);

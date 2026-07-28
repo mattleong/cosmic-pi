@@ -66,8 +66,25 @@ describe("host-session helpers", () => {
     expect(hasTerminalUI({ mode: "tui" })).toBe(true);
     expect(hasTerminalUI({ mode: undefined, hasUI: true })).toBe(true);
     expect(hasTerminalUI({ mode: "rpc" })).toBe(false);
-    expect(isProjectTrusted({})).toBe(true);
+    expect(isProjectTrusted({ isProjectTrusted: () => true })).toBe(true);
+    expect(isProjectTrusted({})).toBe(false);
     expect(isProjectTrusted({ isProjectTrusted: () => false })).toBe(false);
+    expect(isProjectTrusted({ isProjectTrusted: true })).toBe(false);
+    expect(isProjectTrusted({ isProjectTrusted: () => "true" })).toBe(false);
+    expect(
+      isProjectTrusted({
+        get isProjectTrusted(): unknown {
+          throw new Error("hostile trust getter");
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isProjectTrusted({
+        isProjectTrusted: () => {
+          throw new Error("hostile trust callback");
+        },
+      }),
+    ).toBe(false);
     expect(captureHostSignal({ signal: undefined })).toEqual({
       _tag: "Captured",
       signal: undefined,

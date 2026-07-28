@@ -1,4 +1,4 @@
-import type { SubagentBackend, SubagentModelView } from "./model.ts";
+import type { SubagentBackend, SubagentEffort, SubagentModelView } from "./model.ts";
 
 export const MAX_DISCOVERY_RESULTS = 100;
 const MAX_NEAR_MATCHES = 6;
@@ -7,11 +7,36 @@ const MAX_NEAR_MATCHES = 6;
  * Claude CLI aliases advertised by discovery. Aliases track the installed CLI's current mapping;
  * an exact Claude version requires its full model ID and is never translated into an alias.
  */
+const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export const CLAUDE_CLI_ALIAS_MODELS: ReadonlyArray<SubagentModelView> = [
-  { backend: "claude-cli", id: "fable", name: "Claude Fable (CLI alias)", reasoning: true },
-  { backend: "claude-cli", id: "sonnet", name: "Claude Sonnet (CLI alias)", reasoning: true },
-  { backend: "claude-cli", id: "opus", name: "Claude Opus (CLI alias)", reasoning: true },
-  { backend: "claude-cli", id: "haiku", name: "Claude Haiku (CLI alias)", reasoning: true },
+  {
+    backend: "claude-cli",
+    id: "fable",
+    name: "Claude Fable (CLI alias)",
+    reasoning: true,
+    supportedEfforts: CLAUDE_EFFORTS,
+  },
+  {
+    backend: "claude-cli",
+    id: "sonnet",
+    name: "Claude Sonnet (CLI alias)",
+    reasoning: true,
+    supportedEfforts: CLAUDE_EFFORTS,
+  },
+  {
+    backend: "claude-cli",
+    id: "opus",
+    name: "Claude Opus (CLI alias)",
+    reasoning: true,
+    supportedEfforts: CLAUDE_EFFORTS,
+  },
+  {
+    backend: "claude-cli",
+    id: "haiku",
+    name: "Claude Haiku (CLI alias)",
+    reasoning: true,
+    supportedEfforts: CLAUDE_EFFORTS,
+  },
 ];
 
 export const CLAUDE_CLI_ALIASES: ReadonlySet<string> = new Set(
@@ -21,6 +46,8 @@ export const CLAUDE_CLI_ALIASES: ReadonlySet<string> = new Set(
 export interface PiCatalogModel {
   readonly provider: string;
   readonly id: string;
+  /** Authenticated host-reported effort capability; omitted only by compatibility callers. */
+  readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
 }
 
 export const canonicalPiModelId = (model: PiCatalogModel): string =>
@@ -28,7 +55,7 @@ export const canonicalPiModelId = (model: PiCatalogModel): string =>
 
 /** Model line in the exact `backend` and `model` values `subagent_start` accepts verbatim. */
 export const launchReadyModelLine = (model: SubagentModelView): string =>
-  `backend=${model.backend} model=${model.id} · ${model.name} · ${model.reasoning ? "reasoning" : "no reasoning"}${model.policy === "discouraged" ? " · discouraged (explicit selection only)" : ""}`;
+  `backend=${model.backend} model=${model.id} · ${model.name} · ${model.reasoning ? "reasoning" : "no reasoning"}${model.supportedEfforts ? ` · efforts=${model.supportedEfforts.join(",")}` : ""}${model.policy === "discouraged" ? " · discouraged (explicit selection only)" : ""}`;
 
 const searchRank = (model: SubagentModelView, terms: ReadonlyArray<string>): number => {
   const id = model.id.toLowerCase();

@@ -10,6 +10,7 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import { isActiveRunState, type SubagentRunView, type SubagentSessionEvent } from "../run/model.ts";
+import { runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "./sanitize.ts";
 
 export interface SessionOutputRenderOptions {
@@ -56,24 +57,14 @@ const runDuration = (run: SubagentRunView, now: number): string => {
 };
 
 const stateLabel = (run: SubagentRunView, theme: Theme, now: number): string => {
-  const label = run.state;
-  switch (run.state) {
-    case "completed":
-      return theme.fg(
-        "success",
-        `✓ ${label} ${formatRelativeAge(now - (run.endedAt ?? run.lastActivityAt))}`,
-      );
-    case "failed":
-      return theme.fg("error", `× ${label}`);
-    case "stopped":
-      return theme.fg("error", `■ ${label}`);
-    case "waiting_for_parent":
-      return theme.fg("warning", `? ${label}`);
-    case "paused":
-      return theme.fg("warning", `Ⅱ ${label}`);
-    default:
-      return theme.fg("accent", `● ${label}`);
-  }
+  const age =
+    run.state === "completed"
+      ? ` ${formatRelativeAge(now - (run.endedAt ?? run.lastActivityAt))}`
+      : "";
+  return theme.fg(
+    runStateColor(run.state),
+    `${runStateGlyph(run.state)} ${runStateLabel(run.state)}${age}`,
+  );
 };
 
 class HangingText implements Component {
@@ -147,7 +138,7 @@ function addToolGroup(container: Container, events: ReadonlyArray<ToolEvent>, th
   const target =
     events.length === 1 && first.target ? `  ${sanitizeTerminalLine(first.target)}` : "";
   const elapsed = toolDuration(events);
-  const body = `${theme.fg("toolTitle", first.toolName)}${theme.fg("muted", count)}${theme.fg("dim", target)}${elapsed ? theme.fg("dim", `  ${elapsed}`) : ""}`;
+  const body = `${theme.fg("toolTitle", sanitizeTerminalLine(first.toolName))}${theme.fg("muted", count)}${theme.fg("dim", target)}${elapsed ? theme.fg("dim", `  ${elapsed}`) : ""}`;
   container.addChild(new HangingText(`${theme.fg(color, glyph)} `, body));
   if (events.length > 1) {
     const targets = [
@@ -208,7 +199,7 @@ function addTechnicalDetails(container: Container, run: SubagentRunView, theme: 
   ]
     .filter((value): value is string => value !== undefined)
     .join(" · ");
-  container.addChild(new Text(theme.fg("dim", process), 2, 0));
+  container.addChild(new Text(theme.fg("dim", sanitizeTerminalLine(process)), 2, 0));
   const candidate =
     run.selection.candidateIndex === undefined
       ? run.selection.source
@@ -266,23 +257,14 @@ export function renderSubagentSessionOutput(
 ): Component {
   const now = options.now ?? run.lastActivityAt;
   const container = new Container();
-  container.addChild(
-    new Text(
-      `${theme.fg("toolTitle", theme.bold(run.name))}  ${stateLabel(run, theme, now)}`,
-      0,
-      0,
-    ),
+  const name = sanitizeTerminalLine(run.name);
+  const subtitle = sanitizeTerminalLine(
+    `${run.writeIntent} · ${run.profile ? `${run.profile} · ` : ""}${run.context} · ${run.model}:${run.effort} · ${runDuration(run, now)}`,
   );
   container.addChild(
-    new Text(
-      theme.fg(
-        "dim",
-        `${run.writeIntent} · ${run.profile ? `${run.profile} · ` : ""}${run.context} · ${run.model}:${run.effort} · ${runDuration(run, now)}`,
-      ),
-      0,
-      0,
-    ),
+    new Text(`${theme.fg("toolTitle", theme.bold(name))}  ${stateLabel(run, theme, now)}`, 0, 0),
   );
+  container.addChild(new Text(theme.fg("dim", subtitle), 0, 0));
   container.addChild(new Spacer(1));
   container.addChild(new Text(theme.fg("muted", theme.bold("Task")), 0, 0));
   container.addChild(
@@ -337,13 +319,7 @@ export function renderSubagentSessionOutput(
   const assistantOutput = isActiveRunState(run.state) ? undefined : run.finalText;
   if (assistantOutput) {
     container.addChild(new Spacer(1));
-    container.addChild(
-      new Text(
-        `${theme.fg("accent", theme.bold("Final report"))}  ${theme.fg("dim", "sent to parent")}`,
-        0,
-        0,
-      ),
-    );
+    container.addChild(new Text(theme.fg("accent", theme.bold("Final report")), 0, 0));
     container.addChild(
       new Markdown(sanitizeTerminalText(assistantOutput), 2, 0, getMarkdownTheme(), {
         color: (text) => theme.fg("toolOutput", text),
@@ -352,7 +328,9 @@ export function renderSubagentSessionOutput(
   }
   if (run.error) {
     container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("error", `Error: ${run.error}`), 0, 0));
+    container.addChild(
+      new Text(theme.fg("error", `Error: ${sanitizeTerminalLine(run.error)}`), 0, 0),
+    );
   }
 
   container.addChild(new Spacer(1));

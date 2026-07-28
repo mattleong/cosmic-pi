@@ -119,13 +119,14 @@ describe("structured subagent session output", () => {
     const component = renderSubagentSessionOutput(runView({ sessionEvents }), theme);
     const rendered = sanitizeTerminalText(component.render(100).join("\n"));
 
-    expect(rendered).toContain("preview-check  ✓ completed");
+    expect(rendered).toContain("preview-check  ✓ finished just now");
     expect(rendered).toContain("read-only · fresh · openai-codex/gpt-5.6-sol:high · 3s");
     expect(rendered).toContain("Task");
     expect(rendered).toContain("Inspect preview rendering.");
     expect(rendered).toContain("Activity");
     expect(rendered).toContain("✓ read  AGENTS.md");
-    expect(rendered).toContain("Final report  sent to parent");
+    expect(rendered).toContain("Final report");
+    expect(rendered).not.toContain("sent to parent");
     expect(rendered).toContain("Preview rendering works.");
     expect(rendered).not.toContain("Rule confirmed.");
     expect(rendered).not.toContain("agent-1");
@@ -182,7 +183,7 @@ describe("structured subagent session output", () => {
         .join("\n"),
     );
 
-    expect(rendered).toContain("✓ completed 18s ago");
+    expect(rendered).toContain("✓ finished 18s ago");
     expect(rendered).toContain("read ×2");
     expect(rendered).toContain("src/one.ts · src/two.ts");
     expect(rendered).toContain("300ms");
@@ -210,6 +211,38 @@ describe("structured subagent session output", () => {
     expect(rendered).not.toContain("dGFzaw==");
     expect(rendered).not.toContain("forged-title");
     expect(rendered).not.toContain("\u001b");
+  });
+
+  it("sanitizes CSI and OSC controls from model and every dynamic session header field", () => {
+    const rendered = renderSubagentSessionOutput(
+      runView({
+        name: "review\u001b]2;forged-title\u0007-agent",
+        model: "provider/evil\u001b[2Jmodel",
+        error: "failure\u001b]52;c;Zm9yZ2Vk\u0007-safe",
+        sessionEvents: [
+          {
+            type: "tool",
+            toolCallId: "tool-malicious",
+            toolName: "read\u001b[31m-forged",
+            state: "failed",
+            startedAt: 1,
+            endedAt: 2,
+          },
+        ],
+      }),
+      theme,
+    )
+      .render(120)
+      .join("\n");
+
+    expect(rendered).toContain("review-agent");
+    expect(rendered).toContain("provider/evilmodel:high");
+    expect(rendered).toContain("read-forged");
+    expect(rendered).toContain("failure-safe");
+    expect(rendered).not.toContain("forged-title");
+    expect(rendered).not.toContain("Zm9yZ2Vk");
+    expect(rendered).not.toContain("\u001b[2J");
+    expect(rendered).not.toContain("\u001b]");
   });
 
   it("does not label stale assistant text as a final report while active", () => {

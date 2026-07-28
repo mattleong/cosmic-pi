@@ -24,6 +24,21 @@ import { registerSubagentTools, SUBAGENT_TOOL_NAMES } from "../tools/subagent.ts
 
 const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
 
+export interface SubagentApplicationBoundaries {
+  readonly loadSettings: (cwd: string, projectTrusted: boolean) => Promise<unknown>;
+}
+
+const LIVE_APPLICATION_BOUNDARIES: SubagentApplicationBoundaries = {
+  loadSettings: loadCodePreviewSettings,
+};
+
+interface CapturedActivation {
+  readonly ctx: ExtensionContext;
+  readonly cwd: string;
+  readonly projectTrusted: boolean;
+  readonly agentDirectory: string;
+}
+
 function deactivateSubagentTools(pi: ExtensionAPI): ReadonlyArray<string> {
   try {
     const active = pi.getActiveTools();
@@ -53,50 +68,60 @@ function notifyActivationFailure(ctx: ExtensionContext, message: string): void {
   }
 }
 
-export function registerSubagentApplication(pi: ExtensionAPI): void {
+export function registerSubagentApplication(
+  pi: ExtensionAPI,
+  boundaries: SubagentApplicationBoundaries = LIVE_APPLICATION_BOUNDARIES,
+): void {
   const bridge = makeSubagentProjectionBridge();
   const notify = makeHostNotifier(pi);
   let currentContext: ExtensionContext | undefined;
   let startupFailureTools: ReadonlyArray<string> = [];
+  let preparationGeneration = 0;
+  let hasRegisteredTools = false;
+
+  const rememberDisabledTools = (names: ReadonlyArray<string>): void => {
+    startupFailureTools = [...new Set([...startupFailureTools, ...names])];
+  };
 
   const slot = makePiSessionRuntimeSlot<
-    ExtensionContext,
+    CapturedActivation,
     SubagentApplication,
     never,
     SubagentRuntimeError
   >({
-    makeRuntime: (ctx) =>
+    makeRuntime: (activation) =>
       makePiManagedRuntime(
         pi,
         makeSubagentLayer({
-          cwd: ctx.cwd,
-          agentDirectory: getAgentDir(),
-          projectTrusted: isProjectTrusted(ctx),
+          cwd: activation.cwd,
+          agentDirectory: activation.agentDirectory,
+          projectTrusted: activation.projectTrusted,
           publish: bridge.publish,
           notify,
         }),
-        { agentDirectory: getAgentDir, packageName: "pi-subagents" },
+        { agentDirectory: () => activation.agentDirectory, packageName: "pi-subagents" },
       ),
     startup: () =>
       SubagentService.use((service) => service.projection).pipe(
         Effect.tap((projection) => Effect.sync(() => bridge.publish(projection))),
         Effect.asVoid,
       ),
-    onActivated: (ctx) => {
-      currentContext = ctx;
-      bridge.setContext(ctx);
+    onActivated: (activation) => {
+      currentContext = activation.ctx;
+      bridge.setContext(activation.ctx);
       reactivateSubagentTools(pi, startupFailureTools);
       startupFailureTools = [];
     },
     onDeactivated: () => {
+      rememberDisabledTools(deactivateSubagentTools(pi));
       currentContext = undefined;
       notify.reset();
       bridge.clear();
     },
-    onStartFailure: (ctx) => {
-      startupFailureTools = deactivateSubagentTools(pi);
+    onStartFailure: (activation) => {
+      rememberDisabledTools(deactivateSubagentTools(pi));
       notifyActivationFailure(
-        ctx,
+        activation.ctx,
         "Subagents failed closed because configuration or runtime startup failed. Fix pi-subagents.json if present, inspect the logs, then run /reload.",
       );
     },
@@ -119,30 +144,71 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
       run(SubagentService.use((service) => service.rename(id, name))).then(() => undefined),
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  const prepareActivation = (ctx: ExtensionContext): Promise<void> => {
+    const generation = ++preparationGeneration;
     bridge.clear();
+    // No registered Subagents tool may target the inactive slot while capture, settings, or runtime
+    // replacement is pending. Preserve only names that were active before deactivation.
+    rememberDisabledTools(deactivateSubagentTools(pi));
+    const shutdown = slot.shutdown();
     const captured = captureSessionHost(ctx);
-    if (captured._tag === "Unavailable") return slot.shutdown().then(() => undefined);
-    const projectTrusted = isProjectTrusted(ctx);
-    return loadCodePreviewSettings(captured.cwd, projectTrusted)
-      .catch(() => undefined)
-      .then(() => {
-        try {
-          registerSubagentTools(pi, {
-            run: (effect, signal) => run(effect, signal),
-          });
-        } catch {
-          deactivateSubagentTools(pi);
+    if (captured._tag === "Unavailable") return shutdown.then(() => undefined);
+    if (captured.aborted)
+      return shutdown.then(() => {
+        if (generation === preparationGeneration)
           notifyActivationFailure(
             ctx,
+            "Subagents did not activate because the session is aborted.",
+          );
+      });
+    const projectTrusted = isProjectTrusted(ctx);
+    let agentDirectory: string;
+    try {
+      agentDirectory = getAgentDir();
+    } catch {
+      return shutdown.then(() => {
+        if (generation === preparationGeneration)
+          notifyActivationFailure(ctx, "Subagents failed to capture the session environment.");
+      });
+    }
+    const activation: CapturedActivation = {
+      ctx,
+      cwd: captured.cwd,
+      projectTrusted,
+      agentDirectory,
+    };
+    const settings = Promise.resolve()
+      .then(() => boundaries.loadSettings(activation.cwd, activation.projectTrusted))
+      .catch(() => undefined);
+    return Promise.all([shutdown, settings])
+      .then(() => {
+        if (generation !== preparationGeneration) return undefined;
+        try {
+          registerSubagentTools(pi, {
+            environment: {
+              cwd: activation.cwd,
+              projectTrusted: activation.projectTrusted,
+            },
+            run: (effect, signal) => run(effect, signal),
+          });
+          const activatedByRegistration = deactivateSubagentTools(pi);
+          if (!hasRegisteredTools) rememberDisabledTools(activatedByRegistration);
+          hasRegisteredTools = true;
+        } catch {
+          rememberDisabledTools(deactivateSubagentTools(pi));
+          notifyActivationFailure(
+            activation.ctx,
             "Subagents failed to activate because tool registration failed.",
           );
           return slot.shutdown().then(() => undefined);
         }
-        return slot.start(ctx, captured.signal);
+        if (generation !== preparationGeneration) return undefined;
+        return slot.start(activation, captured.signal).then(() => undefined);
       })
       .then(() => undefined);
-  });
+  };
+
+  pi.on("session_start", (_event, ctx) => prepareActivation(ctx));
 
   pi.on("turn_end", (_event, ctx) => {
     if (!currentContext) return;
@@ -150,11 +216,12 @@ export function registerSubagentApplication(pi: ExtensionAPI): void {
     bridge.setContext(ctx);
   });
 
-  pi.on("session_tree", (_event, ctx) => {
-    const captured = captureSessionHost(ctx);
-    if (captured._tag === "Unavailable") return slot.shutdown().then(() => undefined);
-    return slot.start(ctx, captured.signal).then(() => undefined);
-  });
+  pi.on("session_tree", (_event, ctx) => prepareActivation(ctx));
 
-  pi.on("session_shutdown", () => slot.shutdown());
+  pi.on("session_shutdown", () => {
+    ++preparationGeneration;
+    rememberDisabledTools(deactivateSubagentTools(pi));
+    bridge.clear();
+    return slot.shutdown();
+  });
 }

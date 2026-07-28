@@ -92,6 +92,27 @@ process.exit(1);`,
     expect(error.message).toContain("Not logged in");
   });
 
+  it.each([
+    ["empty", ``],
+    ["malformed", `process.stdout.write("not-json\\n");`],
+    ["empty-object", `process.stdout.write("{}\\n");`],
+    [
+      "ambiguous",
+      `process.stdout.write(JSON.stringify({ loggedIn: true, authenticated: false }) + "\\n");`,
+    ],
+    ["unknown-status", `process.stdout.write(JSON.stringify({ status: "maybe" }) + "\\n");`],
+  ])("rejects and does not cache an exit-zero %s auth result", async (_label, body) => {
+    const counter = join(directory, "invocations");
+    const script = await fixture(`fake-claude-${_label}.mjs`, body);
+    const options = { command: process.execPath, commandArgs: [script] };
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const error = await Effect.runPromise(Effect.flip(ensureClaudeCliReady(options)));
+      expect(error).toMatchObject({ code: "claude_cli_preflight_failed" });
+    }
+    expect(await readFile(counter, "utf8")).toBe("xx");
+  });
+
   it("deduplicates concurrent probes for the same command", async () => {
     const counter = join(directory, "invocations");
     const script = await fixture(

@@ -104,12 +104,13 @@ setInterval(() => {}, 1000);
     }
   });
 
-  it("fails closed when a read-only child reports an unexpected tool", async () => {
+  it("fails closed when an immediate result precedes an unexpected tool policy", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-subagents-claude-policy-"));
     const fixture = join(directory, "fake-claude-policy.mjs");
     await writeFile(
       fixture,
-      `process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:"550e8400-e29b-41d4-a716-446655440000",model:"claude-fixture",tools:["Read","Bash"]})+"\\n");
+      `process.stdout.write(JSON.stringify({type:"result",subtype:"success",is_error:false,result:"Too early."})+"\\n");
+process.stdout.write(JSON.stringify({type:"system",subtype:"init",session_id:"550e8400-e29b-41d4-a716-446655440000",model:"claude-fixture",tools:["Read","Bash"]})+"\\n");
 setInterval(() => {}, 1000);
 `,
       "utf8",
@@ -170,6 +171,61 @@ setInterval(() => {}, 1000);
         operation: "verify Claude tool policy",
       });
       expect(error.message).toContain("Agent");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("flushes split UTF-8 and a final unterminated Claude result frame", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-subagents-claude-tail-"));
+    const fixture = join(directory, "fake-claude-tail.mjs");
+    await writeFile(
+      fixture,
+      `process.stdin.once("data", () => {
+  const init = Buffer.from(JSON.stringify({type:"system",subtype:"init",session_id:"550e8400-e29b-41d4-a716-446655440000",model:"claude-café",tools:["Read","Glob","Grep","WebFetch","WebSearch"]})+"\\n");
+  const split = init.indexOf(Buffer.from("é")) + 1;
+  process.stdout.write(init.subarray(0, split));
+  process.stdout.write(init.subarray(split));
+  process.stdout.write(JSON.stringify({type:"result",subtype:"success",is_error:false,result:"Tail 🌌",usage:{input_tokens:1,output_tokens:1}}));
+  setTimeout(() => process.exit(0), 10);
+});
+`,
+      "utf8",
+    );
+    await chmod(fixture, 0o700);
+
+    try {
+      const result = await Effect.runPromise(
+        Effect.acquireRelease(
+          acquireClaudeChild(request, { command: process.execPath, commandArgs: [fixture] }),
+          (handle) => handle.release,
+        ).pipe(
+          Effect.flatMap((handle) =>
+            Effect.gen(function* () {
+              yield* handle.send({ type: "prompt", id: "prompt-tail", message: "Review." });
+              yield* handle.send({ type: "get_state", id: "state-tail" });
+              return yield* Stream.fromQueue(handle.events).pipe(
+                Stream.filter(
+                  (event) =>
+                    event.type === "claude_message" &&
+                    typeof event.value === "object" &&
+                    event.value !== null &&
+                    "type" in event.value &&
+                    event.value.type === "result",
+                ),
+                Stream.runHead,
+              );
+            }),
+          ),
+          Effect.scoped,
+        ),
+      );
+      expect(Option.isSome(result)).toBe(true);
+      if (Option.isSome(result))
+        expect(result.value).toMatchObject({
+          type: "claude_message",
+          value: { result: "Tail 🌌" },
+        });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

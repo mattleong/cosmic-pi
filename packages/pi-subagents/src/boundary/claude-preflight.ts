@@ -22,6 +22,7 @@ const AuthStatusSchema = Schema.Struct({
 
 const NEGATIVE_STATUS =
   /not[_ ]?(logged[_ ]?in|authenticated)|logged[_ ]?out|unauthenticated|expired/i;
+const POSITIVE_STATUS = /^(authenticated|logged[_ ]?in)$/i;
 
 export interface ClaudeCliPreflightOptions {
   readonly command?: string | undefined;
@@ -122,24 +123,35 @@ const probeAuthStatus = (
 
 const authenticationFailure = (probe: PreflightProbe): SubagentProcessError | undefined => {
   const decoded = Schema.decodeUnknownOption(AuthStatusSchema)(parseJsonObject(probe.stdout));
-  const explicitlyUnauthenticated =
-    Option.isSome(decoded) &&
-    (decoded.value.loggedIn === false ||
-      decoded.value.authenticated === false ||
-      (decoded.value.status !== undefined && NEGATIVE_STATUS.test(decoded.value.status)));
-  if (probe.exitCode === 0 && !explicitlyUnauthenticated) return undefined;
+  const status = Option.isSome(decoded) ? decoded.value : undefined;
+  const explicitlyUnauthenticated = Boolean(
+    status &&
+    (status.loggedIn === false ||
+      status.authenticated === false ||
+      (status.status !== undefined && NEGATIVE_STATUS.test(status.status))),
+  );
+  const explicitlyAuthenticated = Boolean(
+    status &&
+    (status.loggedIn === true ||
+      status.authenticated === true ||
+      (status.status !== undefined && POSITIVE_STATUS.test(status.status.trim()))),
+  );
+  // Exit zero is not evidence of authentication by itself. Contradictory fields are ambiguous and
+  // fail compatibility preflight rather than being cached as either login or logout.
+  if (probe.exitCode === 0 && explicitlyAuthenticated && !explicitlyUnauthenticated)
+    return undefined;
   const detail = sanitizeDiagnosticText(
     `${probe.stdout}\n${probe.stderr}`.trim(),
     MAX_DETAIL_CHARS,
   );
-  if (explicitlyUnauthenticated)
+  if (explicitlyUnauthenticated && !explicitlyAuthenticated)
     return preflightError(
       "claude_cli_unauthenticated",
       `Claude CLI is not authenticated; sign in with the installed Claude CLI and retry.${detail ? `\n${detail}` : ""}`,
     );
   return preflightError(
     "claude_cli_preflight_failed",
-    `Claude CLI auth preflight exited with code ${probe.exitCode ?? "unknown"}; verify that the installed CLI supports "auth status --json" and retry.${detail ? `\n${detail}` : ""}`,
+    `Claude CLI auth preflight did not return one recognized, unambiguous positive authentication result (exit ${probe.exitCode ?? "unknown"}); verify that the installed CLI supports "auth status --json" and retry.${detail ? `\n${detail}` : ""}`,
   );
 };
 

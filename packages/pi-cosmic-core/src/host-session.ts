@@ -38,12 +38,11 @@ export function hasTerminalUI(ctx: HostUiContext): boolean {
   }
 }
 
-/** True when the host reports the project as trusted, defaulting to trusted on absence/errors. */
+/** True only when the host explicitly reports literal project trust. */
 export function isProjectTrusted(ctx: HostTrustContext): boolean {
   try {
-    return typeof ctx.isProjectTrusted === "function"
-      ? (ctx.isProjectTrusted as () => boolean)()
-      : true;
+    const readTrust = ctx.isProjectTrusted;
+    return typeof readTrust === "function" && readTrust.call(ctx) === true;
   } catch {
     return false;
   }

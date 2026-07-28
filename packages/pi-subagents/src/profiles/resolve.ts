@@ -78,6 +78,27 @@ const skip = (
   reason,
 });
 
+const unsupportedPiEffort = (
+  environment: ProfileResolutionEnvironment,
+  provider: string,
+  id: string,
+  effort: SubagentEffort | undefined,
+  label: string,
+  candidateIndex?: number,
+): SkippedProfileCandidate | undefined => {
+  if (effort === undefined) return undefined;
+  const model = environment.availablePiModels.find(
+    (candidate) => candidate.provider === provider && candidate.id === id,
+  );
+  if (!model?.supportedEfforts || model.supportedEfforts.includes(effort)) return undefined;
+  return skip(
+    label,
+    "pi_effort_unsupported",
+    `Pi model ${provider}/${id} does not support required effort ${effort}; supported efforts: ${model.supportedEfforts.join(", ") || "none"}.`,
+    candidateIndex,
+  );
+};
+
 const automaticPolicySkip = (
   config: ResolvedSubagentConfig,
   backend: SubagentBackend,
@@ -143,6 +164,15 @@ const resolveParent = (
   const model = `${resolved.provider}/${resolved.id}`;
   const policySkip = automaticPolicySkip(config, "pi", model, label, candidateIndex);
   if (policySkip) return { skipped: policySkip };
+  const effortSkip = unsupportedPiEffort(
+    environment,
+    resolved.provider,
+    resolved.id,
+    effortOverride,
+    label,
+    candidateIndex,
+  );
+  if (effortSkip) return { skipped: effortSkip };
   return {
     attempt: {
       profile,
@@ -270,6 +300,16 @@ const resolveConfiguredCandidate = (
   const model = `${resolved.provider}/${resolved.id}`;
   const policySkip = automaticPolicySkip(config, "pi", model, label, candidateIndex);
   if (policySkip) return { skipped: policySkip };
+  const hardEffort = effortOverride ?? candidate.effort;
+  const effortSkip = unsupportedPiEffort(
+    environment,
+    resolved.provider,
+    resolved.id,
+    hardEffort,
+    label,
+    candidateIndex,
+  );
+  if (effortSkip) return { skipped: effortSkip };
   return {
     attempt: {
       profile,

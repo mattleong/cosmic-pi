@@ -4,7 +4,12 @@ import type { SubagentRunObservation, SubagentServiceShape } from "../src/run/se
 
 type ObservationMethods = Pick<
   SubagentServiceShape,
-  "withAwaitTerminalObservations" | "withStatusObservations" | "consumeCompletions"
+  | "startSessionOwned"
+  | "withAwaitTerminalObservations"
+  | "withForegroundStartObservation"
+  | "withForegroundObservation"
+  | "withStatusObservations"
+  | "consumeCompletions"
 >;
 
 export type SubagentServiceDoubleInput = Omit<SubagentServiceShape, keyof ObservationMethods> &
@@ -22,11 +27,30 @@ export type SubagentServiceDoubleInput = Omit<SubagentServiceShape, keyof Observ
  * plain run methods get faithful derivations here instead of the tool re-implementing fallbacks.
  */
 export function subagentServiceDouble(base: SubagentServiceDoubleInput): SubagentServiceShape {
+  const startSessionOwned: SubagentServiceShape["startSessionOwned"] =
+    base.startSessionOwned ?? base.start;
   const observeStatus =
     base.observeStatus ??
     ((id: string) => base.status(id).pipe(Effect.map((run): SubagentRunObservation => ({ run }))));
   const consumeCompletions: SubagentServiceShape["consumeCompletions"] =
     base.consumeCompletions ?? (() => Effect.void);
+  const withForegroundObservation: SubagentServiceShape["withForegroundObservation"] =
+    base.withForegroundObservation ??
+    ((id, use) => base.waitForForeground(id).pipe(Effect.flatMap((run) => use({ run }))));
+  const withForegroundStartObservation: SubagentServiceShape["withForegroundStartObservation"] =
+    base.withForegroundStartObservation ??
+    ((request, use) =>
+      base.start(request).pipe(
+        Effect.flatMap((started) =>
+          use(
+            started,
+            base.waitForForeground(started.id).pipe(
+              Effect.catch((error) => Effect.die(error)),
+              Effect.map((run): SubagentRunObservation => ({ run })),
+            ),
+          ),
+        ),
+      ));
   const withStatusObservations: SubagentServiceShape["withStatusObservations"] =
     base.withStatusObservations ??
     ((ids, use) =>
@@ -60,7 +84,10 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
         .pipe(Effect.flatMap((runs) => use(runs.map((run): SubagentRunObservation => ({ run }))))));
   return {
     ...base,
+    startSessionOwned,
     consumeCompletions,
+    withForegroundStartObservation,
+    withForegroundObservation,
     withStatusObservations,
     withAwaitTerminalObservations,
   };

@@ -10,7 +10,6 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import {
   getAgentDir,
@@ -30,6 +29,7 @@ import {
   piToolsForWriteIntent,
 } from "../run/coordination.ts";
 import { SubagentProcessError } from "../run/errors.ts";
+import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
 import { ensureClaudeCliReady } from "./claude-preflight.ts";
 import { acquireClaudeChild } from "./claude-process.ts";
 import { terminateProcessTree } from "./process-tree.ts";
@@ -37,6 +37,7 @@ import type { ParentReply, PeerNotice, RpcCommand } from "../run/protocol.ts";
 import type { SubagentContextMode, SubagentEffort } from "../run/model.ts";
 
 const MAX_RPC_LINE_BYTES = 4 * 1024 * 1024;
+const MAX_RPC_QUEUED_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 128 * 1024;
 const EVENT_CAPACITY = 512;
 const TRANSPORT_WRITE_TIMEOUT = "10 seconds";
@@ -86,6 +87,8 @@ export type ChildWireEvent =
 export interface ChildProcessHandle {
   readonly pid: number;
   readonly events: Queue.Dequeue<ChildWireEvent, Cause.Done>;
+  /** Release byte-weighted transport backlog ownership after one event is processed. */
+  readonly acknowledge?: ((event: ChildWireEvent) => void) | undefined;
   readonly awaitExit: Effect.Effect<Extract<ChildWireEvent, { readonly type: "exit" }>>;
   readonly send: (command: RpcCommand) => Effect.Effect<void, SubagentProcessError>;
   readonly sendIpc: (
@@ -100,7 +103,7 @@ export interface ChildProcessShape {
   ) => Effect.Effect<ChildProcessHandle, SubagentProcessError, Scope.Scope>;
 }
 
-const processError = (operation: string, error?: unknown) =>
+const processError = (operation: string, error?: unknown, code?: string) =>
   new SubagentProcessError({
     operation,
     message:
@@ -109,6 +112,7 @@ const processError = (operation: string, error?: unknown) =>
         : typeof error === "string"
           ? error
           : `Unable to ${operation} subagent process.`,
+    ...(code ? { code } : {}),
   });
 
 export function safeSubagentDirectorySegment(value: string): string {
@@ -191,36 +195,6 @@ function extensionPath(): string {
   return fileURLToPath(new URL("./host-child.ts", import.meta.url));
 }
 
-function appendLineParser(
-  stream: NodeJS.ReadableStream,
-  onLine: (line: string) => void,
-  onOverflow: () => void,
-): () => void {
-  const decoder = new StringDecoder("utf8");
-  let buffered = "";
-  let overflowed = false;
-  const onData = (chunk: Buffer) => {
-    if (overflowed) return;
-    buffered += decoder.write(chunk);
-    if (Buffer.byteLength(buffered, "utf8") > MAX_RPC_LINE_BYTES) {
-      overflowed = true;
-      buffered = "";
-      onOverflow();
-      return;
-    }
-    while (true) {
-      const index = buffered.indexOf("\n");
-      if (index < 0) break;
-      let line = buffered.slice(0, index);
-      buffered = buffered.slice(index + 1);
-      if (line.endsWith("\r")) line = line.slice(0, -1);
-      if (line) onLine(line);
-    }
-  };
-  stream.on("data", onData);
-  return () => stream.off("data", onData);
-}
-
 const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: ChildLaunchRequest) {
   const runDir = join(
     getAgentDir(),
@@ -279,7 +253,8 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
   let settled = false;
   let spawned = false;
   let cleaned = false;
-  let overflowed = false;
+  let eventQueueOverflowed = false;
+  let transportBacklogOverflowed = false;
   let stdinError: Error | undefined;
 
   return yield* Effect.uninterruptible(
@@ -296,23 +271,41 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
         catch: (error) => processError("spawn", error),
       });
 
-      const offer = (event: ChildWireEvent) => {
-        if (Queue.offerUnsafe(events, event) || overflowed) return;
-        overflowed = true;
+      const transportRoom = makeByteBoundedQueueRoom(events, MAX_RPC_QUEUED_BYTES, () => {
+        transportBacklogOverflowed = true;
+        stderr = `${stderr}\nSubagent RPC event backlog exceeded ${MAX_RPC_QUEUED_BYTES} bytes.`;
+        Queue.offerUnsafe(events, {
+          type: "protocol_error",
+          message: "Subagent RPC event backlog exceeded its byte budget.",
+        });
+        void terminateProcessTree(child, "force").catch(() => {});
+      });
+      const offer = (event: ChildWireEvent, bytes = 0) => {
+        if (transportRoom.offer(event, bytes)) return;
+        if (transportBacklogOverflowed || eventQueueOverflowed) return;
+        eventQueueOverflowed = true;
         stderr = `${stderr}\nSubagent event queue exceeded ${EVENT_CAPACITY} pending events.`;
         void terminateProcessTree(child, "force").catch(() => {});
       };
       const onLine = (line: string) => {
+        const bytes = Buffer.byteLength(line, "utf8") + 1;
         try {
-          offer({ type: "rpc_message", value: JSON.parse(line) as unknown });
+          offer({ type: "rpc_message", value: JSON.parse(line) as unknown }, bytes);
         } catch {
-          offer({ type: "protocol_error", message: "Subagent emitted malformed RPC JSON." });
+          offer({ type: "protocol_error", message: "Subagent emitted malformed RPC JSON." }, bytes);
         }
       };
       const detachStdout = child.stdout
-        ? appendLineParser(child.stdout, onLine, () =>
-            offer({ type: "protocol_error", message: "Subagent RPC line exceeded 4 MiB." }),
-          )
+        ? attachBoundedLineParser(child.stdout, {
+            maxLineBytes: MAX_RPC_LINE_BYTES,
+            maxQueuedBytes: MAX_RPC_QUEUED_BYTES,
+            onLine,
+            onOverflow: () =>
+              offer({
+                type: "protocol_error",
+                message: "Subagent RPC input exceeded its bounded parser budget.",
+              }),
+          })
         : () => {};
       const onStderr = (chunk: Buffer) => {
         stderr = `${stderr}${chunk.toString("utf8")}`;
@@ -396,7 +389,8 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
               : Effect.fail(
                   processError(
                     operation,
-                    `Subagent transport write exceeded ${TRANSPORT_WRITE_TIMEOUT}.`,
+                    `Subagent transport write exceeded ${TRANSPORT_WRITE_TIMEOUT}; the frame may already have been accepted.`,
+                    "transport_outcome_uncertain",
                   ),
                 ),
           ),
@@ -411,6 +405,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
                   processError(
                     "send RPC command to",
                     stdinError ?? "Subagent RPC input is closed.",
+                    "transport_not_sent",
                   ),
                 ),
               );
@@ -421,11 +416,17 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
               encoded = `${JSON.stringify(command)}\n`;
               stdin.write(encoded, (error) =>
                 resume(
-                  error ? Effect.fail(processError("send RPC command to", error)) : Effect.void,
+                  error
+                    ? Effect.fail(
+                        processError("send RPC command to", error, "transport_outcome_uncertain"),
+                      )
+                    : Effect.void,
                 ),
               );
             } catch (error) {
-              resume(Effect.fail(processError("encode RPC command for", error)));
+              resume(
+                Effect.fail(processError("encode RPC command for", error, "transport_not_sent")),
+              );
             }
           }),
           "send RPC command to",
@@ -434,17 +435,29 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
         withWriteTimeout(
           Effect.callback<void, SubagentProcessError>((resume) => {
             if (!child.connected) {
-              resume(Effect.fail(processError("send IPC message to", "Subagent IPC is closed.")));
+              resume(
+                Effect.fail(
+                  processError(
+                    "send IPC message to",
+                    "Subagent IPC is closed.",
+                    "transport_not_sent",
+                  ),
+                ),
+              );
               return;
             }
             try {
               child.send(message, (error) =>
                 resume(
-                  error ? Effect.fail(processError("send IPC message to", error)) : Effect.void,
+                  error
+                    ? Effect.fail(
+                        processError("send IPC message to", error, "transport_outcome_uncertain"),
+                      )
+                    : Effect.void,
                 ),
               );
             } catch (error) {
-              resume(Effect.fail(processError("send IPC message to", error)));
+              resume(Effect.fail(processError("send IPC message to", error, "transport_not_sent")));
             }
           }),
           "send IPC message to",
@@ -488,6 +501,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
       return {
         pid,
         events,
+        acknowledge: transportRoom.acknowledge,
         awaitExit: Deferred.await(exited),
         send,
         sendIpc,

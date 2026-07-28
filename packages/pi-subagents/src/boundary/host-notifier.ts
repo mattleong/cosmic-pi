@@ -20,6 +20,7 @@ export type SubagentNotification =
       readonly name: string;
       readonly requestId: string;
       readonly message: string;
+      readonly generation: number;
     }
   | {
       readonly type: "warning";
@@ -27,10 +28,16 @@ export type SubagentNotification =
       readonly name: string;
       readonly message: string;
       readonly triggerTurn: boolean;
+      readonly generation: number;
+      /** Service-owned identity for independently retried warning classes/windows. */
+      readonly slotKey?: string | undefined;
+      /** Present only for an actual rejected rate-limit window. */
+      readonly rateLimitRejectionKey?: string | undefined;
     };
 
 export interface SubagentNotificationDelivery {
-  readonly deliveredCompletionKeys: ReadonlyArray<string>;
+  readonly deliveredCompletionKeys?: ReadonlyArray<string> | undefined;
+  readonly deliveredActionKeys?: ReadonlyArray<string> | undefined;
 }
 
 export interface SubagentNotifier {
@@ -138,7 +145,7 @@ const completionChunks = (
 
 export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
   const deliveredCompletions = new Map<string, number>();
-  const deliveredQuestions = new Map<string, string>();
+  const deliveredActions = new Map<string, number>();
 
   const notify: SubagentNotifier = (notification) => {
     if (notification.type === "completed") {
@@ -173,14 +180,10 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
       return { deliveredCompletionKeys };
     }
 
-    const questionKey =
-      notification.type === "question" ? `${notification.id}:${notification.requestId}` : undefined;
-    if (
-      questionKey &&
-      notification.type === "question" &&
-      deliveredQuestions.get(notification.id) === notification.requestId
-    )
-      return undefined;
+    const actionIdentity = `${notification.id}:${notification.type}:${notification.type === "warning" ? (notification.slotKey ?? "default") : "default"}`;
+    const actionKey = `${actionIdentity}:${notification.generation}`;
+    if ((deliveredActions.get(actionIdentity) ?? 0) >= notification.generation)
+      return { deliveredActionKeys: [actionKey] };
     const content = clip(
       notification.type === "question"
         ? `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with subagent_reply({ runId: "${notification.id}", message: "..." }).`
@@ -198,17 +201,17 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
           triggerTurn: notification.type === "question" || notification.triggerTurn,
         },
       );
-      if (questionKey && notification.type === "question")
-        remember(deliveredQuestions, notification.id, notification.requestId);
+      remember(deliveredActions, actionIdentity, notification.generation);
+      return { deliveredActionKeys: [actionKey] };
     } catch {
-      // Session shutdown can race with a final child notification.
+      // Session shutdown can race with an actionable notification. The service retains it.
+      return { deliveredActionKeys: [] };
     }
-    return undefined;
   };
 
   notify.reset = () => {
     deliveredCompletions.clear();
-    deliveredQuestions.clear();
+    deliveredActions.clear();
   };
   return notify;
 }

@@ -47,7 +47,12 @@ export interface RunEventDependencies {
     state: "completed" | "failed" | "stopped",
     error?: string,
   ) => Effect.Effect<SubagentRunView>;
-  readonly notify: (notification: SubagentNotification) => void;
+  readonly notify: (
+    record: RunRecord,
+    notification:
+      | Omit<Extract<SubagentNotification, { type: "question" }>, "generation">
+      | Omit<Extract<SubagentNotification, { type: "warning" }>, "generation">,
+  ) => Effect.Effect<void>;
   readonly failPendingResponses: (record: RunRecord, error: SubagentError) => void;
   readonly failRun: (
     record: RunRecord,
@@ -128,28 +133,32 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         if (!view || duplicate) return;
         const triggerTurn = !record.warningTurnTriggered;
         record.warningTurnTriggered = true;
-        notify({ type: "warning", id: view.id, name: view.name, message, triggerTurn });
+        yield* notify(record, {
+          type: "warning",
+          id: view.id,
+          name: view.name,
+          message,
+          triggerTurn,
+        });
         return;
       }
-      const view = yield* mutateView(record, (current) =>
-        current.state !== "running"
-          ? undefined
-          : {
-              ...current,
-              state: "waiting_for_parent",
-              lastActivityAt: now,
-              question: { requestId: envelope.requestId, message, createdAt: now },
-              sessionEvents: appendNoticeSessionEvent(
-                current.sessionEvents,
-                "question",
-                message,
-                now,
-              ),
-            },
-      );
+      const view = yield* mutateView(record, (current) => {
+        if (current.state !== "running") return undefined;
+        if (record.replyPendingRequestId === envelope.requestId) return undefined;
+        // A distinct child request is authoritative evidence that the uncertain prior reply turn
+        // resolved. Permit exactly the new request while retaining same-request duplicate safety.
+        record.replyPendingRequestId = undefined;
+        return {
+          ...current,
+          state: "waiting_for_parent",
+          lastActivityAt: now,
+          question: { requestId: envelope.requestId, message, createdAt: now },
+          sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "question", message, now),
+        };
+      });
       if (!view) return;
       if (!deliverForeground(record, view)) {
-        notify({
+        yield* notify(record, {
           type: "question",
           id: view.id,
           name: view.name,
@@ -309,7 +318,13 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
               if (!view || duplicate) return;
               const triggerTurn = !record.warningTurnTriggered;
               record.warningTurnTriggered = true;
-              notify({ type: "warning", id: view.id, name: view.name, message, triggerTurn });
+              yield* notify(record, {
+                type: "warning",
+                id: view.id,
+                name: view.name,
+                message,
+                triggerTurn,
+              });
             });
           case "extension_ui_request": {
             const dialog = new Set(["select", "confirm", "input", "editor"]).has(envelope.method);

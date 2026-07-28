@@ -19,7 +19,12 @@ import {
   type ChildProcessHandle,
   type ChildWireEvent,
 } from "../src/boundary/child-process.ts";
-import type { StartSubagentRequest, SubagentProjection } from "../src/run/model.ts";
+import { SubagentProcessError } from "../src/run/errors.ts";
+import type {
+  StartSubagentRequest,
+  SubagentProjection,
+  SubagentRunView,
+} from "../src/run/model.ts";
 import { SubagentService, type SubagentServiceOptions } from "../src/run/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 
@@ -30,6 +35,8 @@ interface FakeChildControl {
   readonly terminations: Array<"graceful" | "force">;
   readonly released: () => number;
   readonly failNext: (type: RpcCommand["type"], error: string) => void;
+  readonly failTransportNext: (type: RpcCommand["type"], code: string) => void;
+  readonly failNextIpc: (code: string) => void;
   readonly dropNext: (type: RpcCommand["type"]) => void;
   readonly gateNextSend: (type: RpcCommand["type"], gate: Deferred.Deferred<void, never>) => void;
   readonly gateNextIpc: (gate: Deferred.Deferred<void, never>) => void;
@@ -52,6 +59,16 @@ function fakeChildLayer(
       readonly spawnIndex: number;
       readonly type: RpcCommand["type"];
       readonly error: string;
+    }>;
+    readonly initialTransportFailures?: ReadonlyArray<{
+      readonly spawnIndex: number;
+      readonly type: RpcCommand["type"];
+      readonly code: string;
+    }>;
+    readonly initialBeforeResponses?: ReadonlyArray<{
+      readonly spawnIndex: number;
+      readonly type: RpcCommand["type"];
+      readonly value: unknown;
     }>;
   } = {},
 ) {
@@ -78,6 +95,13 @@ function fakeChildLayer(
             .filter((failure) => failure.spawnIndex === spawnIndex)
             .map(({ type, error }) => ({ type, error }));
           const dropped: RpcCommand["type"][] = remainingInitialStateDrops > 0 ? ["get_state"] : [];
+          const transportFailures: Array<{
+            readonly type: RpcCommand["type"];
+            readonly code: string;
+          }> = (options.initialTransportFailures ?? [])
+            .filter((failure) => failure.spawnIndex === spawnIndex)
+            .map(({ type, code }) => ({ type, code }));
+          const ipcFailures: string[] = [];
           if (remainingInitialStateDrops > 0) remainingInitialStateDrops -= 1;
           const sendGates: Array<{
             readonly type: RpcCommand["type"];
@@ -87,9 +111,17 @@ function fakeChildLayer(
           const beforeResponses: Array<{
             readonly type: RpcCommand["type"];
             readonly value: unknown;
-          }> = [];
+          }> = (options.initialBeforeResponses ?? [])
+            .filter((response) => response.spawnIndex === spawnIndex)
+            .map(({ type, value }) => ({ type, value }));
           const failNext = (type: RpcCommand["type"], error: string) => {
             failures.push({ type, error });
+          };
+          const failTransportNext = (type: RpcCommand["type"], code: string) => {
+            transportFailures.push({ type, code });
+          };
+          const failNextIpc = (code: string) => {
+            ipcFailures.push(code);
           };
           const dropNext = (type: RpcCommand["type"]) => {
             dropped.push(type);
@@ -128,12 +160,28 @@ function fakeChildLayer(
                 );
                 const gate = gateIndex >= 0 ? sendGates.splice(gateIndex, 1)[0]?.gate : undefined;
                 if (gate) yield* Deferred.await(gate);
+                const transportFailureIndex = transportFailures.findIndex(
+                  (candidate) => candidate.type === command.type,
+                );
+                const transportFailure =
+                  transportFailureIndex >= 0
+                    ? transportFailures.splice(transportFailureIndex, 1)[0]
+                    : undefined;
+                if (transportFailure)
+                  return yield* new SubagentProcessError({
+                    operation: "send RPC command to",
+                    code: transportFailure.code,
+                    message: "Fixture transport outcome.",
+                  });
                 const beforeIndex = beforeResponses.findIndex(
                   (candidate) => candidate.type === command.type,
                 );
                 const before =
                   beforeIndex >= 0 ? beforeResponses.splice(beforeIndex, 1)[0] : undefined;
-                if (before) offer(before.value);
+                if (before) {
+                  if (launch.backend === "claude-cli") offerClaude(before.value);
+                  else offer(before.value);
+                }
                 const droppedIndex = dropped.findIndex((type) => type === command.type);
                 if (droppedIndex >= 0) {
                   dropped.splice(droppedIndex, 1);
@@ -187,6 +235,13 @@ function fakeChildLayer(
                 // Model Node child.send handing the envelope to the child before
                 // its acknowledgement callback settles.
                 ipc.push(message);
+                const ipcFailure = ipcFailures.shift();
+                if (ipcFailure)
+                  return yield* new SubagentProcessError({
+                    operation: "send IPC message to",
+                    code: ipcFailure,
+                    message: "Fixture IPC outcome.",
+                  });
                 const gate = ipcGates.shift();
                 if (gate) yield* Deferred.await(gate);
               }),
@@ -199,6 +254,8 @@ function fakeChildLayer(
             terminations,
             released: () => releaseCount,
             failNext,
+            failTransportNext,
+            failNextIpc,
             dropNext,
             gateNextSend,
             gateNextIpc,
@@ -262,6 +319,49 @@ const request = (overrides: Partial<StartSubagentRequest> = {}): StartSubagentRe
 });
 
 describe("SubagentService", () => {
+  it.effect("namespaces run IDs across runtime replacement and rejects stale IDs", () =>
+    Effect.gen(function* () {
+      const firstFake = fakeChildLayer();
+      const firstLayer = serviceLayer().pipe(Layer.provide(firstFake.layer));
+      const first = yield* SubagentService.use((service) => service.start(request())).pipe(
+        Effect.scoped,
+        Effect.provide(firstLayer),
+      );
+
+      const secondFake = fakeChildLayer();
+      const secondLayer = serviceLayer().pipe(Layer.provide(secondFake.layer));
+      const result = yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const second = yield* service.start(request());
+        const stale = yield* service.status(first.id).pipe(Effect.flip);
+        return { second, stale };
+      }).pipe(Effect.scoped, Effect.provide(secondLayer));
+
+      expect(first.id).toMatch(/^agent-r[0-9a-z]+-1$/);
+      expect(result.second.id).toMatch(/^agent-r[0-9a-z]+-1$/);
+      expect(result.second.id).not.toBe(first.id);
+      expect(result.stale).toMatchObject({ _tag: "SubagentNotFoundError", id: first.id });
+    }),
+  );
+
+  it.effect("allocates concurrent unnamed IDs, ordinals, and fallback names atomically", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const runs = yield* Effect.all(
+        Array.from({ length: 12 }, () => service.start(request({ name: undefined }))),
+        { concurrency: "unbounded" },
+      );
+      expect(new Set(runs.map((run) => run.id)).size).toBe(12);
+      expect(new Set(runs.map((run) => run.name)).size).toBe(12);
+      for (const run of runs) {
+        const ordinal = run.id.slice(run.id.lastIndexOf("-") + 1);
+        expect(run.name).toBe(`subagent-${ordinal}`);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("reauthorizes hard-denied models before reserving or spawning a run", () => {
     const fake = fakeChildLayer();
     const layer = serviceLayer(
@@ -339,12 +439,12 @@ describe("SubagentService", () => {
       const service = yield* SubagentService;
       const started = yield* service.start(request({ name: "auth-reader" }));
       expect(started).toMatchObject({
-        id: "agent-1",
         name: "auth-reader",
         state: "running",
         model: "openai-codex/gpt-5.6-sol",
         sessionFile: "/tmp/child-session.jsonl",
       });
+      expect(started.id).toMatch(/^agent-r[0-9a-z]+-1$/);
       expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual([
         "get_state",
         "prompt",
@@ -445,9 +545,11 @@ describe("SubagentService", () => {
       expect(completed.pid).toBeUndefined();
       expect(completed.sessionFile).toBe("/tmp/child-session.jsonl");
 
+      yield* service.rename(run.id, "renamed-before-resume");
       const resumed = yield* service.resume(run.id, "Continue from disk.");
       expect(resumed.state).toBe("running");
       expect(fake.controls).toHaveLength(2);
+      expect(fake.controls[1]?.launch.name).toBe("renamed-before-resume");
       expect(fake.controls[1]?.launch.resumeSessionFile).toBe("/tmp/child-session.jsonl");
       expect(fake.controls[1]?.commands.map((command) => command.type)).toEqual([
         "get_state",
@@ -481,6 +583,99 @@ describe("SubagentService", () => {
       yield* TestClock.adjust("25 millis");
       expect((yield* Fiber.join(resuming)).state).toBe("running");
       expect(fake.controls).toHaveLength(2);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect(
+    "enforces active and cleanup-owned capacity before admitting work after release",
+    () => {
+      const fake = fakeChildLayer();
+      const projections: SubagentProjection[] = [];
+      const layer = serviceLayer({ publish: (projection) => projections.push(projection) }).pipe(
+        Layer.provide(fake.layer),
+      );
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const runs: SubagentRunView[] = [];
+        for (let index = 0; index < 12; index += 1)
+          runs.push(yield* service.start(request({ name: `active-${index + 1}` })));
+        expect(fake.controls).toHaveLength(12);
+
+        const activeSaturation = yield* service
+          .start(request({ name: "thirteenth-active" }))
+          .pipe(Effect.flip);
+        expect(activeSaturation).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });
+        expect(activeSaturation.message).toContain("Stop an active run");
+        expect(fake.controls).toHaveLength(12);
+
+        const cleanupGate = yield* Deferred.make<void>();
+        fake.controls[0]?.gateRelease(cleanupGate);
+        fake.controls[0]?.offer({ type: "agent_settled" });
+        yield* yieldUntil(() =>
+          Boolean(
+            projections
+              .at(-1)
+              ?.runs.some(
+                (candidate) => candidate.id === runs[0]?.id && candidate.state === "completed",
+              ),
+          ),
+        );
+        const cleanupSaturation = yield* service
+          .start(request({ name: "thirteenth-cleanup" }))
+          .pipe(Effect.flip);
+        expect(cleanupSaturation).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });
+        expect(cleanupSaturation.message).toContain("finish cleanup");
+        expect(fake.controls).toHaveLength(12);
+
+        yield* Deferred.succeed(cleanupGate, undefined);
+        yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+        const admitted = yield* service.start(request({ name: "admitted-after-cleanup" }));
+        expect(admitted.state).toBe("running");
+        expect(fake.controls).toHaveLength(13);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("distinguishes cleanup-owned capacity saturation and bounded cleanup timeout", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const gates = yield* Effect.all(Array.from({ length: 12 }, () => Deferred.make<void>()));
+      const runs = [];
+      for (let index = 0; index < 12; index += 1) {
+        const run = yield* service.start(request({ name: `cleanup-${index + 1}` }));
+        runs.push(run);
+        fake.controls[index]?.gateRelease(gates[index]!);
+        fake.controls[index]?.offer({ type: "agent_settled" });
+        yield* yieldUntil(() =>
+          Boolean(
+            projections
+              .at(-1)
+              ?.runs.find(
+                (candidate) => candidate.id === run.id && candidate.state === "completed",
+              ),
+          ),
+        );
+      }
+      const saturated = yield* service.start(request({ name: "capacity-probe" })).pipe(Effect.flip);
+      expect(saturated).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });
+      expect(saturated.message).toContain("finish cleanup");
+
+      const resuming = yield* service.resume(runs[0]!.id).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 seconds");
+      const timeout = yield* Fiber.join(resuming).pipe(Effect.flip);
+      expect(timeout).toMatchObject({
+        _tag: "SubagentProcessError",
+        code: "cleanup_timeout",
+      });
+      yield* Effect.forEach(gates, (gate) => Deferred.succeed(gate, undefined), {
+        discard: true,
+      });
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -574,14 +769,14 @@ describe("SubagentService", () => {
         _tag: "UnsupportedSubagentCapabilityError",
         backend: "claude-cli",
         capability: "steer",
-        message: expect.stringContaining('subagent_await({ runIds: ["agent-1"]'),
+        message: expect.stringContaining(`subagent_await({ runIds: ["${run.id}"]`),
       });
       const interrupting = yield* Effect.flip(service.interrupt(run.id));
       expect(interrupting).toMatchObject({
         _tag: "UnsupportedSubagentCapabilityError",
         capability: "interrupt",
         message: expect.stringContaining(
-          'subagent_lifecycle({ action: "stop", runIds: ["agent-1"] })',
+          `subagent_lifecycle({ action: "stop", runIds: ["${run.id}"] })`,
         ),
       });
       expect(fake.controls[0]?.commands.some((command) => command.type === "steer")).toBe(false);
@@ -671,6 +866,73 @@ describe("SubagentService", () => {
         "prompt",
         "get_state",
       ]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect(
+    "commits Claude initialization before an immediate terminal result closes scope",
+    () => {
+      const fake = fakeChildLayer(Effect.void, {
+        initialBeforeResponses: [
+          {
+            spawnIndex: 0,
+            type: "prompt",
+            value: {
+              type: "result",
+              subtype: "success",
+              is_error: false,
+              result: "Immediate terminal report.",
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
+          },
+        ],
+      });
+      const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(
+          request({ backend: "claude-cli", model: "sonnet", name: "immediate-claude" }),
+        );
+        expect(run).toMatchObject({
+          state: "completed",
+          sessionId: "child-session",
+          model: "claude-sonnet-resolved",
+          finalText: "Immediate terminal report.",
+        });
+        expect(fake.controls).toHaveLength(1);
+        expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual([
+          "prompt",
+          "get_state",
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("never retries a Claude writer after its task frame may have been accepted", () => {
+    const fake = fakeChildLayer(Effect.void, { dropInitialStateAttempts: 1 });
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const starting = yield* service
+        .start(
+          request({
+            backend: "claude-cli",
+            model: "sonnet",
+            name: "uncertain-writer",
+            writeIntent: "writer",
+          }),
+        )
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(
+        () => fake.controls[0]?.commands.some((command) => command.type === "get_state") ?? false,
+      );
+      yield* TestClock.adjust("60 seconds");
+      const failure = yield* Fiber.join(starting).pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "SubagentProcessError",
+        code: "start_outcome_uncertain",
+      });
+      expect(fake.controls).toHaveLength(1);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -815,13 +1077,18 @@ describe("SubagentService", () => {
         expect(warning.warning).toContain(
           "approaching its five hour limit (85% used); resets in 2h",
         );
-        expect(notifications).toContainEqual({
-          type: "warning",
-          id: run.id,
-          name: "claude-limit-warning",
-          message: warning.warning,
-          triggerTurn: false,
-        });
+        expect(notifications).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "warning",
+              id: run.id,
+              name: "claude-limit-warning",
+              message: warning.warning,
+              triggerTurn: false,
+              generation: expect.any(Number),
+            }),
+          ]),
+        );
 
         fake.controls[0]?.offerClaude({
           type: "rate_limit_event",
@@ -914,6 +1181,155 @@ describe("SubagentService", () => {
     },
   );
 
+  it.effect(
+    "correlates rejected settlement by limit key instead of cancelling it with another window",
+    () => {
+      const fake = fakeChildLayer();
+      const projections: SubagentProjection[] = [];
+      const layer = serviceLayer({ publish: (projection) => projections.push(projection) }).pipe(
+        Layer.provide(fake.layer),
+      );
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(
+          request({ backend: "claude-cli", model: "sonnet", name: "mixed-limits" }),
+        );
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "rejected",
+            rateLimitType: "five_hour",
+            overageStatus: "rejected",
+          },
+        });
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: { status: "allowed", rateLimitType: "seven_day" },
+        });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
+        yield* TestClock.adjust("2 seconds");
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+        expect((yield* service.status(run.id)).error).toContain("five hour limit");
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "retains failed actionable retries for two rejected limit windows through settlement",
+    () => {
+      const fake = fakeChildLayer();
+      const attempts = new Map<string, number>();
+      const delivered: SubagentNotification[] = [];
+      let allowDelivery = false;
+      const projections: SubagentProjection[] = [];
+      const layer = serviceLayer({
+        publish: (projection) => projections.push(projection),
+        notify: (notification) => {
+          if (notification.type !== "warning") return undefined;
+          attempts.set(notification.message, (attempts.get(notification.message) ?? 0) + 1);
+          if (!allowDelivery) return { deliveredActionKeys: [] };
+          delivered.push(notification);
+          return {
+            deliveredActionKeys: [
+              `${notification.id}:warning:${notification.slotKey ?? "default"}:${notification.generation}`,
+            ],
+          };
+        },
+      }).pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        yield* service.start(
+          request({ backend: "claude-cli", model: "sonnet", name: "two-rejections" }),
+        );
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "rejected",
+            rateLimitType: "five_hour",
+            overageStatus: "rejected",
+            resetsAt: 7_200,
+          },
+        });
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "rejected",
+            rateLimitType: "seven_day",
+            overageStatus: "rejected",
+            resetsAt: 604_800,
+          },
+        });
+        yield* yieldUntil(() => attempts.size === 2);
+        yield* TestClock.adjust("2 seconds");
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+        expect(delivered).toEqual([]);
+
+        allowDelivery = true;
+        yield* TestClock.adjust("4 seconds");
+        yield* yieldUntil(() => delivered.length === 2);
+        expect(delivered.map((notification) => notification.type)).toEqual(["warning", "warning"]);
+        expect(
+          delivered.some(
+            (notification) =>
+              notification.type === "warning" && notification.message.includes("five hour limit"),
+          ),
+        ).toBe(true);
+        expect(
+          delivered.some(
+            (notification) =>
+              notification.type === "warning" && notification.message.includes("seven day limit"),
+          ),
+        ).toBe(true);
+        yield* TestClock.adjust("30 seconds");
+        expect(delivered).toHaveLength(2);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "clears turn-local rate state on completion/resume while preserving window thresholds",
+    () => {
+      const fake = fakeChildLayer();
+      const notifications: SubagentNotification[] = [];
+      const projections: SubagentProjection[] = [];
+      const layer = serviceLayer({
+        notify: (notification) => notifications.push(notification),
+        publish: (projection) => projections.push(projection),
+      }).pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(
+          request({ backend: "claude-cli", model: "sonnet", name: "resume-limits" }),
+        );
+        const warning = {
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed_warning",
+            rateLimitType: "five_hour",
+            utilization: 0.85,
+            resetsAt: 7_200,
+          },
+        } as const;
+        fake.controls[0]?.offerClaude(warning);
+        yield* yieldUntil(() => notifications.some((value) => value.type === "warning"));
+        fake.controls[0]?.offerClaude({
+          type: "result",
+          subtype: "success",
+          result: "Done.",
+        });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        expect((yield* service.status(run.id)).warning).toBeUndefined();
+        yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+
+        const resumed = yield* service.resume(run.id, "Continue.");
+        expect(resumed.warning).toBeUndefined();
+        fake.controls[1]?.offerClaude(warning);
+        yield* Effect.yieldNow;
+        expect(notifications.filter((value) => value.type === "warning")).toHaveLength(1);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
   it.effect("keeps paid-overage Claude requests running with clear allowance wording", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
@@ -945,13 +1361,18 @@ describe("SubagentService", () => {
       expect(warning.warning).toBe(
         "Claude exhausted its five hour allowance (100% used); resets in 1h; continuing with paid overage.",
       );
-      expect(notifications).toContainEqual({
-        type: "warning",
-        id: run.id,
-        name: "claude-paid-overage",
-        message: warning.warning,
-        triggerTurn: false,
-      });
+      expect(notifications).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "warning",
+            id: run.id,
+            name: "claude-paid-overage",
+            message: warning.warning,
+            triggerTurn: false,
+            generation: expect.any(Number),
+          }),
+        ]),
+      );
 
       fake.controls[0]?.offerClaude(rateLimitEvent);
       yield* Effect.yieldNow;
@@ -991,13 +1412,18 @@ describe("SubagentService", () => {
       expect(warning.warning).toBe(
         "Claude exhausted its five hour allowance; resets in 1h; paid overage is available.",
       );
-      expect(notifications).toContainEqual({
-        type: "warning",
-        id: run.id,
-        name: "claude-credits",
-        message: warning.warning,
-        triggerTurn: false,
-      });
+      expect(notifications).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "warning",
+            id: run.id,
+            name: "claude-credits",
+            message: warning.warning,
+            triggerTurn: false,
+            generation: expect.any(Number),
+          }),
+        ]),
+      );
 
       yield* TestClock.adjust("2 seconds");
       expect((yield* service.status(run.id)).state).toBe("running");
@@ -1294,6 +1720,132 @@ describe("SubagentService", () => {
       });
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
+
+  it.effect(
+    "requeues a foreground report when a later batch start is gated and the owner cancels",
+    () => {
+      let spawnCount = 0;
+      let secondSpawnGate!: Deferred.Deferred<void>;
+      const fake = fakeChildLayer(
+        Effect.suspend(() => (++spawnCount === 2 ? Deferred.await(secondSpawnGate) : Effect.void)),
+      );
+      const notifications: SubagentNotification[] = [];
+      const projections: SubagentProjection[] = [];
+      const layer = serviceLayer({
+        notify: (notification) => notifications.push(notification),
+        publish: (projection) => projections.push(projection),
+      }).pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        secondSpawnGate = yield* Deferred.make<void>();
+        const service = yield* SubagentService;
+        const batch = yield* service
+          .withForegroundStartObservation(
+            request({ name: "batch-foreground", execution: "foreground" }),
+            (_started, awaitObservation) =>
+              Effect.gen(function* () {
+                const background = yield* service
+                  .startSessionOwned(request({ name: "gated-background" }))
+                  .pipe(Effect.forkScoped);
+                yield* Fiber.join(background);
+                return yield* awaitObservation;
+              }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => spawnCount === 2);
+        fake.controls[0]?.offer({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: "Held report." }] },
+        });
+        fake.controls[0]?.offer({ type: "agent_settled" });
+        yield* yieldUntil(
+          () =>
+            projections
+              .at(-1)
+              ?.runs.some(
+                (candidate) =>
+                  candidate.name === "batch-foreground" && candidate.state === "completed",
+              ) === true,
+        );
+
+        yield* Fiber.interrupt(batch);
+        yield* TestClock.adjust("100 millis");
+        yield* yieldUntil(() => notifications.some((value) => value.type === "completed"));
+        expect(notifications).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "completed",
+              runs: [expect.objectContaining({ finalText: "Held report." })],
+            }),
+          ]),
+        );
+        yield* Deferred.succeed(secondSpawnGate, undefined);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "requeues a foreground question when a later batch start is gated and the owner cancels",
+    () => {
+      let spawnCount = 0;
+      let secondSpawnGate!: Deferred.Deferred<void>;
+      const fake = fakeChildLayer(
+        Effect.suspend(() => (++spawnCount === 2 ? Deferred.await(secondSpawnGate) : Effect.void)),
+      );
+      const notifications: SubagentNotification[] = [];
+      const projections: SubagentProjection[] = [];
+      const layer = serviceLayer({
+        notify: (notification) => notifications.push(notification),
+        publish: (projection) => projections.push(projection),
+      }).pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        secondSpawnGate = yield* Deferred.make<void>();
+        const service = yield* SubagentService;
+        const batch = yield* service
+          .withForegroundStartObservation(
+            request({ name: "batch-question", execution: "foreground" }),
+            (_started, awaitObservation) =>
+              Effect.gen(function* () {
+                const background = yield* service
+                  .startSessionOwned(request({ name: "gated-question-peer" }))
+                  .pipe(Effect.forkScoped);
+                yield* Fiber.join(background);
+                return yield* awaitObservation;
+              }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => spawnCount === 2);
+        fake.controls[0]?.offerIpc({
+          channel: "pi-subagents",
+          type: "contact_parent",
+          requestId: "held-question",
+          kind: "question",
+          message: "Which branch?",
+        });
+        yield* yieldUntil(
+          () =>
+            projections
+              .at(-1)
+              ?.runs.some(
+                (candidate) =>
+                  candidate.name === "batch-question" && candidate.state === "waiting_for_parent",
+              ) === true,
+        );
+
+        yield* Fiber.interrupt(batch);
+        yield* yieldUntil(() => notifications.some((value) => value.type === "question"));
+        expect(notifications).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "question",
+              requestId: "held-question",
+              message: "Which branch?",
+            }),
+          ]),
+        );
+        yield* Deferred.succeed(secondSpawnGate, undefined);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
 
   it.effect("releases a foreground waiter when the run is interrupted", () => {
     const fake = fakeChildLayer();
@@ -1651,7 +2203,9 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopped");
       expect(notifications).toEqual([]);
       expect(fake.controls[0]?.released()).toBe(1);
-      expect((yield* service.status("agent-1")).error).toBeUndefined();
+      const id = projections.at(-1)?.runs[0]?.id;
+      expect(id).toBeDefined();
+      expect((yield* service.status(id!)).error).toBeUndefined();
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -1665,8 +2219,8 @@ describe("SubagentService", () => {
     }).pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
       const service = yield* SubagentService;
-      yield* service.start(request({ name: "notify-one" }));
-      yield* service.start(request({ name: "notify-two" }));
+      const first = yield* service.start(request({ name: "notify-one" }));
+      const second = yield* service.start(request({ name: "notify-two" }));
       fake.controls[0]?.offer({ type: "agent_settled" });
       fake.controls[1]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() =>
@@ -1678,10 +2232,51 @@ describe("SubagentService", () => {
       expect(notifications[0]).toMatchObject({
         type: "completed",
         runs: [
-          { id: "agent-1", name: "notify-one", generation: 1 },
-          { id: "agent-2", name: "notify-two", generation: 1 },
+          { id: first.id, name: "notify-one", generation: 1 },
+          { id: second.id, name: "notify-two", generation: 1 },
         ],
       });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("retains 51 unacknowledged completion reports after failed delivery", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    let deliveryAttempts = 0;
+    const layer = serviceLayer({
+      notify: (notification) => {
+        if (notification.type !== "completed") return undefined;
+        deliveryAttempts += 1;
+        return { deliveredCompletionKeys: [] };
+      },
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      let firstId = "";
+      for (let index = 0; index < 51; index += 1) {
+        const run = yield* service.start(request({ name: `retained-${index + 1}` }));
+        if (index === 0) firstId = run.id;
+        fake.controls[index]?.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: `Report ${index + 1}` }],
+          },
+        });
+        fake.controls[index]?.offer({ type: "agent_settled" });
+        yield* yieldUntil(
+          () =>
+            projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state ===
+            "completed",
+        );
+        yield* yieldUntil(() => fake.controls[index]?.released() === 1);
+      }
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => deliveryAttempts === 1);
+      const retained = yield* service.list;
+      expect(retained).toHaveLength(51);
+      expect(retained.find((run) => run.id === firstId)?.finalText).toBe("Report 1");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -1870,11 +2465,13 @@ describe("SubagentService", () => {
           .start(request({ name: "slow-start" }))
           .pipe(Effect.forkScoped);
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "starting");
-        const stopped = yield* service.stop("agent-1");
+        const id = projections.at(-1)?.runs[0]?.id;
+        expect(id).toBeDefined();
+        const stopped = yield* service.stop(id!);
         expect(stopped.state).toBe("stopped");
         yield* Deferred.succeed(spawnGate, undefined);
         yield* Fiber.await(starting);
-        expect((yield* service.status("agent-1")).state).toBe("stopped");
+        expect((yield* service.status(id!)).state).toBe("stopped");
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );
@@ -1974,6 +2571,58 @@ describe("SubagentService", () => {
       expect(failed.state).toBe("failed");
       expect(failed.finalText).toBe("Preserved report.");
       expect(fake.controls[1]?.terminations).toContain("force");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("resolves completed-writer resume uncertainty and releases ownership on exit", () => {
+    const fake = fakeChildLayer(Effect.void, {
+      initialTransportFailures: [
+        { spawnIndex: 1, type: "prompt", code: "transport_outcome_uncertain" },
+      ],
+    });
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          backend: "claude-cli",
+          model: "sonnet",
+          name: "uncertain-completed-writer",
+          writeIntent: "writer",
+        }),
+      );
+      fake.controls[0]?.offerClaude({
+        type: "result",
+        subtype: "success",
+        result: "First writer turn complete.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+
+      const failure = yield* service.resume(run.id, "Continue writer work.").pipe(Effect.flip);
+      expect(failure).toMatchObject({ code: "resume_outcome_uncertain" });
+      expect(fake.controls).toHaveLength(2);
+      expect((yield* service.status(run.id)).state).toBe("starting");
+
+      fake.controls[1]?.exit(1);
+      yield* yieldUntil(() =>
+        Boolean(
+          projections
+            .at(-1)
+            ?.runs.some((candidate) => candidate.id === run.id && candidate.state === "failed"),
+        ),
+      );
+      yield* yieldUntil(() => fake.controls[1]?.released() === 1);
+      expect(fake.controls).toHaveLength(2);
+
+      const replacement = yield* service.start(
+        request({ name: "replacement-writer", writeIntent: "writer" }),
+      );
+      expect(replacement.state).toBe("running");
+      expect(fake.controls).toHaveLength(3);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -2281,6 +2930,130 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect(
+    "maps ambiguous send, reply, interrupt, and resume outcomes without unsafe rollback",
+    () => {
+      const fake = fakeChildLayer();
+      const projections: SubagentProjection[] = [];
+      const layer = serviceLayer({ publish: (projection) => projections.push(projection) }).pipe(
+        Layer.provide(fake.layer),
+      );
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(request({ name: "uncertain-controls" }));
+
+        fake.controls[0]?.failTransportNext("steer", "transport_outcome_uncertain");
+        const sendFailure = yield* service.send(run.id, "Potential guidance.").pipe(Effect.flip);
+        expect(sendFailure).toMatchObject({ code: "guidance_outcome_uncertain" });
+        expect((yield* service.status(run.id)).state).toBe("running");
+
+        fake.controls[0]?.offerIpc({
+          channel: "pi-subagents",
+          type: "contact_parent",
+          requestId: "uncertain-question",
+          kind: "question",
+          message: "Apply this?",
+        });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+        fake.controls[0]?.failNextIpc("transport_outcome_uncertain");
+        const replyFailure = yield* service.reply(run.id, "Yes.").pipe(Effect.flip);
+        expect(replyFailure).toMatchObject({ code: "reply_outcome_uncertain" });
+        expect((yield* service.status(run.id)).state).toBe("running");
+        expect(
+          (yield* service.reply(run.id, "Do not duplicate.").pipe(Effect.flip)).message,
+        ).toContain("no pending parent question");
+        fake.controls[0]?.offerIpc({
+          channel: "pi-subagents",
+          type: "contact_parent",
+          requestId: "uncertain-question",
+          kind: "question",
+          message: "Duplicate request ID",
+        });
+        yield* Effect.yieldNow;
+        expect((yield* service.status(run.id)).state).toBe("running");
+
+        fake.controls[0]?.offerIpc({
+          channel: "pi-subagents",
+          type: "contact_parent",
+          requestId: "authoritative-new-question",
+          kind: "question",
+          message: "A distinct next request?",
+        });
+        yield* yieldUntil(() =>
+          Boolean(
+            projections
+              .at(-1)
+              ?.runs.some(
+                (candidate) => candidate.id === run.id && candidate.state === "waiting_for_parent",
+              ),
+          ),
+        );
+        expect((yield* service.reply(run.id, "Resolved.")).state).toBe("running");
+
+        const interruptRun = yield* service.start(request({ name: "uncertain-interrupt" }));
+        fake.controls[1]?.dropNext("abort");
+        const interrupting = yield* service.interrupt(interruptRun.id).pipe(Effect.forkScoped);
+        yield* TestClock.adjust("10 seconds");
+        expect(yield* Fiber.join(interrupting).pipe(Effect.flip)).toMatchObject({
+          code: "interrupt_outcome_uncertain",
+        });
+
+        const resumeRun = yield* service.start(request({ name: "uncertain-resume" }));
+        expect((yield* service.interrupt(resumeRun.id)).state).toBe("paused");
+        fake.controls[2]?.failTransportNext("prompt", "transport_outcome_uncertain");
+        const resumeFailure = yield* service
+          .resume(resumeRun.id, "Continue once.")
+          .pipe(Effect.flip);
+        expect(resumeFailure).toMatchObject({ code: "resume_outcome_uncertain" });
+        const uncertain = yield* service.status(resumeRun.id);
+        expect(uncertain.state).toBe("starting");
+        expect(uncertain.warning).toContain("may already have applied");
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("clears an uncertain reply claim after terminal settlement and a resumed turn", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({ publish: (projection) => projections.push(projection) }).pipe(
+      Layer.provide(fake.layer),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "reply-resolution" }));
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "uncertain-terminal-question",
+        kind: "question",
+        message: "Finish this turn?",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      fake.controls[0]?.failNextIpc("transport_outcome_uncertain");
+      expect(yield* service.reply(run.id, "Finish.").pipe(Effect.flip)).toMatchObject({
+        code: "reply_outcome_uncertain",
+      });
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: "Turn resolved." }] },
+      });
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+
+      expect((yield* service.resume(run.id, "Next turn.")).state).toBe("running");
+      fake.controls[1]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "resumed-question",
+        kind: "question",
+        message: "Question in resumed turn?",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      expect((yield* service.reply(run.id, "Answered.")).state).toBe("running");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("delivers distinct warnings while triggering only the first warning turn", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
@@ -2289,7 +3062,7 @@ describe("SubagentService", () => {
     }).pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
       const service = yield* SubagentService;
-      yield* service.start(request({ name: "bounded-notices" }));
+      const run = yield* service.start(request({ name: "bounded-notices" }));
       for (const [kind, message] of [
         ["progress", "First progress"],
         ["progress", "Second progress"],
@@ -2319,10 +3092,147 @@ describe("SubagentService", () => {
       expect(extensionWarning?.type).toBe("warning");
       if (extensionWarning?.type === "warning")
         expect(extensionWarning.message).not.toContain("secret-value");
-      const status = yield* service.status("agent-1");
+      const status = yield* service.status(run.id);
       expect(status.progress).toBe("Second progress");
       expect(status.warning).toContain("Extension bridge failed");
       expect(status.warning).not.toContain("secret-value");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect(
+    "retries actionable question, warning, and rate-limit delivery once without duplicates",
+    () => {
+      const fake = fakeChildLayer();
+      const attempts = new Map<string, number>();
+      const delivered: SubagentNotification[] = [];
+      const layer = serviceLayer({
+        notify: (notification) => {
+          if (notification.type === "completed") return undefined;
+          const key = notification.type === "question" ? "question" : notification.message;
+          const attempt = (attempts.get(key) ?? 0) + 1;
+          attempts.set(key, attempt);
+          if (attempt === 1) throw new Error("transient parent delivery failure");
+          delivered.push(notification);
+          return {
+            deliveredActionKeys: [
+              `${notification.id}:${notification.type}:${notification.type === "warning" ? (notification.slotKey ?? "default") : "default"}:${notification.generation}`,
+            ],
+          };
+        },
+      }).pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(
+          request({ backend: "claude-cli", model: "sonnet", name: "retry-actions" }),
+        );
+        fake.controls[0]?.offerIpc({
+          channel: "pi-subagents",
+          type: "contact_parent",
+          requestId: "retry-question",
+          kind: "question",
+          message: "Retry this question?",
+        });
+        yield* yieldUntil(() => attempts.get("question") === 1);
+
+        // A distinct warning must not supersede the still-undelivered question generation.
+        fake.controls[0]?.offerIpc({
+          channel: "pi-subagents",
+          type: "contact_parent",
+          requestId: "retry-warning",
+          kind: "warning",
+          message: "Retry this warning.",
+        });
+        yield* yieldUntil(() => delivered.some((notification) => notification.type === "question"));
+        yield* yieldUntil(() => attempts.get("Retry this warning.") === 1);
+        yield* TestClock.adjust("200 millis");
+        yield* yieldUntil(() =>
+          delivered.some(
+            (notification) =>
+              notification.type === "warning" && notification.message === "Retry this warning.",
+          ),
+        );
+
+        fake.controls[0]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed_warning",
+            rateLimitType: "seven_day",
+            utilization: 0.81,
+            resetsAt: 7_200,
+          },
+        });
+        const rateMessage = "Claude is approaching its seven day limit (81% used); resets in 2h.";
+        yield* yieldUntil(() => attempts.get(rateMessage) === 1);
+        yield* TestClock.adjust("200 millis");
+        yield* yieldUntil(() =>
+          delivered.some(
+            (notification) =>
+              notification.type === "warning" && notification.message === rateMessage,
+          ),
+        );
+        yield* TestClock.adjust("30 seconds");
+        expect(delivered.filter((notification) => notification.type === "question")).toHaveLength(
+          1,
+        );
+        expect(
+          delivered.filter(
+            (notification) =>
+              notification.type === "warning" && notification.message === "Retry this warning.",
+          ),
+        ).toHaveLength(1);
+        expect(
+          delivered.filter(
+            (notification) =>
+              notification.type === "warning" && notification.message === rateMessage,
+          ),
+        ).toHaveLength(1);
+        expect((yield* service.status(run.id)).state).toBe("waiting_for_parent");
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("restarts actionable delivery after a stale queue drains to idle", () => {
+    const fake = fakeChildLayer();
+    const attempts: SubagentNotification[] = [];
+    const layer = serviceLayer({
+      notify: (notification) => {
+        if (notification.type === "completed") return undefined;
+        attempts.push(notification);
+        return notification.type === "question"
+          ? { deliveredActionKeys: [] }
+          : {
+              deliveredActionKeys: [
+                `${notification.id}:warning:${notification.slotKey ?? "default"}:${notification.generation}`,
+              ],
+            };
+      },
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "action-idle-restart" }));
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "stale-question",
+        kind: "question",
+        message: "This will become stale.",
+      });
+      yield* yieldUntil(() => attempts.some((value) => value.type === "question"));
+      yield* service.reply(run.id, "Resolved before retry.");
+      yield* TestClock.adjust("200 millis");
+
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "new-warning",
+        kind: "warning",
+        message: "Delivery after idle.",
+      });
+      yield* yieldUntil(() =>
+        attempts.some(
+          (value) => value.type === "warning" && value.message === "Delivery after idle.",
+        ),
+      );
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

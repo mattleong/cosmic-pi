@@ -18,7 +18,7 @@
 - `src/projection.ts` publishes immutable synchronous snapshots.
 - `src/security.ts` owns shared redaction/sanitization.
 - `src/subscription-format.ts` owns shared subscription countdown/percent/token/status-line formatting helpers.
-- `src/host-session.ts` owns pure Pi host session capture helpers (UI mode, trust, cwd/signal).
+- `src/host-session.ts` owns pure Pi host session capture helpers (UI mode, trust, cwd/signal). Trust fails closed unless a captured callback returns literal `true`; absent, malformed, false, or throwing host values are untrusted.
 - `src/usage-projection.ts` owns shared usage eligibility/clearing projection transitions.
 - `src/testing/` contains multi-consumer fakes and probes only.
 

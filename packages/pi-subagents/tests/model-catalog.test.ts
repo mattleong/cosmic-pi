@@ -29,7 +29,7 @@ describe("model catalog", () => {
       "backend=pi model=openai-codex/gpt-5.5 · GPT 5.5 · reasoning",
     );
     expect(launchReadyModelLine(CLAUDE_CLI_ALIAS_MODELS[0]!)).toBe(
-      "backend=claude-cli model=fable · Claude Fable (CLI alias) · reasoning",
+      "backend=claude-cli model=fable · Claude Fable (CLI alias) · reasoning · efforts=low,medium,high,xhigh,max",
     );
   });
 

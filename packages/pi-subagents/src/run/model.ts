@@ -151,6 +151,7 @@ export interface SubagentModelView {
   readonly id: string;
   readonly name: string;
   readonly reasoning: boolean;
+  readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
   readonly policy?: "discouraged" | undefined;
 }
 

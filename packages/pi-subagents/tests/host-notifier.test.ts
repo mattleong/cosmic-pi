@@ -41,6 +41,7 @@ describe("subagent host notifier", () => {
       name: "reader",
       message: "Later warning.",
       triggerTurn: false,
+      generation: 1,
     });
 
     expect(sendMessage).toHaveBeenCalledOnce();
@@ -60,6 +61,7 @@ describe("subagent host notifier", () => {
       name: "reviewer",
       requestId: "question-1",
       message: "Should I update the fixture?",
+      generation: 1,
     });
 
     expect(sendMessage).toHaveBeenCalledOnce();

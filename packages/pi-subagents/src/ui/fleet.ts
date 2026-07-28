@@ -193,7 +193,7 @@ export class SubagentFleetComponent implements Component {
       run.state === "completed"
         ? `finished ${formatRelativeAge(this.options.getNow() - (run.endedAt ?? run.lastActivityAt))}`
         : runStateLabel(run.state);
-    const label = sanitizeTerminalLine(`${run.name} · ${state} · ${run.writeIntent} · ${run.id}`);
+    const label = sanitizeTerminalLine(`${run.name} · ${state} · ${run.writeIntent}`);
     return pad(
       `${prefix} ${glyph} ${selected ? this.options.theme.fg("accent", label) : label}`,
       width,
@@ -213,7 +213,10 @@ export class SubagentFleetComponent implements Component {
     const contentWidth = Math.max(0, width - 2);
     if (this.pendingStop)
       return renderResponsiveManagerFooter(contentWidth, [
-        [`x Confirm stop ${this.pendingStop}`, "Esc Cancel"],
+        [
+          `x Confirm stop ${sanitizeTerminalLine(selected?.name ?? "selected subagent")}`,
+          "Esc Cancel",
+        ],
       ]);
     const actions = [
       canMessage(selected)

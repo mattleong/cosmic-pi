@@ -162,6 +162,71 @@ describe("subagent profile configuration and resolution", () => {
     );
   });
 
+  it("rejects excess selector/candidate fields and caps arrays before item decoding", () => {
+    const oversized = Array.from({ length: 10_000 }, (_, index) => ({
+      backend: "pi",
+      model: `provider/model-${index}`,
+    }));
+    const decoded = decodeSubagentConfig(
+      {
+        denied: oversized,
+        discouraged: [{ backend: "pi", model: "safe", modle: "typo" }],
+        profiles: {
+          worker: {
+            candidates: [
+              { source: "parent", effort: "high" },
+              { source: "model", backend: "pi", model: "safe", modle: "typo" },
+              { source: "model", backend: "pi", model: "valid" },
+            ],
+            fallback: "fail",
+            candidtes: [],
+          },
+        },
+        defualtProfile: "worker",
+      },
+      "global",
+    );
+
+    expect(decoded.file.denied).toHaveLength(256);
+    expect(decoded.file.discouraged).toBeUndefined();
+    expect(decoded.file.profiles?.worker?.candidates).toEqual([
+      { source: "model", backend: "pi", model: "valid" },
+    ]);
+    expect(decoded.diagnostics).toEqual(
+      expect.arrayContaining([
+        "global.<unknown>",
+        "global.denied[256+]",
+        "global.discouraged[0]",
+        "global.profiles.worker.<unknown>",
+        "global.profiles.worker.candidates[0]",
+        "global.profiles.worker.candidates[1]",
+      ]),
+    );
+    expect(decoded.diagnostics.join(" ")).not.toContain("defualtProfile");
+    expect(decoded.diagnostics.join(" ")).not.toContain("modle");
+  });
+
+  it("never traverses raw array entries beyond the configured decode cap", () => {
+    let accesses = 0;
+    const denied: unknown[] = [];
+    denied.length = 1_000;
+    for (let index = 0; index < denied.length; index += 1)
+      Object.defineProperty(denied, index, {
+        enumerable: true,
+        configurable: true,
+        get: () => {
+          accesses += 1;
+          if (index >= 256) throw new Error("out-of-bound entry was inspected");
+          return { backend: "pi", model: `provider/model-${index}` };
+        },
+      });
+
+    const decoded = decodeSubagentConfig({ denied }, "global");
+    expect(decoded.file.denied).toHaveLength(256);
+    expect(accesses).toBe(256);
+    expect(decoded.diagnostics).toContain("global.denied[256+]");
+  });
+
   it("unions project policy while project routes atomically replace global routes", () => {
     const config = resolved(
       {
@@ -255,6 +320,52 @@ describe("subagent profile configuration and resolution", () => {
       "model_discouraged",
       "pi_model_unknown",
     ]);
+  });
+
+  it("skips a hard-incompatible Pi effort before spawn planning and preserves soft defaults", () => {
+    const config = resolved({
+      profiles: {
+        worker: {
+          candidates: [
+            {
+              source: "model",
+              backend: "pi",
+              model: "openai/gpt-review",
+              effort: "xhigh",
+            },
+            { source: "model", backend: "pi", model: "openai/gpt-parent", effort: "high" },
+          ],
+          fallback: "fail",
+        },
+      },
+    });
+    const capableEnvironment = {
+      ...environment,
+      availablePiModels: [
+        { provider: "openai", id: "gpt-review", supportedEfforts: ["off", "high"] as const },
+        {
+          provider: "openai",
+          id: "gpt-parent",
+          supportedEfforts: ["off", "high"] as const,
+        },
+      ],
+    };
+    expect(resolveProfilePlan("worker", config, capableEnvironment)).toMatchObject({
+      kind: "resolved",
+      attempts: [
+        {
+          model: "openai/gpt-parent",
+          effort: "high",
+          skippedBefore: [{ candidateIndex: 0, code: "pi_effort_unsupported" }],
+        },
+      ],
+      skippedCandidates: [{ candidateIndex: 0, code: "pi_effort_unsupported" }],
+    });
+    // A profile default is still a soft preference and does not remove a model from the plan.
+    expect(resolveProfilePlan("worker", resolved(), capableEnvironment)).toMatchObject({
+      kind: "resolved",
+      attempts: [{ model: "openai/gpt-parent", effort: "high", effortWasExplicit: false }],
+    });
   });
 
   it("keeps later invalid candidates out of provenance when an earlier candidate wins", () => {
@@ -395,7 +506,10 @@ describe("subagent profile configuration and resolution", () => {
     const unsupported = decodeSubagentConfig({ version: 2, defaultProfile: "reviewer" }, "global");
     expect(unsupported.unsupportedVersion).toBe(true);
     expect(unsupported.diagnostics).toContain("global.version");
-    // A non-numeric version is field corruption, recovered like any other malformed field.
-    expect(decodeSubagentConfig({ version: "2" }, "global").unsupportedVersion).toBe(false);
+    for (const version of ["1", "2", null, false, true, 1.5]) {
+      const malformed = decodeSubagentConfig({ version }, "global");
+      expect(malformed.unsupportedVersion).toBe(true);
+      expect(malformed.diagnostics).toContain("global.version");
+    }
   });
 });

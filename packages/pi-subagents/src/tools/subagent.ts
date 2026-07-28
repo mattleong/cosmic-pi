@@ -1,6 +1,7 @@
 // Pi tool execution is a Promise-shaped host boundary.
 // @effect-diagnostics effect/asyncFunction:off
 import { StringEnum } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import {
   defineTool,
   getMarkdownTheme,
@@ -22,19 +23,23 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { withCodePreviewShell } from "pi-code-previews";
-import { isProjectTrusted } from "pi-cosmic-core";
 import { Type, type Static } from "typebox";
 import {
   hostProfileEnvironment,
   liveSubagentStartBoundaries,
   resolveProfileStart,
+  type SubagentSessionEnvironment,
   type SubagentStartBoundaries,
 } from "../boundary/host-profile-resolution.ts";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
 import { profileCandidateLabel } from "../profiles/resolve.ts";
 import { SubagentProfileService, type SubagentProfileServiceShape } from "../profiles/service.ts";
-import { InvalidSubagentRequestError, subagentErrorCode } from "../run/errors.ts";
+import {
+  InvalidSubagentRequestError,
+  subagentErrorCode,
+  type SubagentError,
+} from "../run/errors.ts";
 import {
   CLAUDE_CLI_ALIAS_MODELS,
   launchReadyModelLine,
@@ -44,17 +49,23 @@ import {
 } from "../run/model-catalog.ts";
 import {
   isTerminalRunState,
+  type StartSubagentRequest,
   type SubagentEffort,
   type SubagentModelView,
   type SubagentRunView,
 } from "../run/model.ts";
-import { MAX_PARENT_MESSAGE_CHARS, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
+import {
+  MAX_PARENT_MESSAGE_CHARS,
+  MAX_PROTOCOL_ID_CHARS,
+  MAX_TARGET_RUNS,
+  MAX_TOOL_OUTPUT_CHARS,
+} from "../run/limits.ts";
 import {
   SubagentService,
   type SubagentAwaitUntil,
   type SubagentRunObservation,
 } from "../run/service.ts";
-import { MAX_TASK_CHARS, safeTextPrefix } from "../run/state.ts";
+import { MAX_NAME_CHARS, MAX_TASK_CHARS, safeTextPrefix } from "../run/state.ts";
 import {
   animatedRunStateGlyph,
   runStateColor,
@@ -62,6 +73,14 @@ import {
   runStateLabel,
 } from "../ui/run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
+import {
+  decodeStartAwaitCardDetails,
+  makeCompactToolDetails,
+  makeStartAwaitCardDetails,
+  type CompactSubagentToolDetails,
+  type SubagentRunCard,
+  type SubagentStartAwaitCardDetails,
+} from "./details.ts";
 
 export const SUBAGENT_TOOL_NAMES = [
   "subagent_models",
@@ -75,132 +94,195 @@ export const SUBAGENT_TOOL_NAMES = [
   "subagent_rename",
 ] as const;
 
-const LIFECYCLE_ACTIONS = ["interrupt", "resume", "stop"] as const;
+const NONBLANK_PATTERN = ".*\\S.*";
+const strictObjectOptions = { additionalProperties: false } as const;
+const runIdOptions = {
+  minLength: 1,
+  maxLength: MAX_PROTOCOL_ID_CHARS,
+  pattern: NONBLANK_PATTERN,
+} as const;
+const RunIdParameter = Type.String(runIdOptions);
 
-const StartSpecParameters = Type.Object({
-  task: Type.String({ description: "Task for this subagent.", maxLength: MAX_TASK_CHARS }),
-  name: Type.Optional(Type.String({ description: "Optional display name." })),
-  execution: Type.Optional(
-    StringEnum(["foreground", "background"] as const, {
+const StartSpecParameters = Type.Object(
+  {
+    task: Type.String({
       description:
-        "Launch behavior; defaults to background. Foreground blocks subagent_start until the run finishes, pauses, or asks a parent question. Use at most one foreground agent per start call.",
+        "Self-contained task: include relevant paths, constraints, evidence to inspect, and the required deliverable.",
+      minLength: 1,
+      maxLength: MAX_TASK_CHARS,
+      pattern: NONBLANK_PATTERN,
     }),
-  ),
-  context: Type.Optional(
-    StringEnum(["fresh", "fork"] as const, {
+    name: Type.Optional(
+      Type.String({
+        description: "Optional nonblank display name.",
+        minLength: 1,
+        maxLength: MAX_NAME_CHARS,
+        pattern: NONBLANK_PATTERN,
+      }),
+    ),
+    execution: Type.Optional(
+      StringEnum(["foreground", "background"] as const, {
+        description:
+          "Launch behavior; defaults to background. Foreground blocks subagent_start until the run finishes, pauses, or asks a parent question. Use at most one foreground agent per start call.",
+      }),
+    ),
+    context: Type.Optional(
+      StringEnum(["fresh", "fork"] as const, {
+        description:
+          'Child context. Explicit values override the profile default. Only oracle defaults to "fork"; every other profile defaults to "fresh". Fork requires backend "pi" and a persisted parent leaf.',
+      }),
+    ),
+    profile: Type.Optional(
+      StringEnum(PROFILE_IDS, {
+        description:
+          "Behavior and automatic model-routing profile. Explicit pi/claude-cli backend and model values override routing while retaining profile guidance.",
+      }),
+    ),
+    backend: StringEnum(["auto", "pi", "claude-cli"] as const, {
       description:
-        'Child context. Explicit values override the profile default. Only oracle defaults to "fork"; every other profile defaults to "fresh". Fork requires backend "pi" and a persisted parent leaf.',
+        'Execution backend. "auto" deterministically resolves the selected profile (or configured defaultProfile) and cannot combine with model. "pi" and "claude-cli" preserve explicit launch behavior.',
     }),
-  ),
-  profile: Type.Optional(
-    StringEnum(PROFILE_IDS, {
-      description:
-        "Behavior and automatic model-routing profile. Explicit pi/claude-cli backend and model values override routing while retaining profile guidance.",
+    writeIntent: StringEnum(["writer", "read-only"] as const, {
+      description: "Only one shared-cwd writer may be active.",
     }),
-  ),
-  backend: StringEnum(["auto", "pi", "claude-cli"] as const, {
-    description:
-      'Execution backend. "auto" deterministically resolves the selected profile (or configured defaultProfile) and cannot combine with model. "pi" and "claude-cli" preserve explicit launch behavior.',
-  }),
-  writeIntent: StringEnum(["writer", "read-only"] as const, {
-    description: "Only one shared-cwd writer may be active.",
-  }),
-  model: Type.Optional(
-    Type.String({
-      description:
-        'Explicit model override. Invalid with backend "auto". For backend "pi": a canonical provider/model value exactly as listed by subagent_models (omit to inherit the parent model); a bare model ID is accepted only when unique. For backend "claude-cli": a Claude alias or full Claude model ID; Claude defaults to sonnet.',
-    }),
-  ),
-  effort: Type.Optional(
-    StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, {
-      description:
-        "Explicit thinking-effort override. Omit to use the candidate effort, then the profile default effort, then the parent effort. claude-cli supports low through max only; off and minimal are rejected.",
-    }),
-  ),
-});
+    model: Type.Optional(
+      Type.String({
+        description:
+          'Explicit model override. Invalid with backend "auto". For backend "pi": a canonical provider/model value exactly as listed by subagent_models (omit to inherit the parent model); a bare model ID is accepted only when unique. For backend "claude-cli": a Claude alias or full Claude model ID; Claude defaults to sonnet.',
+        minLength: 1,
+        maxLength: 512,
+        pattern: NONBLANK_PATTERN,
+      }),
+    ),
+    effort: Type.Optional(
+      StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, {
+        description:
+          "Explicit thinking-effort override. Omit to use the candidate effort, then the profile default effort, then the parent effort. claude-cli supports low through max only; off and minimal are rejected.",
+      }),
+    ),
+  },
+  strictObjectOptions,
+);
 
-const RunIdsParameters = Type.Array(Type.String(), {
+const RunIdsParameters = Type.Array(RunIdParameter, {
   description: "Target run IDs.",
   minItems: 1,
   maxItems: MAX_TARGET_RUNS,
 });
 
 const MessageParameters = Type.String({
-  description: "Message to send to the selected subagent or subagents.",
+  description: "Nonblank message to send to the selected subagent or subagents.",
+  minLength: 1,
   maxLength: MAX_PARENT_MESSAGE_CHARS,
+  pattern: NONBLANK_PATTERN,
 });
 
-const ModelsParameters = Type.Object({
-  query: Type.Optional(
-    Type.String({
+const ModelsParameters = Type.Object(
+  {
+    query: Type.Optional(
+      Type.String({
+        description:
+          "Optional search text; every whitespace-separated term must match, so extra terms narrow the results. A blank query intentionally lists the unfiltered catalog.",
+        maxLength: 512,
+      }),
+    ),
+    backend: Type.Optional(
+      StringEnum(["pi", "claude-cli"] as const, {
+        description: "Optional backend filter for explicit launch-ready model selectors.",
+      }),
+    ),
+    profile: Type.Optional(
+      StringEnum(PROFILE_IDS, {
+        description: "Optional profile filter; omit to discover every built-in profile route.",
+      }),
+    ),
+  },
+  strictObjectOptions,
+);
+
+const StartParameters = Type.Object(
+  {
+    agents: Type.Array(StartSpecParameters, {
+      description: "One to twelve independent subagents to launch.",
+      minItems: 1,
+      maxItems: MAX_TARGET_RUNS,
+    }),
+  },
+  strictObjectOptions,
+);
+
+const ListParameters = Type.Object({}, strictObjectOptions);
+
+const StatusParameters = Type.Object(
+  {
+    runIds: RunIdsParameters,
+  },
+  strictObjectOptions,
+);
+
+const AwaitParameters = Type.Object(
+  {
+    runIds: RunIdsParameters,
+    until: StringEnum(["all_finished", "any_finished"] as const, {
       description:
-        "Optional search text; every whitespace-separated term must match, so extra terms narrow the results.",
+        "Return when all selected runs are finished, or when any selected run is finished. Finished includes completed, failed, and stopped.",
     }),
-  ),
-  backend: Type.Optional(
-    StringEnum(["pi", "claude-cli"] as const, {
-      description: "Optional backend filter for explicit launch-ready model selectors.",
+    timeoutSeconds: Type.Number({
+      description: "Await timeout in seconds; use 0 to wait without a timeout.",
+      minimum: 0,
+      maximum: 3600,
     }),
-  ),
-  profile: Type.Optional(
-    StringEnum(PROFILE_IDS, {
-      description: "Optional profile filter; omit to discover every built-in profile route.",
+  },
+  strictObjectOptions,
+);
+
+const SendParameters = Type.Object(
+  {
+    runIds: RunIdsParameters,
+    message: MessageParameters,
+  },
+  strictObjectOptions,
+);
+
+const ReplyParameters = Type.Object(
+  {
+    runId: Type.String({
+      ...runIdOptions,
+      description: "Run ID waiting for a parent reply.",
     }),
+    message: MessageParameters,
+  },
+  strictObjectOptions,
+);
+
+const LifecycleParameters = Type.Union([
+  Type.Object({ action: Type.Literal("interrupt"), runIds: RunIdsParameters }, strictObjectOptions),
+  Type.Object({ action: Type.Literal("stop"), runIds: RunIdsParameters }, strictObjectOptions),
+  Type.Object(
+    {
+      action: Type.Literal("resume"),
+      runIds: RunIdsParameters,
+      message: Type.Optional(MessageParameters),
+    },
+    strictObjectOptions,
   ),
-});
+]);
 
-const StartParameters = Type.Object({
-  agents: Type.Array(StartSpecParameters, {
-    description: "One to twelve independent subagents to launch.",
-    minItems: 1,
-    maxItems: MAX_TARGET_RUNS,
-  }),
-});
-
-const ListParameters = Type.Object({});
-
-const StatusParameters = Type.Object({
-  runIds: RunIdsParameters,
-});
-
-const AwaitParameters = Type.Object({
-  runIds: RunIdsParameters,
-  until: StringEnum(["all_finished", "any_finished"] as const, {
-    description:
-      "Return when all selected runs are finished, or when any selected run is finished. Finished includes completed, failed, and stopped.",
-  }),
-  timeoutSeconds: Type.Number({
-    description: "Await timeout in seconds; use 0 to wait without a timeout.",
-    minimum: 0,
-    maximum: 3600,
-  }),
-});
-
-const SendParameters = Type.Object({
-  runIds: RunIdsParameters,
-  message: MessageParameters,
-});
-
-const ReplyParameters = Type.Object({
-  runId: Type.String({ description: "Run ID waiting for a parent reply." }),
-  message: MessageParameters,
-});
-
-const LifecycleParameters = Type.Object({
-  action: StringEnum(LIFECYCLE_ACTIONS),
-  runIds: RunIdsParameters,
-  message: Type.Optional(
-    Type.String({
-      description: 'Optional continuation guidance; valid only when action="resume".',
-      maxLength: MAX_PARENT_MESSAGE_CHARS,
+const RenameParameters = Type.Object(
+  {
+    runId: Type.String({
+      ...runIdOptions,
+      description: "Run ID to rename.",
     }),
-  ),
-});
-
-const RenameParameters = Type.Object({
-  runId: Type.String({ description: "Run ID to rename." }),
-  name: Type.String({ description: "New display name." }),
-});
+    name: Type.String({
+      description: "New nonblank display name.",
+      minLength: 1,
+      maxLength: MAX_NAME_CHARS,
+      pattern: NONBLANK_PATTERN,
+    }),
+  },
+  strictObjectOptions,
+);
 
 export type SubagentStartSpec = Static<typeof StartSpecParameters>;
 export type SubagentModelsInput = Static<typeof ModelsParameters>;
@@ -221,7 +303,7 @@ export type SubagentToolInput =
   | ({ readonly action: "await" } & SubagentAwaitInput)
   | ({ readonly action: "send" } & SubagentSendInput)
   | ({ readonly action: "reply" } & SubagentReplyInput)
-  | ({ readonly action: SubagentLifecycleInput["action"] } & Omit<SubagentLifecycleInput, "action">)
+  | SubagentLifecycleInput
   | ({ readonly action: "rename" } & SubagentRenameInput);
 
 export interface SubagentStartFailure {
@@ -231,6 +313,14 @@ export interface SubagentStartFailure {
   /** Machine-actionable failure code (specific validation code or the error tag). */
   readonly code?: string;
 }
+
+type SubagentStartOutcome =
+  | {
+      readonly index: number;
+      readonly run: SubagentRunView;
+      readonly foreground: boolean;
+    }
+  | { readonly index: number; readonly failure: SubagentStartFailure };
 
 export interface SubagentActionFailure {
   readonly id: string;
@@ -255,22 +345,11 @@ export interface SubagentProfileView {
   readonly candidates: ReadonlyArray<ProfileCandidateDiscovery>;
 }
 
-export interface SubagentToolDetails {
-  readonly action: SubagentToolInput["action"];
-  readonly runs?: ReadonlyArray<SubagentRunView>;
-  readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
-  readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
-  readonly models?: ReadonlyArray<SubagentModelView>;
-  readonly profiles?: ReadonlyArray<SubagentProfileView>;
-  readonly defaultProfile?: ProfileId;
-  readonly awaitUntil?: SubagentAwaitUntil;
-  readonly timedOut?: boolean;
-  readonly attentionRequired?: boolean;
-  readonly cancelled?: boolean;
-}
+export type SubagentToolDetails = CompactSubagentToolDetails | SubagentStartAwaitCardDetails;
 
 export interface SubagentToolRuntime {
   readonly boundaries?: SubagentToolBoundaries | undefined;
+  readonly environment: SubagentSessionEnvironment;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, SubagentService | SubagentProfileService>,
     signal?: AbortSignal,
@@ -338,7 +417,9 @@ const requiredMessage = (
     ? Effect.succeed(message.trim())
     : Effect.fail(new InvalidSubagentRequestError({ message: `${action} requires message.` }));
 
-const selectionSourceLabel = (run: SubagentRunView): string => {
+const selectionSourceLabel = (
+  run: Pick<SubagentRunView, "selection"> | Pick<SubagentRunCard, "selection">,
+): string => {
   const candidate =
     run.selection.candidateIndex === undefined
       ? ""
@@ -347,10 +428,11 @@ const selectionSourceLabel = (run: SubagentRunView): string => {
 };
 
 const formatRun = (run: SubagentRunView, detailed = false): string => {
-  const profile = run.profile ? ` · profile=${run.profile}` : "";
-  const header = `${run.id} ${run.name} · ${run.state} · ${run.writeIntent}${profile} · ${run.backend}/${run.model}:${run.effort}`;
+  const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
+  const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${run.state} · ${run.writeIntent}${profile} · ${run.backend}/${sanitizeTerminalLine(run.model)}:${run.effort}`;
   if (!detailed) return header;
-  const field = (label: string, value: string): string => `  ${label.padEnd(10)} ${value}`;
+  const field = (label: string, value: string): string =>
+    `  ${label.padEnd(10)} ${sanitizeTerminalLine(value)}`;
   return [
     "Subagent status",
     field("Name", run.name),
@@ -378,7 +460,7 @@ const formatRun = (run: SubagentRunView, detailed = false): string => {
     run.question ? field("Question", run.question.message) : undefined,
     run.error ? field("Error", run.error) : undefined,
     run.finalText
-      ? `\nFinal report\n${run.finalText}`
+      ? `\nFinal report\n${sanitizeTerminalText(run.finalText)}`
       : run.state === "completed"
         ? "\nFinal report\nCompleted without a final report."
         : undefined,
@@ -432,16 +514,21 @@ const formatStartFailures = (failures: ReadonlyArray<SubagentStartFailure>): str
         }),
       ].join("\n");
 
-const formatStartResult = (
+const formatStartResultDetails = (
   runs: ReadonlyArray<SubagentRunView>,
   failures: ReadonlyArray<SubagentStartFailure>,
-): string => {
+): DetailedRunsFormat => {
   const failureText = formatStartFailures(failures);
   return formatDetailedRuns(
     runs,
     failureText ? `${failureText}${runs.length > 0 ? "\n\n" : ""}` : "",
-  ).text;
+  );
 };
+
+const formatStartResult = (
+  runs: ReadonlyArray<SubagentRunView>,
+  failures: ReadonlyArray<SubagentStartFailure>,
+): string => formatStartResultDetails(runs, failures).text;
 
 const formatActionFailures = (failures: ReadonlyArray<SubagentActionFailure>): string =>
   failures.length === 0
@@ -454,12 +541,15 @@ const formatActionFailures = (failures: ReadonlyArray<SubagentActionFailure>): s
         }),
       ].join("\n");
 
-const joinBoundedToolText = (parts: ReadonlyArray<string>): string => {
-  const text = parts.filter(Boolean).join("\n\n");
+const boundToolOutput = (text: string): string => {
   if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
-  const marker = "\n… [tool output truncated]";
-  return `${safeTextPrefix(text, MAX_TOOL_OUTPUT_CHARS - marker.length)}${marker}`;
+  const marker =
+    "\n… [tool output truncated; narrow the request or query individual run IDs for the omitted content]";
+  return `${safeTextPrefix(text, Math.max(0, MAX_TOOL_OUTPUT_CHARS - marker.length))}${marker}`;
 };
+
+const joinBoundedToolText = (parts: ReadonlyArray<string>): string =>
+  boundToolOutput(parts.filter(Boolean).join("\n\n"));
 
 const renderedCompletionReceipts = (
   observations: ReadonlyArray<SubagentRunObservation>,
@@ -475,6 +565,7 @@ function availableModels(
   input: SubagentModelsInput,
   ctx: ExtensionContext,
   profiles: SubagentProfileServiceShape,
+  projectTrusted: boolean,
 ): SubagentModelSearchResult {
   const piModels: ReadonlyArray<SubagentModelView> = ctx.modelRegistry
     .getAvailable()
@@ -483,10 +574,9 @@ function availableModels(
       id: `${model.provider}/${model.id}`,
       name: model.name,
       reasoning: model.reasoning,
+      supportedEfforts: getSupportedThinkingLevels(model) as ReadonlyArray<SubagentEffort>,
     }));
-  const selectorCatalog = isProjectTrusted(ctx)
-    ? [...piModels, ...CLAUDE_CLI_ALIAS_MODELS]
-    : piModels;
+  const selectorCatalog = projectTrusted ? [...piModels, ...CLAUDE_CLI_ALIAS_MODELS] : piModels;
   const policyAnnotated = selectorCatalog.flatMap((model) => {
     const policy = profiles.policyFor(model.backend, model.id);
     if (policy === "denied") return [];
@@ -500,9 +590,10 @@ const profileDiscovery = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   profiles: SubagentProfileServiceShape,
+  sessionEnvironment: SubagentSessionEnvironment,
 ): ReadonlyArray<SubagentProfileView> => {
   const ids = input.profile ? [input.profile] : PROFILE_IDS;
-  const environment = hostProfileEnvironment(pi, ctx);
+  const environment = hostProfileEnvironment(pi, ctx, sessionEnvironment.projectTrusted);
   return ids.flatMap((id) => {
     const definition = profiles.definition(id);
     if (!definition) return [];
@@ -550,7 +641,7 @@ const formatProfileDiscovery = (
   defaultProfile: ProfileId,
 ): string =>
   [
-    "Profiles (use backend=auto; explicit backend/model overrides routing but retains guidance)",
+    "Static profile preflight (backend=auto evaluates ordered candidates first-to-last; explicit backend/model overrides routing but retains guidance)",
     `Configured default profile: ${defaultProfile}`,
     ...profiles.flatMap((profile) => [
       `${profile.id} · context=${profile.defaultContext} · effort=${profile.defaultEffort ?? "inherit"} · fallback=${profile.fallback} · ${profile.description}`,
@@ -563,8 +654,20 @@ const formatProfileDiscovery = (
     ]),
   ].join("\n");
 
+const attentionRecoveryText = (runs: ReadonlyArray<SubagentRunCard>): string => {
+  const waiting = runs.filter((run) => run.state === "waiting_for_parent" && run.question?.message);
+  if (waiting.length === 0) return "";
+  return [
+    "Parent reply required; other unfinished subagents continue independently.",
+    ...waiting.flatMap((run) => [
+      `Question from ${sanitizeTerminalLine(run.name)}: ${safeTextPrefix(sanitizeTerminalLine(run.question?.message ?? ""), 512)}`,
+      `Reply with subagent_reply({ runId: ${JSON.stringify(run.id)}, message: "..." }), then call subagent_await again.`,
+    ]),
+  ].join("\n");
+};
+
 const awaitProgressHeader = (
-  runs: ReadonlyArray<SubagentRunView>,
+  runs: ReadonlyArray<SubagentRunCard>,
   until: SubagentAwaitUntil,
 ): string => {
   const finished = runs.filter((run) => isTerminalRunState(run.state)).length;
@@ -587,13 +690,13 @@ const awaitProgressHeader = (
   return `${condition} · ${finished} of ${runs.length} finished${activeSummary ? ` · ${activeSummary}` : ""}`;
 };
 
-const awaitRunStatus = (run: SubagentRunView): string =>
+const awaitRunStatus = (run: SubagentRunCard): string =>
   sanitizeTerminalLine(
     `${runStateLabel(run.state)}${run.currentTool ? ` (${run.currentTool})` : ""}`,
   );
 
 const formatAwaitProgress = (
-  runs: ReadonlyArray<SubagentRunView>,
+  runs: ReadonlyArray<SubagentRunCard>,
   until: SubagentAwaitUntil,
 ): string =>
   [
@@ -605,7 +708,7 @@ const formatAwaitProgress = (
   ].join("\n");
 
 const awaitHeaderColor = (
-  runs: ReadonlyArray<SubagentRunView>,
+  runs: ReadonlyArray<SubagentRunCard>,
 ): "warning" | "success" | "error" => {
   if (runs.some((run) => run.state === "failed")) return "error";
   return runs.length > 0 && runs.every((run) => isTerminalRunState(run.state))
@@ -617,11 +720,11 @@ const padVisible = (value: string, width: number): string =>
   `${value}${" ".repeat(Math.max(0, width - visibleWidth(value)))}`;
 
 class AwaitProgressComponent implements Component {
-  private readonly runs: ReadonlyArray<SubagentRunView>;
+  private readonly runs: ReadonlyArray<SubagentRunCard>;
   private readonly until: SubagentAwaitUntil;
   private readonly theme: Theme;
 
-  constructor(runs: ReadonlyArray<SubagentRunView>, until: SubagentAwaitUntil, theme: Theme) {
+  constructor(runs: ReadonlyArray<SubagentRunCard>, until: SubagentAwaitUntil, theme: Theme) {
     this.runs = runs;
     this.until = until;
     this.theme = theme;
@@ -682,7 +785,7 @@ interface RunReportSection {
 }
 
 const expandedRunReportSections = (
-  runs: ReadonlyArray<SubagentRunView>,
+  runs: ReadonlyArray<SubagentRunCard>,
 ): ReadonlyArray<RunReportSection> => {
   const candidates = runs.flatMap((run): ReadonlyArray<RunReportSection> => {
     const name = sanitizeTerminalLine(run.name);
@@ -743,11 +846,11 @@ export interface OutcomeBanner {
 
 interface ResponsiveRunRowOptions {
   readonly frame?: number;
-  readonly status?: (run: SubagentRunView) => string;
+  readonly status?: (run: SubagentRunCard) => string;
 }
 
 const renderResponsiveRunRows = (
-  runs: ReadonlyArray<SubagentRunView>,
+  runs: ReadonlyArray<SubagentRunCard>,
   width: number,
   theme: Theme,
   options: ResponsiveRunRowOptions = {},
@@ -801,7 +904,7 @@ const renderResponsiveRunRows = (
 };
 
 class RunOverviewComponent implements Component {
-  private readonly runs: ReadonlyArray<SubagentRunView>;
+  private readonly runs: ReadonlyArray<SubagentRunCard>;
   private readonly failures: ReadonlyArray<SubagentStartFailure>;
   private readonly expanded: boolean;
   private readonly theme: Theme;
@@ -809,7 +912,7 @@ class RunOverviewComponent implements Component {
   private readonly banner: OutcomeBanner | undefined;
 
   constructor(
-    runs: ReadonlyArray<SubagentRunView>,
+    runs: ReadonlyArray<SubagentRunCard>,
     failures: ReadonlyArray<SubagentStartFailure>,
     expanded: boolean,
     theme: Theme,
@@ -833,15 +936,19 @@ class RunOverviewComponent implements Component {
       ...renderResponsiveRunRows(this.runs, safeWidth, this.theme),
       ...(this.expanded
         ? this.runs.flatMap((run) => {
-            const profile = run.profile ? `${run.profile} · ` : "";
-            const summary = `${profile}${selectionSourceLabel(run)} · ${run.selection.reason}`;
+            const profile = run.profile ? `${sanitizeTerminalLine(run.profile)} · ` : "";
+            const summary = sanitizeTerminalLine(
+              `${profile}${selectionSourceLabel(run)} · ${run.selection.reason}`,
+            );
             return [
               truncateToWidth(this.theme.fg("dim", summary), safeWidth),
               ...run.selection.skippedCandidates.map((candidate) =>
                 truncateToWidth(
                   this.theme.fg(
                     "dim",
-                    `  skipped ${candidate.candidate} [${candidate.code}] · ${candidate.reason}`,
+                    sanitizeTerminalLine(
+                      `  skipped ${candidate.candidate} [${candidate.code}] · ${candidate.reason}`,
+                    ),
                   ),
                   safeWidth,
                 ),
@@ -849,7 +956,7 @@ class RunOverviewComponent implements Component {
               ...(run.selection.warning
                 ? [
                     truncateToWidth(
-                      this.theme.fg("warning", `  ${run.selection.warning}`),
+                      this.theme.fg("warning", sanitizeTerminalLine(`  ${run.selection.warning}`)),
                       safeWidth,
                     ),
                   ]
@@ -861,6 +968,10 @@ class RunOverviewComponent implements Component {
         .split("\n")
         .filter(Boolean)
         .map((line) => truncateToWidth(line, safeWidth)),
+      ...attentionRecoveryText(this.runs)
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => truncateToWidth(this.theme.fg("warning", line), safeWidth)),
       ...(this.reportSections.length > 0
         ? [
             truncateToWidth(
@@ -879,14 +990,14 @@ class RunOverviewComponent implements Component {
 
 /** Partial await rendering: the animated in-progress fleet card. */
 export const renderAwaitProgressComponent = (
-  runs: ReadonlyArray<SubagentRunView>,
+  runs: ReadonlyArray<SubagentRunCard>,
   until: SubagentAwaitUntil,
   theme: Theme,
 ): Component => new AwaitProgressComponent(runs, until, theme);
 
 /** Collapsed start/await rendering: run summaries, launch failures, and the report affordance. */
 export const renderStartAwaitOverviewComponent = (
-  runs: ReadonlyArray<SubagentRunView>,
+  runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
   failures: ReadonlyArray<SubagentStartFailure> = [],
   banner?: OutcomeBanner,
@@ -894,7 +1005,7 @@ export const renderStartAwaitOverviewComponent = (
   new RunOverviewComponent(runs, failures, false, theme, expandedRunReportSections(runs), banner);
 
 export const renderExpandedStartAwaitResult = (
-  runs: ReadonlyArray<SubagentRunView>,
+  runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
   failures: ReadonlyArray<SubagentStartFailure> = [],
   banner?: OutcomeBanner,
@@ -924,29 +1035,36 @@ export const renderExpandedStartAwaitResult = (
   return container;
 };
 
-export const awaitResultBanner = (details: SubagentToolDetails): OutcomeBanner | undefined => {
+export const awaitResultBanner = (details: {
+  readonly action?: "start" | "await" | undefined;
+  readonly runs?: ReadonlyArray<SubagentRunCard> | undefined;
+  readonly awaitUntil?: SubagentAwaitUntil | undefined;
+  readonly timedOut?: boolean | undefined;
+  readonly attentionRequired?: boolean | undefined;
+  readonly cancelled?: boolean | undefined;
+}): OutcomeBanner | undefined => {
   const runs = details.runs ?? [];
   const unfinished = runs.filter((run) => !isTerminalRunState(run.state));
+  const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
+  const attention = waiting > 0 ? ` · parent reply required for ${waiting}` : "";
   if (details.cancelled)
     return {
       color: "warning",
       text:
         runs.length === 0
-          ? "Await cancelled · subagents continue running"
-          : `Await cancelled · ${unfinished.length} agent${unfinished.length === 1 ? " continues" : "s continue"} running`,
+          ? "Await cancelled"
+          : `Await cancelled · ${unfinished.length} unfinished${attention}`,
     };
   if (details.timedOut)
     return {
       color: "warning",
-      text: `Await timed out · ${unfinished.length} agent${unfinished.length === 1 ? "" : "s"} still running`,
+      text: `Await timed out · ${unfinished.length} unfinished${attention}`,
     };
-  if (details.attentionRequired) {
-    const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
+  if (details.attentionRequired)
     return {
       color: "warning",
-      text: `Parent reply required · ${waiting} agent${waiting === 1 ? " is" : "s are"} waiting`,
+      text: `Parent reply required for ${waiting} agent${waiting === 1 ? "" : "s"}`,
     };
-  }
   if (details.awaitUntil !== "any_finished") return undefined;
   const first = runs
     .filter((run) => isTerminalRunState(run.state))
@@ -956,7 +1074,7 @@ export const awaitResultBanner = (details: SubagentToolDetails): OutcomeBanner |
   const outcome = runStateLabel(first.state);
   return {
     color: first.state === "failed" ? "error" : "accent",
-    text: `${name} ${outcome} first${unfinished.length > 0 ? ` · ${unfinished.length} agent${unfinished.length === 1 ? " continues" : "s continue"} running` : ""}`,
+    text: `${name} ${outcome} first${unfinished.length > 0 ? ` · ${unfinished.length} unfinished` : ""}${attention}`,
   };
 };
 
@@ -978,7 +1096,22 @@ const managementAcknowledgement = (
     case "rename":
       return `Renamed ${ids}.`;
     case "stop":
-      return `Stopped ${ids}.`;
+      return runs
+        .map((run) => {
+          switch (run.state) {
+            case "stopped":
+              return `${run.id} is stopped.`;
+            case "completed":
+              return `${run.id} was already finished; no stop was needed.`;
+            case "failed":
+              return `${run.id} had already failed; no stop was needed.`;
+            case "stopping":
+              return `Stop cleanup is still in progress for ${run.id}.`;
+            default:
+              return `Stop requested for ${run.id}; current state is ${runStateLabel(run.state)}.`;
+          }
+        })
+        .join("\n");
     default:
       return runs.map((run) => formatRun(run, true)).join("\n\n");
   }
@@ -996,13 +1129,18 @@ const executeSubagentAction = async (
   if (input.action === "models") {
     const discovery = Effect.gen(function* () {
       const profileService = yield* SubagentProfileService;
-      const search = availableModels(input, ctx, profileService);
+      const search = availableModels(
+        input,
+        ctx,
+        profileService,
+        runtime.environment.projectTrusted,
+      );
       const models = search.models;
-      const profiles = profileDiscovery(input, pi, ctx, profileService);
+      const profiles = profileDiscovery(input, pi, ctx, profileService, runtime.environment);
       const selectorText =
         models.length > 0
           ? [
-              "Accepted explicit selectors (denied models are hidden; discouraged models require explicit selection; Claude readiness is checked at launch)",
+              "Accepted static explicit selectors (preflight-only: denied models are hidden, discouraged models require explicit selection, and executable/auth/model readiness is checked at launch)",
               ...models.map(launchReadyModelLine),
               ...(search.truncated
                 ? [
@@ -1015,18 +1153,20 @@ const executeSubagentAction = async (
         content: [
           {
             type: "text" as const,
+            // Selector-first ordering reserves the most actionable filtered results before verbose
+            // profile sections consume the aggregate output budget.
             text: joinBoundedToolText([
-              formatProfileDiscovery(profiles, profileService.config.defaultProfile),
               selectorText,
+              formatProfileDiscovery(profiles, profileService.config.defaultProfile),
             ]),
           },
         ],
-        details: {
+        details: makeCompactToolDetails({
           action: input.action,
           models,
-          profiles,
+          profileIds: profiles.map((profile) => profile.id),
           defaultProfile: profileService.config.defaultProfile,
-        },
+        }),
       };
     });
     return runtime.run(discovery, signal);
@@ -1050,20 +1190,12 @@ const executeSubagentAction = async (
           (run) => run.state === "waiting_for_parent" && run.question !== undefined,
         );
         const attentionRequired = waiting.length > 0;
-        const attentionText = attentionRequired
-          ? [
-              "Await paused because a parent reply is required; other subagents continue running.",
-              ...waiting.map(
-                (run) =>
-                  `Reply with subagent_reply({ runId: "${run.id}", message: "..." }), then call subagent_await again.`,
-              ),
-              "",
-            ].join("\n")
+        const attentionText = attentionRequired ? `${attentionRecoveryText(runs)}\n\n` : "";
+        const unfinished = runs.filter((run) => !isTerminalRunState(run.state)).length;
+        const timeoutText = timedOut
+          ? `Await timed out; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished.\n\n`
           : "";
-        const formatted = formatDetailedRuns(
-          runs,
-          timedOut ? "Await timed out; subagents continue running.\n\n" : attentionText,
-        );
+        const formatted = formatDetailedRuns(runs, `${timeoutText}${attentionText}`);
         yield* consumeCompletions(observations, formatted.fullyRenderedIds);
         return { runs, timedOut, attentionRequired, text: formatted.text };
       });
@@ -1102,54 +1234,147 @@ const executeSubagentAction = async (
       case "start": {
         const specs = yield* startSpecs(input.agents);
         let launchedRuns: ReadonlyArray<SubagentRunView> = [];
-        const startOne = (spec: SubagentStartSpec) =>
-          Effect.gen(function* () {
-            const request = yield* resolveProfileStart(pi, spec, ctx, boundaries);
-            const started = yield* service.start(request);
-            launchedRuns = [...launchedRuns, started];
-            yield* Effect.sync(() =>
-              onUpdate?.({
-                content: [
-                  {
-                    type: "text",
-                    text: `Started ${launchedRuns.length} of ${specs.length} subagent${specs.length === 1 ? "" : "s"}${request.execution === "foreground" ? "; waiting for the foreground run" : ""}.`,
-                  },
-                ],
-                details: { action: "start", runs: launchedRuns },
-              }),
-            ).pipe(
-              Effect.catchDefect(() => Effect.void),
-              Effect.asVoid,
-            );
-            return request.execution === "foreground"
-              ? yield* service.waitForForeground(started.id)
-              : started;
-          });
-        const outcomes = yield* Effect.forEach(
-          specs,
-          (spec, index) =>
-            startOne(spec).pipe(
-              Effect.match({
-                onFailure: (error) => ({
-                  failure: {
-                    index,
-                    ...(spec.name?.trim() ? { name: spec.name.trim() } : {}),
-                    message: error.message,
-                    code: subagentErrorCode(error),
-                  } satisfies SubagentStartFailure,
-                }),
-                onSuccess: (run) => ({ run }),
-              }),
-            ),
-          { concurrency: MAX_TARGET_RUNS },
-        );
-        return {
-          runs: outcomes.flatMap((outcome) => ("run" in outcome ? [outcome.run] : [])),
-          startFailures: outcomes.flatMap((outcome) =>
-            "failure" in outcome ? [outcome.failure] : [],
-          ),
-          timedOut: false,
+        const failureFor = (
+          spec: SubagentStartSpec,
+          index: number,
+          error: SubagentError,
+        ): SubagentStartOutcome => ({
+          index,
+          failure: {
+            index,
+            ...(spec.name?.trim() ? { name: spec.name.trim() } : {}),
+            message: error.message,
+            code: subagentErrorCode(error),
+          },
+        });
+        const publishStarted = (
+          request: StartSubagentRequest,
+          started: SubagentRunView,
+        ): Effect.Effect<void> => {
+          launchedRuns = [...launchedRuns, started];
+          return Effect.sync(() =>
+            onUpdate?.({
+              content: [
+                {
+                  type: "text",
+                  text: `Started ${launchedRuns.length} of ${specs.length} subagent${specs.length === 1 ? "" : "s"}${request.execution === "foreground" ? "; waiting for the foreground run" : ""}.`,
+                },
+              ],
+              details: makeStartAwaitCardDetails({ action: "start", runs: launchedRuns }),
+            }),
+          ).pipe(
+            Effect.catchDefect(() => Effect.void),
+            Effect.asVoid,
+          );
         };
+        const resolveRequest = (spec: SubagentStartSpec) =>
+          resolveProfileStart(pi, spec, ctx, runtime.environment, boundaries);
+        const launchOne = (spec: SubagentStartSpec, index: number, sessionOwned = false) =>
+          resolveRequest(spec).pipe(
+            Effect.flatMap((request) =>
+              (sessionOwned ? service.startSessionOwned(request) : service.start(request)).pipe(
+                Effect.tap((started) => publishStarted(request, started)),
+                Effect.map(
+                  (run): SubagentStartOutcome => ({
+                    index,
+                    run,
+                    foreground: request.execution === "foreground",
+                  }),
+                ),
+              ),
+            ),
+            Effect.catch((error) => Effect.succeed(failureFor(spec, index, error))),
+          );
+        const summarize = (
+          outcomes: ReadonlyArray<SubagentStartOutcome>,
+          observation?: SubagentRunObservation,
+        ) => {
+          const ordered = [...outcomes].sort((left, right) => left.index - right.index);
+          const launched = ordered.flatMap((outcome) =>
+            "run" in outcome
+              ? [
+                  observation && observation.run.id === outcome.run.id
+                    ? observation.run
+                    : outcome.run,
+                ]
+              : [],
+          );
+          const failures = ordered.flatMap((outcome) =>
+            "failure" in outcome ? [outcome.failure] : [],
+          );
+          if (!observation)
+            return Effect.succeed({ runs: launched, startFailures: failures, timedOut: false });
+          const formatted = formatStartResultDetails(launched, failures);
+          return consumeCompletions([observation], formatted.fullyRenderedIds).pipe(
+            Effect.as({
+              runs: launched,
+              startFailures: failures,
+              timedOut: false,
+              text: formatted.text,
+            }),
+          );
+        };
+
+        const foregroundIndex = specs.findIndex((spec) => spec.execution === "foreground");
+        if (foregroundIndex < 0) {
+          const outcomes = yield* Effect.forEach(specs, launchOne, {
+            concurrency: MAX_TARGET_RUNS,
+          });
+          return yield* summarize(outcomes);
+        }
+
+        const foregroundSpec = specs[foregroundIndex]!;
+        const resolvedForeground = yield* resolveRequest(foregroundSpec).pipe(
+          Effect.match({
+            onFailure: (error) => ({ failure: failureFor(foregroundSpec, foregroundIndex, error) }),
+            onSuccess: (request) => ({ request }),
+          }),
+        );
+        const otherSpecs = specs.flatMap((spec, index) =>
+          index === foregroundIndex ? [] : [{ spec, index }],
+        );
+        if ("failure" in resolvedForeground) {
+          const others = yield* Effect.forEach(
+            otherSpecs,
+            ({ spec, index }) => launchOne(spec, index),
+            { concurrency: MAX_TARGET_RUNS },
+          );
+          return yield* summarize([resolvedForeground.failure, ...others]);
+        }
+
+        const foregroundRequest = resolvedForeground.request;
+        const atomicForeground = service.withForegroundStartObservation(
+          foregroundRequest,
+          (started, awaitObservation) =>
+            Effect.gen(function* () {
+              yield* publishStarted(foregroundRequest, started);
+              const others = yield* Effect.forEach(
+                otherSpecs,
+                ({ spec, index }) => launchOne(spec, index, true),
+                { concurrency: MAX_TARGET_RUNS },
+              );
+              const observation = yield* awaitObservation;
+              return yield* summarize(
+                [{ index: foregroundIndex, run: started, foreground: true }, ...others],
+                observation,
+              );
+            }),
+        );
+        return yield* atomicForeground.pipe(
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              const others = yield* Effect.forEach(
+                otherSpecs,
+                ({ spec, index }) => launchOne(spec, index),
+                { concurrency: MAX_TARGET_RUNS },
+              );
+              return yield* summarize([
+                failureFor(foregroundSpec, foregroundIndex, error),
+                ...others,
+              ]);
+            }),
+          ),
+        );
       }
       case "list":
         return { runs: yield* service.list, timedOut: false };
@@ -1166,7 +1391,11 @@ const executeSubagentAction = async (
           lastUpdate = text;
           onUpdate?.({
             content: [{ type: "text", text }],
-            details: { action: "await", runs, awaitUntil: until },
+            details: makeStartAwaitCardDetails({
+              action: "await",
+              runs,
+              awaitUntil: until,
+            }),
           });
         };
         const waiting = service.withAwaitTerminalObservations(
@@ -1232,7 +1461,7 @@ const executeSubagentAction = async (
       case "interrupt":
       case "resume":
       case "stop": {
-        if (input.action !== "resume" && input.message !== undefined)
+        if (input.action !== "resume" && "message" in input && input.message !== undefined)
           return yield* new InvalidSubagentRequestError({
             message: 'subagent_lifecycle message is valid only when action="resume".',
           });
@@ -1297,14 +1526,22 @@ const executeSubagentAction = async (
   const cancelAwait = () => {
     if (input.action !== "await" || !requestedAwaitUntil) return;
     try {
+      const unfinished = latestAwaitRuns.filter((run) => !isTerminalRunState(run.state)).length;
+      const attention = attentionRecoveryText(latestAwaitRuns);
+      const text = [
+        `Await cancelled; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished.`,
+        attention,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
       onUpdate?.({
-        content: [{ type: "text", text: "Await cancelled; subagents continue running." }],
-        details: {
+        content: [{ type: "text", text }],
+        details: makeStartAwaitCardDetails({
           action: "await",
           runs: latestAwaitRuns,
           awaitUntil: requestedAwaitUntil,
           cancelled: true,
-        },
+        }),
       });
     } catch {
       // Cancellation rendering is best effort and cannot own the waiter lifecycle.
@@ -1330,37 +1567,31 @@ const executeSubagentAction = async (
   const { runs, timedOut, attentionRequired, text: formattedText } = executionResult;
   const startFailures = executionResult.startFailures ?? [];
   const actionFailures = executionResult.actionFailures ?? [];
-  const managementAction =
-    input.action === "send" ||
-    input.action === "reply" ||
-    input.action === "interrupt" ||
-    input.action === "resume" ||
-    input.action === "stop" ||
-    input.action === "rename";
-  const details: SubagentToolDetails =
+  const details: unknown =
     input.action === "start"
-      ? {
+      ? makeStartAwaitCardDetails({
           action: input.action,
           runs,
           ...(startFailures.length > 0 ? { startFailures } : {}),
-        }
+        })
       : input.action === "await"
-        ? {
+        ? makeStartAwaitCardDetails({
             action: input.action,
             runs,
             awaitUntil: input.until,
             ...(timedOut ? { timedOut: true } : {}),
             ...(attentionRequired ? { attentionRequired: true } : {}),
-          }
-        : {
+          })
+        : makeCompactToolDetails({
             action: input.action,
-            ...(managementAction || actionFailures.length > 0 ? { runs } : {}),
+            runs,
             ...(actionFailures.length > 0 ? { actionFailures } : {}),
             ...(timedOut ? { timedOut: true } : {}),
-          };
+            ...(attentionRequired ? { attentionRequired: true } : {}),
+          });
   const text =
     input.action === "start"
-      ? formatStartResult(runs, startFailures)
+      ? (formattedText ?? formatStartResult(runs, startFailures))
       : actionFailures.length > 0
         ? input.action === "status"
           ? (formattedText ?? formatDetailedRuns(runs).text)
@@ -1377,7 +1608,7 @@ const executeSubagentAction = async (
               : input.action === "await"
                 ? (formattedText ?? formatDetailedRuns(runs).text)
                 : managementAcknowledgement(input.action, runs);
-  return { content: [{ type: "text", text }], details };
+  return { content: [{ type: "text", text: boundToolOutput(text) }], details };
 };
 
 const renderSubagentCall = (name: string, target: string, theme: Theme): Component => {
@@ -1398,30 +1629,35 @@ const renderSubagentResult = (
   expanded: boolean,
   theme: Theme,
 ): Component => {
-  const details = result.details as SubagentToolDetails | undefined;
-  if (isPartial && details?.action === "await" && details.runs && details.awaitUntil) {
+  const details = decodeStartAwaitCardDetails(result.details);
+  if (isPartial && details?.action === "await" && details.awaitUntil) {
     if (details.cancelled)
       return new RunOverviewComponent(
-        details.runs,
+        details.cards,
         [],
         false,
         theme,
         [],
-        awaitResultBanner(details),
+        awaitResultBanner({ ...details, runs: details.cards }),
       );
-    return renderAwaitProgressComponent(details.runs, details.awaitUntil, theme);
+    return renderAwaitProgressComponent(details.cards, details.awaitUntil, theme);
   }
-  if (!isPartial && (details?.action === "start" || details?.action === "await") && details.runs) {
+  if (!isPartial && details) {
     const failures = details.startFailures ?? [];
-    const banner = details.action === "await" ? awaitResultBanner(details) : undefined;
-    if (expanded) return renderExpandedStartAwaitResult(details.runs, theme, failures, banner);
-    return renderStartAwaitOverviewComponent(details.runs, theme, failures, banner);
+    const banner =
+      details.action === "await"
+        ? awaitResultBanner({ ...details, runs: details.cards })
+        : undefined;
+    if (expanded) return renderExpandedStartAwaitResult(details.cards, theme, failures, banner);
+    return renderStartAwaitOverviewComponent(details.cards, theme, failures, banner);
   }
-  let text = sanitizeTerminalText(
-    result.content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text ?? "")
-      .join("\n"),
+  let text = boundToolOutput(
+    sanitizeTerminalText(
+      result.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text ?? "")
+        .join("\n"),
+    ),
   );
   if (!expanded) {
     const lines = text.split("\n");
@@ -1445,10 +1681,10 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_models",
     label: "Subagent Models",
     description:
-      "Discover deterministic subagent profiles plus accepted explicit model selectors. Profile output shows default context, ordered candidates, skips, and fallback. Denied selectors are hidden; discouraged selectors are marked explicit-only. All model search terms must match.",
+      "Static preflight-only discovery of deterministic subagent profiles and accepted explicit model selectors. Profile candidates retain declared first-to-last order, skips, and fallback; runtime auth/model readiness is checked only at launch. Denied selectors are hidden, discouraged selectors are explicit-only, and all search terms must match.",
     parameters: ModelsParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
-      executeSubagentAction(pi, runtime, { action: "models", ...input }, signal, onUpdate, ctx),
+      executeSubagentAction(pi, runtime, { ...input, action: "models" }, signal, onUpdate, ctx),
     renderCall: (args, theme) => renderSubagentCall("subagent_models", args.query ?? "", theme),
     renderResult: sharedRenderResult,
   });
@@ -1457,10 +1693,10 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_start",
     label: "Start Subagents",
     description:
-      "Launch one to twelve session-scoped subagents from one agents array. Backend is required: use auto for deterministic profile routing or pi/claude-cli for an explicit override. Background is the default; at most one foreground agent is allowed. Successful launches remain active when a peer launch fails.",
+      "Launch one to twelve session-scoped subagents from one agents array. Every fresh task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. Backend is required: use auto for deterministic profile routing or pi/claude-cli for an explicit override. Background is the default; at most one foreground agent is allowed. Successful launches remain active when a peer launch fails.",
     promptSnippet: "Launch delegated subagents using a task profile and explicit write intent",
     promptGuidelines: [
-      "Use subagent_start for delegated work that can proceed independently; background is the default launch mode, and each call accepts at most one foreground agent.",
+      "Use subagent_start for delegated work that can proceed independently; make every fresh task self-contained with relevant paths, constraints, evidence, and its expected deliverable. Background is the default, and each call accepts at most one foreground agent.",
       "Every subagent_start agent must explicitly declare writeIntent as writer or read-only and must provide backend; prefer backend=auto unless the user requests a model or backend capabilities require an explicit choice.",
       "Choose a profile by task: scout for local reconnaissance, researcher for sourced external research, planner for plans, worker for implementation, reviewer for independent review, oracle for inherited-decision analysis, and delegate for general work.",
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
@@ -1471,7 +1707,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     ],
     parameters: StartParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
-      executeSubagentAction(pi, runtime, { action: "start", ...input }, signal, onUpdate, ctx),
+      executeSubagentAction(pi, runtime, { ...input, action: "start" }, signal, onUpdate, ctx),
     renderCall: (args, theme) =>
       renderSubagentCall(
         "subagent_start",
@@ -1487,7 +1723,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     description: "List every session-scoped subagent run in compact form.",
     parameters: ListParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
-      executeSubagentAction(pi, runtime, { action: "list", ...input }, signal, onUpdate, ctx),
+      executeSubagentAction(pi, runtime, { ...input, action: "list" }, signal, onUpdate, ctx),
     renderCall: (_args, theme) => renderSubagentCall("subagent_list", "", theme),
     renderResult: sharedRenderResult,
   });
@@ -1499,7 +1735,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
       "Inspect up to twelve specific subagent run IDs, including each run's backend capabilities.",
     parameters: StatusParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
-      executeSubagentAction(pi, runtime, { action: "status", ...input }, signal, onUpdate, ctx),
+      executeSubagentAction(pi, runtime, { ...input, action: "status" }, signal, onUpdate, ctx),
     renderCall: (args, theme) =>
       renderSubagentCall("subagent_status", args.runIds.join(", "), theme),
     renderResult: sharedRenderResult,
@@ -1516,7 +1752,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     ],
     parameters: AwaitParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
-      executeSubagentAction(pi, runtime, { action: "await", ...input }, signal, onUpdate, ctx),
+      executeSubagentAction(pi, runtime, { ...input, action: "await" }, signal, onUpdate, ctx),
     renderCall: (args, theme) =>
       renderSubagentCall("subagent_await", args.runIds.join(", "), theme),
     renderResult: sharedRenderResult,
@@ -1529,7 +1765,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
       "Send the same guidance message to one or more running Pi-backend subagents. claude-cli runs cannot receive mid-turn guidance; await, stop, or resume them after completion instead. Mixed-target calls report each success and failure.",
     parameters: SendParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
-      executeSubagentAction(pi, runtime, { action: "send", ...input }, signal, onUpdate, ctx),
+      executeSubagentAction(pi, runtime, { ...input, action: "send" }, signal, onUpdate, ctx),
     renderCall: (args, theme) => renderSubagentCall("subagent_send", args.runIds.join(", "), theme),
     renderResult: sharedRenderResult,
   });
@@ -1541,7 +1777,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
       "Answer a blocking parent question from one Pi-backend subagent. claude-cli runs do not support parent questions.",
     parameters: ReplyParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
-      executeSubagentAction(pi, runtime, { action: "reply", ...input }, signal, onUpdate, ctx),
+      executeSubagentAction(pi, runtime, { ...input, action: "reply" }, signal, onUpdate, ctx),
     renderCall: (args, theme) => renderSubagentCall("subagent_reply", args.runId, theme),
     renderResult: sharedRenderResult,
   });
@@ -1565,7 +1801,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     description: "Change one subagent's local display name.",
     parameters: RenameParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
-      executeSubagentAction(pi, runtime, { action: "rename", ...input }, signal, onUpdate, ctx),
+      executeSubagentAction(pi, runtime, { ...input, action: "rename" }, signal, onUpdate, ctx),
     renderCall: (args, theme) =>
       renderSubagentCall("subagent_rename", `${args.runId} → ${args.name}`, theme),
     renderResult: sharedRenderResult,

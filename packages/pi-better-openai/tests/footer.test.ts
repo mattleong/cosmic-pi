@@ -133,6 +133,7 @@ function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Har
 
   const ctx = {
     cwd,
+    isProjectTrusted: () => true,
     mode: "tui",
     hasUI: true,
     signal: undefined,

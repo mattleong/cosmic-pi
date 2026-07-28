@@ -77,6 +77,7 @@ function createHarness(cwd: string, model = createModel("openai", "gpt-5.5")): H
 
   const ctx = {
     cwd,
+    isProjectTrusted: () => true,
     hasUI: false,
     signal: undefined,
     model,

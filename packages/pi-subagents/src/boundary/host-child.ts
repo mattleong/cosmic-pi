@@ -8,12 +8,17 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Type } from "typebox";
-import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS } from "../run/limits.ts";
+import {
+  MAX_PARENT_MESSAGE_CHARS,
+  MAX_PROTOCOL_ID_CHARS,
+  MAX_TOOL_OUTPUT_CHARS,
+} from "../run/limits.ts";
 import { clipUtf8Text, safeTextPrefix } from "../run/state.ts";
 
 const ProtocolIdSchema = Schema.String.check(Schema.isMaxLength(MAX_PROTOCOL_ID_CHARS));
 const ParentMessageSchema = Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS));
-const MAX_TOOL_REPLY_BYTES = 48 * 1024;
+const PARENT_REPLY_PREFIX = "Parent replied: ";
+const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
 let nextRequest = 1;
 
 const clipToolReply = (value: string): string => clipUtf8Text(value, MAX_TOOL_REPLY_BYTES);
@@ -37,10 +42,17 @@ const ParentControlSchema = Schema.Union([
   }),
 ]);
 
-const ContactParentParameters = Type.Object({
-  kind: StringEnum(["progress", "question", "warning"] as const),
-  message: Type.String({ minLength: 1, maxLength: MAX_PARENT_MESSAGE_CHARS }),
-});
+const ContactParentParameters = Type.Object(
+  {
+    kind: StringEnum(["progress", "question", "warning"] as const),
+    message: Type.String({
+      minLength: 1,
+      maxLength: MAX_PARENT_MESSAGE_CHARS,
+      pattern: ".*\\S.*",
+    }),
+  },
+  { additionalProperties: false },
+);
 
 function sendIpc(message: object): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -173,7 +185,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
         content: [
           {
             type: "text" as const,
-            text: `Parent replied: ${clipToolReply(reply)}`,
+            text: `${PARENT_REPLY_PREFIX}${clipToolReply(reply)}`,
           },
         ],
         details: {},

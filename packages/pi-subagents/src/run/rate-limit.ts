@@ -11,6 +11,9 @@ export interface RateLimitNoticeState {
 
 const rateLimitName = (value: string | undefined): string =>
   value ? value.replaceAll("_", " ") : "usage";
+
+export const rateLimitWindowKey = (event: ChildRateLimitEvent): string =>
+  `${event.rateLimitType ?? "usage"}:${event.resetsAt === undefined ? "unknown" : event.resetsAt}`;
 const rateLimitLabel = (value: string | undefined): string => `${rateLimitName(value)} limit`;
 const rateLimitAllowance = (value: string | undefined): string =>
   `${rateLimitName(value)} allowance`;
