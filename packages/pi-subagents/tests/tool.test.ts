@@ -294,9 +294,9 @@ describe("subagent tool", () => {
     expect(properties("subagent_start")).toEqual(["agents"]);
     expect(properties("subagent_list")).toEqual([]);
     expect(properties("subagent_status")).toEqual(["runIds"]);
-    expect(properties("subagent_await")).toEqual(["runIds", "until", "timeoutSeconds"]);
+    expect(properties("subagent_await")).toEqual(["runIds", "until"]);
     expect(schema("subagent_status")?.required).toEqual(["runIds"]);
-    expect(schema("subagent_await")?.required).toEqual(["runIds", "until", "timeoutSeconds"]);
+    expect(schema("subagent_await")?.required).toEqual(["runIds", "until"]);
     expect(properties("subagent_send")).toEqual(["runIds", "message"]);
     expect(properties("subagent_reply")).toEqual(["runId", "message"]);
     expect(properties("subagent_lifecycle")).toEqual(["action", "runIds", "message"]);
@@ -463,7 +463,7 @@ describe("subagent tool", () => {
     const invalidate = vi.fn();
     const state: Record<string, unknown> = {};
     const renderContext = {
-      args: { runIds: ["agent-1"], until: "all_finished", timeoutSeconds: 0 },
+      args: { runIds: ["agent-1"], until: "all_finished" },
       toolCallId: "await-call",
       invalidate,
       lastComponent: undefined,
@@ -513,7 +513,7 @@ describe("subagent tool", () => {
     expect(state.piSubagentsAwaitTicker).toBeUndefined();
   });
 
-  it("projects timeout, cancellation, and first-finished await outcomes", () => {
+  it("projects legacy timeout, cancellation, and first-finished await outcomes", () => {
     const running = view({ name: "still-working", state: "running" });
     const completed = view({
       id: "agent-2",
@@ -1900,7 +1900,7 @@ describe("subagent tool", () => {
     const updates: string[] = [];
     const awaited = await awaitTool?.execute(
       "call",
-      { runIds: ["agent-1", "agent-2"], until: "all_finished", timeoutSeconds: 0 },
+      { runIds: ["agent-1", "agent-2"], until: "all_finished" },
       undefined,
       (result) => updates.push(result.content[0]?.text ?? ""),
       context,
@@ -1929,34 +1929,19 @@ describe("subagent tool", () => {
     expect(sentResult?.content[0]?.text).not.toContain("Subagent status");
   });
 
-  it("handles real tool-level await timeout and cancellation with retained attention", async () => {
-    const running = view({ id: "agent-timeout", state: "running" });
-    const timeoutBase = startCapturingService([]);
-    const timeoutService = subagentServiceDouble({
-      ...timeoutBase,
+  it("handles tool-level await cancellation with retained attention", async () => {
+    const base = startCapturingService([]);
+    const noProgressService = subagentServiceDouble({
+      ...base,
       withAwaitTerminalObservations: () => Effect.never,
-      withStatusObservations: (_ids, use) =>
-        use({ observations: [{ run: running }], missingIds: [] }),
     });
-    const timeout = await captureSubagentTools(timeoutService)
-      .get("subagent_await")
-      ?.execute(
-        "call",
-        { runIds: [running.id], until: "all_finished", timeoutSeconds: 0.01 },
-        undefined,
-        undefined,
-        context,
-      );
-    expect(timeout?.content[0]?.text).toContain("Await timed out; 1 subagent is unfinished.");
-    expect(timeout?.details).toMatchObject({ action: "await", timedOut: true });
-
     const waiting = view({
       id: "agent-question",
       state: "waiting_for_parent",
       question: { requestId: "question", message: "Which fixture?", createdAt: 2 },
     });
     const cancelService = subagentServiceDouble({
-      ...timeoutBase,
+      ...base,
       withAwaitTerminalObservations: (_ids, _until, onUpdate) =>
         Effect.sync(() => onUpdate?.([waiting])).pipe(Effect.andThen(Effect.never)),
     });
@@ -1966,7 +1951,7 @@ describe("subagent tool", () => {
       .get("subagent_await")
       ?.execute(
         "call",
-        { runIds: [waiting.id], until: "all_finished", timeoutSeconds: 0 },
+        { runIds: [waiting.id], until: "all_finished" },
         controller.signal,
         (result) => updates.push(result),
         context,
@@ -1984,11 +1969,11 @@ describe("subagent tool", () => {
       [];
     const immediateController = new AbortController();
     immediateController.abort();
-    const immediate = captureSubagentTools(timeoutService)
+    const immediate = captureSubagentTools(noProgressService)
       .get("subagent_await")
       ?.execute(
         "call",
-        { runIds: [waiting.id], until: "all_finished", timeoutSeconds: 0 },
+        { runIds: [waiting.id], until: "all_finished" },
         immediateController.signal,
         (result) => immediateUpdates.push(result),
         context,
@@ -2294,7 +2279,7 @@ describe("subagent tool", () => {
 
     const result = await tool?.execute(
       "call",
-      { runIds: ["agent-1"], until: "all_finished", timeoutSeconds: 0 },
+      { runIds: ["agent-1"], until: "all_finished" },
       undefined,
       undefined,
       context,

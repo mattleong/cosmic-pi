@@ -137,11 +137,6 @@ export const AwaitParameters = Type.Object(
       description:
         "Return when all selected runs are finished, or when any selected run is finished. Finished includes completed, failed, and stopped.",
     }),
-    timeoutSeconds: Type.Number({
-      description: "Await timeout in seconds; use 0 to wait without a timeout.",
-      minimum: 0,
-      maximum: 3600,
-    }),
   },
   strictObjectOptions,
 );

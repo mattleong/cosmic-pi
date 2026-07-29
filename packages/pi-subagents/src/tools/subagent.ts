@@ -209,7 +209,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_await",
     label: "Await Subagents",
     description:
-      "Wait for selected background subagents to finish, with live progress and an explicit timeout; use zero for no timeout. Returns early if a Pi subagent needs a parent reply, then call it again after subagent_reply.",
+      "Wait for selected background subagents to finish with live progress. Returns early if a Pi subagent needs a parent reply, then call it again after subagent_reply.",
     promptSnippet: "Wait for background subagents and collect their final reports",
     promptGuidelines: [
       "Do not poll subagent_status. After independent work, call subagent_await to collect results; if it returns for a parent question, use subagent_reply and then call subagent_await again. Use subagent_status only for troubleshooting or a user-requested snapshot.",

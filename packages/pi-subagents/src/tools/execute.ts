@@ -8,7 +8,6 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import {
   hostProfileEnvironment,
   liveSubagentStartBoundaries,
@@ -323,10 +322,7 @@ export const executeSubagentAction = async (
       observations: ReadonlyArray<SubagentRunObservation>,
       fullyRenderedIds: ReadonlySet<string>,
     ) => service.consumeCompletions(renderedCompletionReceipts(observations, fullyRenderedIds));
-    const finishObservations = (
-      observations: ReadonlyArray<SubagentRunObservation>,
-      timedOut: boolean,
-    ) =>
+    const finishObservations = (observations: ReadonlyArray<SubagentRunObservation>) =>
       Effect.gen(function* () {
         const runs = observations.map((observation) => observation.run);
         const waiting = runs.filter(
@@ -334,15 +330,11 @@ export const executeSubagentAction = async (
         );
         const attentionRequired = waiting.length > 0;
         const attentionText = attentionRequired ? `${attentionRecoveryText(runs)}\n\n` : "";
-        const unfinished = runs.filter((run) => !isTerminalRunState(run.state)).length;
-        const timeoutText = timedOut
-          ? `Await timed out; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished.\n\n`
-          : "";
-        const formatted = formatDetailedRuns(runs, `${timeoutText}${attentionText}`);
+        const formatted = formatDetailedRuns(runs, attentionText);
         yield* consumeCompletions(observations, formatted.fullyRenderedIds);
-        return { runs, timedOut, attentionRequired, text: formatted.text };
+        return { runs, attentionRequired, text: formatted.text };
       });
-    const finishStatus = (ids: ReadonlyArray<string>, timedOut: boolean, attentionAware = false) =>
+    const finishStatus = (ids: ReadonlyArray<string>) =>
       service.withStatusObservations(ids, ({ observations, missingIds }) => {
         const actionFailures = missingIds.map(
           (id): SubagentActionFailure => ({
@@ -351,10 +343,6 @@ export const executeSubagentAction = async (
             message: `Subagent run not found: ${id}. Use subagent_list to refresh active run IDs.`,
           }),
         );
-        if (attentionAware)
-          return finishObservations(observations, timedOut).pipe(
-            Effect.map((result) => ({ ...result, actionFailures })),
-          );
         return Effect.gen(function* () {
           const runs = observations.map((observation) => observation.run);
           const failureText = formatActionFailures(actionFailures);
@@ -365,7 +353,6 @@ export const executeSubagentAction = async (
           yield* consumeCompletions(observations, formatted.fullyRenderedIds);
           return {
             runs,
-            timedOut,
             attentionRequired: false,
             text: formatted.text,
             actionFailures,
@@ -445,14 +432,12 @@ export const executeSubagentAction = async (
           const failures = ordered.flatMap((outcome) =>
             "failure" in outcome ? [outcome.failure] : [],
           );
-          if (!observation)
-            return Effect.succeed({ runs: launched, startFailures: failures, timedOut: false });
+          if (!observation) return Effect.succeed({ runs: launched, startFailures: failures });
           const formatted = formatStartResultDetails(launched, failures);
           return consumeCompletions([observation], formatted.fullyRenderedIds).pipe(
             Effect.as({
               runs: launched,
               startFailures: failures,
-              timedOut: false,
               text: formatted.text,
             }),
           );
@@ -520,9 +505,9 @@ export const executeSubagentAction = async (
         );
       }
       case "list":
-        return { runs: yield* service.list, timedOut: false };
+        return { runs: yield* service.list };
       case "status":
-        return yield* finishStatus(yield* requiredTargetIds(input.action, input.runIds), false);
+        return yield* finishStatus(yield* requiredTargetIds(input.action, input.runIds));
       case "await": {
         const ids = yield* requiredTargetIds(input.action, input.runIds);
         const until = input.until;
@@ -541,18 +526,12 @@ export const executeSubagentAction = async (
             }),
           });
         };
-        const waiting = service.withAwaitTerminalObservations(
+        return yield* service.withAwaitTerminalObservations(
           ids,
           until,
           updateAwait,
-          (observations) => finishObservations(observations, false),
+          finishObservations,
         );
-        if (input.timeoutSeconds === 0) return yield* waiting;
-        const outcome = yield* waiting.pipe(
-          Effect.timeoutOption(`${input.timeoutSeconds} seconds`),
-        );
-        if (Option.isSome(outcome)) return outcome.value;
-        return yield* finishStatus(ids, true, true);
       }
       case "send": {
         const ids = yield* requiredTargetIds(input.action, input.runIds);
@@ -579,7 +558,6 @@ export const executeSubagentAction = async (
           actionFailures: outcomes.flatMap((outcome) =>
             "failure" in outcome ? [outcome.failure] : [],
           ),
-          timedOut: false,
         };
       }
       case "reply": {
@@ -598,8 +576,8 @@ export const executeSubagentAction = async (
           }),
         );
         return "run" in outcome
-          ? { runs: [outcome.run], timedOut: false }
-          : { runs: [], actionFailures: [outcome.failure], timedOut: false };
+          ? { runs: [outcome.run] }
+          : { runs: [], actionFailures: [outcome.failure] };
       }
       case "interrupt":
       case "resume":
@@ -643,7 +621,6 @@ export const executeSubagentAction = async (
           actionFailures: outcomes.flatMap((outcome) =>
             "failure" in outcome ? [outcome.failure] : [],
           ),
-          timedOut: false,
         };
       }
       case "rename": {
@@ -661,8 +638,8 @@ export const executeSubagentAction = async (
           }),
         );
         return "run" in outcome
-          ? { runs: [outcome.run], timedOut: false }
-          : { runs: [], actionFailures: [outcome.failure], timedOut: false };
+          ? { runs: [outcome.run] }
+          : { runs: [], actionFailures: [outcome.failure] };
       }
     }
   });
@@ -697,7 +674,6 @@ export const executeSubagentAction = async (
     readonly runs: ReadonlyArray<SubagentRunView>;
     readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
     readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
-    readonly timedOut: boolean;
     readonly attentionRequired?: boolean;
     readonly text?: string;
   };
@@ -707,7 +683,7 @@ export const executeSubagentAction = async (
     signal?.removeEventListener("abort", cancelAwait);
   }
 
-  const { runs, timedOut, attentionRequired, text: formattedText } = executionResult;
+  const { runs, attentionRequired, text: formattedText } = executionResult;
   const startFailures = executionResult.startFailures ?? [];
   const actionFailures = executionResult.actionFailures ?? [];
   const details: unknown =
@@ -722,14 +698,12 @@ export const executeSubagentAction = async (
             action: input.action,
             runs,
             awaitUntil: input.until,
-            ...(timedOut ? { timedOut: true } : {}),
             ...(attentionRequired ? { attentionRequired: true } : {}),
           })
         : makeCompactToolDetails({
             action: input.action,
             runs,
             ...(actionFailures.length > 0 ? { actionFailures } : {}),
-            ...(timedOut ? { timedOut: true } : {}),
             ...(attentionRequired ? { attentionRequired: true } : {}),
           });
   const text =
