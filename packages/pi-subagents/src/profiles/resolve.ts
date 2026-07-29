@@ -29,7 +29,7 @@ export interface ProfileResolutionEnvironment {
 
 export interface ProfileCandidateAttempt {
   readonly profile: ProfileId;
-  readonly source: Exclude<SubagentSelectionSource, "explicit">;
+  readonly source: SubagentSelectionSource;
   readonly candidateIndex: number;
   readonly backend: SubagentBackend;
   readonly model: string;
@@ -102,13 +102,6 @@ const automaticPolicySkip = (
       label,
       "model_denied",
       `Model ${backend}/${model} is denied by policy.`,
-      candidateIndex,
-    );
-  if (policy === "discouraged")
-    return skip(
-      label,
-      "model_discouraged",
-      `Model ${backend}/${model} is discouraged and automatic selection excludes it.`,
       candidateIndex,
     );
   return undefined;

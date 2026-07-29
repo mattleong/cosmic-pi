@@ -1,7 +1,6 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { PROFILE_IDS } from "../profiles/model.ts";
-import { EXPLICIT_SUBAGENT_MODEL_SELECTOR } from "../run/model-catalog.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS } from "../run/limits.ts";
 import { MAX_NAME_CHARS, MAX_TASK_CHARS } from "../run/state.ts";
 
@@ -14,65 +13,55 @@ const runIdOptions = {
 } as const;
 const RunIdParameter = Type.String(runIdOptions);
 
-const StartSpecParameters = Type.Object(
-  {
-    task: Type.String({
-      description:
-        "Self-contained task: include relevant paths, constraints, evidence to inspect, and the required deliverable.",
+const StartSpecFields = {
+  task: Type.String({
+    description:
+      "Self-contained task: include relevant paths, constraints, evidence to inspect, and the required deliverable.",
+    minLength: 1,
+    maxLength: MAX_TASK_CHARS,
+    pattern: NONBLANK_PATTERN,
+  }),
+  name: Type.Optional(
+    Type.String({
+      description: "Optional nonblank display name.",
       minLength: 1,
-      maxLength: MAX_TASK_CHARS,
+      maxLength: MAX_NAME_CHARS,
       pattern: NONBLANK_PATTERN,
     }),
-    name: Type.Optional(
-      Type.String({
-        description: "Optional nonblank display name.",
-        minLength: 1,
-        maxLength: MAX_NAME_CHARS,
-        pattern: NONBLANK_PATTERN,
-      }),
-    ),
-    execution: Type.Optional(
-      StringEnum(["foreground", "background"] as const, {
-        description:
-          "Launch behavior; defaults to background. Foreground blocks subagent_start until the run finishes, pauses, or asks a parent question. Use at most one foreground agent per start call.",
-      }),
-    ),
-    context: Type.Optional(
-      StringEnum(["fresh", "fork"] as const, {
-        description:
-          'Child context. Explicit values override the profile default. Only oracle defaults to "fork"; every other profile defaults to "fresh". Fork requires effective Pi routing and a persisted parent leaf.',
-      }),
-    ),
-    profile: Type.Optional(
-      StringEnum(PROFILE_IDS, {
-        description:
-          "Behavior and automatic routing profile. Omit to use configured defaultProfile. A user-authorized explicit model overrides only the profile model route; profile guidance and defaults remain active.",
-      }),
-    ),
-    model: Type.Optional(
-      Type.String({
-        description:
-          "One-run model selector allowed only when the user explicitly requested that model for this delegated task; launch requires direct user confirmation. Never choose a model yourself. Omit to route through project/global profile settings.",
-        minLength: 1,
-        maxLength: 512,
-        pattern: EXPLICIT_SUBAGENT_MODEL_SELECTOR.source,
-      }),
-    ),
-    writeIntent: Type.Optional(
-      StringEnum(["writer", "read-only"] as const, {
-        description:
-          "Explicit capability override. Omit to use the profile default. Only one shared-cwd writer may be active.",
-      }),
-    ),
-    effort: Type.Optional(
-      StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, {
-        description:
-          "Explicit thinking-effort override. Omit to use the candidate effort, then the profile default effort, then the parent effort. claude-cli supports low through max only; off and minimal are rejected.",
-      }),
-    ),
-  },
-  strictObjectOptions,
-);
+  ),
+  execution: Type.Optional(
+    StringEnum(["foreground", "background"] as const, {
+      description:
+        "Launch behavior; defaults to background. Foreground blocks the start call until the run finishes, pauses, or asks a parent question. Use at most one foreground agent per call.",
+    }),
+  ),
+  context: Type.Optional(
+    StringEnum(["fresh", "fork"] as const, {
+      description:
+        'Child context. Explicit values override the profile default. Only oracle defaults to "fork"; every other profile defaults to "fresh". Fork requires effective Pi routing and a persisted parent leaf.',
+    }),
+  ),
+  profile: Type.Optional(
+    StringEnum(PROFILE_IDS, {
+      description:
+        "Behavior and model-routing profile. Omit to use configured defaultProfile. The selected profile always determines the model route.",
+    }),
+  ),
+  writeIntent: Type.Optional(
+    StringEnum(["writer", "read-only"] as const, {
+      description:
+        "Explicit capability override. Omit to use the profile default. Only one shared-cwd writer may be active.",
+    }),
+  ),
+  effort: Type.Optional(
+    StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, {
+      description:
+        "Explicit thinking-effort override. Omit to use the candidate effort, then the profile default effort, then the parent effort. claude-cli supports low through max only; off and minimal are rejected.",
+    }),
+  ),
+} as const;
+
+const StartSpecParameters = Type.Object(StartSpecFields, strictObjectOptions);
 
 const RunIdsParameters = Type.Array(RunIdParameter, {
   description: "Target run IDs.",
@@ -89,18 +78,6 @@ const MessageParameters = Type.String({
 
 export const ModelsParameters = Type.Object(
   {
-    query: Type.Optional(
-      Type.String({
-        description:
-          "Optional search text; every whitespace-separated term must match, so extra terms narrow the results. A blank query intentionally lists the unfiltered catalog.",
-        maxLength: 512,
-      }),
-    ),
-    backend: Type.Optional(
-      StringEnum(["pi", "claude-cli"] as const, {
-        description: "Optional backend filter for explicit launch-ready model selectors.",
-      }),
-    ),
     profile: Type.Optional(
       StringEnum(PROFILE_IDS, {
         description: "Optional profile filter; omit to discover every built-in profile route.",
@@ -113,7 +90,7 @@ export const ModelsParameters = Type.Object(
 export const StartParameters = Type.Object(
   {
     agents: Type.Array(StartSpecParameters, {
-      description: "One to twelve independent subagents to launch.",
+      description: "One to twelve independent subagents to launch with configured profile routing.",
       minItems: 1,
       maxItems: MAX_TARGET_RUNS,
     }),
@@ -218,7 +195,7 @@ export const prepareSubagentStartArguments = (args: unknown): SubagentStartInput
   if (!Array.isArray(agents)) {
     if (Object.prototype.hasOwnProperty.call(record, "task"))
       throw new Error(
-        '[legacy_start_shape] subagent_start now requires { agents: [{ task: "..." }] }; wrap the top-level launch fields in the agents array.',
+        '[legacy_start_shape] subagent_start requires { agents: [{ task: "..." }] }; wrap the top-level launch fields in the agents array.',
       );
     return prepared;
   }
@@ -227,14 +204,11 @@ export const prepareSubagentStartArguments = (args: unknown): SubagentStartInput
     const fields = agent as Readonly<Record<string, unknown>>;
     if (Object.prototype.hasOwnProperty.call(fields, "backend"))
       throw new Error(
-        `[legacy_backend_field] subagent_start agents[${index}]: backend is no longer accepted. Omit model for automatic profile routing, or pass model as "pi/provider/model-id" or "claude-cli/alias-or-full-id".`,
+        `[legacy_backend_field] subagent_start agents[${index}]: backend is not accepted. Select a profile; its configured route determines the backend and model.`,
       );
-    if (
-      fields.model !== undefined &&
-      (typeof fields.model !== "string" || !EXPLICIT_SUBAGENT_MODEL_SELECTOR.test(fields.model))
-    )
+    if (Object.prototype.hasOwnProperty.call(fields, "model"))
       throw new Error(
-        `[model_selector_invalid] subagent_start agents[${index}]: model must be "pi/provider/model-id" or "claude-cli/alias-or-full-id". Copy a listed selector when available; full Claude model IDs are also accepted. Omit model for automatic profile routing.`,
+        `[model_not_supported] subagent_start agents[${index}]: model is not accepted. Select a profile; its configured route always determines the model.`,
       );
   });
   return prepared;

@@ -1,16 +1,9 @@
-import {
-  CLAUDE_CLI_ALIAS_IDS,
-  type SubagentBackend,
-  type SubagentEffort,
-  type SubagentModelView,
-} from "./model.ts";
+import { CLAUDE_CLI_ALIAS_IDS, type SubagentEffort, type SubagentModelView } from "./model.ts";
 
-export const MAX_DISCOVERY_RESULTS = 100;
 const MAX_NEAR_MATCHES = 6;
-export const EXPLICIT_SUBAGENT_MODEL_SELECTOR = /^(?:pi\/[^\s/]+\/[^\s]+|claude-cli\/[^\s/]+)$/;
 
 /**
- * Claude CLI aliases advertised by discovery. Aliases track the installed CLI's current mapping;
+ * Claude CLI aliases shown by profile settings. Aliases track the installed CLI's current mapping;
  * an exact Claude version requires its full model ID and is never translated into an alias.
  */
 const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -24,10 +17,6 @@ export const CLAUDE_CLI_ALIAS_MODELS: ReadonlyArray<SubagentModelView> = CLAUDE_
   }),
 );
 
-export const CLAUDE_CLI_ALIASES: ReadonlySet<string> = new Set(
-  CLAUDE_CLI_ALIAS_MODELS.map((model) => model.id),
-);
-
 export interface PiCatalogModel {
   readonly provider: string;
   readonly id: string;
@@ -37,77 +26,6 @@ export interface PiCatalogModel {
 
 export const canonicalPiModelId = (model: PiCatalogModel): string =>
   `${model.provider}/${model.id}`;
-
-export interface ExplicitSubagentModelSelection {
-  readonly backend: SubagentBackend;
-  readonly model: string;
-}
-
-/** Strictly decode one backend-prefixed selector accepted by `subagent_start.model`. */
-export const parseExplicitSubagentModelSelector = (
-  selector: string,
-): ExplicitSubagentModelSelection | undefined => {
-  const value = selector.trim();
-  if (!EXPLICIT_SUBAGENT_MODEL_SELECTOR.test(value)) return undefined;
-  return value.startsWith("pi/")
-    ? { backend: "pi", model: value.slice("pi/".length) }
-    : { backend: "claude-cli", model: value.slice("claude-cli/".length) };
-};
-
-/** Canonical one-field selector accepted by `subagent_start.model`. */
-export const explicitSubagentModelSelector = (model: SubagentModelView): string =>
-  `${model.backend}/${model.id}`;
-
-/** Model line in the exact `model` value `subagent_start` accepts verbatim. */
-export const launchReadyModelLine = (model: SubagentModelView): string =>
-  `model=${explicitSubagentModelSelector(model)} · ${model.name} · ${model.reasoning ? "reasoning" : "no reasoning"}${model.supportedEfforts ? ` · efforts=${model.supportedEfforts.join(",")}` : ""}${model.policy === "discouraged" ? " · discouraged (explicit selection only)" : ""}`;
-
-const searchRank = (model: SubagentModelView, terms: ReadonlyArray<string>): number => {
-  const id = model.id.toLowerCase();
-  const name = model.name.toLowerCase();
-  const joined = terms.join(" ");
-  if (id === joined || name === joined) return 0;
-  if (id.includes(joined) || name.includes(joined)) return 1;
-  if (terms.every((term) => id.includes(term))) return 2;
-  return 3;
-};
-
-export interface SubagentModelSearchResult {
-  readonly models: ReadonlyArray<SubagentModelView>;
-  /** True only when matches beyond MAX_DISCOVERY_RESULTS were actually dropped. */
-  readonly truncated: boolean;
-}
-
-const cappedResults = (matches: ReadonlyArray<SubagentModelView>): SubagentModelSearchResult => ({
-  models: matches.slice(0, MAX_DISCOVERY_RESULTS),
-  truncated: matches.length > MAX_DISCOVERY_RESULTS,
-});
-
-/**
- * Discovery search: every whitespace-separated term must match (AND semantics), and results are
- * ordered by match closeness with the stable catalog order breaking ties.
- */
-export const searchSubagentModels = (
-  models: ReadonlyArray<SubagentModelView>,
-  query: string | undefined,
-  backend?: SubagentBackend | undefined,
-): SubagentModelSearchResult => {
-  const scoped =
-    backend === undefined ? models : models.filter((model) => model.backend === backend);
-  const terms = query?.trim().toLowerCase().split(/\s+/).filter(Boolean) ?? [];
-  if (terms.length === 0) return cappedResults(scoped);
-  return cappedResults(
-    scoped
-      .flatMap((model) => {
-        const searchable = `${model.backend} ${model.id} ${model.name}`.toLowerCase();
-        return terms.every((term) => searchable.includes(term))
-          ? [{ model, rank: searchRank(model, terms) }]
-          : [];
-      })
-      .sort((left, right) => left.rank - right.rank)
-      .map((entry) => entry.model),
-  );
-};
 
 export type PiModelResolution =
   | { readonly kind: "resolved"; readonly provider: string; readonly id: string }
@@ -131,7 +49,7 @@ const nearMatchesFor = (
 };
 
 /**
- * Deterministic Pi model resolution against the authenticated catalog.
+ * Deterministic Pi model resolution for configured profile candidates.
  *
  * Exact canonical `provider/model` values win; a bare model ID resolves only when it matches
  * exactly one provider. Ambiguity and unknown selectors return structured candidates instead of
@@ -162,57 +80,4 @@ export const resolvePiModelSelector = (
   if (matched.length > 1)
     return { kind: "ambiguous", candidates: matched.map(canonicalPiModelId).sort() };
   return { kind: "unknown", nearMatches: nearMatchesFor(trimmed, available) };
-};
-
-export interface ClaudeCliModelConflict {
-  readonly code: "backend_model_mismatch" | "claude_model_invalid";
-  readonly message: string;
-}
-
-/**
- * Fast-fail detection of Pi selectors sent to claude-cli. Claude CLI models are aliases or full
- * Claude model IDs; canonical Pi `provider/model` values (and bare IDs that identify authenticated
- * Pi models) must launch through `backend: "pi"` instead of being reinterpreted.
- */
-export const claudeCliModelConflict = (
-  selector: string,
-  availablePi: ReadonlyArray<PiCatalogModel>,
-): ClaudeCliModelConflict | undefined => {
-  const trimmed = selector.trim();
-  if (trimmed.includes("/")) {
-    const canonical = availablePi.filter(
-      (model) => canonicalPiModelId(model).toLowerCase() === trimmed.toLowerCase(),
-    );
-    if (canonical.length > 0)
-      return {
-        code: "backend_model_mismatch",
-        message: `"${trimmed}" is an authenticated Pi model; launch it with backend "pi". Claude CLI models are Claude aliases (fable, sonnet, opus, haiku) or full Claude model IDs.`,
-      };
-    return {
-      code: "claude_model_invalid",
-      message: `Claude CLI models never use provider/model form; "${trimmed}" is not launchable. Pass a Claude alias (fable, sonnet, opus, haiku) or a full Claude model ID.`,
-    };
-  }
-  if (CLAUDE_CLI_ALIASES.has(trimmed) || trimmed.toLowerCase().startsWith("claude"))
-    return undefined;
-  // Bare-ID detection mirrors resolvePiModelSelector: exact matches win, then case-insensitive.
-  const exactBareMatches = availablePi.filter((model) => model.id === trimmed);
-  const bareMatches =
-    exactBareMatches.length > 0
-      ? exactBareMatches
-      : availablePi.filter((model) => model.id.toLowerCase() === trimmed.toLowerCase());
-  if (bareMatches.length > 0) {
-    const candidates = bareMatches.map(canonicalPiModelId).sort();
-    return {
-      code: "backend_model_mismatch",
-      message:
-        candidates.length === 1
-          ? `"${trimmed}" is an authenticated Pi model ID; launch it with backend "pi" and model "${candidates[0]}", or pass a Claude alias/full Claude model ID for claude-cli.`
-          : `"${trimmed}" matches authenticated Pi models (${candidates.join(", ")}); launch it with backend "pi" using one canonical value, or pass a Claude alias/full Claude model ID for claude-cli.`,
-    };
-  }
-  return {
-    code: "claude_model_invalid",
-    message: `"${trimmed}" is not a Claude CLI alias or full Claude model ID. Use fable, sonnet, opus, haiku, or an ID beginning with "claude".`,
-  };
 };

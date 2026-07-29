@@ -1,71 +1,25 @@
 import { describe, expect, it } from "vitest";
-import {
-  CLAUDE_CLI_ALIAS_MODELS,
-  claudeCliModelConflict,
-  launchReadyModelLine,
-  resolvePiModelSelector,
-  searchSubagentModels,
-} from "../src/run/model-catalog.ts";
-import type { SubagentModelView } from "../src/run/model.ts";
+import { CLAUDE_CLI_ALIAS_MODELS, resolvePiModelSelector } from "../src/run/model-catalog.ts";
 
-const piView = (provider: string, id: string, name: string): SubagentModelView => ({
-  backend: "pi",
-  id: `${provider}/${id}`,
-  name,
-  reasoning: true,
-});
-
-const catalog: ReadonlyArray<SubagentModelView> = [
-  piView("openai-codex", "gpt-5.5", "GPT 5.5"),
-  piView("xai", "grok-5-fast", "Grok 5 Fast"),
-  piView("anthropic", "claude-opus-5", "Claude Opus 5"),
-  piView("anthropic", "claude-sonnet-5", "Claude Sonnet 5"),
-  ...CLAUDE_CLI_ALIAS_MODELS,
-];
-
-describe("model catalog", () => {
-  it("prints launch-ready one-field model selectors", () => {
-    expect(launchReadyModelLine(piView("openai-codex", "gpt-5.5", "GPT 5.5"))).toBe(
-      "model=pi/openai-codex/gpt-5.5 · GPT 5.5 · reasoning",
-    );
-    expect(launchReadyModelLine(CLAUDE_CLI_ALIAS_MODELS[0]!)).toBe(
-      "model=claude-cli/fable · Claude Fable (CLI alias) · reasoning · efforts=low,medium,high,xhigh,max",
-    );
-  });
-
-  it("requires every search term to match and ranks closer matches first", () => {
-    expect(searchSubagentModels(catalog, "opus 5").models.map((model) => model.id)).toEqual([
-      "anthropic/claude-opus-5",
+describe("profile model catalog", () => {
+  it("exposes the Claude aliases used by profile configuration", () => {
+    expect(CLAUDE_CLI_ALIAS_MODELS.map((model) => model.id)).toEqual([
+      "fable",
+      "sonnet",
+      "opus",
+      "haiku",
     ]);
-    expect(searchSubagentModels(catalog, "5").models.map((model) => model.id)).toEqual([
-      "openai-codex/gpt-5.5",
-      "xai/grok-5-fast",
-      "anthropic/claude-opus-5",
-      "anthropic/claude-sonnet-5",
+    expect(CLAUDE_CLI_ALIAS_MODELS.every((model) => model.backend === "claude-cli")).toBe(true);
+    expect(CLAUDE_CLI_ALIAS_MODELS[0]?.supportedEfforts).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
     ]);
-    // Exact alias match outranks substring matches deterministically.
-    expect(searchSubagentModels(catalog, "opus").models[0]?.id).toBe("opus");
-    expect(
-      searchSubagentModels(catalog, "claude", "claude-cli").models.map((model) => model.backend),
-    ).toEqual(["claude-cli", "claude-cli", "claude-cli", "claude-cli"]);
-    expect(searchSubagentModels(catalog, "no-such-model").models).toEqual([]);
   });
 
-  it("marks truncation only when matches beyond the discovery cap were dropped", () => {
-    const oversized = Array.from({ length: 105 }, (_, index) =>
-      piView("provider", `model-${index + 1}`, `Model ${index + 1}`),
-    );
-    const truncated = searchSubagentModels(oversized, undefined);
-    expect(truncated.models).toHaveLength(100);
-    expect(truncated.truncated).toBe(true);
-
-    const exact = searchSubagentModels(oversized.slice(0, 100), undefined);
-    expect(exact.models).toHaveLength(100);
-    expect(exact.truncated).toBe(false);
-    expect(searchSubagentModels(catalog, "opus 5").truncated).toBe(false);
-  });
-
-  it("resolves Pi selectors deterministically without picking among providers", () => {
+  it("resolves configured Pi profile selectors without picking among providers", () => {
     const available = [
       { provider: "openai", id: "gpt-5.5" },
       { provider: "openrouter", id: "gpt-5.5" },
@@ -89,50 +43,5 @@ describe("model catalog", () => {
     expect(unknown.kind).toBe("unknown");
     if (unknown.kind === "unknown")
       expect(unknown.nearMatches).toEqual(["anthropic/claude-opus-5"]);
-  });
-
-  it("detects Pi selectors sent to claude-cli and leaves Claude selectors alone", () => {
-    const available = [
-      { provider: "openai-codex", id: "gpt-5.6-sol" },
-      { provider: "anthropic", id: "claude-opus-5" },
-    ];
-    expect(claudeCliModelConflict("openai-codex/gpt-5.6-sol", available)).toMatchObject({
-      code: "backend_model_mismatch",
-    });
-    expect(claudeCliModelConflict("gpt-5.6-sol", available)).toMatchObject({
-      code: "backend_model_mismatch",
-      message: expect.stringContaining("openai-codex/gpt-5.6-sol"),
-    });
-    expect(claudeCliModelConflict("unknown/model", available)).toMatchObject({
-      code: "claude_model_invalid",
-    });
-    expect(claudeCliModelConflict("gpt-4o", available)).toMatchObject({
-      code: "claude_model_invalid",
-      message: expect.stringContaining('ID beginning with "claude"'),
-    });
-    expect(claudeCliModelConflict("opus", available)).toBeUndefined();
-    // A claude-prefixed ID stays valid for claude-cli even when a Pi provider also serves it.
-    expect(claudeCliModelConflict("claude-opus-5", available)).toBeUndefined();
-    expect(claudeCliModelConflict("claude-opus-5-20260115", available)).toBeUndefined();
-  });
-
-  it("detects bare Pi IDs case-insensitively with exact-case matches winning", () => {
-    const available = [
-      { provider: "openai-codex", id: "gpt-5.6-sol" },
-      { provider: "casing-a", id: "Model-X" },
-      { provider: "casing-b", id: "model-x" },
-    ];
-    // Aligned with resolvePiModelSelector: a differently cased bare Pi ID is still a Pi selector.
-    expect(claudeCliModelConflict("GPT-5.6-SOL", available)).toMatchObject({
-      code: "backend_model_mismatch",
-      message: expect.stringContaining("openai-codex/gpt-5.6-sol"),
-    });
-    // Exact-case matches win before the case-insensitive fallback widens to every casing.
-    expect(claudeCliModelConflict("Model-X", available)?.message).toContain(
-      'model "casing-a/Model-X"',
-    );
-    expect(claudeCliModelConflict("MODEL-X", available)?.message).toContain(
-      "casing-a/Model-X, casing-b/model-x",
-    );
   });
 });

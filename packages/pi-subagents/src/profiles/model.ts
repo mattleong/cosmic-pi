@@ -74,7 +74,7 @@ export interface SkippedProfileCandidate {
   readonly reason: string;
 }
 
-export type SubagentSelectionSource = "explicit" | "profile-candidate" | "profile-parent-candidate";
+export type SubagentSelectionSource = "profile-candidate" | "profile-parent-candidate";
 
 export interface SubagentSelectionProvenance {
   readonly source: SubagentSelectionSource;

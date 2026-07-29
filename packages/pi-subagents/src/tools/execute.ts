@@ -1,6 +1,5 @@
 // Pi tool execution is a Promise-shaped host boundary.
 // @effect-diagnostics effect/asyncFunction:off
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -8,10 +7,6 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import {
-  authorizeExplicitModelOverrides,
-  type ExplicitModelAuthorization,
-} from "../boundary/host-model-authorization.ts";
 import {
   hostProfileEnvironment,
   liveSubagentStartBoundaries,
@@ -27,17 +22,8 @@ import {
   type SubagentError,
 } from "../run/errors.ts";
 import {
-  CLAUDE_CLI_ALIAS_MODELS,
-  launchReadyModelLine,
-  MAX_DISCOVERY_RESULTS,
-  searchSubagentModels,
-  type SubagentModelSearchResult,
-} from "../run/model-catalog.ts";
-import {
   isTerminalRunState,
   type StartSubagentRequest,
-  type SubagentEffort,
-  type SubagentModelView,
   type SubagentRunView,
 } from "../run/model.ts";
 import { MAX_TARGET_RUNS } from "../run/limits.ts";
@@ -119,6 +105,20 @@ const startSpecs = (
         code: "agent_count_invalid",
         message: `subagent_start requires between 1 and ${MAX_TARGET_RUNS} agents.`,
       });
+    for (const agent of agents) {
+      if (Object.prototype.hasOwnProperty.call(agent, "model"))
+        return yield* new InvalidSubagentRequestError({
+          code: "model_not_supported",
+          message:
+            "subagent_start does not accept model. Select a profile; its configured route always determines the model.",
+        });
+      if (Object.prototype.hasOwnProperty.call(agent, "backend"))
+        return yield* new InvalidSubagentRequestError({
+          code: "backend_not_supported",
+          message:
+            "subagent_start does not accept backend. Select a profile; its configured route always determines the backend and model.",
+        });
+    }
     const foregroundCount = agents.filter((agent) => agent.execution === "foreground").length;
     if (foregroundCount > 1)
       return yield* new InvalidSubagentRequestError({
@@ -141,30 +141,6 @@ const requiredMessage = (
           message: `${action} requires message.`,
         }),
       );
-
-function availableModels(
-  input: SubagentModelsInput,
-  ctx: ExtensionContext,
-  profiles: SubagentProfileServiceShape,
-  projectTrusted: boolean,
-): SubagentModelSearchResult {
-  const piModels: ReadonlyArray<SubagentModelView> = ctx.modelRegistry
-    .getAvailable()
-    .map((model) => ({
-      backend: "pi" as const,
-      id: `${model.provider}/${model.id}`,
-      name: model.name,
-      reasoning: model.reasoning,
-      supportedEfforts: getSupportedThinkingLevels(model) as ReadonlyArray<SubagentEffort>,
-    }));
-  const selectorCatalog = projectTrusted ? [...piModels, ...CLAUDE_CLI_ALIAS_MODELS] : piModels;
-  const policyAnnotated = selectorCatalog.flatMap((model) => {
-    const policy = profiles.policyFor(model.backend, model.id);
-    if (policy === "denied") return [];
-    return [{ ...model, ...(policy === "discouraged" ? { policy } : {}) }];
-  });
-  return searchSubagentModels(policyAnnotated, input.query, input.backend);
-}
 
 const profileDiscovery = (
   input: SubagentModelsInput,
@@ -210,7 +186,7 @@ const formatProfileDiscovery = (
   defaultProfile: ProfileId,
 ): string =>
   [
-    "Static profile preflight (an omitted model evaluates ordered candidates first-to-last; a user-authorized explicit model selector overrides routing but retains profile guidance and defaults)",
+    "Static profile preflight (subagent_start always evaluates the selected profile's ordered candidates first-to-last)",
     "Candidate eligibility below is evaluated with each profile's default context; an explicit context override at launch (for example oracle with context=fresh) can change which candidates are eligible.",
     `Configured default profile: ${defaultProfile}`,
     ...profiles.flatMap((profile) => [
@@ -275,41 +251,18 @@ export const executeSubagentAction = async (
   if (input.action === "models") {
     const discovery = Effect.gen(function* () {
       const profileService = yield* SubagentProfileService;
-      const search = availableModels(
-        input,
-        ctx,
-        profileService,
-        runtime.environment.projectTrusted,
-      );
-      const models = search.models;
       const profiles = profileDiscovery(input, pi, ctx, profileService, runtime.environment);
-      const selectorText =
-        models.length > 0
-          ? [
-              "Accepted one-field explicit model selectors (use only for a model the user requested; launch requires direct confirmation; denied models are hidden, discouraged models require explicit selection, and executable/auth/model readiness is checked at launch)",
-              ...models.map(launchReadyModelLine),
-              ...(search.truncated
-                ? [
-                    `Showing the first ${MAX_DISCOVERY_RESULTS} matching selectors; narrow query or backend to search further.`,
-                  ]
-                : []),
-            ].join("\n")
-          : "No matching explicit model selectors.";
       return {
         content: [
           {
             type: "text" as const,
-            // Selector-first ordering reserves the most actionable filtered results before verbose
-            // profile sections consume the aggregate output budget.
-            text: joinBoundedToolText([
-              selectorText,
+            text: boundToolOutput(
               formatProfileDiscovery(profiles, profileService.config.defaultProfile),
-            ]),
+            ),
           },
         ],
         details: makeCompactToolDetails({
           action: input.action,
-          models,
           profileIds: profiles.map((profile) => profile.id),
           defaultProfile: profileService.config.defaultProfile,
         }),
@@ -367,33 +320,6 @@ export const executeSubagentAction = async (
     switch (input.action) {
       case "start": {
         const specs = yield* startSpecs(input.agents);
-        const explicitModelRequests = specs.flatMap((spec, index) => {
-          const selector = spec.model?.trim();
-          if (!selector) return [];
-          return [
-            {
-              index,
-              selector,
-              task: spec.task,
-              ...(spec.name?.trim() ? { name: spec.name } : {}),
-            },
-          ];
-        });
-        const authorizationOutcome = yield* authorizeExplicitModelOverrides(
-          explicitModelRequests,
-          ctx,
-          signal,
-        ).pipe(
-          Effect.match({
-            onFailure: (error) => ({ _tag: "Denied" as const, error }),
-            onSuccess: (grants) => ({ _tag: "Authorized" as const, grants }),
-          }),
-        );
-        const authorizations = new Map<number, ExplicitModelAuthorization>(
-          authorizationOutcome._tag === "Authorized"
-            ? authorizationOutcome.grants.map((grant) => [grant.index, grant.authorization])
-            : [],
-        );
         let launchedRuns: ReadonlyArray<SubagentRunView> = [];
         const failureFor = (
           spec: SubagentStartSpec,
@@ -428,20 +354,10 @@ export const executeSubagentAction = async (
             Effect.asVoid,
           );
         };
-        const resolveRequest = (spec: SubagentStartSpec, index: number) =>
-          spec.model?.trim() && authorizationOutcome._tag === "Denied"
-            ? Effect.fail(authorizationOutcome.error)
-            : resolveProfileStart(
-                pi,
-                spec,
-                ctx,
-                runtime.environment,
-                boundaries,
-                index,
-                authorizations.get(index),
-              );
+        const resolveRequest = (spec: SubagentStartSpec) =>
+          resolveProfileStart(pi, spec, ctx, runtime.environment, boundaries);
         const launchOne = (spec: SubagentStartSpec, index: number, sessionOwned = false) =>
-          resolveRequest(spec, index).pipe(
+          resolveRequest(spec).pipe(
             Effect.flatMap((request) =>
               (sessionOwned ? service.startSessionOwned(request) : service.start(request)).pipe(
                 Effect.tap((started) => publishStarted(request, started)),
@@ -493,7 +409,7 @@ export const executeSubagentAction = async (
         }
 
         const foregroundSpec = specs[foregroundIndex]!;
-        const resolvedForeground = yield* resolveRequest(foregroundSpec, foregroundIndex).pipe(
+        const resolvedForeground = yield* resolveRequest(foregroundSpec).pipe(
           Effect.match({
             onFailure: (error) => ({ failure: failureFor(foregroundSpec, foregroundIndex, error) }),
             onSuccess: (request) => ({ request }),
@@ -730,7 +646,7 @@ export const executeSubagentAction = async (
   const details: unknown =
     input.action === "start"
       ? makeStartAwaitCardDetails({
-          action: input.action,
+          action: "start",
           runs,
           ...(startFailures.length > 0 ? { startFailures } : {}),
         })

@@ -264,7 +264,7 @@ async function editProfile(
       model.policy === "discouraged" &&
       !(await ctx.ui.confirm(
         `Discouraged model for ${profile}`,
-        "This model is discouraged by Subagents policy. Save it as an explicit profile choice anyway?",
+        "This model is discouraged by Subagents policy. Save it as the deliberate profile route anyway?",
       ))
     )
       continue;

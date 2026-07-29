@@ -67,7 +67,7 @@ describe("persisted subagent card details", () => {
         model: hostile,
         finalText: hostile,
         selection: {
-          source: "explicit" as const,
+          source: "profile-candidate" as const,
           reason: hostile,
           skippedCandidates: [{ candidate: hostile, code: hostile, reason: hostile }],
         },
@@ -91,10 +91,6 @@ describe("persisted subagent card details", () => {
     const details = makeCompactToolDetails({
       action: hostile,
       runs: Array.from({ length: 12 }, (_, index) => ({ id: `${index}-${hostile}` })),
-      models: Array.from({ length: 100 }, (_, index) => ({
-        backend: index % 2 === 0 ? ("pi" as const) : ("claude-cli" as const),
-        id: `${index}-${hostile}`,
-      })),
       profileIds: Array.from({ length: 20 }, () => hostile),
       defaultProfile: hostile,
       actionFailures: Array.from({ length: 12 }, (_, index) => ({

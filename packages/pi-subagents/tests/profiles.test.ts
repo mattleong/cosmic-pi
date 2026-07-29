@@ -237,7 +237,7 @@ describe("subagent v2 profile configuration and resolution", () => {
     expect(untrusted.profiles.worker.candidates).toHaveLength(2);
   });
 
-  it("keeps policies additive and skips denied/discouraged candidates in order", () => {
+  it("keeps policies additive, skips denied candidates, and retains discouraged profile routes", () => {
     const config = resolved(
       document({
         denied: [{ backend: "pi", model: "openai/denied" }],
@@ -256,9 +256,13 @@ describe("subagent v2 profile configuration and resolution", () => {
       kind: "resolved",
       attempts: [
         {
+          source: "profile-candidate",
+          candidateIndex: 1,
+          skippedBefore: [{ code: "model_denied" }],
+        },
+        {
           source: "profile-parent-candidate",
           candidateIndex: 2,
-          skippedBefore: [{ code: "model_denied" }, { code: "model_discouraged" }],
         },
       ],
     });

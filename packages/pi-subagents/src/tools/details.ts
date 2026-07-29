@@ -74,13 +74,6 @@ export interface CompactSubagentToolDetails {
   readonly action: string;
   readonly runIds?: ReadonlyArray<string> | undefined;
   readonly runCount?: number | undefined;
-  readonly modelSelectors?:
-    | ReadonlyArray<{
-        readonly backend: "pi" | "claude-cli";
-        readonly id: string;
-      }>
-    | undefined;
-  readonly modelCount?: number | undefined;
   readonly profileIds?: ReadonlyArray<string> | undefined;
   readonly defaultProfile?: string | undefined;
   readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
@@ -91,12 +84,6 @@ export interface CompactSubagentToolDetails {
 export interface CompactToolDetailsInput {
   readonly action: string;
   readonly runs?: ReadonlyArray<Pick<SubagentRunView, "id">> | undefined;
-  readonly models?:
-    | ReadonlyArray<{
-        readonly backend: "pi" | "claude-cli";
-        readonly id: string;
-      }>
-    | undefined;
   readonly profileIds?: ReadonlyArray<string> | undefined;
   readonly defaultProfile?: string | undefined;
   readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
@@ -269,10 +256,6 @@ export function makeStartAwaitCardDetails(
 /** Compact, versioned persistence projection for every non-card tool result. */
 export function makeCompactToolDetails(input: CompactToolDetailsInput): CompactSubagentToolDetails {
   const runIds = input.runs?.slice(0, MAX_TARGET_RUNS).map((run) => clean(run.id, 128));
-  const models = input.models?.slice(0, 32).map((model) => ({
-    backend: model.backend,
-    id: clean(model.id, 128),
-  }));
   const profileIds = input.profileIds?.slice(0, 16).map((id) => clean(id, 64));
   const failures = input.actionFailures?.slice(0, MAX_TARGET_RUNS).map((failure) => ({
     id: clean(failure.id, 128),
@@ -283,11 +266,6 @@ export function makeCompactToolDetails(input: CompactToolDetailsInput): CompactS
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: clean(input.action, 32),
     ...(runIds && runIds.length > 0 ? { runIds, runCount: input.runs?.length } : {}),
-    ...(models && models.length > 0
-      ? { modelSelectors: models, modelCount: input.models?.length }
-      : input.models
-        ? { modelCount: input.models.length }
-        : {}),
     ...(profileIds && profileIds.length > 0 ? { profileIds } : {}),
     ...(input.defaultProfile ? { defaultProfile: clean(input.defaultProfile, 64) } : {}),
     ...(failures && failures.length > 0 ? { actionFailures: failures } : {}),
@@ -299,7 +277,6 @@ export function makeCompactToolDetails(input: CompactToolDetailsInput): CompactS
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: clean(input.action, 32),
     ...(input.runs ? { runCount: input.runs.length } : {}),
-    ...(input.models ? { modelCount: input.models.length } : {}),
     ...(input.timedOut ? { timedOut: true } : {}),
     ...(input.attentionRequired ? { attentionRequired: true } : {}),
   });
@@ -308,7 +285,6 @@ export function makeCompactToolDetails(input: CompactToolDetailsInput): CompactS
 const RUN_STATES: ReadonlySet<string> = new Set(SUBAGENT_RUN_STATES);
 const EFFORTS: ReadonlySet<string> = new Set(SUBAGENT_EFFORTS);
 const SOURCES: ReadonlySet<string> = new Set([
-  "explicit",
   "profile-candidate",
   "profile-parent-candidate",
   "profile-parent-fallback",

@@ -4,11 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/coordination.ts";
 import { InvalidSubagentRequestError, type SubagentProcessError } from "../run/errors.ts";
-import {
-  claudeCliModelConflict,
-  parseExplicitSubagentModelSelector,
-  resolvePiModelSelector,
-} from "../run/model-catalog.ts";
+import { resolvePiModelSelector } from "../run/model-catalog.ts";
 import {
   decodeSubagentEffort,
   isClaudeModelSelector,
@@ -27,10 +23,6 @@ import {
 import type { ProfileCandidateAttempt, ProfileResolutionEnvironment } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import { ensureClaudeCliReady } from "./claude-preflight.ts";
-import {
-  consumeExplicitModelAuthorization,
-  type ExplicitModelAuthorization,
-} from "./host-model-authorization.ts";
 
 export interface SubagentProfileStartSpec {
   readonly task: string;
@@ -38,8 +30,6 @@ export interface SubagentProfileStartSpec {
   readonly execution?: SubagentExecution | undefined;
   readonly context?: SubagentContextMode | undefined;
   readonly profile?: string | undefined;
-  /** Canonical one-run selector: pi/provider/model-id or claude-cli/alias-or-full-id. */
-  readonly model?: string | undefined;
   readonly writeIntent?: SubagentWriteIntent | undefined;
   readonly effort?: SubagentEffort | undefined;
 }
@@ -71,26 +61,6 @@ const deniedModelError = (backend: SubagentBackend, model: string) =>
     message: `Model ${backend}/${model} is denied by Subagents policy and cannot be started.`,
   });
 
-type LaunchRouting =
-  | { readonly backend: "auto"; readonly model?: undefined }
-  | { readonly backend: SubagentBackend; readonly model: string };
-
-const launchRouting = (
-  selector: string | undefined,
-): Effect.Effect<LaunchRouting, InvalidSubagentRequestError> => {
-  const value = selector?.trim();
-  if (!value) return Effect.succeed({ backend: "auto" });
-  const explicit = parseExplicitSubagentModelSelector(value);
-  if (explicit) return Effect.succeed(explicit);
-  return Effect.fail(
-    new InvalidSubagentRequestError({
-      code: "model_selector_invalid",
-      message:
-        'Explicit model must use "pi/provider/model-id" or "claude-cli/alias-or-full-id". Copy a selector from subagent_models when available; full Claude model IDs are also accepted. Omit model for automatic profile routing.',
-    }),
-  );
-};
-
 const resolvePiModel = (
   selector: string | undefined,
   effort: SubagentEffort,
@@ -118,7 +88,7 @@ const resolvePiModel = (
       if (resolution.kind === "unknown")
         return yield* new InvalidSubagentRequestError({
           code: "pi_model_unknown",
-          message: `Unknown or unauthenticated Pi model "${requested}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${resolution.nearMatches.join(", ")}.` : ""} Use subagent_models for launch-ready values.`,
+          message: `Profile route references unknown or unauthenticated Pi model "${requested}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${resolution.nearMatches.join(", ")}.` : ""} Update the profile route and reload.`,
         });
       provider = resolution.provider;
       id = resolution.id;
@@ -127,7 +97,7 @@ const resolvePiModel = (
       if (!inherited)
         return yield* new InvalidSubagentRequestError({
           code: "pi_model_missing",
-          message: "No parent model is active; specify model.",
+          message: "The profile route requires the parent model, but no parent model is active.",
         });
       provider = inherited.provider;
       id = inherited.id;
@@ -235,16 +205,11 @@ const resolveConcreteModel = (
         message: `Claude CLI does not support effort ${effort}; use low through max.`,
       });
     const requested = selector?.trim() || "sonnet";
-    const conflict = claudeCliModelConflict(
-      requested,
-      ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
-    );
-    if (conflict) return yield* new InvalidSubagentRequestError(conflict);
     if (!isClaudeModelSelector(requested))
       return yield* new InvalidSubagentRequestError({
         code: "claude_model_invalid",
         message:
-          'Claude model must be fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
+          'The profile route must use Claude model fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
       });
     return { backend, model: requested, effort, effortWasExplicit };
   });
@@ -266,8 +231,6 @@ export const resolveProfileStart = (
   ctx: ExtensionContext,
   environment: SubagentSessionEnvironment,
   boundaries: SubagentStartBoundaries,
-  launchIndex: number,
-  explicitModelAuthorization?: ExplicitModelAuthorization,
 ): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError, SubagentProfileService> =>
   Effect.gen(function* () {
     const profiles = yield* SubagentProfileService;
@@ -278,20 +241,17 @@ export const resolveProfileStart = (
         message: "subagent_start requires every agent to have a task.",
       });
 
-    const routing = yield* launchRouting(rawInput.model);
-    if (
-      routing.backend !== "auto" &&
-      !consumeExplicitModelAuthorization(
-        explicitModelAuthorization,
-        launchIndex,
-        rawInput.model ?? "",
-        task,
-      )
-    )
+    if (Object.prototype.hasOwnProperty.call(rawInput, "model"))
       return yield* new InvalidSubagentRequestError({
-        code: "explicit_model_not_authorized",
+        code: "model_not_supported",
         message:
-          "Explicit subagent model overrides require direct user authorization. Retry without model to use configured profile routing.",
+          "subagent_start does not accept a model override. Select a profile; its configured route always determines the model.",
+      });
+    if (Object.prototype.hasOwnProperty.call(rawInput, "backend"))
+      return yield* new InvalidSubagentRequestError({
+        code: "backend_not_supported",
+        message:
+          "subagent_start does not accept a backend override. Select a profile; its configured route always determines the backend and model.",
       });
     const requestedProfile = rawInput.profile?.trim();
     const selectedProfile = requestedProfile || profiles.config.defaultProfile;
@@ -303,19 +263,11 @@ export const resolveProfileStart = (
       });
     const input = {
       ...rawInput,
-      ...routing,
       profile: definition.id,
       writeIntent: rawInput.writeIntent ?? definition.defaultWriteIntent,
     };
     const context = input.context ?? definition.defaultContext;
     const projectTrusted = environment.projectTrusted;
-    // This backend incompatibility is independent of parent branch state and must win even when
-    // that state is ephemeral or malformed. It also precedes every Claude preflight.
-    if (input.backend === "claude-cli" && context === "fork")
-      return yield* new InvalidSubagentRequestError({
-        code: "claude_context_unsupported",
-        message: "Claude CLI does not support forked Pi context yet; use context=fresh.",
-      });
     const parentSessionFile = ctx.sessionManager.getSessionFile();
     const parentLeafId = stableParentLeaf(ctx);
     if (context === "fork" && (!parentSessionFile || !parentLeafId))
@@ -325,8 +277,6 @@ export const resolveProfileStart = (
           "Forked context requires a persisted parent session with a stable leaf; oracle does not silently degrade to fresh context.",
       });
 
-    let concrete: ResolvedConcreteModel;
-    let selection: SubagentSelectionProvenance;
     let claudeReadiness: Exit.Exit<void, SubagentProcessError> | undefined;
     const ensureClaudeReady = (): Effect.Effect<void, SubagentProcessError> =>
       claudeReadiness ??
@@ -341,133 +291,91 @@ export const resolveProfileStart = (
       );
     const isPiModelDenied = (model: string): boolean =>
       profiles.policyFor("pi", model) === "denied";
-    if (input.backend !== "auto") {
-      // Hard denies are enforced on the deterministic raw selector before registry auth lookup,
-      // runtime API-key resolution, or Claude preflight; the resolved canonical model is rechecked
-      // below as defense in depth.
-      const rawSelector = input.model;
-      if (profiles.policyFor(input.backend, rawSelector) === "denied")
-        return yield* deniedModelError(input.backend, rawSelector);
-      const inheritedEffort = inheritedParentEffort(pi);
-      const selectedEffort = input.effort ?? definition.defaultEffort ?? inheritedEffort;
-      const effort =
-        input.effort === undefined &&
-        input.backend === "claude-cli" &&
-        (selectedEffort === "off" || selectedEffort === "minimal")
-          ? "low"
-          : selectedEffort;
-      concrete = yield* resolveConcreteModel(
-        input.backend,
-        input.model,
+    const profile = definition.id;
+    const plan = profiles.resolve(
+      profile,
+      hostProfileEnvironment(pi, ctx, projectTrusted),
+      context,
+      input.effort,
+    );
+    if (plan.kind === "failed")
+      return yield* new InvalidSubagentRequestError({ code: plan.code, message: plan.message });
+    const tryAttempt = (
+      index: number,
+      skippedCandidates: ReadonlyArray<SkippedProfileCandidate>,
+    ): Effect.Effect<
+      {
+        readonly concrete: ResolvedConcreteModel;
+        readonly selection: SubagentSelectionProvenance;
+      },
+      InvalidSubagentRequestError
+    > => {
+      const attempt = plan.attempts[index];
+      if (!attempt) {
+        const exhausted = [...skippedCandidates, ...plan.trailingSkippedCandidates];
+        const skipCodes = exhausted
+          .map(
+            (candidate) =>
+              `${candidate.candidateIndex === undefined ? "route" : `candidate ${candidate.candidateIndex + 1}`}[${candidate.code}]`,
+          )
+          .join(", ");
+        return Effect.fail(
+          new InvalidSubagentRequestError({
+            code: "profile_no_eligible_model",
+            message: `Profile ${profile} has no eligible model after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+          }),
+        );
+      }
+      const precedingSkips = [...skippedCandidates, ...(attempt.skippedBefore ?? [])];
+      const effort = input.effort ?? attempt.effort;
+      const effortWasExplicit = input.effort !== undefined || attempt.effortWasExplicit;
+      const concreteAttempt = resolveConcreteModel(
+        attempt.backend,
+        attempt.model,
         effort,
-        // Profile effort defaults are soft preferences; only the per-call effort is enforced.
-        input.effort !== undefined,
+        effortWasExplicit,
         projectTrusted,
         ctx,
         isPiModelDenied,
       );
-      const policy = profiles.policyFor(concrete.backend, concrete.model);
-      if (policy === "denied") return yield* deniedModelError(concrete.backend, concrete.model);
-      if (concrete.backend === "claude-cli")
-        yield* ensureClaudeReady().pipe(
-          Effect.mapError(
-            (error) =>
-              new InvalidSubagentRequestError({
-                code: error.code ?? error._tag,
-                message: error.message,
-              }),
-          ),
-        );
-      selection = {
-        source: "explicit",
-        reason: `Explicit model selection overrode profile ${selectedProfile} routing; profile guidance and defaults were retained.`,
-        skippedCandidates: [],
-        ...(policy === "discouraged"
-          ? {
-              warning: `Model ${concrete.backend}/${concrete.model} is discouraged by policy; explicit selection was honored.`,
-            }
-          : {}),
-      };
-    } else {
-      const profile = definition.id;
-      const plan = profiles.resolve(
-        profile,
-        hostProfileEnvironment(pi, ctx, projectTrusted),
-        context,
-        input.effort,
+      // Pure backend/model/effort checks must reject before an executable/auth probe is run.
+      return concreteAttempt.pipe(
+        Effect.flatMap((resolved) =>
+          attempt.backend === "claude-cli"
+            ? ensureClaudeReady().pipe(Effect.as(resolved))
+            : Effect.succeed(resolved),
+        ),
+        Effect.matchEffect({
+          onFailure: (error) =>
+            tryAttempt(index + 1, [
+              ...precedingSkips,
+              dynamicCandidateSkip(attempt, effort, error),
+            ]),
+          onSuccess: (resolved) => {
+            const policy = profiles.policyFor(resolved.backend, resolved.model);
+            return Effect.succeed({
+              concrete: resolved,
+              selection: {
+                source: attempt.source,
+                ...(attempt.candidateIndex === undefined
+                  ? {}
+                  : { candidateIndex: attempt.candidateIndex }),
+                reason: attempt.reason,
+                skippedCandidates: precedingSkips,
+                ...(policy === "discouraged"
+                  ? {
+                      warning: `Profile ${profile} routes through discouraged model ${resolved.backend}/${resolved.model}.`,
+                    }
+                  : {}),
+              },
+            });
+          },
+        }),
       );
-      if (plan.kind === "failed")
-        return yield* new InvalidSubagentRequestError({ code: plan.code, message: plan.message });
-      const tryAttempt = (
-        index: number,
-        skippedCandidates: ReadonlyArray<SkippedProfileCandidate>,
-      ): Effect.Effect<
-        {
-          readonly concrete: ResolvedConcreteModel;
-          readonly selection: SubagentSelectionProvenance;
-        },
-        InvalidSubagentRequestError
-      > => {
-        const attempt = plan.attempts[index];
-        if (!attempt) {
-          const exhausted = [...skippedCandidates, ...plan.trailingSkippedCandidates];
-          const skipCodes = exhausted
-            .map(
-              (candidate) =>
-                `${candidate.candidateIndex === undefined ? "route" : `candidate ${candidate.candidateIndex + 1}`}[${candidate.code}]`,
-            )
-            .join(", ");
-          return Effect.fail(
-            new InvalidSubagentRequestError({
-              code: "profile_no_eligible_model",
-              message: `Profile ${profile} has no eligible model after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
-            }),
-          );
-        }
-        const precedingSkips = [...skippedCandidates, ...(attempt.skippedBefore ?? [])];
-        const effort = input.effort ?? attempt.effort;
-        const effortWasExplicit = input.effort !== undefined || attempt.effortWasExplicit;
-        const concreteAttempt = resolveConcreteModel(
-          attempt.backend,
-          attempt.model,
-          effort,
-          effortWasExplicit,
-          projectTrusted,
-          ctx,
-          isPiModelDenied,
-        );
-        // Pure backend/model/effort checks must reject before an executable/auth probe is run.
-        return concreteAttempt.pipe(
-          Effect.flatMap((resolved) =>
-            attempt.backend === "claude-cli"
-              ? ensureClaudeReady().pipe(Effect.as(resolved))
-              : Effect.succeed(resolved),
-          ),
-          Effect.matchEffect({
-            onFailure: (error) =>
-              tryAttempt(index + 1, [
-                ...precedingSkips,
-                dynamicCandidateSkip(attempt, effort, error),
-              ]),
-            onSuccess: (resolved) =>
-              Effect.succeed({
-                concrete: resolved,
-                selection: {
-                  source: attempt.source,
-                  ...(attempt.candidateIndex === undefined
-                    ? {}
-                    : { candidateIndex: attempt.candidateIndex }),
-                  reason: attempt.reason,
-                  skippedCandidates: precedingSkips,
-                },
-              }),
-          }),
-        );
-      };
-      const selected = yield* tryAttempt(0, []);
-      concrete = selected.concrete;
-      selection = selected.selection;
-    }
+    };
+    const selected = yield* tryAttempt(0, []);
+    const concrete = selected.concrete;
+    const selection = selected.selection;
 
     return {
       ...(input.name?.trim() ? { name: input.name.trim() } : {}),
