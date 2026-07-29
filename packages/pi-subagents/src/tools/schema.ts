@@ -46,13 +46,13 @@ const StartSpecParameters = Type.Object(
     profile: Type.Optional(
       StringEnum(PROFILE_IDS, {
         description:
-          "Behavior and automatic routing profile. Omit to use configured defaultProfile. An explicit model overrides only the profile model route; profile guidance and defaults remain active.",
+          "Behavior and automatic routing profile. Omit to use configured defaultProfile. A user-authorized explicit model overrides only the profile model route; profile guidance and defaults remain active.",
       }),
     ),
     model: Type.Optional(
       Type.String({
         description:
-          'One-run explicit model selector: copy a listed "pi/provider/model-id" or Claude alias, or pass "claude-cli/full-claude-model-id". Omit to route through project/global profile settings.',
+          "One-run model selector allowed only when the user explicitly requested that model for this delegated task; launch requires direct user confirmation. Never choose a model yourself. Omit to route through project/global profile settings.",
         minLength: 1,
         maxLength: 512,
         pattern: EXPLICIT_SUBAGENT_MODEL_SELECTOR.source,

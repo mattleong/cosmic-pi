@@ -144,7 +144,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_models",
     label: "Subagent Models",
     description:
-      "Static preflight-only discovery of deterministic subagent profiles and accepted one-field explicit model selectors. Profile candidates retain declared first-to-last order; runtime auth/model readiness is checked only at launch. Denied selectors are hidden, discouraged selectors are explicit-only, and all search terms must match.",
+      "Static preflight-only discovery of deterministic subagent profiles and accepted one-field explicit model selectors. Explicit selectors are only for a model the user already requested and require direct confirmation at launch. Profile candidates retain declared first-to-last order; runtime auth/model readiness is checked only at launch. Denied selectors are hidden, discouraged selectors are explicit-only, and all search terms must match.",
     parameters: ModelsParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "models" }, signal, onUpdate, ctx),
@@ -156,16 +156,16 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_start",
     label: "Start Subagents",
     description:
-      "Launch one to twelve session-scoped subagents from one agents array. Every fresh task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. The short form needs only task and profile: omitted model uses project/global profile routing, while an optional canonical model selector performs a one-run override. Omitted writeIntent uses the profile default. Background is the default; at most one foreground agent is allowed. Successful launches remain active when a peer launch fails.",
+      "Launch one to twelve session-scoped subagents from one agents array. Every fresh task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. The short form needs only task and profile: omitted model uses project/global profile routing. A canonical one-run model override is allowed only when the user explicitly requested that model and directly confirms the launch. Omitted writeIntent uses the profile default. Background is the default; at most one foreground agent is allowed. Successful launches remain active when a peer launch fails.",
     promptSnippet: "Launch delegated subagents using a task profile",
     promptGuidelines: [
       "Use subagent_start for delegated work that can proceed independently; make every fresh task self-contained with relevant paths, constraints, evidence, and its expected deliverable. Background is the default, and each call accepts at most one foreground agent.",
-      "Prefer the short automatic form with task and profile only. Omit model to use project/global profile routing, and omit writeIntent to use the profile capability default. Supply writeIntent only for a deliberate per-launch capability override.",
+      "Prefer the short automatic form with task and profile only. Keep configured profile model routing unless the user explicitly requests a different model for that delegated task; never supply model based on perceived quality, cost, availability, or task suitability. Explicit overrides require direct user confirmation. Omit writeIntent to use the profile capability default, and supply it only for a deliberate per-launch capability override.",
       "Choose a profile by task: scout for local reconnaissance, researcher for sourced external research, planner for plans, worker for implementation, reviewer for independent review, oracle for inherited-decision analysis, and delegate for general work.",
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
       "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",
-      "Use subagent_models to inspect profile routing or copy an explicit launch-ready model selector; never substitute an arbitrary model when a profile has no eligible candidate.",
-      'To choose a model for one launch, pass one canonical selector: copy a listed "pi/provider/model-id" or Claude alias, or use "claude-cli/full-claude-model-id". The selector prefix determines the backend, so there is no separate backend field.',
+      "Use subagent_models to inspect profile routing. Copy an explicit launch-ready selector only after the user requests a different model; never shop for a model or substitute one when a profile has no eligible candidate.",
+      'When honoring a user-requested model for one launch, pass one canonical selector: copy a listed "pi/provider/model-id" or Claude alias, or use "claude-cli/full-claude-model-id". The selector prefix determines the backend, so there is no separate backend field.',
       'Choose a "pi/…" selector when the child may need mid-turn guidance, interruption, or parent questions; "claude-cli/…" supports await, stop, local rename, and resume after completion but not those interactive controls.',
     ],
     parameters: StartParameters,

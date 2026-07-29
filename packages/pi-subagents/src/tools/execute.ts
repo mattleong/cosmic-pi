@@ -9,6 +9,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import {
+  authorizeExplicitModelOverrides,
+  type ExplicitModelAuthorization,
+} from "../boundary/host-model-authorization.ts";
+import {
   hostProfileEnvironment,
   liveSubagentStartBoundaries,
   resolveProfileStart,
@@ -206,7 +210,7 @@ const formatProfileDiscovery = (
   defaultProfile: ProfileId,
 ): string =>
   [
-    "Static profile preflight (an omitted model evaluates ordered candidates first-to-last; an explicit model selector overrides routing but retains profile guidance and defaults)",
+    "Static profile preflight (an omitted model evaluates ordered candidates first-to-last; a user-authorized explicit model selector overrides routing but retains profile guidance and defaults)",
     "Candidate eligibility below is evaluated with each profile's default context; an explicit context override at launch (for example oracle with context=fresh) can change which candidates are eligible.",
     `Configured default profile: ${defaultProfile}`,
     ...profiles.flatMap((profile) => [
@@ -282,7 +286,7 @@ export const executeSubagentAction = async (
       const selectorText =
         models.length > 0
           ? [
-              "Accepted one-field explicit model selectors (preflight-only: denied models are hidden, discouraged models require explicit selection, and executable/auth/model readiness is checked at launch)",
+              "Accepted one-field explicit model selectors (use only for a model the user requested; launch requires direct confirmation; denied models are hidden, discouraged models require explicit selection, and executable/auth/model readiness is checked at launch)",
               ...models.map(launchReadyModelLine),
               ...(search.truncated
                 ? [
@@ -363,6 +367,33 @@ export const executeSubagentAction = async (
     switch (input.action) {
       case "start": {
         const specs = yield* startSpecs(input.agents);
+        const explicitModelRequests = specs.flatMap((spec, index) => {
+          const selector = spec.model?.trim();
+          if (!selector) return [];
+          return [
+            {
+              index,
+              selector,
+              task: spec.task,
+              ...(spec.name?.trim() ? { name: spec.name } : {}),
+            },
+          ];
+        });
+        const authorizationOutcome = yield* authorizeExplicitModelOverrides(
+          explicitModelRequests,
+          ctx,
+          signal,
+        ).pipe(
+          Effect.match({
+            onFailure: (error) => ({ _tag: "Denied" as const, error }),
+            onSuccess: (grants) => ({ _tag: "Authorized" as const, grants }),
+          }),
+        );
+        const authorizations = new Map<number, ExplicitModelAuthorization>(
+          authorizationOutcome._tag === "Authorized"
+            ? authorizationOutcome.grants.map((grant) => [grant.index, grant.authorization])
+            : [],
+        );
         let launchedRuns: ReadonlyArray<SubagentRunView> = [];
         const failureFor = (
           spec: SubagentStartSpec,
@@ -397,10 +428,20 @@ export const executeSubagentAction = async (
             Effect.asVoid,
           );
         };
-        const resolveRequest = (spec: SubagentStartSpec) =>
-          resolveProfileStart(pi, spec, ctx, runtime.environment, boundaries);
+        const resolveRequest = (spec: SubagentStartSpec, index: number) =>
+          spec.model?.trim() && authorizationOutcome._tag === "Denied"
+            ? Effect.fail(authorizationOutcome.error)
+            : resolveProfileStart(
+                pi,
+                spec,
+                ctx,
+                runtime.environment,
+                boundaries,
+                index,
+                authorizations.get(index),
+              );
         const launchOne = (spec: SubagentStartSpec, index: number, sessionOwned = false) =>
-          resolveRequest(spec).pipe(
+          resolveRequest(spec, index).pipe(
             Effect.flatMap((request) =>
               (sessionOwned ? service.startSessionOwned(request) : service.start(request)).pipe(
                 Effect.tap((started) => publishStarted(request, started)),
@@ -452,7 +493,7 @@ export const executeSubagentAction = async (
         }
 
         const foregroundSpec = specs[foregroundIndex]!;
-        const resolvedForeground = yield* resolveRequest(foregroundSpec).pipe(
+        const resolvedForeground = yield* resolveRequest(foregroundSpec, foregroundIndex).pipe(
           Effect.match({
             onFailure: (error) => ({ failure: failureFor(foregroundSpec, foregroundIndex, error) }),
             onSuccess: (request) => ({ request }),

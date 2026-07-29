@@ -154,6 +154,10 @@ const captureSubagentTools = (
 
 const context = {
   cwd: "/project",
+  hasUI: true,
+  ui: {
+    confirm: () => Promise.resolve(true),
+  },
   model: {
     provider: "openai-codex",
     id: "gpt-5.6-sol",
@@ -335,6 +339,9 @@ describe("subagent tool", () => {
     expect(startItem?.properties).not.toHaveProperty("backend");
     expect(startItem?.properties?.model?.pattern).toContain("pi\\/");
     expect(startItem?.properties?.model?.pattern).toContain("claude-cli\\/");
+    expect(startItem?.properties?.model?.description).toContain(
+      "only when the user explicitly requested",
+    );
     const startTool = tools.get("subagent_start");
     const startParameters = startTool?.parameters as TSchema;
     expect(Check(startParameters, { agents: [{ profile: "scout", task: "Inspect" }] })).toBe(true);
@@ -372,6 +379,7 @@ describe("subagent tool", () => {
       }),
     ).toThrow('model must be "pi/provider/model-id"');
     expect(tools.get("subagent_start")?.description).toContain("at most one foreground agent");
+    expect(tools.get("subagent_start")?.description).toContain("directly confirms");
     expect(tools.get("subagent_status")?.description).toContain("backend capabilities");
     expect(tools.get("subagent_send")?.description).toContain(
       "claude-cli runs cannot receive mid-turn guidance",
@@ -720,6 +728,9 @@ describe("subagent tool", () => {
     expect(tool?.renderResult).toBeTypeOf("function");
     expect(tool?.promptGuidelines?.join(" ")).toContain("one writer");
     expect(tool?.promptGuidelines?.join(" ")).toContain(
+      "never supply model based on perceived quality, cost, availability, or task suitability",
+    );
+    expect(tool?.promptGuidelines?.join(" ")).toContain(
       '"claude-cli/…" supports await, stop, local rename, and resume after completion',
     );
     expect(result?.content[0]?.text).toContain("agent-1");
@@ -732,6 +743,176 @@ describe("subagent tool", () => {
       writeIntent: "read-only",
       parentLeafId: "user-1",
       activeTools: ["read", "grep"],
+    });
+  });
+
+  it("does not request model authorization when launches use profile routing", async () => {
+    const confirm = vi.fn(() => Promise.resolve(true));
+    const requests: StartSubagentRequest[] = [];
+    const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
+
+    await tool?.execute(
+      "call",
+      { agents: [{ task: "Inspect auth", profile: "scout" }] },
+      undefined,
+      undefined,
+      {
+        ...(context as unknown as Record<string, unknown>),
+        ui: { confirm },
+      } as unknown as ExtensionContext,
+    );
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.selection?.source).toBe("profile-parent-candidate");
+  });
+
+  it("confirms one explicit-model batch and binds approval to the listed launches", async () => {
+    const confirm = vi.fn<(title: string, message: string, options?: unknown) => Promise<boolean>>(
+      () => Promise.resolve(true),
+    );
+    const requests: StartSubagentRequest[] = [];
+    const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
+
+    await tool?.execute(
+      "call",
+      {
+        agents: [
+          {
+            task: "Review authentication policy",
+            name: "auth-review",
+            model: "pi/openai-codex/gpt-5.6-sol",
+          },
+          {
+            task: "Review storage policy",
+            name: "storage-review",
+            model: "pi/openai-codex/gpt-5.6-sol",
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      {
+        ...(context as unknown as Record<string, unknown>),
+        ui: { confirm },
+      } as unknown as ExtensionContext,
+    );
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm).toHaveBeenCalledWith(
+      "Authorize subagent models?",
+      expect.stringContaining("auth-review · pi/openai-codex/gpt-5.6-sol"),
+      undefined,
+    );
+    expect(confirm.mock.calls[0]?.[1]).toContain("storage-review");
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.selection?.source === "explicit")).toBe(true);
+  });
+
+  it("fails unapproved explicit models per item while automatic peers still launch", async () => {
+    const confirm = vi.fn(() => Promise.resolve(false));
+    const requests: StartSubagentRequest[] = [];
+    const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
+    const result = await tool?.execute(
+      "call",
+      {
+        agents: [
+          {
+            task: "Use a requested override",
+            model: "pi/openai-codex/gpt-5.6-sol",
+            execution: "foreground",
+          },
+          { task: "Use profile routing", profile: "scout" },
+        ],
+      },
+      undefined,
+      undefined,
+      {
+        ...(context as unknown as Record<string, unknown>),
+        ui: { confirm },
+      } as unknown as ExtensionContext,
+    );
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.profile).toBe("scout");
+    expect(result?.details).toMatchObject({
+      startFailures: [{ index: 0, code: "explicit_model_not_authorized" }],
+    });
+    expect(result?.content[0]?.text).toContain("[explicit_model_not_authorized]");
+  });
+
+  it("does not reuse an earlier confirmation for the same explicit model", async () => {
+    const confirm = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const requests: StartSubagentRequest[] = [];
+    const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
+    const authorizedContext = {
+      ...(context as unknown as Record<string, unknown>),
+      ui: { confirm },
+    } as unknown as ExtensionContext;
+    const input = {
+      agents: [
+        {
+          task: "Review auth",
+          model: "pi/openai-codex/gpt-5.6-sol",
+        },
+      ],
+    } as const;
+
+    await tool?.execute("first", input, undefined, undefined, authorizedContext);
+    const second = await tool?.execute("second", input, undefined, undefined, authorizedContext);
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(requests).toHaveLength(1);
+    expect(second?.details).toMatchObject({
+      startFailures: [{ code: "explicit_model_not_authorized" }],
+    });
+  });
+
+  it("fails closed without UI before model lookup, authentication, preflight, or start", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const find = vi.fn();
+    const getProviderAuthStatus = vi.fn();
+    const getApiKeyAndHeaders = vi.fn();
+    const ensureClaudeReady = vi.fn(() => Effect.void);
+    const tool = captureSubagentTools(startCapturingService(requests), ["read"], undefined, {
+      ensureClaudeReady,
+    }).get("subagent_start");
+    const result = await tool?.execute(
+      "call",
+      {
+        agents: [
+          { task: "Pi override", model: "pi/openai-codex/gpt-5.6-sol" },
+          { task: "Claude override", model: "claude-cli/fable" },
+        ],
+      },
+      undefined,
+      undefined,
+      {
+        ...(context as unknown as Record<string, unknown>),
+        hasUI: false,
+        modelRegistry: {
+          ...(context.modelRegistry as unknown as Record<string, unknown>),
+          find,
+          getProviderAuthStatus,
+          getApiKeyAndHeaders,
+        },
+      } as unknown as ExtensionContext,
+    );
+
+    expect(requests).toEqual([]);
+    expect(find).not.toHaveBeenCalled();
+    expect(getProviderAuthStatus).not.toHaveBeenCalled();
+    expect(getApiKeyAndHeaders).not.toHaveBeenCalled();
+    expect(ensureClaudeReady).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      startFailures: [
+        { index: 0, code: "explicit_model_not_authorized" },
+        { index: 1, code: "explicit_model_not_authorized" },
+      ],
     });
   });
 

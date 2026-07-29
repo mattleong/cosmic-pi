@@ -27,6 +27,10 @@ import {
 import type { ProfileCandidateAttempt, ProfileResolutionEnvironment } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import { ensureClaudeCliReady } from "./claude-preflight.ts";
+import {
+  consumeExplicitModelAuthorization,
+  type ExplicitModelAuthorization,
+} from "./host-model-authorization.ts";
 
 export interface SubagentProfileStartSpec {
   readonly task: string;
@@ -262,6 +266,8 @@ export const resolveProfileStart = (
   ctx: ExtensionContext,
   environment: SubagentSessionEnvironment,
   boundaries: SubagentStartBoundaries,
+  launchIndex: number,
+  explicitModelAuthorization?: ExplicitModelAuthorization,
 ): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError, SubagentProfileService> =>
   Effect.gen(function* () {
     const profiles = yield* SubagentProfileService;
@@ -273,6 +279,20 @@ export const resolveProfileStart = (
       });
 
     const routing = yield* launchRouting(rawInput.model);
+    if (
+      routing.backend !== "auto" &&
+      !consumeExplicitModelAuthorization(
+        explicitModelAuthorization,
+        launchIndex,
+        rawInput.model ?? "",
+        task,
+      )
+    )
+      return yield* new InvalidSubagentRequestError({
+        code: "explicit_model_not_authorized",
+        message:
+          "Explicit subagent model overrides require direct user authorization. Retry without model to use configured profile routing.",
+      });
     const requestedProfile = rawInput.profile?.trim();
     const selectedProfile = requestedProfile || profiles.config.defaultProfile;
     const definition = profiles.definition(selectedProfile);
