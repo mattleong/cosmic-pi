@@ -11,7 +11,13 @@ import type {
   SubagentProfilePatch,
 } from "../config/store.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
-import { PROFILE_IDS, type DeclaredProfileRoute, type ProfileId } from "../profiles/model.ts";
+import {
+  PROFILE_IDS,
+  type DeclaredProfileRoute,
+  type ProfileId,
+  type ProfileRoute,
+  type ProfileRouteSource,
+} from "../profiles/model.ts";
 import { isActiveRunState } from "../run/model.ts";
 import { SubagentFleetComponent } from "../ui/fleet.ts";
 import {
@@ -157,9 +163,35 @@ const currentSelectorFor = (
   return candidates.length === 1 ? candidates[0]?.model : undefined;
 };
 
-const profileSummary = (inspection: SubagentConfigInspection, profile: ProfileId): string => {
-  const route = inspection.config.profiles[profile];
-  const source = inspection.config.profileSources[profile].replace("-invalid", " invalid");
+const globalProfileRoute = (
+  inspection: SubagentConfigInspection,
+  profile: ProfileId,
+): { readonly route: ProfileRoute; readonly source: ProfileRouteSource } => {
+  if (inspection.global.invalidProfileRoutes.includes(profile))
+    return { route: { candidates: [] }, source: "global-invalid" };
+  const declared = inspection.global.file.profiles?.[profile];
+  if (declared === undefined) return { route: BUILTIN_PROFILE_ROUTES[profile], source: "builtin" };
+  return {
+    route: {
+      candidates: declared === "disabled" ? [] : Array.isArray(declared) ? declared : [declared],
+    },
+    source: "global",
+  };
+};
+
+const profileSummary = (
+  inspection: SubagentConfigInspection,
+  scope: SubagentConfigScope,
+  profile: ProfileId,
+): string => {
+  const { route, source: routeSource } =
+    scope === "global"
+      ? globalProfileRoute(inspection, profile)
+      : {
+          route: inspection.config.profiles[profile],
+          source: inspection.config.profileSources[profile],
+        };
+  const source = routeSource.replace("-invalid", " invalid");
   if (route.candidates.length === 0) return `${profile} · ${source} · Disabled`;
   if (route.candidates.length > 1)
     return `${profile} · ${source} · Ordered route · ${route.candidates.length} candidates · JSON-managed`;
@@ -354,7 +386,7 @@ async function openProfileSettings(
       scope === "global" ? inspection.config.globalConfigPath : inspection.config.projectConfigPath;
 
     while (true) {
-      const labels = PROFILE_IDS.map((profile) => profileSummary(inspection, profile));
+      const labels = PROFILE_IDS.map((profile) => profileSummary(inspection, scope, profile));
       const selected = await ctx.ui.select(
         `${scope === "global" ? "Global" : "Project"} profiles · ${path} · esc back to scope`,
         labels,

@@ -148,10 +148,30 @@ describe("/subagents command and profile settings", () => {
     expect(managerActions.patchProfile).not.toHaveBeenCalled();
   });
 
+  it("keeps global summaries scoped when a project route overrides them", () => {
+    const value = inspection(
+      {
+        version: 2,
+        profiles: { reviewer: { model: "claude-cli/fable", effort: "medium" } },
+      },
+      {
+        version: 2,
+        profiles: { reviewer: { model: "pi/openai-codex/gpt-5.6-sol", effort: "xhigh" } },
+      },
+    );
+
+    expect(_profileSettingsTest.profileSummary(value, "global", "reviewer")).toBe(
+      "reviewer · global · claude-cli/fable · medium",
+    );
+    expect(_profileSettingsTest.profileSummary(value, "project", "reviewer")).toBe(
+      "reviewer · project · pi/openai-codex/gpt-5.6-sol · xhigh",
+    );
+  });
+
   it("navigates back from model to profile and from profile to scope", async () => {
     const managerActions = actions();
     const run = register(managerActions);
-    const worker = _profileSettingsTest.profileSummary(inspection(), "worker");
+    const worker = _profileSettingsTest.profileSummary(inspection(), "global", "worker");
     const select = vi
       .fn()
       .mockResolvedValueOnce("Global · /agent/pi-subagents.json")
@@ -179,7 +199,7 @@ describe("/subagents command and profile settings", () => {
   it("returns from effort selection to the same profile's model picker", async () => {
     const managerActions = actions();
     const run = register(managerActions);
-    const worker = _profileSettingsTest.profileSummary(inspection(), "worker");
+    const worker = _profileSettingsTest.profileSummary(inspection(), "global", "worker");
     const select = vi
       .fn()
       .mockResolvedValueOnce("Global · /agent/pi-subagents.json")
@@ -197,7 +217,7 @@ describe("/subagents command and profile settings", () => {
   it("shows the active profile and scope in the model picker", async () => {
     const managerActions = actions();
     const run = register(managerActions);
-    const worker = _profileSettingsTest.profileSummary(inspection(), "worker");
+    const worker = _profileSettingsTest.profileSummary(inspection(), "global", "worker");
     const custom = vi
       .fn()
       .mockImplementationOnce(
@@ -255,7 +275,7 @@ describe("/subagents command and profile settings", () => {
     const managerActions = actions(value);
     const run = register(managerActions);
     const notify = vi.fn();
-    const worker = _profileSettingsTest.profileSummary(value, "worker");
+    const worker = _profileSettingsTest.profileSummary(value, "global", "worker");
     const select = vi
       .fn()
       .mockResolvedValueOnce("Global · /agent/pi-subagents.json")
@@ -282,7 +302,7 @@ describe("/subagents command and profile settings", () => {
     expect(_profileSettingsTest.currentSelectorFor(value, "project", "worker")).toBe("inherit");
     const managerActions = actions(value);
     const run = register(managerActions);
-    const worker = _profileSettingsTest.profileSummary(value, "worker");
+    const worker = _profileSettingsTest.profileSummary(value, "project", "worker");
     const select = vi
       .fn()
       .mockResolvedValueOnce("Project · /repo/.pi/pi-subagents.json")
@@ -324,7 +344,7 @@ describe("/subagents command and profile settings", () => {
     const managerActions = actions(value);
     const run = register(managerActions);
     const notify = vi.fn();
-    const worker = _profileSettingsTest.profileSummary(value, "worker");
+    const worker = _profileSettingsTest.profileSummary(value, "project", "worker");
     const select = vi
       .fn()
       .mockResolvedValueOnce("Project · /repo/.pi/pi-subagents.json")
@@ -349,7 +369,7 @@ describe("/subagents command and profile settings", () => {
     const managerActions = actions(value);
     const run = register(managerActions);
     const notify = vi.fn();
-    const worker = _profileSettingsTest.profileSummary(value, "worker");
+    const worker = _profileSettingsTest.profileSummary(value, "project", "worker");
     const select = vi
       .fn()
       .mockResolvedValueOnce("Project · /repo/.pi/pi-subagents.json")
@@ -406,7 +426,7 @@ describe("/subagents command and profile settings", () => {
     const managerActions = actions();
     const run = register(managerActions);
     const value = inspection();
-    const worker = _profileSettingsTest.profileSummary(value, "worker");
+    const worker = _profileSettingsTest.profileSummary(value, "global", "worker");
     const select = vi
       .fn()
       .mockResolvedValueOnce("Global · /agent/pi-subagents.json")
@@ -433,7 +453,7 @@ describe("/subagents command and profile settings", () => {
     const managerActions = actions();
     const run = register(managerActions);
     const value = inspection();
-    const worker = _profileSettingsTest.profileSummary(value, "worker");
+    const worker = _profileSettingsTest.profileSummary(value, "global", "worker");
     const select = vi
       .fn()
       .mockResolvedValueOnce("Global · /agent/pi-subagents.json")
@@ -466,7 +486,7 @@ describe("/subagents command and profile settings", () => {
     );
     const managerActions = actions(value);
     const run = register(managerActions);
-    const worker = _profileSettingsTest.profileSummary(value, "worker");
+    const worker = _profileSettingsTest.profileSummary(value, "project", "worker");
     const select = vi
       .fn()
       .mockResolvedValueOnce("Project · /repo/.pi/pi-subagents.json")
@@ -491,7 +511,7 @@ describe("/subagents command and profile settings", () => {
       version: 2,
       discouraged: [{ backend: "pi", model: "zai/plain" }],
     });
-    const worker = _profileSettingsTest.profileSummary(value, "worker");
+    const worker = _profileSettingsTest.profileSummary(value, "global", "worker");
     const declineActions = actions(value);
     const runDecline = register(declineActions);
     const declineConfirm = vi.fn().mockResolvedValue(false);
@@ -541,7 +561,7 @@ describe("/subagents command and profile settings", () => {
     );
     const run = register(managerActions);
     const value = inspection();
-    const worker = _profileSettingsTest.profileSummary(value, "worker");
+    const worker = _profileSettingsTest.profileSummary(value, "global", "worker");
     const notify = vi.fn();
     const ctx = baseContext({
       select: vi
@@ -572,7 +592,7 @@ describe("/subagents command and profile settings", () => {
     } as unknown as ExtensionAPI;
     registerSubagentManagerCommand(pi, bridge, managerActions);
     const value = inspection();
-    const worker = _profileSettingsTest.profileSummary(value, "worker");
+    const worker = _profileSettingsTest.profileSummary(value, "global", "worker");
     const select = vi
       .fn()
       .mockResolvedValueOnce("Global · /agent/pi-subagents.json")
