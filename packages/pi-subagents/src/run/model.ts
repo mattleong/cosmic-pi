@@ -1,20 +1,21 @@
 import type { ProfileId, SubagentSelectionProvenance } from "../profiles/model.ts";
 
-export type SubagentRunState =
-  | "starting"
-  | "running"
-  | "waiting_for_parent"
-  | "paused"
-  | "completed"
-  | "failed"
-  | "stopping"
-  | "stopped";
+export const SUBAGENT_RUN_STATES = [
+  "starting",
+  "running",
+  "waiting_for_parent",
+  "paused",
+  "completed",
+  "failed",
+  "stopping",
+  "stopped",
+] as const;
+export type SubagentRunState = (typeof SUBAGENT_RUN_STATES)[number];
 
 export type SubagentExecution = "foreground" | "background";
 export type SubagentContextMode = "fresh" | "fork";
 export type SubagentWriteIntent = "writer" | "read-only";
 export type SubagentBackend = "pi" | "claude-cli";
-export type SubagentBackendSelector = SubagentBackend | "auto";
 export type SubagentCapability =
   | "steer"
   | "interrupt"
@@ -59,7 +60,8 @@ export const CLAUDE_CLI_SUBAGENT_CAPABILITIES = [
 ] as const satisfies ReadonlyArray<SubagentCapability>;
 
 const CLAUDE_MODEL_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const CLAUDE_MODEL_ALIASES: ReadonlySet<string> = new Set(["fable", "sonnet", "opus", "haiku"]);
+export const CLAUDE_CLI_ALIAS_IDS = ["fable", "sonnet", "opus", "haiku"] as const;
+const CLAUDE_MODEL_ALIASES: ReadonlySet<string> = new Set(CLAUDE_CLI_ALIAS_IDS);
 
 export const isClaudeModelSelector = (value: string): boolean => {
   const trimmed = value.trim();

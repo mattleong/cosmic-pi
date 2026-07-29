@@ -43,12 +43,12 @@ async function openFleetManager(
   bridge: SubagentProjectionBridge,
   actions: FleetManagerActions,
 ): Promise<void> {
-  if (ctx.mode !== "tui") {
+  if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
     if (ctx.hasUI) ctx.ui.notify("/subagents requires interactive TUI mode.", "warning");
     return;
   }
   await ctx.ui.custom<void>(
-    (tui, theme, _keybindings, done) => {
+    (tui, theme, keybindings, done) => {
       let unsubscribe = () => {};
       const promptMessage = (id: string, waiting: boolean) => {
         void ctx.ui
@@ -78,6 +78,7 @@ async function openFleetManager(
         getProjection: bridge.get,
         getHeight: () => tui.terminal.rows,
         getNow: synchronousNow,
+        matchesKeybinding: (data, id) => keybindings.matches(data, id),
         requestRender: () => tui.requestRender(),
         close: () => done(undefined),
         actions: {
@@ -92,9 +93,18 @@ async function openFleetManager(
         manager.invalidate();
         tui.requestRender();
       });
+      let lastAgeSecond = -1;
       const stopSpinnerTicker = startHostUiTicker(160, () => {
-        if (bridge.get().runs.some((run) => run.state === "starting" || run.state === "running"))
+        const runs = bridge.get().runs;
+        if (runs.some((run) => run.state === "starting" || run.state === "running")) {
           tui.requestRender();
+          return;
+        }
+        if (!runs.some((run) => run.endedAt !== undefined)) return;
+        const ageSecond = Math.floor(synchronousNow() / 1_000);
+        if (ageSecond === lastAgeSecond) return;
+        lastAgeSecond = ageSecond;
+        tui.requestRender();
       });
       return {
         render: (width) => manager.render(width),
@@ -152,7 +162,7 @@ const profileSummary = (inspection: SubagentConfigInspection, profile: ProfileId
   const source = inspection.config.profileSources[profile].replace("-invalid", " invalid");
   if (route.candidates.length === 0) return `${profile} · ${source} · Disabled`;
   if (route.candidates.length > 1)
-    return `${profile} · ${source} · Ordered route · ${route.candidates.length} candidates`;
+    return `${profile} · ${source} · Ordered route · ${route.candidates.length} candidates · JSON-managed`;
   const candidate = route.candidates[0];
   return `${profile} · ${source} · ${candidate?.model ?? "Disabled"} · ${candidate?.effort ?? ""}`;
 };
@@ -179,7 +189,9 @@ const chooseScope = async (
   const project = `Project · ${inspection.config.projectConfigPath}`;
   const options = projectTrusted ? [global, project] : [global];
   const selected = await ctx.ui.select(
-    "Subagent profile settings · choose scope · esc close",
+    projectTrusted
+      ? "Subagent profile settings · choose scope · esc close"
+      : "Subagent profile settings · choose scope · Project unavailable while untrusted · esc close",
     options,
   );
   return selected === global ? "global" : selected === project ? "project" : undefined;

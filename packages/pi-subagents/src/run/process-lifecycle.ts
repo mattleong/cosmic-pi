@@ -201,6 +201,7 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
       );
       if (!attached)
         return yield* new InvalidSubagentRequestError({
+          code: "start_cancelled",
           message: `Subagent ${record.view.id} was stopped during startup.`,
         });
       const isCurrentProcess = withLock(
@@ -255,7 +256,8 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
 
   const isRetryableClaudeInitialization = (error: SubagentError): boolean =>
     error._tag === "SubagentProcessError" &&
-    (error.operation === "spawn" ||
+    (error.code === "transport_not_sent" ||
+      error.operation === "spawn" ||
       error.operation === "await RPC response from" ||
       error.operation === "initialize stream");
 
@@ -297,6 +299,7 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
       if (!accepted) {
         yield* Scope.close(nextScope, Exit.void);
         return yield* new InvalidSubagentRequestError({
+          code: "initialization_retry_cancelled",
           message: `Subagent ${record.view.id} stopped before initialization retry.`,
         });
       }

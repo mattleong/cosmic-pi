@@ -14,7 +14,7 @@ import {
   UnsupportedSubagentCapabilityError,
 } from "./errors.ts";
 import { validateParentMessage } from "./coordination.ts";
-import { appendNoticeSessionEvent } from "./session-output.ts";
+import { appendNoticeSessionEvent } from "./session-events.ts";
 import { sanitizeName, snapshotView } from "./state.ts";
 
 export interface RunControlDependencies {
@@ -65,22 +65,27 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           yield* requireCapability(selected, "steer");
           if (selected.view.state === "waiting_for_parent")
             return yield* new InvalidSubagentRequestError({
+              code: "run_waiting_for_parent",
               message: `Subagent ${id} is waiting for a parent reply; use subagent_reply({ runId: "${id}", message: "..." }).`,
             });
           if (selected.replyPendingRequestId)
             return yield* new InvalidSubagentRequestError({
+              code: "reply_in_flight",
               message: `Subagent ${id} already has a parent reply in flight.`,
             });
           if (selected.view.state === "paused" || selected.view.state === "completed")
             return yield* new InvalidSubagentRequestError({
+              code: "run_not_running",
               message: `Subagent ${id} is ${selected.view.state}; resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance.`,
             });
           if (selected.view.state === "starting")
             return yield* new InvalidSubagentRequestError({
+              code: "run_starting",
               message: `Subagent ${id} is still starting; wait for it to start before retrying subagent_send.`,
             });
           if (selected.view.state !== "running")
             return yield* new InvalidSubagentRequestError({
+              code: "run_not_running",
               message: `Subagent ${id} is ${selected.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
             });
           return selected;
@@ -127,10 +132,12 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             const question = record.view.question;
             if (record.view.state !== "waiting_for_parent" || !question)
               return yield* new InvalidSubagentRequestError({
+                code: "parent_question_missing",
                 message: `Subagent ${id} has no pending parent question.`,
               });
             if (record.replyPendingRequestId)
               return yield* new InvalidSubagentRequestError({
+                code: "reply_in_flight",
                 message: `Subagent ${id} already has a reply in flight.`,
               });
             const process = record.process;
@@ -223,10 +230,12 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             yield* requireCapability(selected, "interrupt");
             if (selected.view.state !== "running" && selected.view.state !== "waiting_for_parent")
               return yield* new InvalidSubagentRequestError({
+                code: "interrupt_state_invalid",
                 message: `Subagent ${id} cannot be interrupted while ${selected.view.state}.`,
               });
             if (selected.pauseRequested)
               return yield* new InvalidSubagentRequestError({
+                code: "interrupt_in_flight",
                 message: `Subagent ${id} already has an interrupt pending.`,
               });
             selected.pauseRequested = true;
@@ -267,6 +276,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               if (record.view.state === "paused") return snapshotView(record.view);
               if (record.view.state !== "running" && record.view.state !== "waiting_for_parent")
                 return yield* new InvalidSubagentRequestError({
+                  code: "interrupt_outcome_uncertain",
                   message: `Subagent ${id} stopped before interruption completed.`,
                 });
               record.pauseRequested = false;
@@ -297,13 +307,17 @@ export function makeRunControls(dependencies: RunControlDependencies) {
     Effect.gen(function* () {
       const name = sanitizeName(rawName);
       if (!name)
-        return yield* new InvalidSubagentRequestError({ message: "Subagent name is required." });
+        return yield* new InvalidSubagentRequestError({
+          code: "name_required",
+          message: "Subagent name is required.",
+        });
       const selected = yield* withLock(
         Effect.gen(function* () {
           const record = yield* requireRecord(id);
           yield* requireCapability(record, "rename-display");
           if (record.view.state === "stopping")
             return yield* new InvalidSubagentRequestError({
+              code: "rename_state_invalid",
               message: `Subagent ${id} cannot be renamed while stopping.`,
             });
           if (
@@ -332,6 +346,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             isTerminalRunState(selected.record.view.state)
           )
             return yield* new InvalidSubagentRequestError({
+              code: "rename_outcome_uncertain",
               message: `Subagent ${id} stopped before rename completed.`,
             });
           selected.record.launch = { ...selected.record.launch, name };

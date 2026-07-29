@@ -1,4 +1,9 @@
-import type { SubagentBackend, SubagentEffort, SubagentModelView } from "./model.ts";
+import {
+  CLAUDE_CLI_ALIAS_IDS,
+  type SubagentBackend,
+  type SubagentEffort,
+  type SubagentModelView,
+} from "./model.ts";
 
 export const MAX_DISCOVERY_RESULTS = 100;
 const MAX_NEAR_MATCHES = 6;
@@ -9,36 +14,15 @@ export const EXPLICIT_SUBAGENT_MODEL_SELECTOR = /^(?:pi\/[^\s/]+\/[^\s]+|claude-
  * an exact Claude version requires its full model ID and is never translated into an alias.
  */
 const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
-export const CLAUDE_CLI_ALIAS_MODELS: ReadonlyArray<SubagentModelView> = [
-  {
+export const CLAUDE_CLI_ALIAS_MODELS: ReadonlyArray<SubagentModelView> = CLAUDE_CLI_ALIAS_IDS.map(
+  (id) => ({
     backend: "claude-cli",
-    id: "fable",
-    name: "Claude Fable (CLI alias)",
+    id,
+    name: `Claude ${id[0]?.toUpperCase() ?? ""}${id.slice(1)} (CLI alias)`,
     reasoning: true,
     supportedEfforts: CLAUDE_EFFORTS,
-  },
-  {
-    backend: "claude-cli",
-    id: "sonnet",
-    name: "Claude Sonnet (CLI alias)",
-    reasoning: true,
-    supportedEfforts: CLAUDE_EFFORTS,
-  },
-  {
-    backend: "claude-cli",
-    id: "opus",
-    name: "Claude Opus (CLI alias)",
-    reasoning: true,
-    supportedEfforts: CLAUDE_EFFORTS,
-  },
-  {
-    backend: "claude-cli",
-    id: "haiku",
-    name: "Claude Haiku (CLI alias)",
-    reasoning: true,
-    supportedEfforts: CLAUDE_EFFORTS,
-  },
-];
+  }),
+);
 
 export const CLAUDE_CLI_ALIASES: ReadonlySet<string> = new Set(
   CLAUDE_CLI_ALIAS_MODELS.map((model) => model.id),

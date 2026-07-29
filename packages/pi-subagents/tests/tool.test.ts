@@ -299,17 +299,9 @@ describe("subagent tool", () => {
     expect(schema("subagent_await")?.required).toEqual(["runIds", "until", "timeoutSeconds"]);
     expect(properties("subagent_send")).toEqual(["runIds", "message"]);
     expect(properties("subagent_reply")).toEqual(["runId", "message"]);
-    expect(properties("subagent_lifecycle")).toEqual([]);
-    expect(
-      schema("subagent_lifecycle")?.anyOf?.map((member) => Object.keys(member.properties ?? {})),
-    ).toEqual([
-      ["action", "runIds"],
-      ["action", "runIds"],
-      ["action", "runIds", "message"],
-    ]);
-    expect(
-      schema("subagent_lifecycle")?.anyOf?.every((member) => member.additionalProperties === false),
-    ).toBe(true);
+    expect(properties("subagent_lifecycle")).toEqual(["action", "runIds", "message"]);
+    expect(schema("subagent_lifecycle")?.required).toEqual(["action", "runIds"]);
+    expect(schema("subagent_lifecycle")?.anyOf).toBeUndefined();
     expect(properties("subagent_rename")).toEqual(["runId", "name"]);
     for (const name of [
       "subagent_models",
@@ -319,6 +311,7 @@ describe("subagent tool", () => {
       "subagent_await",
       "subagent_send",
       "subagent_reply",
+      "subagent_lifecycle",
       "subagent_rename",
     ])
       expect(schema(name)?.additionalProperties).toBe(false);
@@ -365,11 +358,14 @@ describe("subagent tool", () => {
         agents: [{ model: "openai-codex/gpt-5.6-sol", profile: "scout", task: "Inspect" }],
       }),
     ).toBe(false);
+    expect(() => startTool?.prepareArguments?.({ task: "Inspect", profile: "scout" })).toThrow(
+      "[legacy_start_shape]",
+    );
     expect(() =>
       startTool?.prepareArguments?.({
         agents: [{ backend: "auto", profile: "scout", task: "Inspect" }],
       }),
-    ).toThrow("backend is no longer accepted");
+    ).toThrow("[legacy_backend_field]");
     expect(() =>
       startTool?.prepareArguments?.({
         agents: [{ model: "/", profile: "scout", task: "Inspect" }],
@@ -1983,6 +1979,24 @@ describe("subagent tool", () => {
     expect(cancelled).toContain("Await cancelled; 1 subagent is unfinished.");
     expect(cancelled).toContain("Question from auth-review: Which fixture?");
     expect(cancelled).toContain('subagent_reply({ runId: "agent-question", message: "..." })');
+
+    const immediateUpdates: Array<{ readonly content: ReadonlyArray<{ readonly text: string }> }> =
+      [];
+    const immediateController = new AbortController();
+    immediateController.abort();
+    const immediate = captureSubagentTools(timeoutService)
+      .get("subagent_await")
+      ?.execute(
+        "call",
+        { runIds: [waiting.id], until: "all_finished", timeoutSeconds: 0 },
+        immediateController.signal,
+        (result) => immediateUpdates.push(result),
+        context,
+      );
+    await expect(immediate).rejects.toBeDefined();
+    expect(immediateUpdates.at(-1)?.content[0]?.text).toContain(
+      "Await cancelled before progress was observed",
+    );
   });
 
   it("reports per-target management outcomes without hiding successful side effects", async () => {

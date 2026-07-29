@@ -2,7 +2,7 @@ import type * as Deferred from "effect/Deferred";
 import type * as Scope from "effect/Scope";
 import type { ChildLaunchRequest, ChildProcessHandle } from "../boundary/child-process.ts";
 import type { SubagentError } from "./errors.ts";
-import type { SubagentRunView } from "./model.ts";
+import { isTerminalRunState, type SubagentRunView } from "./model.ts";
 import type { RpcResponse } from "./protocol.ts";
 import type { RateLimitNoticeState } from "./rate-limit.ts";
 
@@ -18,6 +18,12 @@ export interface RateLimitSettlementState {
   readonly windowKey: string;
   readonly message?: string | undefined;
 }
+
+/** Stopped-by-parent, stopping, or terminal records ignore further child events. */
+export const isInactiveRunRecord = (record: RunRecord): boolean =>
+  record.stoppedByParent ||
+  record.view.state === "stopping" ||
+  isTerminalRunState(record.view.state);
 
 export interface RunRecord {
   view: SubagentRunView;

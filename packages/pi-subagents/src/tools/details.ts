@@ -1,9 +1,11 @@
 import { freezeSnapshot, stripTerminalControls } from "pi-cosmic-core";
-import type {
-  PendingParentQuestion,
-  SubagentEffort,
-  SubagentRunState,
-  SubagentRunView,
+import {
+  SUBAGENT_EFFORTS,
+  SUBAGENT_RUN_STATES,
+  type PendingParentQuestion,
+  type SubagentEffort,
+  type SubagentRunState,
+  type SubagentRunView,
 } from "../run/model.ts";
 import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import {
@@ -303,25 +305,8 @@ export function makeCompactToolDetails(input: CompactToolDetailsInput): CompactS
   });
 }
 
-const RUN_STATES: ReadonlySet<string> = new Set([
-  "starting",
-  "running",
-  "waiting_for_parent",
-  "paused",
-  "completed",
-  "failed",
-  "stopping",
-  "stopped",
-]);
-const EFFORTS: ReadonlySet<string> = new Set([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
+const RUN_STATES: ReadonlySet<string> = new Set(SUBAGENT_RUN_STATES);
+const EFFORTS: ReadonlySet<string> = new Set(SUBAGENT_EFFORTS);
 const SOURCES: ReadonlySet<string> = new Set([
   "explicit",
   "profile-candidate",

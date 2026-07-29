@@ -25,11 +25,20 @@ export interface FleetActions {
   readonly rename: (id: string) => void;
 }
 
+export type FleetKeybindingId =
+  | "tui.select.up"
+  | "tui.select.down"
+  | "tui.select.pageUp"
+  | "tui.select.pageDown"
+  | "tui.select.confirm"
+  | "tui.select.cancel";
+
 export interface FleetOptions {
   readonly theme: Theme;
   readonly getProjection: () => SubagentProjection;
   readonly getHeight: () => number;
   readonly getNow: () => number;
+  readonly matchesKeybinding?: ((data: string, id: FleetKeybindingId) => boolean) | undefined;
   readonly requestRender: () => void;
   readonly close: () => void;
   readonly actions: FleetActions;
@@ -111,24 +120,37 @@ export class SubagentFleetComponent implements Component {
     const runs = this.options.getProjection().runs;
     this.reconcile(runs);
     const selected = runs[this.selected];
-    if (matchesKey(data, Key.escape)) {
+    const configured = (
+      id: FleetKeybindingId,
+      fallback: Parameters<typeof matchesKey>[1],
+    ): boolean =>
+      this.options.matchesKeybinding
+        ? this.options.matchesKeybinding(data, id)
+        : matchesKey(data, fallback);
+    if (configured("tui.select.cancel", Key.escape)) {
       if (this.pendingStop) {
         this.pendingStop = undefined;
+        this.options.requestRender();
+        return;
+      }
+      if (this.layout === "narrow" && this.details) {
+        this.details = false;
+        this.detailScroll = 0;
         this.options.requestRender();
         return;
       }
       this.options.close();
       return;
     }
-    if (matchesKey(data, Key.ctrl("u"))) {
+    if (matchesKey(data, Key.ctrl("u")) || configured("tui.select.pageUp", Key.pageUp)) {
       this.detailScroll = Math.min(this.detailMaxScroll, this.detailScroll + 1);
-    } else if (matchesKey(data, Key.ctrl("d"))) {
+    } else if (matchesKey(data, Key.ctrl("d")) || configured("tui.select.pageDown", Key.pageDown)) {
       this.detailScroll = Math.max(0, this.detailScroll - 1);
-    } else if (matchesKey(data, Key.up) || data === "k") {
+    } else if (configured("tui.select.up", Key.up) || data === "k") {
       this.select(this.selected - 1, runs);
-    } else if (matchesKey(data, Key.down) || data === "j") {
+    } else if (configured("tui.select.down", Key.down) || data === "j") {
       this.select(this.selected + 1, runs);
-    } else if (matchesKey(data, Key.enter) && this.layout === "narrow") {
+    } else if (configured("tui.select.confirm", Key.enter) && this.layout === "narrow") {
       this.details = !this.details;
       this.detailScroll = 0;
     } else if (data === "t") {
@@ -162,9 +184,12 @@ export class SubagentFleetComponent implements Component {
     const runs = projection.runs;
     this.reconcile(runs);
     const selected = runs[this.selected];
-    const active = runs.filter((run) => isActiveRunState(run.state)).length;
+    const working = runs.filter(
+      (run) => run.state === "starting" || run.state === "running" || run.state === "stopping",
+    ).length;
     const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
-    const title = ` /subagents · ${active} active${waiting ? ` · ${waiting} waiting` : ""} `;
+    const paused = runs.filter((run) => run.state === "paused").length;
+    const title = ` /subagents · ${runs.length} run${runs.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""} `;
     const top = `${this.outerBorder("╭")}${this.options.theme.fg("accent", title)}${this.outerBorder(
       `${"─".repeat(Math.max(0, safeWidth - visibleWidth(title) - 2))}╮`,
     )}`;
@@ -269,7 +294,7 @@ export class SubagentFleetComponent implements Component {
       ],
       width >= 60
         ? ["↑↓ Select · C-u/d", "t Details · ? Actions · Esc"]
-        : ["↑↓ · Enter", "t", "? Actions · Esc"],
+        : ["↑↓ · Enter", "t Tech", "? Actions · Esc"],
     ]);
   }
 

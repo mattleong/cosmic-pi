@@ -6,6 +6,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ensureClaudeCliReady,
@@ -128,6 +129,35 @@ process.exit(1);`,
     );
 
     expect(await readFile(counter, "utf8")).toBe("x");
+  });
+
+  it("releases the shared gate when the owning probe is interrupted", async () => {
+    const counter = join(directory, "invocations");
+    const script = await fixture(
+      "fake-claude-interrupt.mjs",
+      `import { readFileSync } from "node:fs";
+const attempt = readFileSync(process.env[${JSON.stringify(COUNTER_ENV)}], "utf8").length;
+if (attempt === 1) setInterval(() => {}, 1000);
+else process.stdout.write(JSON.stringify({ loggedIn: true, status: "authenticated" }) + "\\n");`,
+    );
+    const options = { command: process.execPath, commandArgs: [script], timeoutMillis: 2_000 };
+    const owner = Effect.runFork(ensureClaudeCliReady(options));
+    while (true) {
+      const attempts = await readFile(counter, "utf8").catch(() => "");
+      if (attempts === "x") break;
+      await Effect.runPromise(Effect.sleep("10 millis"));
+    }
+
+    const waiter = Effect.runPromise(Effect.flip(ensureClaudeCliReady(options)));
+    await Effect.runPromise(Effect.yieldNow);
+    await Effect.runPromise(Fiber.interrupt(owner));
+    await expect(waiter).resolves.toMatchObject({
+      code: "claude_cli_preflight_failed",
+      message: expect.stringContaining("owner was interrupted"),
+    });
+    await Effect.runPromise(ensureClaudeCliReady(options));
+
+    expect(await readFile(counter, "utf8")).toBe("xx");
   });
 
   it("reports a missing executable distinctly", async () => {

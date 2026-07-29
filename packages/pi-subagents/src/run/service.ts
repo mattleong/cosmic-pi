@@ -41,7 +41,7 @@ import {
   validateParentMessage,
 } from "./coordination.ts";
 import { makeRunEventHandler } from "./events.ts";
-import type { RunRecord } from "./internal.ts";
+import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
 import { makeRunProcessLifecycle } from "./process-lifecycle.ts";
 import {
   COMPLETION_RETRY_INITIAL_MILLIS,
@@ -76,7 +76,7 @@ import {
   rateLimitMessage,
   rateLimitWindowKey,
 } from "./rate-limit.ts";
-import { appendNoticeSessionEvent } from "./session-output.ts";
+import { appendNoticeSessionEvent } from "./session-events.ts";
 import {
   MAX_ERROR_CHARS,
   MAX_TASK_CHARS,
@@ -96,6 +96,38 @@ const ownsProcessSlot = (record: RunRecord): boolean =>
 const ownsWriterSlot = (record: RunRecord): boolean =>
   record.view.writeIntent === "writer" &&
   (record.cleanupPending || isActiveRunState(record.view.state));
+
+const processCapacityError = (
+  records: ReadonlyMap<string, RunRecord>,
+  excluded?: RunRecord,
+): SubagentCapacityError | undefined => {
+  const candidates = [...records.values()].filter((record) => record !== excluded);
+  if (candidates.filter(ownsProcessSlot).length < MAX_CONCURRENT_RUNS) return undefined;
+  const cleanupCount = candidates.filter((record) => record.cleanupPending).length;
+  return new SubagentCapacityError({
+    limit: MAX_CONCURRENT_RUNS,
+    message:
+      cleanupCount > 0
+        ? `Subagent capacity is temporarily occupied while ${cleanupCount} run${cleanupCount === 1 ? "" : "s"} finish cleanup; retry shortly.`
+        : `Subagent capacity reached (${MAX_CONCURRENT_RUNS}). Stop an active run first.`,
+  });
+};
+
+const writerConflictError = (
+  records: ReadonlyMap<string, RunRecord>,
+  excluded?: RunRecord,
+): SubagentWriterConflictError | undefined => {
+  const activeWriter = [...records.values()].find(
+    (record) => record !== excluded && ownsWriterSlot(record),
+  );
+  return activeWriter
+    ? new SubagentWriterConflictError({
+        activeId: activeWriter.view.id,
+        activeName: activeWriter.view.name,
+        message: `Writer ${activeWriter.view.name} (${activeWriter.view.id}) already owns the shared cwd.`,
+      })
+    : undefined;
+};
 
 const recordDeliveredRateLimitRejection = (
   record: RunRecord | undefined,
@@ -519,12 +551,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   ) =>
     withLock(
       Effect.sync(() => {
-        if (
-          record.stoppedByParent ||
-          record.view.state === "stopping" ||
-          isTerminalRunState(record.view.state)
-        )
-          return undefined;
+        if (isInactiveRunRecord(record)) return undefined;
         const next = update(record.view);
         if (!next) return undefined;
         record.view = next;
@@ -546,13 +573,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const pauseFromEvent = (record: RunRecord, now: number) =>
     withLock(
       Effect.sync(() => {
-        if (
-          !record.pauseRequested ||
-          record.stoppedByParent ||
-          record.view.state === "stopping" ||
-          isTerminalRunState(record.view.state)
-        )
-          return undefined;
+        if (!record.pauseRequested || isInactiveRunRecord(record)) return undefined;
         record.activeTools.clear();
         record.view = {
           ...record.view,
@@ -818,12 +839,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     const diagnostic = sanitizeDiagnosticText(message, MAX_ERROR_CHARS);
     return withLock(
       Effect.sync(() => {
-        if (
-          record.stoppedByParent ||
-          record.view.state === "stopping" ||
-          isTerminalRunState(record.view.state)
-        )
-          return false;
+        if (isInactiveRunRecord(record)) return false;
         record.cleanupPending = true;
         failPendingResponses(
           record,
@@ -849,10 +865,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       const now = yield* Clock.currentTimeMillis;
       const message = event.status === "allowed" ? undefined : rateLimitMessage(event, now);
       const rejected = isRejectedRateLimit(event);
-      const windowKey = rateLimitWindowKey(event);
       const update = yield* withLock(
         Effect.sync(() => {
           const limitKey = event.rateLimitType ?? "usage";
+          const windowKey = rateLimitWindowKey(event, record.rateLimitTurn);
           const priorSettlement = record.rateLimitSettlements.get(limitKey);
           const generation =
             priorSettlement?.turn === record.rateLimitTurn ? priorSettlement.generation + 1 : 1;
@@ -866,18 +882,24 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           record.rateLimitRejected = [...record.rateLimitSettlements.values()].some(
             (settlement) => settlement.turn === record.rateLimitTurn && settlement.rejected,
           );
-          if (
-            record.stoppedByParent ||
-            record.view.state === "stopping" ||
-            isTerminalRunState(record.view.state)
-          )
-            return { limitKey, turn: record.rateLimitTurn, generation, notifyParent: false };
+          if (isInactiveRunRecord(record))
+            return {
+              limitKey,
+              windowKey,
+              turn: record.rateLimitTurn,
+              generation,
+              notifyParent: false,
+            };
 
           const { notice, notifyParent } = advanceRateLimitNotice(
-            record.rateLimitNotices.get(limitKey),
+            record.rateLimitNotices.get(windowKey),
             event,
           );
-          record.rateLimitNotices.set(limitKey, notice);
+          if (!record.rateLimitNotices.has(windowKey) && record.rateLimitNotices.size >= 32) {
+            const oldestWindow = record.rateLimitNotices.keys().next().value;
+            if (oldestWindow !== undefined) record.rateLimitNotices.delete(oldestWindow);
+          }
+          record.rateLimitNotices.set(windowKey, notice);
 
           if (!message) {
             record.rateLimitWarnings.delete(limitKey);
@@ -888,7 +910,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               record.view = { ...record.view, warning: replacement };
               publish();
             }
-            return { limitKey, turn: record.rateLimitTurn, generation, notifyParent: false };
+            return {
+              limitKey,
+              windowKey,
+              turn: record.rateLimitTurn,
+              generation,
+              notifyParent: false,
+            };
           }
           const duplicate = record.view.warning === message;
           record.rateLimitWarnings.delete(limitKey);
@@ -904,7 +932,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 : record.view.sessionEvents,
           };
           publish();
-          return { limitKey, turn: record.rateLimitTurn, generation, notifyParent };
+          return { limitKey, windowKey, turn: record.rateLimitTurn, generation, notifyParent };
         }),
       );
       if (event.status === "allowed" || !message) return;
@@ -916,7 +944,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             name: record.view.name,
             message,
             triggerTurn: false,
-            slotKey: `rate-limit:${windowKey}`,
+            slotKey: `rate-limit:${update.windowKey}`,
           });
         return;
       }
@@ -927,8 +955,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           name: record.view.name,
           message,
           triggerTurn: true,
-          slotKey: `rate-limit:${windowKey}`,
-          rateLimitRejectionKey: windowKey,
+          slotKey: `rate-limit:${update.windowKey}`,
+          rateLimitRejectionKey: update.windowKey,
         });
       }
       yield* Effect.sleep(CLAUDE_RATE_LIMIT_RESULT_GRACE).pipe(
@@ -979,11 +1007,51 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     failRun,
   }));
 
+  const submitPrompt = (record: RunRecord, message: string, operation: "start" | "resume") =>
+    rpc(record, { type: "prompt", message }).pipe(
+      Effect.tap(() =>
+        withLock(
+          Effect.sync(() => {
+            record.taskSubmission = "potentially-applied";
+          }),
+        ),
+      ),
+      Effect.tapError((error) =>
+        error._tag === "SubagentProcessError" && error.code === "transport_not_sent"
+          ? Effect.void
+          : withLock(
+              Effect.sync(() => {
+                record.taskSubmission = "potentially-applied";
+              }),
+            ),
+      ),
+      Effect.mapError((error) => {
+        const outcomeUncertain =
+          error._tag === "SubagentProcessError" && error.code?.endsWith("_outcome_uncertain");
+        if (!outcomeUncertain || (operation === "start" && record.view.writeIntent !== "writer"))
+          return error;
+        return operation === "start"
+          ? new SubagentProcessError({
+              operation,
+              code: "start_outcome_uncertain",
+              message: `The writer task may have been accepted, but startup could not confirm the outcome. Inspect the workspace and subagent status before starting another writer. (${error.message})`,
+            })
+          : new SubagentProcessError({
+              operation,
+              code: "resume_outcome_uncertain",
+              message: `The resume prompt may already have applied. Inspect subagent status before retrying. (${error.message})`,
+            });
+      }),
+    );
+
   const start: SubagentServiceShape["start"] = (request) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         if (!request.task.trim())
-          return yield* new InvalidSubagentRequestError({ message: "Subagent task is required." });
+          return yield* new InvalidSubagentRequestError({
+            code: "task_required",
+            message: "Subagent task is required.",
+          });
         if (request.backend === "claude-cli" && !request.projectTrusted)
           return yield* new InvalidSubagentRequestError({
             code: "claude_untrusted",
@@ -1010,7 +1078,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             message: `Claude CLI does not support effort ${request.effort}.`,
           });
         if (request.task.length > MAX_TASK_CHARS)
-          return yield* new InvalidSubagentRequestError({ message: "Subagent task is too large." });
+          return yield* new InvalidSubagentRequestError({
+            code: "task_too_large",
+            message: "Subagent task is too large.",
+          });
         if (profileService.policyFor(request.backend, request.model) === "denied")
           return yield* new InvalidSubagentRequestError({
             code: "model_denied",
@@ -1027,27 +1098,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               return yield* new SubagentRuntimeClosedError({
                 message: "The subagent session runtime is closed.",
               });
-            const retainedProcesses = [...records.values()].filter(ownsProcessSlot).length;
-            if (retainedProcesses >= MAX_CONCURRENT_RUNS) {
-              const cleanupCount = [...records.values()].filter(
-                (record) => record.cleanupPending,
-              ).length;
-              return yield* new SubagentCapacityError({
-                limit: MAX_CONCURRENT_RUNS,
-                message:
-                  cleanupCount > 0
-                    ? `Subagent capacity is temporarily occupied while ${cleanupCount} run${cleanupCount === 1 ? "" : "s"} finish cleanup; retry shortly.`
-                    : `Subagent capacity reached (${MAX_CONCURRENT_RUNS}). Stop an active run first.`,
-              });
-            }
+            const capacityFailure = processCapacityError(records);
+            if (capacityFailure) return yield* capacityFailure;
             if (request.writeIntent === "writer") {
-              const activeWriter = [...records.values()].find(ownsWriterSlot);
-              if (activeWriter)
-                return yield* new SubagentWriterConflictError({
-                  activeId: activeWriter.view.id,
-                  activeName: activeWriter.view.name,
-                  message: `Writer ${activeWriter.view.name} (${activeWriter.view.id}) already owns the shared cwd.`,
-                });
+              const writerFailure = writerConflictError(records);
+              if (writerFailure) return yield* writerFailure;
             }
             const ordinal = nextRunOrdinal++;
             const id = `agent-${runtimeNamespace}-${ordinal}`;
@@ -1183,6 +1238,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           );
           if (!activated)
             return yield* new InvalidSubagentRequestError({
+              code: "start_cancelled",
               message: `Subagent ${reserved.view.id} was stopped during startup.`,
             });
           if (activated.pendingSettlement) {
@@ -1194,39 +1250,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               ).pipe(Effect.tap(() => closeRecordScope(reserved)));
             return yield* settle(reserved, pending.state, pending.error);
           }
-          if (request.backend === "pi") {
-            const submit = rpc(reserved, { type: "prompt", message: initialPrompt }).pipe(
-              Effect.tap(() =>
-                withLock(
-                  Effect.sync(() => {
-                    reserved.taskSubmission = "potentially-applied";
-                  }),
-                ),
-              ),
-              Effect.tapError((error) =>
-                error._tag === "SubagentProcessError" && error.code === "transport_not_sent"
-                  ? Effect.void
-                  : withLock(
-                      Effect.sync(() => {
-                        reserved.taskSubmission = "potentially-applied";
-                      }),
-                    ),
-              ),
-              Effect.mapError((error) =>
-                reserved.view.writeIntent === "writer" &&
-                reserved.taskSubmission === "potentially-applied" &&
-                error._tag === "SubagentProcessError" &&
-                error.code?.endsWith("_outcome_uncertain")
-                  ? new SubagentProcessError({
-                      operation: "start",
-                      code: "start_outcome_uncertain",
-                      message: `The writer task may have been accepted, but startup could not confirm the outcome. Inspect the workspace and subagent status before starting another writer. (${error.message})`,
-                    })
-                  : error,
-              ),
-            );
-            yield* submit;
-          }
+          if (request.backend === "pi") yield* submitPrompt(reserved, initialPrompt, "start");
           yield* sendPeerNotices(reserved.view.id);
           return activated.view;
         });
@@ -1341,6 +1365,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     if (request.execution !== "foreground")
       return Effect.fail(
         new InvalidSubagentRequestError({
+          code: "foreground_execution_required",
           message: "Atomic foreground start observation requires execution=foreground.",
         }),
       );
@@ -1481,6 +1506,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     if (ids.length === 0)
       return Effect.fail(
         new InvalidSubagentRequestError({
+          code: "run_ids_required",
           message: "Await requires at least one subagent run ID.",
         }),
       );
@@ -1585,42 +1611,25 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 yield* requireCapability(selected, "resume");
                 if (selected.view.state !== "paused" && selected.view.state !== "completed")
                   return yield* new InvalidSubagentRequestError({
+                    code: "resume_state_invalid",
                     message: `Subagent ${id} cannot resume while ${selected.view.state}.`,
                   });
                 if (selected.view.writeIntent === "writer") {
-                  const activeWriter = [...records.values()].find(
-                    (candidate) => candidate !== selected && ownsWriterSlot(candidate),
-                  );
-                  if (activeWriter)
-                    return yield* new SubagentWriterConflictError({
-                      activeId: activeWriter.view.id,
-                      activeName: activeWriter.view.name,
-                      message: `Writer ${activeWriter.view.name} (${activeWriter.view.id}) already owns the shared cwd.`,
-                    });
+                  const writerFailure = writerConflictError(records, selected);
+                  if (writerFailure) return yield* writerFailure;
                 }
                 const needsRespawn = selected.process === undefined;
                 if (needsRespawn) {
-                  const retainedProcesses = [...records.values()].filter(
-                    (candidate) => candidate !== selected && ownsProcessSlot(candidate),
-                  ).length;
-                  if (retainedProcesses >= MAX_CONCURRENT_RUNS) {
-                    const cleanupCount = [...records.values()].filter(
-                      (record) => record.cleanupPending,
-                    ).length;
-                    return yield* new SubagentCapacityError({
-                      limit: MAX_CONCURRENT_RUNS,
-                      message:
-                        cleanupCount > 0
-                          ? `Subagent capacity is temporarily occupied while ${cleanupCount} run${cleanupCount === 1 ? "" : "s"} finish cleanup; retry shortly.`
-                          : `Subagent capacity reached (${MAX_CONCURRENT_RUNS}). Stop an active run first.`,
-                    });
-                  }
+                  const capacityFailure = processCapacityError(records, selected);
+                  if (capacityFailure) return yield* capacityFailure;
                   if (selected.view.backend === "pi" && !selected.view.sessionFile)
                     return yield* new InvalidSubagentRequestError({
+                      code: "pi_session_unavailable",
                       message: `Subagent ${id} cannot resume because its Pi session file is unavailable.`,
                     });
                   if (selected.view.backend === "claude-cli" && !selected.view.sessionId)
                     return yield* new InvalidSubagentRequestError({
+                      code: "claude_session_unavailable",
                       message: `Subagent ${id} cannot resume because its Claude session ID is unavailable.`,
                     });
                 }
@@ -1692,6 +1701,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 if (!installed) {
                   yield* Scope.close(nextScope, Exit.void);
                   return yield* new InvalidSubagentRequestError({
+                    code: "resume_cancelled",
                     message: `Subagent ${id} stopped before its session could be restored.`,
                   });
                 }
@@ -1726,36 +1736,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                   return yield* settle(record, committed.state, committed.error);
                 }
               }
-              if (!promptSubmittedDuringInitialization) {
-                yield* rpc(claimed.record, { type: "prompt", message: prompt }).pipe(
-                  Effect.tap(() =>
-                    withLock(
-                      Effect.sync(() => {
-                        claimed.record.taskSubmission = "potentially-applied";
-                      }),
-                    ),
-                  ),
-                  Effect.tapError((error) =>
-                    error._tag === "SubagentProcessError" && error.code === "transport_not_sent"
-                      ? Effect.void
-                      : withLock(
-                          Effect.sync(() => {
-                            claimed.record.taskSubmission = "potentially-applied";
-                          }),
-                        ),
-                  ),
-                  Effect.mapError((error) =>
-                    error._tag === "SubagentProcessError" &&
-                    error.code?.endsWith("_outcome_uncertain")
-                      ? new SubagentProcessError({
-                          operation: "resume",
-                          code: "resume_outcome_uncertain",
-                          message: `The resume prompt may already have applied. Inspect subagent status before retrying. (${error.message})`,
-                        })
-                      : error,
-                  ),
-                );
-              }
+              if (!promptSubmittedDuringInitialization)
+                yield* submitPrompt(claimed.record, prompt, "resume");
               const view = yield* withLock(
                 Effect.sync(() => {
                   const record = claimed.record;

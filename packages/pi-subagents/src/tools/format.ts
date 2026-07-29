@@ -1,0 +1,38 @@
+import type { SubagentSelectionProvenance } from "../profiles/model.ts";
+import type { SubagentRunView } from "../run/model.ts";
+import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
+import { safeTextPrefix } from "../run/state.ts";
+import { sanitizeTerminalLine } from "../ui/sanitize.ts";
+import type { SubagentRunCard } from "./details.ts";
+
+export const selectionSourceLabel = (
+  run: Pick<SubagentRunView, "selection"> | { readonly selection: SubagentSelectionProvenance },
+): string => {
+  const candidate =
+    run.selection.candidateIndex === undefined
+      ? ""
+      : ` candidate ${run.selection.candidateIndex + 1}`;
+  return `${run.selection.source}${candidate}`;
+};
+
+export const boundToolOutput = (text: string): string => {
+  if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
+  const marker =
+    "\n… [tool output truncated; narrow the request or query individual run IDs for the omitted content]";
+  return `${safeTextPrefix(text, Math.max(0, MAX_TOOL_OUTPUT_CHARS - marker.length))}${marker}`;
+};
+
+export const joinBoundedToolText = (parts: ReadonlyArray<string>): string =>
+  boundToolOutput(parts.filter(Boolean).join("\n\n"));
+
+export const attentionRecoveryText = (runs: ReadonlyArray<SubagentRunCard>): string => {
+  const waiting = runs.filter((run) => run.state === "waiting_for_parent" && run.question?.message);
+  if (waiting.length === 0) return "";
+  return [
+    "Parent reply required; other unfinished subagents continue independently.",
+    ...waiting.flatMap((run) => [
+      `Question from ${sanitizeTerminalLine(run.name)}: ${safeTextPrefix(sanitizeTerminalLine(run.question?.message ?? ""), 512)}`,
+      `Reply with subagent_reply({ runId: ${JSON.stringify(run.id)}, message: "..." }), then call subagent_await again.`,
+    ]),
+  ].join("\n");
+};

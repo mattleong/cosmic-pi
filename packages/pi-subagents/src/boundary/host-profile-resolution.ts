@@ -150,11 +150,13 @@ const resolvePiModel = (
       try: () => ctx.modelRegistry.getApiKeyAndHeaders(model),
       catch: () =>
         new InvalidSubagentRequestError({
+          code: "pi_auth_resolution_failed",
           message: `Unable to resolve runtime authentication for ${modelId}.`,
         }),
     });
     if (!auth.ok || !auth.apiKey)
       return yield* new InvalidSubagentRequestError({
+        code: "pi_auth_unavailable",
         message: `Runtime authentication is unavailable for ${modelId}.`,
       });
     return { model: `${model.provider}/${model.id}`, runtimeApiKey: auth.apiKey };
@@ -266,6 +268,7 @@ export const resolveProfileStart = (
     const task = rawInput.task.trim();
     if (!task)
       return yield* new InvalidSubagentRequestError({
+        code: "task_required",
         message: "subagent_start requires every agent to have a task.",
       });
 
@@ -366,12 +369,7 @@ export const resolveProfileStart = (
           : {}),
       };
     } else {
-      const profile = definition?.id;
-      if (!profile)
-        return yield* new InvalidSubagentRequestError({
-          code: "profile_unknown",
-          message: "Automatic backend selection requires a valid profile.",
-        });
+      const profile = definition.id;
       const plan = profiles.resolve(
         profile,
         hostProfileEnvironment(pi, ctx, projectTrusted),
@@ -393,10 +391,16 @@ export const resolveProfileStart = (
         const attempt = plan.attempts[index];
         if (!attempt) {
           const exhausted = [...skippedCandidates, ...plan.trailingSkippedCandidates];
+          const skipCodes = exhausted
+            .map(
+              (candidate) =>
+                `${candidate.candidateIndex === undefined ? "route" : `candidate ${candidate.candidateIndex + 1}`}[${candidate.code}]`,
+            )
+            .join(", ");
           return Effect.fail(
             new InvalidSubagentRequestError({
               code: "profile_no_eligible_model",
-              message: `Profile ${profile} has no eligible model after pre-start checks.${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+              message: `Profile ${profile} has no eligible model after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
             }),
           );
         }
@@ -449,7 +453,8 @@ export const resolveProfileStart = (
       ...(input.name?.trim() ? { name: input.name.trim() } : {}),
       backend: concrete.backend,
       task,
-      ...(definition ? { profile: definition.id, profileGuidance: definition.guidance } : {}),
+      profile: definition.id,
+      profileGuidance: definition.guidance,
       selection,
       cwd: environment.cwd,
       execution: input.execution ?? "background",

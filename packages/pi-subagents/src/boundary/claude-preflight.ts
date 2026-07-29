@@ -2,8 +2,10 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
 import { spawn } from "node:child_process";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { SubagentProcessError } from "../run/errors.ts";
@@ -169,38 +171,56 @@ export const ensureClaudeCliReady = (
     const args = options.commandArgs ?? [];
     const key = [command, ...args].join(" ");
     if (verifiedCommands.has(key)) return Effect.void;
-    return Effect.gen(function* () {
-      const gate = yield* Deferred.make<void, SubagentProcessError>();
-      const registration = yield* Effect.sync(() => {
-        const pending = pendingCommands.get(key);
-        if (pending) return { owner: false as const, gate: pending };
-        pendingCommands.set(key, gate);
-        return { owner: true as const, gate };
-      });
-      if (!registration.owner) return yield* Deferred.await(registration.gate);
-      const check = probeAuthStatus(
-        command,
-        args,
-        options.timeoutMillis ?? PREFLIGHT_TIMEOUT_MILLIS,
-      ).pipe(
-        Effect.flatMap((probe) => {
-          const failure = authenticationFailure(probe);
-          return failure ? Effect.fail(failure) : Effect.void;
-        }),
-        Effect.tap(() =>
-          Effect.sync(() => {
-            verifiedCommands.add(key);
+    const timeoutMillis = options.timeoutMillis ?? PREFLIGHT_TIMEOUT_MILLIS;
+    return Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void, SubagentProcessError>();
+        const registration = yield* Effect.sync(() => {
+          const pending = pendingCommands.get(key);
+          if (pending) return { owner: false as const, gate: pending };
+          pendingCommands.set(key, gate);
+          return { owner: true as const, gate };
+        });
+        if (!registration.owner)
+          return yield* restore(Deferred.await(registration.gate)).pipe(
+            Effect.timeoutOrElse({
+              duration: timeoutMillis + 1_000,
+              orElse: () =>
+                Effect.fail(
+                  preflightError(
+                    "claude_cli_preflight_failed",
+                    `Claude CLI preflight coordination did not settle within ${timeoutMillis + 1_000} ms; retry the launch.`,
+                  ),
+                ),
+            }),
+          );
+        const check = probeAuthStatus(command, args, timeoutMillis).pipe(
+          Effect.flatMap((probe) => {
+            const failure = authenticationFailure(probe);
+            return failure ? Effect.fail(failure) : Effect.void;
           }),
-        ),
-      );
-      return yield* Effect.uninterruptibleMask(() =>
-        check.pipe(
-          Effect.onExit((exit) =>
+          Effect.tap(() =>
             Effect.sync(() => {
-              if (pendingCommands.get(key) === gate) pendingCommands.delete(key);
-            }).pipe(Effect.andThen(Deferred.done(gate, exit)), Effect.asVoid),
+              verifiedCommands.add(key);
+            }),
           ),
-        ),
-      );
-    });
+        );
+        return yield* restore(check).pipe(
+          Effect.onExit((exit) => {
+            const gateExit =
+              Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+                ? Exit.fail(
+                    preflightError(
+                      "claude_cli_preflight_failed",
+                      "The shared Claude CLI preflight owner was interrupted; retry the launch.",
+                    ),
+                  )
+                : exit;
+            return Effect.sync(() => {
+              if (pendingCommands.get(key) === gate) pendingCommands.delete(key);
+            }).pipe(Effect.andThen(Deferred.done(gate, gateExit)), Effect.asVoid);
+          }),
+        );
+      }),
+    );
   });

@@ -76,6 +76,7 @@ const makeComponent = (
   currentProjection: SubagentProjection = projection,
   getNow: () => number = () => 20_000,
   currentTheme: Theme = theme,
+  matchesKeybinding?: (data: string, id: string) => boolean,
 ) => {
   const actions = {
     stop: vi.fn(),
@@ -84,16 +85,18 @@ const makeComponent = (
     message: vi.fn(),
     rename: vi.fn(),
   };
+  const close = vi.fn();
   const component = new SubagentFleetComponent({
     theme: currentTheme,
     getProjection: () => currentProjection,
     getHeight: () => height,
     getNow,
+    ...(matchesKeybinding ? { matchesKeybinding } : {}),
     requestRender: vi.fn(),
-    close: vi.fn(),
+    close,
     actions,
   });
-  return { actions, lines: component.render(width), component };
+  return { actions, close, lines: component.render(width), component };
 };
 
 describe("/subagents fleet UI", () => {
@@ -136,6 +139,13 @@ describe("/subagents fleet UI", () => {
     expect(mutedChrome).toContain("─");
   });
 
+  it("does not double-count waiting runs as active work in the fleet title", () => {
+    const title = makeComponent(80, 18).lines[0] ?? "";
+    expect(title).toContain("1 run · 1 waiting");
+    expect(title).not.toContain("active");
+    expect(title).not.toContain("working");
+  });
+
   it("groups navigation, available actions, and global footer controls", () => {
     const footer = makeComponent(120, 18).lines.at(-1) ?? "";
     expect(footer).toContain("↑↓ Select · C-u/d Scroll");
@@ -162,6 +172,41 @@ describe("/subagents fleet UI", () => {
     const { component } = makeComponent(42, 24, completedProjection);
     component.handleInput(key);
     expect(component.render(42).join("\n")).toContain("Final report");
+  });
+
+  it("uses cancel as back from narrow details before closing the inspector", () => {
+    const { close, component } = makeComponent(42, 24, completedProjection);
+    component.handleInput("\r");
+    expect(component.render(42).join("\n")).toContain("Final report");
+    component.handleInput("\u001b");
+    expect(component.render(42).join("\n")).not.toContain("Final report");
+    expect(close).not.toHaveBeenCalled();
+    component.handleInput("\u001b");
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors configured selection and cancel keybindings", () => {
+    const bindings: Record<string, string> = {
+      "tui.select.confirm": "o",
+      "tui.select.cancel": "q",
+      "tui.select.down": "n",
+      "tui.select.up": "p",
+    };
+    const matcher = (data: string, id: string) => bindings[id] === data;
+    const { close, component } = makeComponent(
+      42,
+      24,
+      completedProjection,
+      () => 20_000,
+      theme,
+      matcher,
+    );
+    component.handleInput("o");
+    expect(component.render(42).join("\n")).toContain("Final report");
+    component.handleInput("q");
+    expect(component.render(42).join("\n")).not.toContain("Final report");
+    component.handleInput("q");
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("wraps structured narrow details without showing raw transcript duplicates", () => {

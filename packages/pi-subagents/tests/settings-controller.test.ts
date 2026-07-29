@@ -128,6 +128,7 @@ describe("/subagents command and profile settings", () => {
     const run = register(managerActions);
     const select = vi.fn().mockResolvedValue(undefined);
     await run("profiles", baseContext({ select, custom: vi.fn(), notify: vi.fn() }, false));
+    expect(select.mock.calls[0]?.[0]).toContain("Project unavailable while untrusted");
     expect(select.mock.calls[0]?.[1]).toEqual(["Global · /agent/pi-subagents.json"]);
     expect(managerActions.inspectProfiles).toHaveBeenCalledWith(false);
     expect(managerActions.patchProfile).not.toHaveBeenCalled();
@@ -260,7 +261,7 @@ describe("/subagents command and profile settings", () => {
       .mockResolvedValueOnce("Global · /agent/pi-subagents.json")
       .mockResolvedValueOnce(worker);
     await run("profiles", baseContext({ select, custom: vi.fn(), notify }));
-    expect(worker).toContain("Ordered route · 2 candidates");
+    expect(worker).toContain("Ordered route · 2 candidates · JSON-managed");
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("read-only"), "warning");
     expect(managerActions.patchProfile).not.toHaveBeenCalled();
   });

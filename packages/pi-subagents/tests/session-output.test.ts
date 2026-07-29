@@ -8,7 +8,7 @@ import {
   finishToolSessionEvent,
   startToolSessionEvent,
   summarizeToolArguments,
-} from "../src/run/session-output.ts";
+} from "../src/run/session-events.ts";
 import { renderSubagentSessionOutput } from "../src/ui/session-output.ts";
 import { sanitizeTerminalText } from "../src/ui/sanitize.ts";
 

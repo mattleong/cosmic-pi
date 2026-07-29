@@ -869,6 +869,29 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("retries a Claude bootstrap write that was definitely not sent", () => {
+    const fake = fakeChildLayer(Effect.void, {
+      initialTransportFailures: [{ spawnIndex: 0, type: "prompt", code: "transport_not_sent" }],
+    });
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const starting = yield* service
+        .start(request({ backend: "claude-cli", model: "sonnet", name: "retry-not-sent" }))
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(() => fake.controls.length === 1);
+      yield* TestClock.adjust("250 millis");
+      const started = yield* Fiber.join(starting);
+      expect(started.state).toBe("running");
+      expect(fake.controls).toHaveLength(2);
+      expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual(["prompt"]);
+      expect(fake.controls[1]?.commands.map((command) => command.type)).toEqual([
+        "prompt",
+        "get_state",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect(
     "commits Claude initialization before an immediate terminal result closes scope",
     () => {
@@ -1326,6 +1349,18 @@ describe("SubagentService", () => {
         fake.controls[1]?.offerClaude(warning);
         yield* Effect.yieldNow;
         expect(notifications.filter((value) => value.type === "warning")).toHaveLength(1);
+
+        fake.controls[1]?.offerClaude({
+          type: "rate_limit_event",
+          rate_limit_info: {
+            status: "allowed_warning",
+            rateLimitType: "five_hour",
+            utilization: 0.85,
+          },
+        });
+        yield* yieldUntil(
+          () => notifications.filter((value) => value.type === "warning").length === 2,
+        );
       }).pipe(Effect.scoped, Effect.provide(layer));
     },
   );

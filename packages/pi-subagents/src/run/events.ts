@@ -10,8 +10,8 @@ import type { ChildAgentEvent, ChildRateLimitEvent } from "./child-agent.ts";
 import type { SubagentNotification } from "../boundary/host-notifier.ts";
 import type { SubagentError } from "./errors.ts";
 import { SubagentProcessError, SubagentProtocolError } from "./errors.ts";
-import type { RunRecord } from "./internal.ts";
-import { isTerminalRunState, type SubagentRunView } from "./model.ts";
+import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
+import type { SubagentRunView } from "./model.ts";
 import {
   assistantText,
   decodeAssistantMessage,
@@ -25,7 +25,7 @@ import {
   appendNoticeSessionEvent,
   finishToolSessionEvent,
   startToolSessionEvent,
-} from "./session-output.ts";
+} from "./session-events.ts";
 import {
   addUsage,
   MAX_ERROR_CHARS,
@@ -68,11 +68,6 @@ export interface RunEventDependencies {
 }
 
 const protocolError = (message: string) => new SubagentProtocolError({ message });
-/** Stopped-by-parent, stopping, or terminal records ignore further child events. */
-const isInactiveRecord = (record: RunRecord): boolean =>
-  record.stoppedByParent ||
-  record.view.state === "stopping" ||
-  isTerminalRunState(record.view.state);
 const isRawRpcResponse = (value: unknown): boolean =>
   typeof value === "object" &&
   value !== null &&
@@ -179,7 +174,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           }
           return Effect.void;
         }
-        if (isInactiveRecord(record)) return Effect.void;
+        if (isInactiveRunRecord(record)) return Effect.void;
         switch (envelope.type) {
           case "agent_start":
             return Clock.currentTimeMillis.pipe(
@@ -432,20 +427,20 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
 
   return (record: RunRecord, event: ChildWireEvent): Effect.Effect<void, SubagentError> => {
     if (event.type === "claude_message") {
-      if (isInactiveRecord(record)) return Effect.void;
+      if (isInactiveRunRecord(record)) return Effect.void;
       return handleClaudeEnvelope(record, event.value);
     }
     if (event.type === "rpc_message") {
       // Raw RPC responses still settle pending requests on inactive records.
-      if (!isRawRpcResponse(event.value) && isInactiveRecord(record)) return Effect.void;
+      if (!isRawRpcResponse(event.value) && isInactiveRunRecord(record)) return Effect.void;
       return handleRpcEnvelope(record, event.value);
     }
     if (event.type === "ipc_message") {
-      if (isInactiveRecord(record)) return Effect.void;
+      if (isInactiveRunRecord(record)) return Effect.void;
       return handleIpcEnvelope(record, event.value);
     }
     if (event.type === "protocol_error") {
-      if (isInactiveRecord(record)) return Effect.void;
+      if (isInactiveRunRecord(record)) return Effect.void;
       const error = protocolError(event.message);
       return failRun(record, error.message, error).pipe(Effect.asVoid);
     }
@@ -458,7 +453,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       ),
     });
     failPendingResponses(record, processFailure);
-    if (isInactiveRecord(record)) return Effect.void;
+    if (isInactiveRunRecord(record)) return Effect.void;
     return settle(record, "failed", processFailure.message).pipe(Effect.asVoid);
   };
 }

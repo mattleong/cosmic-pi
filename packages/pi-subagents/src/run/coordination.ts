@@ -33,10 +33,14 @@ export const validateParentMessage = (
   emptyMessage: string,
 ): Effect.Effect<string, InvalidSubagentRequestError> => {
   const normalized = message.trim();
-  if (!normalized) return Effect.fail(new InvalidSubagentRequestError({ message: emptyMessage }));
+  if (!normalized)
+    return Effect.fail(
+      new InvalidSubagentRequestError({ code: "message_required", message: emptyMessage }),
+    );
   if (normalized.length > MAX_PARENT_MESSAGE_CHARS)
     return Effect.fail(
       new InvalidSubagentRequestError({
+        code: "message_too_large",
         message: `Subagent message exceeds ${MAX_PARENT_MESSAGE_CHARS} characters.`,
       }),
     );
