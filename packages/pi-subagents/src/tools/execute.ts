@@ -165,7 +165,10 @@ const profileDiscovery = (
         order: index + 1,
         candidate: profileCandidateLabel(candidate),
         status: attempt ? "eligible" : "skipped",
-        reason: attempt?.reason ?? omitted?.reason ?? "Candidate was not eligible.",
+        ...(attempt ? { effectiveContext: attempt.effectiveContext } : {}),
+        reason: attempt
+          ? "Candidate is statically eligible before runtime readiness checks."
+          : (omitted?.reason ?? "Candidate was not eligible."),
       };
     });
     return [
@@ -187,14 +190,14 @@ const formatProfileDiscovery = (
 ): string =>
   [
     "Static profile preflight (subagent_start always evaluates the selected profile's ordered candidates first-to-last)",
-    "Candidate eligibility below is evaluated with each profile's default context; an explicit context override at launch (for example oracle with context=fresh) can change which candidates are eligible.",
+    "Each profile context is a preference when context is omitted: candidates use it when supported, while backends without fork support use fresh context. An explicit launch context is a hard requirement and can change eligibility.",
     `Configured default profile: ${defaultProfile}`,
     ...profiles.flatMap((profile) => [
       `${profile.id} · context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"} · ${profile.description}`,
       ...(profile.candidates.length > 0
         ? profile.candidates.map(
             (candidate) =>
-              `  ${candidate.order}. ${candidate.candidate} · ${candidate.status} · ${candidate.reason}`,
+              `  ${candidate.order}. ${candidate.candidate} · ${candidate.status}${candidate.effectiveContext ? ` · context=${candidate.effectiveContext}` : ""} · ${candidate.reason}`,
           )
         : ["  disabled · no candidates"]),
     ]),

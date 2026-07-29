@@ -1,6 +1,7 @@
 import { modelPolicyFor, type ResolvedSubagentConfig } from "../config/options.ts";
 import { resolvePiModelSelector, type PiCatalogModel } from "../run/model-catalog.ts";
 import {
+  backendSupportsContext,
   isClaudeModelSelector,
   type SubagentBackend,
   type SubagentContextMode,
@@ -33,6 +34,7 @@ export interface ProfileCandidateAttempt {
   readonly candidateIndex: number;
   readonly backend: SubagentBackend;
   readonly model: string;
+  readonly effectiveContext: SubagentContextMode;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
   readonly reason: string;
@@ -42,7 +44,8 @@ export interface ProfileCandidateAttempt {
 export interface ProfileResolutionPlan {
   readonly kind: "resolved";
   readonly profile: ProfileId;
-  readonly context: SubagentContextMode;
+  /** Requested context, or the profile preference when omitted. Attempts carry effective context. */
+  readonly preferredContext: SubagentContextMode;
   readonly attempts: ReadonlyArray<ProfileCandidateAttempt>;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
   readonly trailingSkippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
@@ -50,7 +53,7 @@ export interface ProfileResolutionPlan {
 
 export interface ProfileResolutionFailure {
   readonly kind: "failed";
-  readonly code: "profile_unknown" | "profile_no_eligible_model";
+  readonly code: "profile_unknown" | "profile_no_eligible_model" | "fork_context_unavailable";
   readonly message: string;
   readonly profile?: ProfileId | undefined;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
@@ -117,11 +120,61 @@ const softEffort = (
   parent: ParentProfileModel | undefined,
 ): SubagentEffort => profileDefault ?? parent?.effort ?? "high";
 
+interface CandidateContextResolution {
+  readonly effectiveContext?: SubagentContextMode | undefined;
+  readonly skipped?: SkippedProfileCandidate | undefined;
+}
+
+const resolveCandidateContext = (
+  backend: SubagentBackend,
+  preferredContext: SubagentContextMode,
+  contextWasExplicit: boolean,
+  environment: ProfileResolutionEnvironment,
+  label: string,
+  candidateIndex: number,
+): CandidateContextResolution => {
+  let effectiveContext = preferredContext;
+  if (!backendSupportsContext(backend, preferredContext)) {
+    if (contextWasExplicit)
+      return {
+        skipped: skip(
+          label,
+          backend === "claude-cli" ? "claude_context_unsupported" : "context_unsupported",
+          backend === "claude-cli"
+            ? "Claude CLI candidates cannot use forked Pi context."
+            : `Backend ${backend} does not support ${preferredContext} context.`,
+          candidateIndex,
+        ),
+      };
+    if (!backendSupportsContext(backend, "fresh"))
+      return {
+        skipped: skip(
+          label,
+          "context_unsupported",
+          `Backend ${backend} supports neither the profile's ${preferredContext} context preference nor fresh context.`,
+          candidateIndex,
+        ),
+      };
+    effectiveContext = "fresh";
+  }
+  if (effectiveContext === "fork" && !environment.forkAvailable)
+    return {
+      skipped: skip(
+        label,
+        "fork_context_unavailable",
+        "Forked context requires a persisted parent session with a stable leaf.",
+        candidateIndex,
+      ),
+    };
+  return { effectiveContext };
+};
+
 const resolveCandidate = (
   profile: ProfileId,
   candidate: ProfileCandidate,
   candidateIndex: number,
-  context: SubagentContextMode,
+  preferredContext: SubagentContextMode,
+  contextWasExplicit: boolean,
   config: ResolvedSubagentConfig,
   environment: ProfileResolutionEnvironment,
   profileDefaultEffort: SubagentEffort | undefined,
@@ -131,6 +184,17 @@ const resolveCandidate = (
   const configuredEffort = candidate.effort === "default" ? undefined : candidate.effort;
   const hardEffort = effortOverride ?? configuredEffort;
   const selectedEffort = hardEffort ?? softEffort(profileDefaultEffort, environment.parentModel);
+  const backend: SubagentBackend = candidate.model.startsWith("claude-cli/") ? "claude-cli" : "pi";
+  const contextResolution = resolveCandidateContext(
+    backend,
+    preferredContext,
+    contextWasExplicit,
+    environment,
+    label,
+    candidateIndex,
+  );
+  if (contextResolution.skipped) return { skipped: contextResolution.skipped };
+  const effectiveContext = contextResolution.effectiveContext ?? preferredContext;
 
   if (candidate.model === "parent") {
     const parent = environment.parentModel;
@@ -174,6 +238,7 @@ const resolveCandidate = (
         candidateIndex,
         backend: "pi",
         model,
+        effectiveContext,
         effort: selectedEffort,
         effortWasExplicit: hardEffort !== undefined,
         reason: `Profile ${profile} selected parent candidate ${candidateIndex + 1}.`,
@@ -189,15 +254,6 @@ const resolveCandidate = (
           label,
           "claude_untrusted",
           "Claude CLI candidates require a trusted project.",
-          candidateIndex,
-        ),
-      };
-    if (context === "fork")
-      return {
-        skipped: skip(
-          label,
-          "claude_context_unsupported",
-          "Claude CLI candidates cannot use forked Pi context.",
           candidateIndex,
         ),
       };
@@ -231,6 +287,7 @@ const resolveCandidate = (
         candidateIndex,
         backend: "claude-cli",
         model,
+        effectiveContext,
         effort,
         effortWasExplicit: hardEffort !== undefined,
         reason: `Profile ${profile} selected configured candidate ${candidateIndex + 1}.`,
@@ -272,6 +329,7 @@ const resolveCandidate = (
       candidateIndex,
       backend: "pi",
       model,
+      effectiveContext,
       effort: selectedEffort,
       effortWasExplicit: hardEffort !== undefined,
       reason: `Profile ${profile} selected configured candidate ${candidateIndex + 1}.`,
@@ -295,7 +353,8 @@ export function resolveProfilePlan(
       skippedCandidates: [],
     };
   const definition = profileDefinition(requestedProfile);
-  const context = contextOverride ?? definition.defaultContext;
+  const preferredContext = contextOverride ?? definition.defaultContext;
+  const contextWasExplicit = contextOverride !== undefined;
   const route = config.profiles[requestedProfile];
   if (route.candidates.length === 0) {
     const source = config.profileSources[requestedProfile];
@@ -311,31 +370,6 @@ export function resolveProfilePlan(
       skippedCandidates: [],
     };
   }
-  if (context === "fork" && !environment.forkAvailable) {
-    const unavailable = route.candidates.map((candidate, candidateIndex) =>
-      candidate.model.startsWith("claude-cli/")
-        ? skip(
-            candidate.model,
-            "claude_context_unsupported",
-            "Claude CLI candidates cannot use forked Pi context.",
-            candidateIndex,
-          )
-        : skip(
-            candidate.model,
-            "fork_context_unavailable",
-            "Forked context requires a persisted parent session with a stable leaf.",
-            candidateIndex,
-          ),
-    );
-    return {
-      kind: "failed",
-      code: "profile_no_eligible_model",
-      profile: requestedProfile,
-      message: `Profile ${requestedProfile} cannot use forked context because the parent session has no stable persisted leaf.`,
-      skippedCandidates: unavailable,
-    };
-  }
-
   const attempts: ProfileCandidateAttempt[] = [];
   const skippedCandidates: SkippedProfileCandidate[] = [];
   let pendingSkipped: SkippedProfileCandidate[] = [];
@@ -344,7 +378,8 @@ export function resolveProfilePlan(
       requestedProfile,
       candidate,
       candidateIndex,
-      context,
+      preferredContext,
+      contextWasExplicit,
       config,
       environment,
       definition.defaultEffort,
@@ -363,16 +398,21 @@ export function resolveProfilePlan(
     return {
       kind: "resolved",
       profile: requestedProfile,
-      context,
+      preferredContext,
       attempts,
       skippedCandidates,
       trailingSkippedCandidates: pendingSkipped,
     };
+  const forkUnavailable =
+    skippedCandidates.length > 0 &&
+    skippedCandidates.every((candidate) => candidate.code === "fork_context_unavailable");
   return {
     kind: "failed",
-    code: "profile_no_eligible_model",
+    code: forkUnavailable ? "fork_context_unavailable" : "profile_no_eligible_model",
     profile: requestedProfile,
-    message: `Profile ${requestedProfile} has no eligible model.${skippedCandidates.length > 0 ? ` ${skippedCandidates.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+    message: forkUnavailable
+      ? `Profile ${requestedProfile} requires forked context, but the parent session has no stable persisted leaf.`
+      : `Profile ${requestedProfile} has no eligible model.${skippedCandidates.length > 0 ? ` ${skippedCandidates.map((candidate) => candidate.reason).join(" ")}` : ""}`,
     skippedCandidates,
   };
 }

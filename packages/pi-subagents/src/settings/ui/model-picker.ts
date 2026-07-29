@@ -93,7 +93,7 @@ export function createProfileModelChoices(input: {
       item: {
         value: selector,
         label: `${selector}${input.currentSelector === selector ? " (current)" : ""}`,
-        description: `reasoning · efforts: low, medium, high, xhigh, max · requires a trusted project · launch readiness checked only when starting${policy === "discouraged" ? " · discouraged" : ""}`,
+        description: `reasoning · efforts: low, medium, high, xhigh, max · fresh context only · an omitted fork preference adapts to fresh · requires a trusted project · launch readiness checked only when starting${policy === "discouraged" ? " · discouraged" : ""}`,
       },
       searchText: `${selector} claude cli`,
       supportedEfforts: ["low", "medium", "high", "xhigh", "max"],

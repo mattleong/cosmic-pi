@@ -407,6 +407,19 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("preserves selected fork context through run state and child launch", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const started = yield* service.start(
+        request({ context: "fork", profile: "oracle", name: "forked-oracle" }),
+      );
+      expect(started.context).toBe("fork");
+      expect(fake.controls[0]?.launch.context).toBe("fork");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect(
     "keeps soft-effort runs alive on a non-reasoning model and reports the effective level",
     () => {
@@ -722,6 +735,16 @@ describe("SubagentService", () => {
       });
       expect(fake.controls).toHaveLength(0);
 
+      const unsupportedContext = yield* Effect.flip(
+        service.start(request({ backend: "claude-cli", context: "fork", model: "sonnet" })),
+      );
+      expect(unsupportedContext).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "claude_context_unsupported",
+        message: "Backend claude-cli does not support fork context.",
+      });
+      expect(fake.controls).toHaveLength(0);
+
       const invalidModel = yield* Effect.flip(
         service.start(request({ backend: "claude-cli", model: "--permission-mode" })),
       );
@@ -752,6 +775,8 @@ describe("SubagentService", () => {
       );
       expect(run.backend).toBe("claude-cli");
       expect(run.model).toBe("claude-sonnet-resolved");
+      expect(run.context).toBe("fresh");
+      expect(fake.controls[0]?.launch.context).toBe("fresh");
       expect(run.capabilities).toEqual(["resume", "rename-display"]);
       expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual([
         "prompt",

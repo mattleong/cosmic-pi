@@ -268,15 +268,68 @@ describe("subagent v2 profile configuration and resolution", () => {
     });
   });
 
-  it("retains Claude validation, trust, effort, and fork rules", () => {
-    const config = resolved(
+  it("resolves omitted context per candidate while keeping explicit context hard", () => {
+    const claudeOracle = resolved(
       document({ profiles: { oracle: { model: "claude-cli/sonnet", effort: "high" } } }),
     );
-    expect(resolveProfilePlan("oracle", config, environment)).toMatchObject({
+    expect(resolveProfilePlan("oracle", claudeOracle, environment)).toMatchObject({
+      kind: "resolved",
+      preferredContext: "fork",
+      attempts: [{ backend: "claude-cli", effectiveContext: "fresh" }],
+    });
+    expect(resolveProfilePlan("oracle", claudeOracle, environment, "fork")).toMatchObject({
       kind: "failed",
       code: "profile_no_eligible_model",
       skippedCandidates: [{ code: "claude_context_unsupported" }],
     });
+    expect(resolveProfilePlan("oracle", claudeOracle, environment, "fresh")).toMatchObject({
+      kind: "resolved",
+      preferredContext: "fresh",
+      attempts: [{ effectiveContext: "fresh" }],
+    });
+
+    const mixed = resolved(
+      document({
+        profiles: {
+          oracle: [
+            { model: "parent", effort: "default" },
+            { model: "claude-cli/sonnet", effort: "high" },
+          ],
+        },
+      }),
+    );
+    const withoutFork = { ...environment, forkAvailable: false };
+    expect(resolveProfilePlan("oracle", mixed, withoutFork)).toMatchObject({
+      kind: "resolved",
+      preferredContext: "fork",
+      attempts: [
+        {
+          backend: "claude-cli",
+          candidateIndex: 1,
+          effectiveContext: "fresh",
+          skippedBefore: [{ candidateIndex: 0, code: "fork_context_unavailable" }],
+        },
+      ],
+    });
+    expect(resolveProfilePlan("oracle", mixed, environment, "fork")).toMatchObject({
+      kind: "resolved",
+      attempts: [
+        {
+          backend: "pi",
+          candidateIndex: 0,
+          effectiveContext: "fork",
+        },
+      ],
+      trailingSkippedCandidates: [{ candidateIndex: 1, code: "claude_context_unsupported" }],
+    });
+    expect(resolveProfilePlan("oracle", resolved(), withoutFork)).toMatchObject({
+      kind: "failed",
+      code: "fork_context_unavailable",
+      skippedCandidates: [{ code: "fork_context_unavailable" }],
+    });
+  });
+
+  it("retains Claude trust and effort rules after context adaptation", () => {
     const fresh = resolved(
       document({ profiles: { worker: { model: "claude-cli/sonnet", effort: "off" } } }),
     );

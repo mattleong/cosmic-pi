@@ -38,7 +38,7 @@ const StartSpecFields = {
   context: Type.Optional(
     StringEnum(["fresh", "fork"] as const, {
       description:
-        'Child context. Explicit values override the profile default. Only oracle defaults to "fork"; every other profile defaults to "fresh". Fork requires effective Pi routing and a persisted parent leaf.',
+        'Child context. An explicit value is a hard requirement. When omitted, the profile preference applies if the selected backend supports it; a backend without fork support uses "fresh". Only oracle prefers "fork"; every other profile prefers "fresh". Fork requires effective Pi routing and a persisted parent leaf.',
     }),
   ),
   profile: Type.Optional(

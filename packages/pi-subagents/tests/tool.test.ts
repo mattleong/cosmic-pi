@@ -847,7 +847,7 @@ describe("subagent tool", () => {
     expect(requests[0]?.profileGuidance).toContain("independent reviewer");
   });
 
-  it("uses profile context defaults and never degrades oracle forks to fresh", async () => {
+  it("uses profile context defaults and never degrades a Pi oracle fork to fresh", async () => {
     const requests: StartSubagentRequest[] = [];
     const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
 
@@ -888,6 +888,95 @@ describe("subagent tool", () => {
     );
     expect(failed?.details).toMatchObject({
       startFailures: [{ code: "fork_context_unavailable" }],
+    });
+  });
+
+  it("adapts an omitted oracle context to backend capability and keeps explicit fork hard", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const profiles = profileServiceFor({
+      profiles: {
+        oracle: [
+          { model: "claude-cli/opus", effort: "high" },
+          { model: "parent", effort: "default" },
+        ],
+      },
+    });
+    const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles, {
+      ensureClaudeReady: () => Effect.void,
+    }).get("subagent_start");
+
+    await tool?.execute(
+      "call",
+      { agents: [{ profile: "oracle", task: "Advise with profile context" }] },
+      undefined,
+      undefined,
+      context,
+    );
+    await tool?.execute(
+      "call",
+      { agents: [{ profile: "oracle", task: "Advise with fork", context: "fork" }] },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(requests[0]).toMatchObject({
+      backend: "claude-cli",
+      model: "opus",
+      context: "fresh",
+      selection: { candidateIndex: 0, skippedCandidates: [] },
+    });
+    expect(requests[1]).toMatchObject({
+      backend: "pi",
+      model: "openai-codex/gpt-5.6-sol",
+      context: "fork",
+      selection: {
+        candidateIndex: 1,
+        skippedCandidates: [{ candidateIndex: 0, code: "claude_context_unsupported" }],
+      },
+    });
+  });
+
+  it("preserves each attempt's context when Claude readiness falls back to Pi", async () => {
+    const requests: StartSubagentRequest[] = [];
+    let preflightCalls = 0;
+    const profiles = profileServiceFor({
+      profiles: {
+        oracle: [
+          { model: "claude-cli/opus", effort: "high" },
+          { model: "parent", effort: "default" },
+        ],
+      },
+    });
+    const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles, {
+      ensureClaudeReady: () => {
+        preflightCalls += 1;
+        return Effect.fail(
+          new SubagentProcessError({
+            operation: "preflight",
+            code: "claude_cli_unauthenticated",
+            message: "Claude CLI is not authenticated.",
+          }),
+        );
+      },
+    }).get("subagent_start");
+
+    await tool?.execute(
+      "call",
+      { agents: [{ profile: "oracle", task: "Advise after readiness fallback" }] },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(preflightCalls).toBe(1);
+    expect(requests[0]).toMatchObject({
+      backend: "pi",
+      context: "fork",
+      selection: {
+        candidateIndex: 1,
+        skippedCandidates: [{ candidateIndex: 0, code: "claude_cli_unauthenticated" }],
+      },
     });
   });
 
@@ -2361,7 +2450,7 @@ describe("subagent tool", () => {
     expect(text).toContain("Forked context requires a persisted parent session");
   });
 
-  it("states that discovery eligibility uses each profile's default context and can change with an override", async () => {
+  it("states that discovery adapts omitted context by backend and keeps explicit context hard", async () => {
     const ephemeral = {
       ...(context as unknown as Record<string, unknown>),
       sessionManager: {
@@ -2374,14 +2463,21 @@ describe("subagent tool", () => {
       .get("subagent_models")
       ?.execute("call", { profile: "oracle" }, undefined, undefined, ephemeral);
     const text = models?.content[0]?.text ?? "";
-    // Oracle's skips below reflect its default fork context; an explicit context=fresh launch can
-    // still be eligible, and the output must say so.
-    expect(text).toContain(
-      "Candidate eligibility below is evaluated with each profile's default context",
-    );
-    expect(text).toContain(
-      "an explicit context override at launch (for example oracle with context=fresh) can change which candidates are eligible",
-    );
+    expect(text).toContain("Each profile context is a preference when context is omitted");
+    expect(text).toContain("backends without fork support use fresh context");
+    expect(text).toContain("An explicit launch context is a hard requirement");
+  });
+
+  it("shows an oracle Claude candidate's effective fresh context", async () => {
+    const profiles = profileServiceFor({
+      profiles: { oracle: { model: "claude-cli/opus", effort: "high" } },
+    });
+    const models = await captureSubagentTools(startCapturingService([]), ["read"], profiles)
+      .get("subagent_models")
+      ?.execute("call", { profile: "oracle" }, undefined, undefined, context);
+    const text = models?.content[0]?.text ?? "";
+    expect(text).toContain("oracle · context=fork · intent=read-only · effort=high");
+    expect(text).toContain("claude-cli/opus:high · eligible · context=fresh");
   });
 
   it("renders explicitly repeated parent candidates in declared order", async () => {
@@ -2399,6 +2495,10 @@ describe("subagent tool", () => {
     const text = models?.content[0]?.text ?? "";
     expect(text).toContain("1. parent:default · eligible");
     expect(text).toContain("2. parent:high · eligible");
+    expect(
+      text.match(/Candidate is statically eligible before runtime readiness checks\./g),
+    ).toHaveLength(2);
+    expect(text).not.toContain("Profile delegate selected");
     expect(text).not.toContain("fallback");
   });
 

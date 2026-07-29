@@ -16,6 +16,19 @@ export type SubagentExecution = "foreground" | "background";
 export type SubagentContextMode = "fresh" | "fork";
 export type SubagentWriteIntent = "writer" | "read-only";
 export type SubagentBackend = "pi" | "claude-cli";
+
+export const SUBAGENT_BACKEND_CONTEXTS: Readonly<
+  Record<SubagentBackend, ReadonlyArray<SubagentContextMode>>
+> = {
+  pi: ["fresh", "fork"],
+  "claude-cli": ["fresh"],
+};
+
+export const backendSupportsContext = (
+  backend: SubagentBackend,
+  context: SubagentContextMode,
+): boolean => SUBAGENT_BACKEND_CONTEXTS[backend].includes(context);
+
 export type SubagentCapability =
   | "steer"
   | "interrupt"

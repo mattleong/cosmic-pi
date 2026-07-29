@@ -266,16 +266,9 @@ export const resolveProfileStart = (
       profile: definition.id,
       writeIntent: rawInput.writeIntent ?? definition.defaultWriteIntent,
     };
-    const context = input.context ?? definition.defaultContext;
     const projectTrusted = environment.projectTrusted;
     const parentSessionFile = ctx.sessionManager.getSessionFile();
     const parentLeafId = stableParentLeaf(ctx);
-    if (context === "fork" && (!parentSessionFile || !parentLeafId))
-      return yield* new InvalidSubagentRequestError({
-        code: "fork_context_unavailable",
-        message:
-          "Forked context requires a persisted parent session with a stable leaf; oracle does not silently degrade to fresh context.",
-      });
 
     let claudeReadiness: Exit.Exit<void, SubagentProcessError> | undefined;
     const ensureClaudeReady = (): Effect.Effect<void, SubagentProcessError> =>
@@ -295,7 +288,7 @@ export const resolveProfileStart = (
     const plan = profiles.resolve(
       profile,
       hostProfileEnvironment(pi, ctx, projectTrusted),
-      context,
+      input.context,
       input.effort,
     );
     if (plan.kind === "failed")
@@ -306,6 +299,7 @@ export const resolveProfileStart = (
     ): Effect.Effect<
       {
         readonly concrete: ResolvedConcreteModel;
+        readonly effectiveContext: SubagentContextMode;
         readonly selection: SubagentSelectionProvenance;
       },
       InvalidSubagentRequestError
@@ -355,6 +349,7 @@ export const resolveProfileStart = (
             const policy = profiles.policyFor(resolved.backend, resolved.model);
             return Effect.succeed({
               concrete: resolved,
+              effectiveContext: attempt.effectiveContext,
               selection: {
                 source: attempt.source,
                 ...(attempt.candidateIndex === undefined
@@ -374,6 +369,11 @@ export const resolveProfileStart = (
       );
     };
     const selected = yield* tryAttempt(0, []);
+    if (selected.effectiveContext === "fork" && (!parentSessionFile || !parentLeafId))
+      return yield* new InvalidSubagentRequestError({
+        code: "fork_context_unavailable",
+        message: "Forked context requires a persisted parent session with a stable leaf.",
+      });
     const concrete = selected.concrete;
     const selection = selected.selection;
 
@@ -386,7 +386,7 @@ export const resolveProfileStart = (
       selection,
       cwd: environment.cwd,
       execution: input.execution ?? "background",
-      context,
+      context: selected.effectiveContext,
       writeIntent: input.writeIntent,
       model: concrete.model,
       ...(concrete.runtimeApiKey ? { runtimeApiKey: concrete.runtimeApiKey } : {}),

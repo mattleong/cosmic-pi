@@ -50,6 +50,7 @@ import {
   MAX_RETAINED_RUNS,
 } from "./limits.ts";
 import {
+  backendSupportsContext,
   CLAUDE_CLI_SUBAGENT_CAPABILITIES,
   emptyUsage,
   hasSubagentCapability,
@@ -1057,10 +1058,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             code: "claude_untrusted",
             message: "Claude CLI subagents require a trusted project.",
           });
-        if (request.backend === "claude-cli" && request.context === "fork")
+        if (!backendSupportsContext(request.backend, request.context))
           return yield* new InvalidSubagentRequestError({
-            code: "claude_context_unsupported",
-            message: "Claude CLI does not support forked Pi context yet.",
+            code:
+              request.backend === "claude-cli"
+                ? "claude_context_unsupported"
+                : "context_unsupported",
+            message: `Backend ${request.backend} does not support ${request.context} context.`,
           });
         if (request.backend === "claude-cli" && !isClaudeModelSelector(request.model))
           return yield* new InvalidSubagentRequestError({

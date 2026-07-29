@@ -10,7 +10,12 @@ import type {
 import { startHostUiTicker } from "../boundary/host-ui.ts";
 import type { ProfileId } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
-import type { SubagentEffort, SubagentRunView, SubagentWriteIntent } from "../run/model.ts";
+import type {
+  SubagentContextMode,
+  SubagentEffort,
+  SubagentRunView,
+  SubagentWriteIntent,
+} from "../run/model.ts";
 import { SubagentService } from "../run/service.ts";
 import {
   decodeStartAwaitCardDetails,
@@ -97,6 +102,7 @@ export interface ProfileCandidateDiscovery {
   readonly order: number;
   readonly candidate: string;
   readonly status: "eligible" | "skipped";
+  readonly effectiveContext?: SubagentContextMode | undefined;
   readonly reason: string;
 }
 
@@ -144,7 +150,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_models",
     label: "Subagent Models",
     description:
-      "Static preflight-only discovery of deterministic subagent profile routing. Profile candidates retain declared first-to-last order; runtime authentication and model readiness are checked only at launch.",
+      "Static preflight-only discovery of deterministic subagent profile routing and candidate effective contexts. Profile candidates retain declared first-to-last order; runtime authentication and model readiness are checked only at launch.",
     parameters: ModelsParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "models" }, signal, onUpdate, ctx),
@@ -156,11 +162,11 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_start",
     label: "Start Subagents",
     description:
-      "Launch one to twelve session-scoped subagents from one agents array using configured profile model routing. Every fresh task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. The short form needs only task and profile. The selected profile always determines the model; this tool never accepts a model selector. Omitted writeIntent uses the profile default. Background is the default; at most one foreground agent is allowed. Successful launches remain active when a peer launch fails.",
+      "Launch one to twelve session-scoped subagents from one agents array using configured profile model routing. Every fresh task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. The short form needs only task and profile. The selected profile always determines the model; this tool never accepts a model selector. Omitted context uses the profile preference when supported, while backends without fork support use fresh context; an explicit context is a hard requirement. Omitted writeIntent uses the profile default. Background is the default; at most one foreground agent is allowed. Successful launches remain active when a peer launch fails.",
     promptSnippet: "Launch delegated subagents using a task profile",
     promptGuidelines: [
       "Use subagent_start for delegated work that can proceed independently; make every fresh task self-contained with relevant paths, constraints, evidence, and its expected deliverable. Background is the default, and each call accepts at most one foreground agent.",
-      "Use subagent_start only for profile routing; it does not accept model. The selected profile always determines the model route. Omit writeIntent to use the profile capability default, and supply it only for a deliberate per-launch capability override.",
+      "Use subagent_start only for profile routing; it does not accept model. The selected profile always determines the model route. Omitted context uses the profile preference when supported, but a backend without fork support uses fresh context; an explicit context is a hard requirement. Omit writeIntent to use the profile capability default, and supply it only for a deliberate per-launch capability override.",
       "Choose a profile by task: scout for local reconnaissance, researcher for sourced external research, planner for plans, worker for implementation, reviewer for independent review, oracle for inherited-decision analysis, and delegate for general work.",
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
       "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",

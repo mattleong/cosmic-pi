@@ -395,9 +395,11 @@ describe("/subagents command and profile settings", () => {
     const efforts = _profileSettingsTest.effortPickerOptions(plain?.supportedEfforts ?? []);
     expect(efforts[0]).toEqual({ label: "Profile default", effort: "default" });
     expect(efforts.map((entry) => entry.effort)).toEqual(["default", "off"]);
-    expect(
-      choices.find((choice) => choice.item.value === "claude-cli/sonnet")?.item.description,
-    ).toContain("launch readiness checked only when starting");
+    const claudeDescription = choices.find((choice) => choice.item.value === "claude-cli/sonnet")
+      ?.item.description;
+    expect(claudeDescription).toContain("fresh context only");
+    expect(claudeDescription).toContain("an omitted fork preference adapts to fresh");
+    expect(claudeDescription).toContain("launch readiness checked only when starting");
   });
 
   it("stages disabled, saves once, and declining reload explains next application", async () => {
