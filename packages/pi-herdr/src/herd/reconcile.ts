@@ -78,7 +78,7 @@ export const refreshHerdrRecords = Effect.fn("HerdrReconcile.refresh")(function*
       current.state === "awaiting_report" && now - current.updatedAt >= REPORT_GRACE_MILLIS;
     const state = timedOutReport ? "failed" : nextState;
     const error = timedOutReport
-      ? "Claude Code settled without submitting its managed final report. Inspect or stop the managed pane."
+      ? "The managed agent settled without submitting its final report. Inspect or stop the managed pane."
       : current.error;
     if (
       current.state !== state ||

@@ -1,3 +1,6 @@
+export const HERDR_AGENT_KINDS = ["claude", "pi", "codex"] as const;
+export type HerdrAgentKind = (typeof HERDR_AGENT_KINDS)[number];
+
 export const HERDR_AGENT_STATES = [
   "starting",
   "working",
@@ -16,6 +19,8 @@ export type HerdrReadSource = "visible" | "recent" | "recent-unwrapped" | "detec
 
 export interface HerdrAgentView {
   readonly id: string;
+  readonly kind: HerdrAgentKind;
+  readonly model?: string | undefined;
   readonly name: string;
   readonly agentName: string;
   readonly task: string;
@@ -41,6 +46,8 @@ export interface HerdrProjection {
 }
 
 export interface StartHerdrAgentRequest {
+  readonly kind: HerdrAgentKind;
+  readonly model: string;
   readonly task: string;
   readonly name?: string | undefined;
 }

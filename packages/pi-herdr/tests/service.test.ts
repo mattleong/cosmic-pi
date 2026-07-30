@@ -11,12 +11,22 @@ import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, describe, expect } from "vitest";
+import {
+  AgentHarness,
+  type AgentHarnessShape,
+  type PreparedAgentHarness,
+} from "../src/boundary/agent-harness.ts";
 import { HerdrClient, type HerdrClientShape } from "../src/boundary/herdr-client.ts";
 import { ReportChannel, type ReportChannelShape } from "../src/boundary/report-channel.ts";
 import { DEFAULT_HERDR_CONFIG, type PersistedHerdrProject } from "../src/config/schema.ts";
 import { HerdrConfigStore, type HerdrConfigStoreShape } from "../src/config/store.ts";
 import { HerdrCommandError } from "../src/herd/errors.ts";
-import type { HerdrReport, HerdrSnapshot } from "../src/herd/model.ts";
+import type {
+  HerdrAgentKind,
+  HerdrReport,
+  HerdrSnapshot,
+  StartHerdrAgentRequest,
+} from "../src/herd/model.ts";
 import { HerdrService } from "../src/herd/service.ts";
 
 const roots: string[] = [];
@@ -56,11 +66,19 @@ const baseSnapshot = (): HerdrSnapshot => ({
   layouts: [],
 });
 
+const startRequest = (
+  task: string,
+  kind: HerdrAgentKind = "claude",
+  model = kind === "claude" ? "sonnet" : kind === "pi" ? "openai-codex/gpt-5.6-sol" : "gpt-5.4",
+): StartHerdrAgentRequest => ({ kind, model, task });
+
 const fixture = (
   options: {
     readonly busyStarts?: number;
     readonly focusOnStart?: boolean;
+    readonly interactiveReadyPolls?: number;
     readonly kindMismatchStarts?: number;
+    readonly maxActive?: number;
   } = {},
 ) => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdr-service-"));
@@ -73,12 +91,24 @@ const fixture = (
   let nextPaneOrdinal = 3;
   let lastStartedPaneId: string | undefined;
   let report: HerdrReport | undefined;
+  let interactiveReadyPolls = 0;
   const focusCalls: string[] = [];
   const saved: PersistedHerdrProject[] = [];
+  let sharedProject: PersistedHerdrProject | undefined;
   const client: HerdrClientShape = {
     sessionIdentity: "default",
     preflight: Effect.void,
-    snapshot: Effect.sync(() => snapshot),
+    snapshot: Effect.sync(() => {
+      if (interactiveReadyPolls > 0) {
+        interactiveReadyPolls -= 1;
+        if (interactiveReadyPolls === 0)
+          snapshot = {
+            ...snapshot,
+            agents: snapshot.agents.map((agent) => ({ ...agent, interactiveReady: true })),
+          };
+      }
+      return snapshot;
+    }),
     createWorkspace: () => Effect.die("unexpected workspace creation"),
     renameTab: () => Effect.void,
     createTab: (workspaceId, cwd, label) =>
@@ -150,12 +180,12 @@ const fixture = (
         return pane;
       }),
     renamePane: () => Effect.void,
-    startClaude: ({ paneId, name }) => {
+    startAgent: ({ paneId, name, kind }) => {
       startAttempts += 1;
       if (startAttempts <= (options.busyStarts ?? 0))
         return Effect.fail(
           new HerdrCommandError({
-            operation: "start Claude Code",
+            operation: "start managed agent",
             code: "agent_pane_busy",
             message: "agent target pane is not an available shell",
           }),
@@ -163,9 +193,9 @@ const fixture = (
       if (startAttempts <= (options.kindMismatchStarts ?? 0))
         return Effect.fail(
           new HerdrCommandError({
-            operation: "start Claude Code",
+            operation: "start managed agent",
             code: "agent_kind_mismatch",
-            message: "expected Claude, detected Codex",
+            message: "managed agent kind did not match",
           }),
         );
       return Effect.sync(() => {
@@ -181,10 +211,11 @@ const fixture = (
           focused: false,
           agentStatus: "idle" as const,
           name,
-          agent: "claude",
+          agent: kind,
           stateChangeSeq: 1,
-          interactiveReady: true,
+          interactiveReady: options.interactiveReadyPolls === undefined,
         };
+        interactiveReadyPolls = options.interactiveReadyPolls ?? 0;
         snapshot = {
           ...snapshot,
           ...(options.focusOnStart
@@ -262,24 +293,53 @@ const fixture = (
         runId: `herdr-test-run${suffix}`,
         agentName: `pih-test-run${suffix}`,
         generation: `herdr-test-run${suffix}`,
-        directory: `/private/run${suffix}`,
-        mcpConfigPath: `/private/run${suffix}/mcp.json`,
+        directory: `/private/herdr-test-run${suffix}`,
+        helperPath: "/package/report-helper.mjs",
+        mcpConfigPath: `/private/herdr-test-run${suffix}/mcp.json`,
       };
     }),
     read: () => Effect.succeed(report),
     remove: () => Effect.void,
   };
+  const harnesses: AgentHarnessShape = {
+    prepare: (kind, _cwd, channel) => {
+      const harness: PreparedAgentHarness =
+        kind === "claude"
+          ? {
+              kind,
+              mcpConfigPath: channel.mcpConfigPath,
+              settingsPath: `${channel.directory}/claude-settings.json`,
+            }
+          : kind === "pi"
+            ? {
+                kind,
+                integrationPath: "/agent/extensions/herdr-agent-state.ts",
+                reportExtensionPath: "/package/host-report-extension.ts",
+                reportHelperPath: channel.helperPath,
+                reportDirectory: channel.directory,
+                runId: channel.runId,
+                sessionDirectory: `${channel.directory}/pi-sessions`,
+              }
+            : { kind, codexHome: `${channel.directory}/codex-home` };
+      return Effect.succeed(harness);
+    },
+  };
   const store: HerdrConfigStoreShape = {
-    config: DEFAULT_HERDR_CONFIG,
+    config: {
+      ...DEFAULT_HERDR_CONFIG,
+      maxActive: options.maxActive ?? DEFAULT_HERDR_CONFIG.maxActive,
+    },
     statePath: join(root, "state.json"),
-    loadProject: () => Effect.succeed(undefined),
+    loadProject: () => Effect.succeed(sharedProject),
     saveProject: (project) =>
       Effect.sync(() => {
+        sharedProject = project;
         saved.push(project);
       }),
   };
   const dependencies = Layer.mergeAll(
     nodeFilePlatformLayer,
+    Layer.succeed(AgentHarness, AgentHarness.of(harnesses)),
     Layer.succeed(HerdrClient, HerdrClient.of(client)),
     Layer.succeed(ReportChannel, ReportChannel.of(reports)),
     Layer.succeed(HerdrConfigStore, HerdrConfigStore.of(store)),
@@ -290,7 +350,7 @@ const fixture = (
     saved,
     closeCalls: () => closeCalls,
     splitCalls: () => splitCalls,
-    managedTabExists: () => snapshot.tabs.some((tab) => tab.label === "pi-herdr · Claude"),
+    managedTabExists: () => snapshot.tabs.some((tab) => tab.label === "pi-herdr · Agents"),
     managedPaneCount: () => snapshot.panes.filter((pane) => pane.tabId === "w1:t2").length,
     managedBlankPaneCount: () =>
       snapshot.panes.filter(
@@ -331,6 +391,31 @@ const fixture = (
         ),
       };
     },
+    replaceAgentKind: () => {
+      snapshot = {
+        ...snapshot,
+        agents: snapshot.agents.map((agent) =>
+          agent.paneId === lastStartedPaneId ? { ...agent, agent: "codex" } : agent,
+        ),
+      };
+    },
+    transferSharedAnchor: () => {
+      if (!sharedProject) throw new Error("missing shared project");
+      const pane = {
+        paneId: "w1:p99",
+        terminalId: "term-shared-anchor",
+        workspaceId: sharedProject.workspaceId,
+        tabId: sharedProject.tabId,
+        cwd: "/repo",
+        focused: false,
+        agentStatus: "idle" as const,
+      };
+      snapshot = {
+        ...snapshot,
+        panes: [...snapshot.panes, pane],
+      };
+      sharedProject = { ...sharedProject, anchorPaneId: pane.paneId };
+    },
   };
 };
 
@@ -343,7 +428,7 @@ describe("HerdrService", () => {
         const run = yield* Effect.scoped(
           Effect.gen(function* () {
             const service = yield* HerdrService;
-            const started = yield* service.start({ task: "Review auth" });
+            const started = yield* service.start(startRequest("Review auth"));
             expect(started).toMatchObject({
               id: "herdr-test-run",
               agentName: "pih-test-run",
@@ -373,13 +458,85 @@ describe("HerdrService", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const service = yield* HerdrService;
-          const first = yield* service.start({ task: "Review auth" });
-          const second = yield* service.start({ task: "Review config" });
-          expect(first.paneId).toBe("w1:p2");
-          expect(second.paneId).toBe("w1:p3");
+          const first = yield* service.start(startRequest("Review auth", "claude"));
+          const second = yield* service.start(startRequest("Review config", "pi"));
+          expect(first).toMatchObject({ paneId: "w1:p2", kind: "claude", model: "sonnet" });
+          expect(second).toMatchObject({
+            paneId: "w1:p3",
+            kind: "pi",
+            model: "openai-codex/gpt-5.6-sol",
+          });
           expect(test.splitCalls()).toBe(1);
           expect(test.managedPaneCount()).toBe(2);
           expect(test.managedBlankPaneCount()).toBe(0);
+        }).pipe(Effect.provide(test.layer)),
+      );
+    }),
+  );
+
+  it.effect("imports a newer cross-process anchor before the next topology mutation", () =>
+    Effect.gen(function* () {
+      const test = fixture();
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* HerdrService;
+          yield* service.start(startRequest("Review auth", "claude"));
+          test.transferSharedAnchor();
+          const second = yield* service.start(startRequest("Review config", "pi"));
+          expect(second.paneId).toBe("w1:p99");
+          expect(test.splitCalls()).toBe(0);
+          expect(test.saved.at(-1)?.anchorPaneId).toBe("w1:p99");
+        }).pipe(Effect.provide(test.layer)),
+      );
+    }),
+  );
+
+  it.effect("enforces the configured persistent active-run limit", () =>
+    Effect.gen(function* () {
+      const test = fixture({ maxActive: 1 });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* HerdrService;
+          yield* service.start(startRequest("Review auth"));
+          const failure = yield* Effect.flip(service.start(startRequest("Review config", "pi")));
+          expect(failure).toMatchObject({
+            _tag: "InvalidHerdrRequestError",
+            code: "active_limit_reached",
+          });
+          expect(test.startAttempts()).toBe(1);
+        }).pipe(Effect.provide(test.layer)),
+      );
+    }),
+  );
+
+  it.effect("rejects unsafe model arguments before acquiring a pane", () =>
+    Effect.gen(function* () {
+      const test = fixture();
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* HerdrService;
+          const failure = yield* Effect.flip(
+            service.start({ kind: "codex", model: "--dangerous", task: "Review auth" }),
+          );
+          expect(failure).toMatchObject({
+            _tag: "InvalidHerdrRequestError",
+            code: "model_invalid",
+          });
+          expect(test.startAttempts()).toBe(0);
+          expect(test.managedPaneCount()).toBe(0);
+        }).pipe(Effect.provide(test.layer)),
+      );
+    }),
+  );
+
+  it.effect("waits for Herdr interactive readiness before submitting the task", () =>
+    Effect.gen(function* () {
+      const test = fixture({ interactiveReadyPolls: 2 });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* HerdrService;
+          const started = yield* service.start(startRequest("Review auth", "codex"));
+          expect(started).toMatchObject({ kind: "codex", state: "working" });
         }).pipe(Effect.provide(test.layer)),
       );
     }),
@@ -391,7 +548,7 @@ describe("HerdrService", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const service = yield* HerdrService;
-          yield* service.start({ task: "Review auth" });
+          yield* service.start(startRequest("Review auth"));
           expect(test.focusCalls()).toEqual(["w1:t1"]);
         }).pipe(Effect.provide(test.layer)),
       );
@@ -404,7 +561,7 @@ describe("HerdrService", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const service = yield* HerdrService;
-          const started = yield* service.start({ task: "Review auth" });
+          const started = yield* service.start(startRequest("Review auth"));
           expect(test.startAttempts()).toBe(2);
           expect(started.state).toBe("working");
           expect(test.startAttempts()).toBe(2);
@@ -422,9 +579,11 @@ describe("HerdrService", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const service = yield* HerdrService;
-          const starting = yield* service.start({ task: "Review auth" }).pipe(Effect.forkScoped);
+          const starting = yield* service
+            .start(startRequest("Review auth"))
+            .pipe(Effect.forkScoped);
           while (test.startAttempts() < 1) yield* Effect.yieldNow;
-          yield* TestClock.adjust("1 second");
+          yield* TestClock.adjust("5 seconds");
           const started = yield* Fiber.join(starting);
           expect(started.state).toBe("working");
           expect(test.startAttempts()).toBe(3);
@@ -439,7 +598,7 @@ describe("HerdrService", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const service = yield* HerdrService;
-          const started = yield* service.start({ task: "Review auth" });
+          const started = yield* service.start(startRequest("Review auth"));
           test.completeReport();
           yield* TestClock.adjust("1 second");
           let completed = yield* service.status(started.id);
@@ -463,7 +622,7 @@ describe("HerdrService", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const service = yield* HerdrService;
-          const started = yield* service.start({ task: "Review auth" });
+          const started = yield* service.start(startRequest("Review auth"));
           test.settleLastAgentWithoutReport();
           yield* Effect.yieldNow;
           yield* TestClock.adjust("1 second");
@@ -489,7 +648,7 @@ describe("HerdrService", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const service = yield* HerdrService;
-          const started = yield* service.start({ task: "Review auth" });
+          const started = yield* service.start(startRequest("Review auth"));
           const stopped = yield* service.stop(started.id);
           expect(stopped.state).toBe("stopped");
           expect(test.closeCalls()).toBe(1);
@@ -497,7 +656,9 @@ describe("HerdrService", () => {
           expect(test.managedPaneCount()).toBe(1);
           expect(test.managedBlankPaneCount()).toBe(1);
           expect(test.focusCalls()).toEqual(["w1:t1"]);
-          expect((yield* service.start({ task: "Review auth again" })).state).toBe("working");
+          expect((yield* service.start(startRequest("Review auth again", "codex"))).state).toBe(
+            "working",
+          );
           expect(test.managedBlankPaneCount()).toBe(0);
         }).pipe(Effect.provide(test.layer)),
       );
@@ -510,12 +671,31 @@ describe("HerdrService", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const service = yield* HerdrService;
-          const started = yield* service.start({ task: "Review auth" });
+          const started = yield* service.start(startRequest("Review auth"));
           test.replaceAgentTerminal();
           const failure = yield* Effect.flip(service.stop(started.id));
           expect(failure).toMatchObject({
             _tag: "HerdrOwnershipError",
-            code: "owned_pane_mismatch",
+            code: "owned_agent_mismatch",
+          });
+          expect(test.closeCalls()).toBe(0);
+        }).pipe(Effect.provide(test.layer)),
+      );
+    }),
+  );
+
+  it.effect("refuses to close a same-terminal agent whose kind changed", () =>
+    Effect.gen(function* () {
+      const test = fixture();
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* HerdrService;
+          const started = yield* service.start(startRequest("Review auth"));
+          test.replaceAgentKind();
+          const failure = yield* Effect.flip(service.stop(started.id));
+          expect(failure).toMatchObject({
+            _tag: "HerdrOwnershipError",
+            code: "owned_agent_mismatch",
           });
           expect(test.closeCalls()).toBe(0);
         }).pipe(Effect.provide(test.layer)),
@@ -529,7 +709,7 @@ describe("HerdrService", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const service = yield* HerdrService;
-          const started = yield* service.start({ task: "Review auth" });
+          const started = yield* service.start(startRequest("Review auth"));
           test.removeAgentPane();
           const stopped = yield* service.stop(started.id);
           expect(stopped.state).toBe("stopped");

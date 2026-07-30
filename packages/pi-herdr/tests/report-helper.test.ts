@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { callReportHelper } from "../src/boundary/host-report-extension.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -106,6 +107,68 @@ describe("report helper", () => {
     } finally {
       child.kill();
     }
+  });
+
+  it("atomically accepts only one of several concurrent conflicting reports", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-herdr-report-race-"));
+    temporaryDirectories.push(directory);
+    const helper = fileURLToPath(new URL("../src/boundary/report-helper.mjs", import.meta.url));
+    const children = Array.from({ length: 8 }, () =>
+      spawn(process.execPath, [helper], {
+        env: { ...process.env, HERDR_RUN_ID: "herdr-race", HERDR_REPORT_DIR: directory },
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    );
+    try {
+      const responses = await Promise.all(
+        children.map((child, index) =>
+          request(child, {
+            jsonrpc: "2.0",
+            id: index,
+            method: "tools/call",
+            params: {
+              name: "submit_report",
+              arguments: { status: "completed", report: `candidate-${index}` },
+            },
+          }),
+        ),
+      );
+      expect(
+        responses.filter(
+          (response) =>
+            !(
+              response &&
+              typeof response === "object" &&
+              "result" in response &&
+              response.result &&
+              typeof response.result === "object" &&
+              "isError" in response.result
+            ),
+        ),
+      ).toHaveLength(1);
+      const document = JSON.parse(await readFile(join(directory, "report.json"), "utf8"));
+      expect(document.report).toMatch(/^candidate-\d$/);
+    } finally {
+      for (const child of children) child.kill();
+    }
+  });
+
+  it("accepts the same durable receipt through the delegated Pi reporter bridge", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-herdr-pi-report-"));
+    temporaryDirectories.push(directory);
+    const receipt = await callReportHelper(
+      "herdr-pi-test",
+      directory,
+      { status: "completed", report: "pi-report-ok" },
+      undefined,
+    );
+    expect(receipt).toContain("Report durably accepted");
+    const document = JSON.parse(await readFile(join(directory, "report.json"), "utf8"));
+    expect(document).toMatchObject({
+      runId: "herdr-pi-test",
+      status: "completed",
+      report: "pi-report-ok",
+    });
   });
 
   it("preserves the request id when durable report state is corrupt", async () => {

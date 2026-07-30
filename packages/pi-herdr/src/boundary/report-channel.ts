@@ -37,6 +37,7 @@ export interface PreparedReportChannel {
   readonly agentName: string;
   readonly generation: string;
   readonly directory: string;
+  readonly helperPath: string;
   readonly mcpConfigPath: string;
 }
 
@@ -95,6 +96,7 @@ export class ReportChannel extends Context.Service<ReportChannel, ReportChannelS
             agentName,
             generation: runId,
             directory,
+            helperPath,
             mcpConfigPath,
           } satisfies PreparedReportChannel;
         },

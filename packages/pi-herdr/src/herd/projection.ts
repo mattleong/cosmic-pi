@@ -12,6 +12,9 @@ const stateOrder: Readonly<Record<HerdrAgentView["state"], number>> = {
   stopped: 7,
 };
 
+export const formatHerdrState = (state: HerdrAgentView["state"]): string =>
+  state.replaceAll("_", " ");
+
 export const sortHerdrAgents = (
   agents: ReadonlyArray<HerdrAgentView>,
 ): ReadonlyArray<HerdrAgentView> =>
@@ -23,14 +26,17 @@ export const sortHerdrAgents = (
 export const emptyHerdrProjection = (): HerdrProjection => ({ revision: 0, agents: [] });
 
 export const herdrFooterStatus = (projection: HerdrProjection): string | undefined => {
-  const active = projection.agents.filter((agent) => isHerdrAgentActive(agent.state)).length;
-  const blocked = projection.agents.filter((agent) => agent.state === "blocked").length;
-  const completed = projection.agents.filter((agent) => agent.state === "completed").length;
-  if (active === 0 && blocked === 0 && completed === 0) return undefined;
+  const active = projection.agents.filter(
+    (agent) =>
+      isHerdrAgentActive(agent.state) && agent.state !== "blocked" && agent.report === undefined,
+  ).length;
+  const blocked = projection.agents.filter(
+    (agent) => agent.state === "blocked" && agent.report === undefined,
+  ).length;
+  if (active === 0 && blocked === 0) return undefined;
   const parts = [
-    active > 0 ? `${active} Claude ${active === 1 ? "agent" : "agents"} active` : undefined,
+    active > 0 ? `${active} ${active === 1 ? "agent" : "agents"} active` : undefined,
     blocked > 0 ? `${blocked} blocked` : undefined,
-    completed > 0 ? `${completed} completed` : undefined,
   ].filter((value): value is string => value !== undefined);
   return `Herdr: ${parts.join(" · ")}`;
 };

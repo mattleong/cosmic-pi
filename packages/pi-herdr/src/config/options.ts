@@ -23,5 +23,6 @@ export const normalizeHerdrConfig = (input: HerdrConfigInput): HerdrConfig => ({
     10_000,
   ),
   showFooterStatus: input.showFooterStatus ?? DEFAULT_HERDR_CONFIG.showFooterStatus,
+  maxActive: boundedInteger(input.maxActive, DEFAULT_HERDR_CONFIG.maxActive, 1, 100),
   maxRetained: boundedInteger(input.maxRetained, DEFAULT_HERDR_CONFIG.maxRetained, 10, 1_000),
 });

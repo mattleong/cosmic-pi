@@ -113,6 +113,8 @@ export function registerHerdrApplication(pi: ExtensionAPI): void {
       run(HerdrService.use((service) => service.read(id, "recent-unwrapped", 160))).then(
         (result) => result.text,
       ),
+    send: (id, message) =>
+      run(HerdrService.use((service) => service.send(id, message))).then(() => undefined),
   });
 
   const prepare = (ctx: ExtensionContext): Promise<void> => {

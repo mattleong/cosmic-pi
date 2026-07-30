@@ -79,6 +79,22 @@ describe("Herdr protocol", () => {
     }),
   );
 
+  it.effect("preserves Pi and Codex agent kinds for ownership matching", () =>
+    Effect.gen(function* () {
+      const decoded = yield* decodeAgents({
+        id: "list",
+        result: {
+          type: "agent_list",
+          agents: [
+            { ...agent, name: "pi-agent", agent: "pi" },
+            { ...agent, pane_id: "w1:p2", name: "codex-agent", agent: "codex" },
+          ],
+        },
+      });
+      expect(decoded.map((value) => value.agent)).toEqual(["pi", "codex"]);
+    }),
+  );
+
   it.effect("maps forward-compatible remote statuses to unknown", () =>
     Effect.gen(function* () {
       const decoded = yield* decodeAgents({

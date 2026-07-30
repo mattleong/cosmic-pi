@@ -92,7 +92,7 @@ Each extension has one host-owned session runtime. `PiApi` and the package appli
 - `pi-code-previews` composes session capability, settings/environment services, scoped Shiki state, and scoped before-write state. Pure diff/layout/rendering remains outside Effect.
 - `pi-advisor` composes the parent controller, review queue, child runtime, read-only filesystem, and Pi command adapter. Immediate ingestion remains a bounded synchronous projection into the controller.
 - `pi-background-terminals` composes a session-scoped job registry, child-process boundary, bounded log buffers, cooperative tool renderer, and synchronous manager projection.
-- `pi-herdr` composes a session-scoped monitor over persistent Herdr-owned Claude Code panes, a bounded CLI boundary, durable private MCP report channel, ownership store, cooperative tool renderers, and synchronous fleet projection. Pi runtime disposal never owns the Herdr process lifetime.
+- `pi-herdr` composes a session-scoped monitor over persistent Herdr-owned Claude Code, Pi, and Codex panes, a bounded CLI boundary, isolated per-kind harnesses, one durable private report contract, ownership store, cooperative tool renderers, and synchronous fleet projection. Parent Pi runtime disposal never owns the delegated process lifetime.
 - `pi-subagents` composes a session-scoped Pi child-run registry, bounded RPC/process boundaries, structured child-event timelines, completion delivery, cooperative tool renderer, and synchronous fleet projection.
 
 No extension owns a telemetry exporter or process-wide Effect runtime.

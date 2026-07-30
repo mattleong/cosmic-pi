@@ -46,6 +46,11 @@ export class HerdrReportError extends Schema.TaggedErrorClass<HerdrReportError>(
   { operation: Schema.String, code: Schema.String, message: Schema.String },
 ) {}
 
+export class HerdrHarnessError extends Schema.TaggedErrorClass<HerdrHarnessError>()(
+  "HerdrHarnessError",
+  { operation: Schema.String, code: Schema.String, message: Schema.String },
+) {}
+
 export class HerdrRuntimeClosedError extends Schema.TaggedErrorClass<HerdrRuntimeClosedError>()(
   "HerdrRuntimeClosedError",
   { message: Schema.String },
@@ -61,4 +66,5 @@ export type HerdrError =
   | InvalidHerdrRequestError
   | HerdrOwnershipError
   | HerdrReportError
+  | HerdrHarnessError
   | HerdrRuntimeClosedError;

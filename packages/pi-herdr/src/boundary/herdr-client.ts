@@ -14,6 +14,8 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { HerdrConfigStore } from "../config/store.ts";
+import type { HerdrAgentKind } from "../herd/model.ts";
+import type { PreparedAgentHarness } from "./agent-harness.ts";
 import { HerdrCommandError, HerdrProtocolError, HerdrUnavailableError } from "../herd/errors.ts";
 import {
   decodeAgent,
@@ -80,10 +82,12 @@ export interface HerdrClientShape {
     paneId: string,
     label: string,
   ) => Effect.Effect<void, HerdrCommandError | HerdrProtocolError>;
-  readonly startClaude: (input: {
+  readonly startAgent: (input: {
+    readonly kind: HerdrAgentKind;
+    readonly model: string;
     readonly paneId: string;
     readonly name: string;
-    readonly mcpConfigPath: string;
+    readonly harness: PreparedAgentHarness;
   }) => Effect.Effect<HerdrRemoteAgentInfo, HerdrCommandError | HerdrProtocolError>;
   readonly prompt: (
     target: string,
@@ -247,7 +251,7 @@ const parseJson = (operation: string, source: string): Effect.Effect<unknown, He
       }),
   });
 
-const READ_ONLY_SYSTEM_PROMPT = [
+const CLAUDE_READ_ONLY_SYSTEM_PROMPT = [
   "You are a read-only delegated Claude Code agent managed by pi-herdr.",
   "Do not modify the project, run shell commands, create subagents, or request permission to mutate files.",
   "Use only the supplied read and web tools. Complete the assigned task independently.",
@@ -255,7 +259,50 @@ const READ_ONLY_SYSTEM_PROMPT = [
   "Do not ask the user to copy, save, locate, or manage a report artifact.",
 ].join(" ");
 
-export const buildClaudePromptArgs = (target: string, text: string): ReadonlyArray<string> => [
+const PI_READ_ONLY_SYSTEM_PROMPT = [
+  "You are a read-only delegated Pi agent managed by pi-herdr.",
+  "Do not modify the project, run shell commands, create subagents, or request permission to mutate files.",
+  "Use only read, grep, find, ls, and herdr_report_submit.",
+  "Complete the assigned task independently and submit exactly one complete final report through herdr_report_submit.",
+].join(" ");
+
+const CODEX_DISABLED_FEATURES = [
+  "apps",
+  "browser_use",
+  "browser_use_external",
+  "browser_use_full_cdp_access",
+  "computer_use",
+  "enable_mcp_apps",
+  "image_generation",
+  "in_app_browser",
+  "multi_agent",
+  "multi_agent_v2",
+  "network_proxy",
+  "plugin_sharing",
+  "plugins",
+  "remote_plugin",
+  "skill_mcp_dependency_install",
+  "standalone_web_search",
+] as const;
+
+const agentStartPrefix = (
+  kind: HerdrAgentKind,
+  paneId: string,
+  name: string,
+): ReadonlyArray<string> => [
+  "agent",
+  "start",
+  name,
+  "--kind",
+  kind,
+  "--pane",
+  paneId,
+  "--timeout",
+  "60000",
+  "--",
+];
+
+export const buildAgentPromptArgs = (target: string, text: string): ReadonlyArray<string> => [
   "agent",
   "prompt",
   target,
@@ -265,24 +312,21 @@ export const buildClaudePromptArgs = (target: string, text: string): ReadonlyArr
 export const buildClaudeStartArgs = (input: {
   readonly paneId: string;
   readonly name: string;
+  readonly model: string;
   readonly mcpConfigPath: string;
+  readonly settingsPath: string;
 }): ReadonlyArray<string> => [
-  "agent",
-  "start",
-  input.name,
-  "--kind",
-  "claude",
-  "--pane",
-  input.paneId,
-  "--timeout",
-  "60000",
-  "--",
+  ...agentStartPrefix("claude", input.paneId, input.name),
   "--name",
   input.name,
+  "--model",
+  input.model,
   "--no-chrome",
   "--disable-slash-commands",
   "--setting-sources",
-  "user",
+  "",
+  "--settings",
+  input.settingsPath,
   "--mcp-config",
   input.mcpConfigPath,
   "--strict-mcp-config",
@@ -295,7 +339,81 @@ export const buildClaudeStartArgs = (input: {
   "--permission-mode",
   "dontAsk",
   "--append-system-prompt",
-  READ_ONLY_SYSTEM_PROMPT,
+  CLAUDE_READ_ONLY_SYSTEM_PROMPT,
+];
+
+export const buildPiStartArgs = (input: {
+  readonly paneId: string;
+  readonly name: string;
+  readonly model: string;
+  readonly integrationPath: string;
+  readonly reportExtensionPath: string;
+  readonly reportDirectory: string;
+  readonly runId: string;
+  readonly sessionDirectory: string;
+}): ReadonlyArray<string> => [
+  ...agentStartPrefix("pi", input.paneId, input.name),
+  "--name",
+  input.name,
+  "--model",
+  input.model,
+  "--session-dir",
+  input.sessionDirectory,
+  "--no-approve",
+  "--no-extensions",
+  "--extension",
+  input.integrationPath,
+  "--extension",
+  input.reportExtensionPath,
+  "--no-skills",
+  "--no-prompt-templates",
+  "--no-themes",
+  "--no-context-files",
+  "--tools",
+  "read,grep,find,ls,herdr_report_submit",
+  "--exclude-tools",
+  "bash,edit,write",
+  "--system-prompt",
+  PI_READ_ONLY_SYSTEM_PROMPT,
+  "--herdr-report-run-id",
+  input.runId,
+  "--herdr-report-directory",
+  input.reportDirectory,
+];
+
+export const buildCodexStartArgs = (input: {
+  readonly paneId: string;
+  readonly name: string;
+  readonly model: string;
+}): ReadonlyArray<string> => [
+  ...agentStartPrefix("codex", input.paneId, input.name),
+  "--model",
+  input.model,
+  "--sandbox",
+  "read-only",
+  "--ask-for-approval",
+  "never",
+  "--no-alt-screen",
+  "--dangerously-bypass-hook-trust",
+  "-c",
+  'web_search="disabled"',
+  "-c",
+  "agents.enabled=false",
+  "-c",
+  "allow_login_shell=false",
+  ...CODEX_DISABLED_FEATURES.flatMap((feature) => ["--disable", feature]),
+];
+
+const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+
+export const buildCodexEnvironmentArgs = (
+  paneId: string,
+  codexHome: string,
+): ReadonlyArray<string> => [
+  "pane",
+  "run",
+  paneId,
+  `export CODEX_HOME=${shellSingleQuote(codexHome)}`,
 ];
 
 export class HerdrClient extends Context.Service<HerdrClient, HerdrClientShape>()(
@@ -324,6 +442,8 @@ export class HerdrClient extends Context.Service<HerdrClient, HerdrClientShape>(
           );
         const ok = (args: ReadonlyArray<string>, operation: string) =>
           json(args, operation).pipe(Effect.flatMap((value) => decodeOk(operation, value)));
+        const commandOnly = (args: ReadonlyArray<string>, operation: string) =>
+          runCommand(command, [...prefix, ...args], operation, MAX_TEXT_BYTES).pipe(Effect.asVoid);
 
         const preflight: HerdrClientShape["preflight"] = json(
           ["api", "schema", "--json"],
@@ -394,13 +514,77 @@ export class HerdrClient extends Context.Service<HerdrClient, HerdrClientShape>(
           ).pipe(Effect.flatMap((value) => decodePane("split pane", value)));
         const renamePane: HerdrClientShape["renamePane"] = (paneId, label) =>
           ok(["pane", "rename", paneId, label], "rename pane");
-        const startClaude: HerdrClientShape["startClaude"] = (input) =>
-          json(buildClaudeStartArgs(input), "start Claude Code", START_COMMAND_TIMEOUT).pipe(
-            Effect.flatMap((value) => decodeAgent("start Claude Code", value)),
+        const startAgent: HerdrClientShape["startAgent"] = (input) => {
+          const operation = `start ${input.kind} agent`;
+          const startCommand = (() => {
+            switch (input.harness.kind) {
+              case "claude":
+                return json(
+                  buildClaudeStartArgs({
+                    paneId: input.paneId,
+                    name: input.name,
+                    model: input.model,
+                    mcpConfigPath: input.harness.mcpConfigPath,
+                    settingsPath: input.harness.settingsPath,
+                  }),
+                  operation,
+                  START_COMMAND_TIMEOUT,
+                );
+              case "pi":
+                return json(
+                  buildPiStartArgs({
+                    paneId: input.paneId,
+                    name: input.name,
+                    model: input.model,
+                    integrationPath: input.harness.integrationPath,
+                    reportExtensionPath: input.harness.reportExtensionPath,
+                    reportDirectory: input.harness.reportDirectory,
+                    runId: input.harness.runId,
+                    sessionDirectory: input.harness.sessionDirectory,
+                  }),
+                  operation,
+                  START_COMMAND_TIMEOUT,
+                );
+              case "codex":
+                return commandOnly(
+                  buildCodexEnvironmentArgs(input.paneId, input.harness.codexHome),
+                  "prepare Codex environment",
+                ).pipe(
+                  Effect.andThen(Effect.sleep("500 millis")),
+                  Effect.andThen(
+                    json(
+                      buildCodexStartArgs({
+                        paneId: input.paneId,
+                        name: input.name,
+                        model: input.model,
+                      }),
+                      operation,
+                      START_COMMAND_TIMEOUT,
+                    ),
+                  ),
+                );
+            }
+          })();
+          return Effect.sleep("1 second").pipe(
+            Effect.andThen(startCommand),
+            Effect.flatMap((value) => decodeAgent(operation, value)),
+            Effect.flatMap((remote) =>
+              remote.agent === input.kind
+                ? Effect.succeed(remote)
+                : Effect.fail(
+                    new HerdrCommandError({
+                      operation,
+                      code: "agent_kind_mismatch",
+                      message: `Herdr started ${remote.agent ?? "an unknown agent"}; expected ${input.kind}.`,
+                    }),
+                  ),
+            ),
+            Effect.tap(() => Effect.sleep("500 millis")),
           );
+        };
         const prompt: HerdrClientShape["prompt"] = (target, text) =>
-          json(buildClaudePromptArgs(target, text), "prompt Claude Code").pipe(
-            Effect.flatMap((value) => decodeAgent("prompt Claude Code", value)),
+          json(buildAgentPromptArgs(target, text), "prompt managed agent").pipe(
+            Effect.flatMap((value) => decodeAgent("prompt managed agent", value)),
           );
         const listAgents = json(["agent", "list"], "list agents").pipe(
           Effect.flatMap(decodeAgents),
@@ -428,7 +612,7 @@ export class HerdrClient extends Context.Service<HerdrClient, HerdrClientShape>(
           createTab,
           splitPane,
           renamePane,
-          startClaude,
+          startAgent,
           prompt,
           listAgents,
           readAgent,

@@ -11,6 +11,8 @@ import { refreshHerdrRecords } from "../src/herd/reconcile.ts";
 
 const run = (state: HerdrAgentView["state"], updatedAt = 1): HerdrAgentView => ({
   id: "herdr-11111111-1111-4111-8111-111111111111",
+  kind: "claude",
+  model: "sonnet",
   name: "Claude 1",
   agentName: "pih-test",
   task: "Review",
@@ -110,6 +112,23 @@ describe("Herdr reconciliation", () => {
 
       expect(result.changed).toBe(false);
       expect(records.get(restored.id)).toEqual(restored);
+    }),
+  );
+
+  it.effect("refuses to adopt an otherwise matching remote agent of another kind", () =>
+    Effect.gen(function* () {
+      const piRun = { ...run("working"), kind: "pi" as const, model: "openai/gpt-5" };
+      const records = new Map([[piRun.id, piRun]]);
+      const result = yield* refreshHerdrRecords({
+        client: clientWith([remote("working")]),
+        reports: reportsWith(() => Effect.succeed(undefined)),
+        records,
+        maxRetained: 8,
+      });
+
+      expect(result.changed).toBe(true);
+      expect(records.get(piRun.id)).toMatchObject({ state: "unknown" });
+      expect(records.get(piRun.id)?.remoteStatus).toBeUndefined();
     }),
   );
 

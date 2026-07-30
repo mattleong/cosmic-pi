@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 const MAX_REPORT_BYTES = 48_000;
@@ -27,21 +27,32 @@ const durableWrite = async (document) => {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const temporaryPath = join(directory, `.report.${process.pid}.${randomUUID()}.tmp`);
   const source = `${JSON.stringify(document, null, 2)}\n`;
-  await writeFile(temporaryPath, source, { encoding: "utf8", mode: 0o600 });
-  const handle = await open(temporaryPath, "r");
+  await writeFile(temporaryPath, source, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  let accepted = false;
   try {
-    await handle.sync();
+    const handle = await open(temporaryPath, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    try {
+      await link(temporaryPath, reportPath);
+      accepted = true;
+    } catch (cause) {
+      if (!cause || typeof cause !== "object" || !("code" in cause) || cause.code !== "EEXIST")
+        throw cause;
+    }
+    const directoryHandle = await open(dirname(reportPath), "r");
+    try {
+      await directoryHandle.sync();
+    } finally {
+      await directoryHandle.close();
+    }
+    return accepted;
   } finally {
-    await handle.close();
+    await rm(temporaryPath, { force: true }).catch(() => {});
   }
-  await rename(temporaryPath, reportPath);
-  const directoryHandle = await open(dirname(reportPath), "r");
-  try {
-    await directoryHandle.sync();
-  } finally {
-    await directoryHandle.close();
-  }
-  await rm(temporaryPath, { force: true }).catch(() => {});
 };
 
 const existingReport = async () => {
@@ -96,7 +107,16 @@ const submit = async (id, args) => {
     report,
     sha256: digest,
   };
-  await durableWrite(document);
+  const accepted = await durableWrite(document);
+  if (!accepted) {
+    const winner = await existingReport();
+    if (winner?.sha256 === digest) {
+      toolResult(id, `Report already accepted; receipt ${winner.receiptId}.`);
+      return;
+    }
+    toolResult(id, "A different final report was already accepted for this run.", true);
+    return;
+  }
   toolResult(id, `Report durably accepted; receipt ${document.receiptId}.`);
 };
 

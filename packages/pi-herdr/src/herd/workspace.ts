@@ -1,6 +1,10 @@
 import * as Effect from "effect/Effect";
 import type { HerdrClientShape } from "../boundary/herdr-client.ts";
-import { HERDR_MANAGED_TAB_LABEL, type PersistedHerdrProject } from "../config/schema.ts";
+import {
+  HERDR_LEGACY_MANAGED_TAB_LABEL,
+  HERDR_MANAGED_TAB_LABEL,
+  type PersistedHerdrProject,
+} from "../config/schema.ts";
 import type { HerdrSnapshot } from "./model.ts";
 import { selectWorkspace } from "./coordination.ts";
 
@@ -8,6 +12,7 @@ export interface ManagedHerdrProject {
   readonly workspaceId: string;
   readonly workspaceOwned: boolean;
   readonly tabId: string;
+  readonly tabLabel: string;
   readonly anchorPaneId: string;
 }
 
@@ -37,13 +42,17 @@ export const acquireManagedProject = Effect.fn("HerdrWorkspace.acquire")(functio
   readonly snapshot: HerdrSnapshot;
   readonly persisted?: PersistedHerdrProject | undefined;
 }) {
-  if (persistedProjectIsLive(input.persisted, input.snapshot))
+  if (persistedProjectIsLive(input.persisted, input.snapshot)) {
+    const migrateLabel = input.persisted.tabLabel === HERDR_LEGACY_MANAGED_TAB_LABEL;
+    if (migrateLabel) yield* input.client.renameTab(input.persisted.tabId, HERDR_MANAGED_TAB_LABEL);
     return {
       workspaceId: input.persisted.workspaceId,
       workspaceOwned: input.persisted.workspaceOwned,
       tabId: input.persisted.tabId,
+      tabLabel: migrateLabel ? HERDR_MANAGED_TAB_LABEL : input.persisted.tabLabel,
       anchorPaneId: input.persisted.anchorPaneId,
     } satisfies ManagedHerdrProject;
+  }
 
   const selected = selectWorkspace(input.snapshot, input.cwd);
   if (selected) {
@@ -56,6 +65,7 @@ export const acquireManagedProject = Effect.fn("HerdrWorkspace.acquire")(functio
       workspaceId: selected.workspaceId,
       workspaceOwned: false,
       tabId: created.tab.tabId,
+      tabLabel: HERDR_MANAGED_TAB_LABEL,
       anchorPaneId: created.rootPane.paneId,
     } satisfies ManagedHerdrProject;
   }
@@ -66,6 +76,7 @@ export const acquireManagedProject = Effect.fn("HerdrWorkspace.acquire")(functio
     workspaceId: created.workspace.workspaceId,
     workspaceOwned: true,
     tabId: created.tab.tabId,
+    tabLabel: HERDR_MANAGED_TAB_LABEL,
     anchorPaneId: created.rootPane.paneId,
   } satisfies ManagedHerdrProject;
 });

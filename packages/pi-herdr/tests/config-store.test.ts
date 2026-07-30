@@ -2,7 +2,7 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/strictEffectProvide:off
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
@@ -41,6 +41,8 @@ const runStore = <A, E>(
 
 const persistedRun = (id: string, updatedAt: number) => ({
   id,
+  kind: "claude" as const,
+  model: "sonnet",
   name: id,
   agentName: `pih-${id}`,
   task: "Review",
@@ -72,11 +74,16 @@ describe("HerdrConfigStore", () => {
     const paths = await fixture();
     await writeFile(
       join(paths.agentDirectory, "extensions", "pi-herdr.json"),
-      JSON.stringify({ version: 1, pollIntervalMs: 700, showFooterStatus: false }),
+      JSON.stringify({
+        version: 1,
+        pollIntervalMs: 700,
+        showFooterStatus: false,
+        maxActive: 40,
+      }),
     );
     await writeFile(
       join(paths.cwd, CONFIG_DIR_NAME, "extensions", "pi-herdr.json"),
-      JSON.stringify({ version: 1, pollIntervalMs: 300, session: "project" }),
+      JSON.stringify({ version: 1, pollIntervalMs: 300, session: "project", maxActive: 3 }),
     );
     const trusted = await runStore(
       paths.cwd,
@@ -88,6 +95,7 @@ describe("HerdrConfigStore", () => {
       pollIntervalMs: 300,
       session: "project",
       showFooterStatus: false,
+      maxActive: 3,
     });
     const untrusted = await runStore(
       paths.cwd,
@@ -97,6 +105,7 @@ describe("HerdrConfigStore", () => {
     );
     expect(untrusted.session).toBeUndefined();
     expect(untrusted.pollIntervalMs).toBe(700);
+    expect(untrusted.maxActive).toBe(40);
   });
 
   it("atomically saves and reloads private ownership state", async () => {
@@ -123,6 +132,39 @@ describe("HerdrConfigStore", () => {
       Effect.flatMap(HerdrConfigStore, (store) => store.loadProject(state.key)),
     );
     expect(loaded).toEqual(state);
+  });
+
+  it("migrates version-1 ownership records to Claude version-2 records", async () => {
+    const paths = await fixture();
+    const legacy = projectState(paths.cwd);
+    const legacyRun = persistedRun("herdr-legacy", 1);
+    const { kind: _kind, model: _model, ...withoutKind } = legacyRun;
+    await mkdir(join(paths.agentDirectory, "herdr"), { recursive: true });
+    await writeFile(
+      join(paths.agentDirectory, "herdr", "state.json"),
+      JSON.stringify({ version: 1, projects: [{ ...legacy, runs: [withoutKind] }] }),
+    );
+    const loaded = await runStore(
+      paths.cwd,
+      paths.agentDirectory,
+      true,
+      Effect.flatMap(HerdrConfigStore, (store) => store.loadProject(legacy.key)),
+    );
+    expect(loaded?.runs[0]).toMatchObject({ id: "herdr-legacy", kind: "claude" });
+    expect(loaded?.runs[0]?.model).toBeUndefined();
+
+    if (!loaded) throw new Error("missing migrated project");
+    await runStore(
+      paths.cwd,
+      paths.agentDirectory,
+      true,
+      Effect.flatMap(HerdrConfigStore, (store) => store.saveProject(loaded)),
+    );
+    const document = JSON.parse(
+      await readFile(join(paths.agentDirectory, "herdr", "state.json"), "utf8"),
+    );
+    expect(document.version).toBe(2);
+    expect(document.projects[0].runs[0].kind).toBe("claude");
   });
 
   it("merges runs from concurrent session snapshots and supports explicit eviction", async () => {
@@ -163,6 +205,32 @@ describe("HerdrConfigStore", () => {
       Effect.flatMap(HerdrConfigStore, (store) => store.loadProject(state.key)),
     );
     expect(evicted?.runs.map((run) => run.id)).toEqual(["herdr-b"]);
+  });
+
+  it("refuses concurrent ownership changes to kind or model", async () => {
+    const paths = await fixture();
+    const state = projectState(paths.cwd);
+    const established = persistedRun("herdr-owned", 1);
+    await runStore(
+      paths.cwd,
+      paths.agentDirectory,
+      true,
+      Effect.gen(function* () {
+        const store = yield* HerdrConfigStore;
+        yield* store.saveProject({ ...state, runs: [established] });
+        yield* store.saveProject({
+          ...state,
+          runs: [{ ...established, kind: "codex", model: "gpt-5.4", updatedAt: 2 }],
+        });
+      }),
+    );
+    const loaded = await runStore(
+      paths.cwd,
+      paths.agentDirectory,
+      true,
+      Effect.flatMap(HerdrConfigStore, (store) => store.loadProject(state.key)),
+    );
+    expect(loaded?.runs[0]).toMatchObject({ kind: "claude", model: "sonnet" });
   });
 
   it("preserves terminal states when concurrent snapshots contain active states", async () => {

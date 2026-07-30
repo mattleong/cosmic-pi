@@ -7,10 +7,12 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot, ProcessCoordinator } from "pi-cosmic-core";
-import { HerdrClient, type HerdrClientShape } from "../boundary/herdr-client.ts";
+import { AgentHarness } from "../boundary/agent-harness.ts";
+import { HerdrClient } from "../boundary/herdr-client.ts";
 import { ReportChannel } from "../boundary/report-channel.ts";
 import { withHerdrStateLock } from "../boundary/state-lock.ts";
 import {
+  HERDR_LEGACY_MANAGED_TAB_LABEL,
   HERDR_MANAGED_TAB_LABEL,
   type PersistedHerdrProject,
   type PersistedHerdrRun,
@@ -19,7 +21,9 @@ import { HerdrConfigStore } from "../config/store.ts";
 import {
   displayName,
   guidancePrompt,
+  matchesOwnedAgent,
   nextDisplayOrdinal,
+  normalizeModel,
   normalizeTask,
   paneLabel,
   persistedRun,
@@ -28,6 +32,7 @@ import {
 } from "./coordination.ts";
 import {
   HerdrAgentNotFoundError,
+  HerdrCommandError,
   HerdrOwnershipError,
   HerdrRuntimeClosedError,
   InvalidHerdrRequestError,
@@ -41,6 +46,7 @@ import {
   type HerdrProjection,
   type HerdrPaneInfo,
   type HerdrReadSource,
+  type HerdrRemoteAgentInfo,
   type HerdrSnapshot,
   type StartHerdrAgentRequest,
 } from "./model.ts";
@@ -53,9 +59,9 @@ import {
 } from "./workspace.ts";
 
 const MAX_GUIDANCE_CHARS = 16_384;
-const PANE_READY_RETRIES = 50;
-const PANE_READY_RETRY_DELAY = "100 millis";
-const KIND_MISMATCH_RETRIES = 2;
+const TRANSIENT_START_RETRIES = 2;
+const INTERACTIVE_READY_RETRIES = 300;
+const INTERACTIVE_READY_DELAY = "200 millis";
 
 export interface HerdrServiceShape {
   readonly start: (request: StartHerdrAgentRequest) => Effect.Effect<HerdrAgentView, HerdrError>;
@@ -83,7 +89,10 @@ export interface HerdrServiceOptions {
 }
 
 const notFound = (id: string) =>
-  new HerdrAgentNotFoundError({ id, message: `Herdr agent run not found: ${id}` });
+  new HerdrAgentNotFoundError({
+    id,
+    message: `Herdr agent run not found: ${id}. Use herdr_agent_list to refresh managed run IDs.`,
+  });
 
 const restoreRun = (
   run: PersistedHerdrRun,
@@ -91,6 +100,8 @@ const restoreRun = (
   state: HerdrAgentView["state"] = run.state,
 ): HerdrAgentView => ({
   id: run.id,
+  kind: run.kind,
+  ...(run.model === undefined ? {} : { model: run.model }),
   name: run.name,
   agentName: run.agentName,
   task: run.task,
@@ -115,6 +126,7 @@ const shouldImportPersisted = (
   persisted: PersistedHerdrRun,
 ): boolean => {
   if (!current) return true;
+  if (current.kind !== persisted.kind || current.model !== persisted.model) return false;
   if (current.state === "stopped")
     return persisted.state === "stopped" && persisted.updatedAt > current.updatedAt;
   if (persisted.state === "stopped") return true;
@@ -126,6 +138,7 @@ const shouldImportPersisted = (
 
 const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServiceOptions) {
   const client = yield* HerdrClient;
+  const harnesses = yield* AgentHarness;
   const reports = yield* ReportChannel;
   const store = yield* HerdrConfigStore;
   const path = yield* Path.Path;
@@ -162,6 +175,7 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
     workspaceId: persisted.workspaceId,
     workspaceOwned: persisted.workspaceOwned,
     tabId: persisted.tabId,
+    tabLabel: persisted.tabLabel,
     anchorPaneId: persisted.anchorPaneId,
   });
   const persistedProject = (): PersistedHerdrProject | undefined =>
@@ -173,7 +187,7 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
           workspaceId: project.workspaceId,
           workspaceOwned: project.workspaceOwned,
           tabId: project.tabId,
-          tabLabel: HERDR_MANAGED_TAB_LABEL,
+          tabLabel: project.tabLabel,
           anchorPaneId: project.anchorPaneId,
           runs: [...records.values()].map(persistedRun),
         }
@@ -186,19 +200,6 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
   const stateLockKey = `${store.statePath}.operations`;
   const withStateLock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     coordinator.withLock(stateLockKey, withHerdrStateLock(stateLockKey, effect));
-  const startClaudeWhenReady: HerdrClientShape["startClaude"] = (input) => {
-    const attempt = (remaining: number): ReturnType<HerdrClientShape["startClaude"]> =>
-      client
-        .startClaude(input)
-        .pipe(
-          Effect.catch((error) =>
-            error._tag === "HerdrCommandError" && error.code === "agent_pane_busy" && remaining > 0
-              ? Effect.sleep(PANE_READY_RETRY_DELAY).pipe(Effect.andThen(attempt(remaining - 1)))
-              : Effect.fail(error),
-          ),
-        );
-    return attempt(PANE_READY_RETRIES);
-  };
   const restorePreviousTabFocus = (previous: HerdrSnapshot, targetTabId: string) => {
     const previousTabId = previous.focusedTabId;
     if (!previousTabId || previousTabId === targetTabId) return Effect.void;
@@ -217,10 +218,58 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
       yield* client.closePane(paneId);
       yield* restorePreviousTabFocus(previous, targetTabId);
     });
+  const exactOwnedPane = (run: HerdrAgentView, snapshot: HerdrSnapshot) =>
+    run.terminalId === undefined
+      ? undefined
+      : snapshot.panes.find(
+          (candidate) =>
+            candidate.paneId === run.paneId &&
+            candidate.workspaceId === run.workspaceId &&
+            candidate.tabId === run.tabId &&
+            candidate.terminalId === run.terminalId,
+        );
+  const exactOwnedRemote = (run: HerdrAgentView, snapshot: HerdrSnapshot) => {
+    if (!exactOwnedPane(run, snapshot)) return undefined;
+    return snapshot.agents.find((candidate) => matchesOwnedAgent(run, candidate));
+  };
+  const ownershipMismatch = (message: string) =>
+    new HerdrOwnershipError({ code: "owned_agent_mismatch", message });
+  const waitForInteractive = (
+    run: HerdrAgentView,
+    initial: HerdrRemoteAgentInfo,
+  ): Effect.Effect<HerdrRemoteAgentInfo, HerdrError> => {
+    const isReady = (remote: HerdrRemoteAgentInfo): boolean => remote.interactiveReady === true;
+    if (isReady(initial)) return Effect.succeed(initial);
+    const attempt = (remaining: number): Effect.Effect<HerdrRemoteAgentInfo, HerdrError> =>
+      client.snapshot.pipe(
+        Effect.flatMap((snapshot) => {
+          const remote = exactOwnedRemote(run, snapshot);
+          if (remote !== undefined && isReady(remote)) return Effect.succeed(remote);
+          if (remaining <= 0)
+            return Effect.fail(
+              new HerdrCommandError({
+                operation: `wait for ${run.kind} interactive readiness`,
+                code: "agent_not_interactive",
+                message: "The managed agent did not become ready to receive its task in time.",
+              }),
+            );
+          return Effect.sleep(INTERACTIVE_READY_DELAY).pipe(Effect.andThen(attempt(remaining - 1)));
+        }),
+      );
+    return attempt(INTERACTIVE_READY_RETRIES);
+  };
   const ensureManagedProject = Effect.fn("HerdrService.ensureManagedProject")(function* () {
     const current = persistedProject();
     const snapshot = yield* client.snapshot;
-    if (project && persistedProjectIsLive(current, snapshot)) return { project, snapshot };
+    if (project && persistedProjectIsLive(current, snapshot)) {
+      if (project.tabLabel === HERDR_LEGACY_MANAGED_TAB_LABEL) {
+        yield* client.renameTab(project.tabId, HERDR_MANAGED_TAB_LABEL);
+        project = { ...project, tabLabel: HERDR_MANAGED_TAB_LABEL };
+        yield* persist();
+        return { project, snapshot: yield* client.snapshot };
+      }
+      return { project, snapshot };
+    }
     const acquired = yield* acquireManagedProject({
       client,
       cwd,
@@ -238,7 +287,7 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
     readonly snapshot: HerdrSnapshot;
   }) {
     if (!project || project.anchorPaneId !== input.pane.paneId) return;
-    let replacement = [...records.values()]
+    let replacement: HerdrPaneInfo | undefined = [...records.values()]
       .filter(
         (run) =>
           run.id !== input.closingRunId &&
@@ -246,15 +295,7 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
           run.workspaceId === input.pane.workspaceId &&
           run.tabId === input.pane.tabId,
       )
-      .map((run) =>
-        input.snapshot.panes.find(
-          (candidate) =>
-            candidate.paneId === run.paneId &&
-            candidate.workspaceId === run.workspaceId &&
-            candidate.tabId === run.tabId &&
-            (run.terminalId === undefined || candidate.terminalId === run.terminalId),
-        ),
-      )
+      .map((run) => exactOwnedRemote(run, input.snapshot))
       .find((candidate) => candidate !== undefined);
     if (!replacement) replacement = yield* client.splitPane(input.pane.paneId, cwd, "right");
     project = { ...project, anchorPaneId: replacement.paneId };
@@ -267,14 +308,8 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
       );
       for (const run of candidates) {
         const snapshot = yield* client.snapshot;
-        const pane = snapshot.panes.find((candidate) => candidate.paneId === run.paneId);
-        if (
-          !pane ||
-          pane.workspaceId !== run.workspaceId ||
-          pane.tabId !== run.tabId ||
-          (run.terminalId !== undefined && pane.terminalId !== run.terminalId)
-        )
-          continue;
+        const pane = exactOwnedRemote(run, snapshot);
+        if (!pane) continue;
         yield* moveAnchorBeforeClose({ closingRunId: run.id, pane, snapshot });
         yield* closePanePreservingFocus(run.paneId, run.tabId, snapshot);
         yield* reports.remove(run.id);
@@ -310,14 +345,19 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
   const importSharedRuns = Effect.fn("HerdrService.importSharedRuns")(function* () {
     let imported = false;
     const shared = yield* store.loadProject(projectKey);
-    if (shared && !project) project = projectFromPersisted(shared);
-    if (
-      shared &&
-      project &&
-      shared.workspaceId === project.workspaceId &&
-      shared.tabId === project.tabId &&
-      shared.anchorPaneId === project.anchorPaneId
-    ) {
+    if (shared) {
+      const sharedProject = projectFromPersisted(shared);
+      if (
+        !project ||
+        project.workspaceId !== sharedProject.workspaceId ||
+        project.workspaceOwned !== sharedProject.workspaceOwned ||
+        project.tabId !== sharedProject.tabId ||
+        project.tabLabel !== sharedProject.tabLabel ||
+        project.anchorPaneId !== sharedProject.anchorPaneId
+      ) {
+        project = sharedProject;
+        imported = true;
+      }
       for (const persisted of shared.runs) {
         const current = records.get(persisted.id);
         if (shouldImportPersisted(current, persisted)) {
@@ -379,12 +419,34 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
                 code: "task_required",
                 message: "Herdr agent task must not be empty.",
               });
+            const model = normalizeModel(request.model);
+            if (!model)
+              return yield* new InvalidHerdrRequestError({
+                code: "model_invalid",
+                message:
+                  "Herdr agent model must be non-empty, contain no control characters, and not begin with a dash.",
+              });
             const imported = yield* importSharedRuns();
             if (imported) publish();
+            const activeCount = [...records.values()].filter(
+              (run) => !isHerdrAgentFinished(run.state),
+            ).length;
+            if (activeCount >= store.config.maxActive)
+              return yield* new InvalidHerdrRequestError({
+                code: "active_limit_reached",
+                message: `pi-herdr already manages the configured limit of ${store.config.maxActive} active or inspectable agents. Stop an existing run before starting another.`,
+              });
             const managed = yield* ensureManagedProject();
             const channel = yield* reports.prepare;
+            const harness = yield* harnesses
+              .prepare(request.kind, cwd, channel)
+              .pipe(Effect.onError(() => reports.remove(channel.runId)));
             const now = yield* Clock.currentTimeMillis;
-            const name = displayName(request.name, nextDisplayOrdinal(records.values()));
+            const name = displayName(
+              request.kind,
+              request.name,
+              nextDisplayOrdinal(request.kind, records.values()),
+            );
             const anchorPane = managed.snapshot.panes.find(
               (candidate) =>
                 candidate.paneId === managed.project.anchorPaneId &&
@@ -413,6 +475,8 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
             }
             const provisional: HerdrAgentView = {
               id: channel.runId,
+              kind: request.kind,
+              model,
               name,
               agentName: channel.agentName,
               task,
@@ -431,53 +495,71 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
             yield* persist();
             publish();
             const rollback = Effect.gen(function* () {
-              if (!paneWasSplit) {
-                yield* Effect.gen(function* () {
-                  const snapshot = yield* client.snapshot;
-                  const owned = snapshot.panes.find(
+              yield* Effect.gen(function* () {
+                const snapshot = yield* client.snapshot;
+                const owned = snapshot.panes.find(
+                  (candidate) =>
+                    candidate.paneId === pane.paneId &&
+                    candidate.workspaceId === provisional.workspaceId &&
+                    candidate.tabId === provisional.tabId &&
+                    candidate.terminalId === provisional.terminalId,
+                );
+                if (!owned) return;
+                const occupants = snapshot.agents.filter(
+                  (candidate) => candidate.paneId === provisional.paneId,
+                );
+                if (
+                  occupants.some(
                     (candidate) =>
-                      candidate.paneId === pane.paneId &&
-                      candidate.workspaceId === provisional.workspaceId &&
-                      candidate.tabId === provisional.tabId &&
-                      candidate.terminalId === provisional.terminalId,
-                  );
-                  if (!owned) return;
+                      candidate.terminalId !== provisional.terminalId ||
+                      candidate.name !== provisional.agentName,
+                  )
+                )
+                  return;
+                if (!paneWasSplit)
                   yield* moveAnchorBeforeClose({
                     closingRunId: provisional.id,
                     pane: owned,
                     snapshot,
                   });
-                  yield* closePanePreservingFocus(owned.paneId, provisional.tabId, snapshot);
-                }).pipe(Effect.catch(() => Effect.void));
-              } else
-                yield* closePanePreservingFocus(pane.paneId, managed.project.tabId).pipe(
-                  Effect.catch(() => Effect.void),
-                );
+                yield* closePanePreservingFocus(owned.paneId, provisional.tabId, snapshot);
+              }).pipe(Effect.catch(() => Effect.void));
               records.delete(provisional.id);
               yield* persist([provisional.id]).pipe(Effect.catch(() => Effect.void));
               publish();
               yield* reports.remove(channel.runId);
             });
             yield* client
-              .renamePane(pane.paneId, paneLabel(name))
+              .renamePane(pane.paneId, paneLabel(request.kind, name))
               .pipe(Effect.onError(() => rollback));
-            const remote = yield* startClaudeWhenReady({
-              paneId: pane.paneId,
-              name: channel.agentName,
-              mcpConfigPath: channel.mcpConfigPath,
-            }).pipe(Effect.onError(() => rollback));
+            const remote = yield* client
+              .startAgent({
+                kind: request.kind,
+                model,
+                paneId: pane.paneId,
+                name: channel.agentName,
+                harness,
+              })
+              .pipe(Effect.onError(() => rollback));
             yield* restorePreviousTabFocus(managed.snapshot, managed.project.tabId);
             const created: HerdrAgentView = {
               ...provisional,
               remoteStatus: remote.agentStatus,
               terminalId: remote.terminalId,
             };
+            if (!matchesOwnedAgent(created, remote)) {
+              yield* rollback;
+              return yield* ownershipMismatch(
+                "Herdr returned an agent outside the requested ownership tuple; the run was not adopted.",
+              );
+            }
             records.set(created.id, created);
             yield* persist();
             publish();
-            const promptOutcome = yield* client
-              .prompt(created.agentName, taskPrompt(task))
-              .pipe(Effect.exit);
+            const promptOutcome = yield* waitForInteractive(created, remote).pipe(
+              Effect.andThen(client.prompt(created.agentName, taskPrompt(created.kind, task))),
+              Effect.exit,
+            );
             const promptTime = yield* Clock.currentTimeMillis;
             const updated: HerdrAgentView = Exit.isSuccess(promptOutcome)
               ? {
@@ -498,7 +580,7 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
                   ...created,
                   state: "blocked",
                   error:
-                    "Claude Code started, but pi-herdr could not submit its task. Inspect the pane, retry with guidance, or stop it.",
+                    "The managed agent started, but pi-herdr could not submit its task. Inspect the pane, retry with guidance, or stop it.",
                   updatedAt: promptTime,
                 };
             records.set(updated.id, updated);
@@ -510,13 +592,15 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
       ).pipe(
         Effect.catch((error) =>
           error._tag === "HerdrCommandError" &&
-          error.code === "agent_kind_mismatch" &&
+          (error.code === "agent_kind_mismatch" ||
+            error.code === "agent_pane_busy" ||
+            error.code === "timeout") &&
           remaining > 0
             ? Effect.yieldNow.pipe(Effect.andThen(attempt(remaining - 1)))
             : Effect.fail(error),
         ),
       );
-    return attempt(KIND_MISMATCH_RETRIES);
+    return attempt(TRANSIENT_START_RETRIES);
   };
 
   const list: HerdrServiceShape["list"] = withLock(
@@ -567,6 +651,11 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
     withLock(
       Effect.gen(function* () {
         const run = yield* requireRun(id);
+        const remote = exactOwnedRemote(run, yield* client.snapshot);
+        if (!remote)
+          return yield* ownershipMismatch(
+            "The managed agent ownership tuple changed; terminal output was not read.",
+          );
         const text = yield* client.readAgent(run.agentName, source, lines);
         return { id, source, text };
       }),
@@ -584,7 +673,7 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
             return yield* new InvalidHerdrRequestError({
               code: "run_finished",
               message:
-                "Herdr runs with a final report cannot accept more guidance; start a new Claude agent.",
+                "Herdr runs with a final report cannot accept more guidance; start a new managed agent.",
             });
           const guidance = message.trim().slice(0, MAX_GUIDANCE_CHARS);
           if (!guidance)
@@ -592,7 +681,12 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
               code: "message_required",
               message: "Herdr guidance must not be empty.",
             });
-          const remote = yield* client.prompt(run.agentName, guidancePrompt(guidance));
+          const owned = exactOwnedRemote(run, yield* client.snapshot);
+          if (!owned)
+            return yield* ownershipMismatch(
+              "The managed agent ownership tuple changed; guidance was not sent.",
+            );
+          const remote = yield* client.prompt(run.agentName, guidancePrompt(run.kind, guidance));
           const updated = {
             ...run,
             state:
@@ -622,19 +716,20 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
           const run = yield* requireRun(id);
           if (run.state === "stopped") return { ...run };
           const snapshot = yield* client.snapshot;
-          const pane = snapshot.panes.find((candidate) => candidate.paneId === run.paneId);
-          if (
-            pane &&
-            (pane.tabId !== run.tabId ||
-              pane.workspaceId !== run.workspaceId ||
-              (run.terminalId !== undefined && pane.terminalId !== run.terminalId))
-          )
-            return yield* new HerdrOwnershipError({
-              code: "owned_pane_mismatch",
-              message: "The Herdr pane ID now belongs to a different resource and was not closed.",
+          const topologyPane = snapshot.panes.find((candidate) => candidate.paneId === run.paneId);
+          const ownedPane = exactOwnedPane(run, snapshot);
+          const remote = exactOwnedRemote(run, snapshot);
+          const occupant = snapshot.agents.find((candidate) => candidate.paneId === run.paneId);
+          if (topologyPane && (!ownedPane || (occupant !== undefined && !remote)))
+            return yield* ownershipMismatch(
+              "The managed agent ownership tuple changed; its pane was not closed.",
+            );
+          if (ownedPane) {
+            yield* moveAnchorBeforeClose({
+              closingRunId: run.id,
+              pane: remote ?? ownedPane,
+              snapshot,
             });
-          if (pane) {
-            yield* moveAnchorBeforeClose({ closingRunId: run.id, pane, snapshot });
             yield* closePanePreservingFocus(run.paneId, run.tabId, snapshot);
           }
           const now = yield* Clock.currentTimeMillis;
@@ -657,6 +752,10 @@ const makeService = Effect.fn("HerdrService.make")(function* (options: HerdrServ
     withLock(
       Effect.gen(function* () {
         const run = yield* requireRun(id);
+        if (!exactOwnedRemote(run, yield* client.snapshot))
+          return yield* ownershipMismatch(
+            "The managed agent ownership tuple changed; focus was not moved.",
+          );
         yield* client.focusAgent(run.agentName);
       }),
     );

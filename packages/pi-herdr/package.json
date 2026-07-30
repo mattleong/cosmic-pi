@@ -1,10 +1,11 @@
 {
   "name": "pi-herdr",
   "version": "0.2.0",
-  "description": "Persistent read-only Claude Code delegation through Herdr.",
+  "description": "Persistent read-only Claude Code, Pi, and Codex delegation through Herdr.",
   "keywords": [
     "agents",
     "claude-code",
+    "codex",
     "herdr",
     "pi",
     "pi-extension",

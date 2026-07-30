@@ -1,5 +1,6 @@
 import * as Layer from "effect/Layer";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
+import { AgentHarness } from "./boundary/agent-harness.ts";
 import { HerdrClient } from "./boundary/herdr-client.ts";
 import { ReportChannel } from "./boundary/report-channel.ts";
 import { HerdrConfigStore } from "./config/store.ts";
@@ -24,7 +25,8 @@ export const makeHerdrLayer = (input: HerdrSessionInput, options: HerdrLayerOpti
   }).pipe(Layer.provide(platform));
   const client = HerdrClient.layer().pipe(Layer.provide(config));
   const reports = ReportChannel.layer.pipe(Layer.provide(platform));
-  const dependencies = Layer.mergeAll(platform, config, client, reports);
+  const harnesses = AgentHarness.layer().pipe(Layer.provide(platform));
+  const dependencies = Layer.mergeAll(platform, config, client, reports, harnesses);
   const service = HerdrService.layer({ cwd: input.cwd, publish: options.publish }).pipe(
     Layer.provide(dependencies),
   );

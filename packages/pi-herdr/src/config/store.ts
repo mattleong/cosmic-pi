@@ -2,6 +2,7 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { AgentDirectory, JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
@@ -15,6 +16,7 @@ import {
   HERDR_STATE_VERSION,
   HerdrConfigFileSchema,
   HerdrStateDocumentSchema,
+  LegacyHerdrStateDocumentSchema,
   type HerdrConfig,
   type HerdrStateDocument,
   type PersistedHerdrProject,
@@ -78,6 +80,7 @@ export class HerdrConfigStore extends Context.Service<HerdrConfigStore, HerdrCon
               ...(decoded.showFooterStatus === undefined
                 ? {}
                 : { showFooterStatus: decoded.showFooterStatus }),
+              ...(decoded.maxActive === undefined ? {} : { maxActive: decoded.maxActive }),
               ...(decoded.maxRetained === undefined ? {} : { maxRetained: decoded.maxRetained }),
             })),
             Effect.mapError(() => configError("decode", target)),
@@ -101,9 +104,22 @@ export class HerdrConfigStore extends Context.Service<HerdrConfigStore, HerdrCon
         ): Effect.Effect<HerdrStateDocument, HerdrStateError> => {
           if (document === undefined || Object.keys(document).length === 0)
             return Effect.succeed({ version: HERDR_STATE_VERSION, projects: [] });
-          return Schema.decodeUnknownEffect(HerdrStateDocumentSchema, {
+          const current = Schema.decodeUnknownOption(HerdrStateDocumentSchema, {
             onExcessProperty: "error",
-          })(document).pipe(Effect.mapError(() => stateError("decode")));
+          })(document);
+          if (Option.isSome(current)) return Effect.succeed(current.value);
+          const legacy = Schema.decodeUnknownOption(LegacyHerdrStateDocumentSchema, {
+            onExcessProperty: "error",
+          })(document);
+          if (Option.isSome(legacy))
+            return Effect.succeed({
+              version: HERDR_STATE_VERSION,
+              projects: legacy.value.projects.map((project) => ({
+                ...project,
+                runs: project.runs.map((run) => ({ ...run, kind: "claude" as const })),
+              })),
+            });
+          return Effect.fail(stateError("decode"));
         };
 
         const loadProject: HerdrConfigStoreShape["loadProject"] = (key) =>
@@ -127,6 +143,7 @@ export class HerdrConfigStore extends Context.Service<HerdrConfigStore, HerdrCon
                     mergedRuns.set(run.id, run);
                     continue;
                   }
+                  if (previous.kind !== run.kind || previous.model !== run.model) continue;
                   if (previous.state === "stopped" && run.state !== "stopped") continue;
                   if (run.state === "stopped" && previous.state !== "stopped") {
                     mergedRuns.set(run.id, run);

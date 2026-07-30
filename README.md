@@ -11,7 +11,7 @@ A pnpm workspace for pi extensions.
 - [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted previews for pi's built-in tool calls.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-directory-models`](packages/pi-directory-models) — per-directory model and thinking-level preferences for fresh Pi sessions.
-- [`pi-herdr`](packages/pi-herdr) — persistent read-only Claude Code delegation through a managed Herdr tab and panes.
+- [`pi-herdr`](packages/pi-herdr) — persistent read-only Claude Code, Pi, and Codex delegation through a managed Herdr tab and panes.
 - [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements, beginning with the footer and information area.
 - [`pi-subagents`](packages/pi-subagents) — session-scoped Pi foreground/background subagents with supervisor communication and a `/subagents` fleet UI.
 
