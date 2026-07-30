@@ -4,19 +4,10 @@ import type { ChildLaunchRequest, ChildProcessHandle } from "../boundary/child-p
 import type { SubagentError } from "./errors.ts";
 import { isTerminalRunState, type SubagentRunView } from "./model.ts";
 import type { RpcResponse } from "./protocol.ts";
-import type { RateLimitNoticeState } from "./rate-limit.ts";
 
 export interface PendingInitializationSettlement {
   readonly state: "completed" | "failed" | "stopped";
   readonly error?: string | undefined;
-}
-
-export interface RateLimitSettlementState {
-  readonly turn: number;
-  readonly generation: number;
-  readonly rejected: boolean;
-  readonly windowKey: string;
-  readonly message?: string | undefined;
 }
 
 /** Stopped-by-parent, stopping, or terminal records ignore further child events. */
@@ -44,7 +35,6 @@ export interface RunRecord {
   cleanupPending: boolean;
   initializationPending: boolean;
   pendingInitializationSettlement?: PendingInitializationSettlement | undefined;
-  taskSubmission: "not-sent" | "potentially-applied";
   replyPendingRequestId?: string | undefined;
   warningTurnTriggered: boolean;
   notificationGeneration: number;
@@ -54,11 +44,4 @@ export interface RunRecord {
   completionConsumedGeneration: number;
   completionNotifiedGeneration: number;
   completionClaims: number;
-  rateLimitTurn: number;
-  rateLimitRejected: boolean;
-  rateLimitWarning?: string | undefined;
-  readonly rateLimitWarnings: Map<string, string>;
-  readonly rateLimitSettlements: Map<string, RateLimitSettlementState>;
-  readonly rateLimitNotices: Map<string, RateLimitNoticeState>;
-  readonly deliveredRateLimitRejections: Set<string>;
 }

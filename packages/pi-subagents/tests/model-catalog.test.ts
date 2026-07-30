@@ -1,24 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { CLAUDE_CLI_ALIAS_MODELS, resolvePiModelSelector } from "../src/run/model-catalog.ts";
+import { resolvePiModelSelector } from "../src/run/model-catalog.ts";
 
 describe("profile model catalog", () => {
-  it("exposes the Claude aliases used by profile configuration", () => {
-    expect(CLAUDE_CLI_ALIAS_MODELS.map((model) => model.id)).toEqual([
-      "fable",
-      "sonnet",
-      "opus",
-      "haiku",
-    ]);
-    expect(CLAUDE_CLI_ALIAS_MODELS.every((model) => model.backend === "claude-cli")).toBe(true);
-    expect(CLAUDE_CLI_ALIAS_MODELS[0]?.supportedEfforts).toEqual([
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-    ]);
-  });
-
   it("resolves configured Pi profile selectors without picking among providers", () => {
     const available = [
       { provider: "openai", id: "gpt-5.5" },

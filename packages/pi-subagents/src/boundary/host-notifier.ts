@@ -29,10 +29,8 @@ export type SubagentNotification =
       readonly message: string;
       readonly triggerTurn: boolean;
       readonly generation: number;
-      /** Service-owned identity for independently retried warning classes/windows. */
+      /** Service-owned identity for independently retried warning classes. */
       readonly slotKey?: string | undefined;
-      /** Present only for an actual rejected rate-limit window. */
-      readonly rateLimitRejectionKey?: string | undefined;
     };
 
 export interface SubagentNotificationDelivery {

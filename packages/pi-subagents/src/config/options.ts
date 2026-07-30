@@ -8,7 +8,7 @@ import {
   type ProfileRoute,
   type ProfileRouteSource,
 } from "../profiles/model.ts";
-import { CLAUDE_CLI_ALIAS_IDS, type SubagentBackend } from "../run/model.ts";
+import type { SubagentBackend } from "../run/model.ts";
 import type { DecodedSubagentConfig } from "./schema.ts";
 
 export interface ResolvedSubagentConfig {
@@ -121,23 +121,6 @@ const selectorMatches = (
     selectedModel.slice(selectedModel.lastIndexOf("/") + 1) === policyModel
   )
     return true;
-  if (backend === "claude-cli") {
-    for (const alias of CLAUDE_CLI_ALIAS_IDS) {
-      if (
-        (policyModel === alias &&
-          selectedModel.startsWith("claude") &&
-          selectedModel.includes(alias)) ||
-        (selectedModel === alias && policyModel.startsWith("claude") && policyModel.includes(alias))
-      )
-        return true;
-    }
-    if (
-      policyModel.startsWith("claude") &&
-      selectedModel.startsWith("claude") &&
-      (selectedModel.startsWith(`${policyModel}-`) || policyModel.startsWith(`${selectedModel}-`))
-    )
-      return true;
-  }
   return false;
 };
 

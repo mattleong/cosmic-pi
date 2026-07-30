@@ -1,21 +1,6 @@
-import { CLAUDE_CLI_ALIAS_IDS, type SubagentEffort, type SubagentModelView } from "./model.ts";
+import type { SubagentEffort } from "./model.ts";
 
 const MAX_NEAR_MATCHES = 6;
-
-/**
- * Claude CLI aliases shown by profile settings. Aliases track the installed CLI's current mapping;
- * an exact Claude version requires its full model ID and is never translated into an alias.
- */
-const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
-export const CLAUDE_CLI_ALIAS_MODELS: ReadonlyArray<SubagentModelView> = CLAUDE_CLI_ALIAS_IDS.map(
-  (id) => ({
-    backend: "claude-cli",
-    id,
-    name: `Claude ${id[0]?.toUpperCase() ?? ""}${id.slice(1)} (CLI alias)`,
-    reasoning: true,
-    supportedEfforts: CLAUDE_EFFORTS,
-  }),
-);
 
 export interface PiCatalogModel {
   readonly provider: string;

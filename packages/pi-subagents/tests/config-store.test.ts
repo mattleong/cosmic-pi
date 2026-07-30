@@ -39,20 +39,20 @@ const fixture = async () => {
   };
 };
 
-describe("SubagentConfigStore v2", () => {
-  it("loads v2 global/project routes with project inheritance and additive policy", async () => {
+describe("SubagentConfigStore v3", () => {
+  it("loads v3 global/project routes with project inheritance and additive policy", async () => {
     const paths = await fixture();
     await writeFile(
       paths.globalPath,
       JSON.stringify({
-        version: 2,
+        version: 3,
         denied: [{ backend: "pi", model: "openai/no" }],
         profiles: { worker: { model: "pi/openai/worker", effort: "high" } },
       }),
     );
     await writeFile(
       paths.projectPath,
-      JSON.stringify({ version: 2, discouraged: [{ backend: "claude-cli", model: "haiku" }] }),
+      JSON.stringify({ version: 3, discouraged: [{ backend: "pi", model: "openai/review" }] }),
     );
     const config = await withStore((store) => store.load(paths.cwd, paths.agentDirectory, true));
     expect(config.profiles.worker).toEqual({
@@ -63,9 +63,9 @@ describe("SubagentConfigStore v2", () => {
     expect(config.discouraged).toHaveLength(1);
   });
 
-  it("accepts only v2 documents and never reads an untrusted project", async () => {
+  it("accepts only v3 documents and never reads an untrusted project", async () => {
     const paths = await fixture();
-    for (const value of [{ version: 1 }, {}, { version: "2" }]) {
+    for (const value of [{ version: 1 }, { version: 2 }, {}, { version: "3" }]) {
       await writeFile(paths.globalPath, JSON.stringify(value));
       await expect(
         withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
@@ -74,7 +74,7 @@ describe("SubagentConfigStore v2", () => {
         path: paths.globalPath,
       });
     }
-    await writeFile(paths.globalPath, JSON.stringify({ version: 2 }));
+    await writeFile(paths.globalPath, JSON.stringify({ version: 3 }));
     await writeFile(paths.projectPath, "{ not json");
     const config = await withStore((store) => store.load(paths.cwd, paths.agentDirectory, false));
     expect(config.projectConfigExists).toBe(false);
@@ -94,7 +94,7 @@ describe("SubagentConfigStore v2", () => {
   it("atomically patches one profile while preserving unrelated fields and routes", async () => {
     const paths = await fixture();
     const initial = {
-      version: 2,
+      version: 3,
       defaultProfile: "planner",
       denied: [{ backend: "pi", model: "openai/no" }],
       customFutureField: { retained: true },
@@ -131,7 +131,7 @@ describe("SubagentConfigStore v2", () => {
   it("removes inherited routes and rejects untrusted project writes", async () => {
     const paths = await fixture();
     const project = {
-      version: 2,
+      version: 3,
       profiles: {
         worker: { model: "parent", effort: "default" },
         reviewer: "disabled",
@@ -190,7 +190,7 @@ describe("SubagentConfigStore v2", () => {
 
   it("does not rewrite an existing document when the patch changes nothing", async () => {
     const paths = await fixture();
-    const raw = JSON.stringify({ version: 2, defaultProfile: "planner" });
+    const raw = JSON.stringify({ version: 3, defaultProfile: "planner" });
     await writeFile(paths.globalPath, raw);
     const inspection = await withStore((store) =>
       store.inspect(paths.cwd, paths.agentDirectory, true),
@@ -209,11 +209,11 @@ describe("SubagentConfigStore v2", () => {
 
   it("detects external edits instead of clobbering them", async () => {
     const paths = await fixture();
-    await writeFile(paths.globalPath, JSON.stringify({ version: 2, defaultProfile: "worker" }));
+    await writeFile(paths.globalPath, JSON.stringify({ version: 3, defaultProfile: "worker" }));
     const inspection = await withStore((store) =>
       store.inspect(paths.cwd, paths.agentDirectory, true),
     );
-    await writeFile(paths.globalPath, JSON.stringify({ version: 2, defaultProfile: "reviewer" }));
+    await writeFile(paths.globalPath, JSON.stringify({ version: 3, defaultProfile: "reviewer" }));
     await expect(
       withStore((store) =>
         store.patchProfile(paths.cwd, paths.agentDirectory, {

@@ -93,20 +93,10 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
     ...(request.profile && request.profileGuidance
       ? [`Your assigned profile is ${request.profile}.\n\n${request.profileGuidance}`]
       : []),
-    ...(request.backend === "claude-cli"
-      ? [
-          "Before changing or reviewing files, read and follow applicable AGENTS.md instructions in the workspace.",
-        ]
-      : []),
-    ...(request.backend === "pi"
-      ? [
-          "Use contact_parent(kind=progress) only for meaningful progress or discoveries that change the plan.",
-          "Use contact_parent(kind=question) when blocked on a decision; wait for the parent reply instead of guessing.",
-          "Use contact_parent(kind=warning) for a material non-blocking risk.",
-        ]
-      : [
-          "This backend cannot contact the parent during the run. If blocked, stop and explain the blocker in the final report rather than guessing.",
-        ]),
+    "Before changing or reviewing files, read and follow applicable AGENTS.md instructions in the workspace.",
+    "Use contact_parent(kind=progress) only for meaningful progress or discoveries that change the plan.",
+    "Use contact_parent(kind=question) when blocked on a decision; wait for the parent reply instead of guessing.",
+    "Use contact_parent(kind=warning) for a material non-blocking risk.",
     "Always end with a concise, self-contained final report containing the actual findings or work completed. Never finish with only an acknowledgement.",
     request.writeIntent === "writer"
       ? "You are the sole declared writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."

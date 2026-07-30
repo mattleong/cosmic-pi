@@ -337,8 +337,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         yield* sendPeerNotices(id);
         return selected.localView;
       }
-      if (selected.record.view.backend === "pi")
-        yield* rpc(selected.record, { type: "set_session_name", name });
+      yield* rpc(selected.record, { type: "set_session_name", name });
       const view = yield* withLock(
         Effect.gen(function* () {
           if (

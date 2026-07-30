@@ -30,8 +30,6 @@ import {
 } from "../run/coordination.ts";
 import { SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
-import { ensureClaudeCliReady } from "./claude-preflight.ts";
-import { acquireClaudeChild } from "./claude-process.ts";
 import { terminateProcessTree } from "./process-tree.ts";
 import type { ParentReply, PeerNotice, RpcCommand } from "../run/protocol.ts";
 import type { SubagentContextMode, SubagentEffort } from "../run/model.ts";
@@ -55,7 +53,6 @@ const BLOCKED_ENV_KEYS = new Set([
 export interface ChildLaunchRequest {
   readonly runId: string;
   readonly name: string;
-  readonly backend: import("../run/model.ts").SubagentBackend;
   readonly cwd: string;
   readonly context: SubagentContextMode;
   readonly writeIntent: import("../run/model.ts").SubagentWriteIntent;
@@ -68,14 +65,12 @@ export interface ChildLaunchRequest {
   readonly parentSessionFile?: string;
   readonly parentLeafId?: string;
   readonly resumeSessionFile?: string | undefined;
-  readonly resumeSessionId?: string | undefined;
   readonly systemPrompt: string;
 }
 
 export type ChildWireEvent =
   | { readonly type: "rpc_message"; readonly value: unknown }
   | { readonly type: "ipc_message"; readonly value: unknown }
-  | { readonly type: "claude_message"; readonly value: unknown }
   | { readonly type: "protocol_error"; readonly message: string }
   | {
       readonly type: "exit";
@@ -517,15 +512,8 @@ export class ChildProcess extends Context.Service<ChildProcess, ChildProcessShap
 ) {
   static readonly layer = Layer.succeed(this, {
     spawn: (request) =>
-      request.backend === "claude-cli"
-        ? ensureClaudeCliReady().pipe(
-            Effect.andThen(
-              Effect.acquireRelease(acquireClaudeChild(request), (handle) => handle.release),
-            ),
-            Effect.map(({ release: _release, ...handle }) => handle),
-          )
-        : Effect.acquireRelease(acquireChild(request), (handle) => handle.release).pipe(
-            Effect.map(({ release: _release, ...handle }) => handle),
-          ),
+      Effect.acquireRelease(acquireChild(request), (handle) => handle.release).pipe(
+        Effect.map(({ release: _release, ...handle }) => handle),
+      ),
   });
 }

@@ -10,7 +10,8 @@
 - `packages/pi-cosmic-core/` contains shared Effect-first runtime foundations for the extension packages.
 - `packages/pi-cosmic-ui/` contains composable shared UI elements, including the responsive footer.
 - `packages/pi-directory-models/` contains per-directory model and thinking-level preference restoration.
-- `packages/pi-subagents/` contains the session-scoped foreground/background subagent extension.
+- `packages/pi-herdr/` contains persistent read-only Claude Code delegation through Herdr.
+- `packages/pi-subagents/` contains the session-scoped Pi foreground/background subagent extension.
 - The repository is a pnpm workspace. Keep shared workspace configuration at the root and package-specific source, tests, and build configuration inside each package.
 
 ## Package layout conventions

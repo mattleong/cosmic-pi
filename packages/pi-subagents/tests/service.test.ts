@@ -44,7 +44,6 @@ interface FakeChildControl {
   readonly beforeNextResponse: (type: RpcCommand["type"], value: unknown) => void;
   readonly offer: (value: unknown) => void;
   readonly offerIpc: (value: unknown) => void;
-  readonly offerClaude: (value: unknown) => void;
   readonly exit: (exitCode?: number | null) => void;
 }
 
@@ -52,7 +51,6 @@ function fakeChildLayer(
   beforeSpawn: Effect.Effect<void, never, never> = Effect.void,
   options: {
     readonly dropInitialState?: boolean;
-    readonly dropInitialStateAttempts?: number;
     readonly releaseDefect?: boolean;
     readonly stateThinkingLevel?: string;
     readonly initialFailures?: ReadonlyArray<{
@@ -65,17 +63,11 @@ function fakeChildLayer(
       readonly type: RpcCommand["type"];
       readonly code: string;
     }>;
-    readonly initialBeforeResponses?: ReadonlyArray<{
-      readonly spawnIndex: number;
-      readonly type: RpcCommand["type"];
-      readonly value: unknown;
-    }>;
   } = {},
 ) {
   const controls: FakeChildControl[] = [];
   let nextSpawnIndex = 0;
-  let remainingInitialStateDrops =
-    options.dropInitialStateAttempts ?? (options.dropInitialState ? Number.POSITIVE_INFINITY : 0);
+  let remainingInitialStateDrops = options.dropInitialState ? Number.POSITIVE_INFINITY : 0;
   const layer: Layer.Layer<ChildProcess> = Layer.succeed(ChildProcess, {
     spawn: (launch) =>
       Effect.acquireRelease(
@@ -111,9 +103,7 @@ function fakeChildLayer(
           const beforeResponses: Array<{
             readonly type: RpcCommand["type"];
             readonly value: unknown;
-          }> = (options.initialBeforeResponses ?? [])
-            .filter((response) => response.spawnIndex === spawnIndex)
-            .map(({ type, value }) => ({ type, value }));
+          }> = [];
           const failNext = (type: RpcCommand["type"], error: string) => {
             failures.push({ type, error });
           };
@@ -142,8 +132,6 @@ function fakeChildLayer(
             Queue.offerUnsafe(events, { type: "rpc_message", value });
           const offerIpc = (value: unknown) =>
             Queue.offerUnsafe(events, { type: "ipc_message", value });
-          const offerClaude = (value: unknown) =>
-            Queue.offerUnsafe(events, { type: "claude_message", value });
           const exit = (exitCode: number | null = 0) => {
             Queue.endUnsafe(events);
             Deferred.doneUnsafe(exited, Effect.succeed({ type: "exit", exitCode, stderr: "" }));
@@ -178,10 +166,7 @@ function fakeChildLayer(
                 );
                 const before =
                   beforeIndex >= 0 ? beforeResponses.splice(beforeIndex, 1)[0] : undefined;
-                if (before) {
-                  if (launch.backend === "claude-cli") offerClaude(before.value);
-                  else offer(before.value);
-                }
+                if (before) offer(before.value);
                 const droppedIndex = dropped.findIndex((type) => type === command.type);
                 if (droppedIndex >= 0) {
                   dropped.splice(droppedIndex, 1);
@@ -209,15 +194,12 @@ function fakeChildLayer(
                                 sessionId: "child-session",
                                 sessionFile: "/tmp/child-session.jsonl",
                                 thinkingLevel: options.stateThinkingLevel ?? "high",
-                                model:
-                                  launch.backend === "claude-cli"
-                                    ? "claude-sonnet-resolved"
-                                    : {
-                                        provider: "openai-codex",
-                                        id: "gpt-5.6-sol",
-                                        name: "GPT 5.6 Sol",
-                                        reasoning: true,
-                                      },
+                                model: {
+                                  provider: "openai-codex",
+                                  id: "gpt-5.6-sol",
+                                  name: "GPT 5.6 Sol",
+                                  reasoning: true,
+                                },
                                 isStreaming: false,
                                 isCompacting: false,
                                 steeringMode: "all",
@@ -263,7 +245,6 @@ function fakeChildLayer(
             beforeNextResponse,
             offer,
             offerIpc,
-            offerClaude,
             exit,
           });
           return {
@@ -689,933 +670,6 @@ describe("SubagentService", () => {
       yield* Effect.forEach(gates, (gate) => Deferred.succeed(gate, undefined), {
         discard: true,
       });
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("terminates a completed Claude process and restores its session ID", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const run = yield* service.start(
-        request({ backend: "claude-cli", model: "sonnet", name: "resume-claude" }),
-      );
-      fake.controls[0]?.offerClaude({
-        type: "result",
-        subtype: "success",
-        result: "Done for now.",
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
-
-      const resumed = yield* service.resume(run.id, "Continue the Claude session.");
-      expect(resumed.state).toBe("running");
-      expect(fake.controls[1]?.launch.resumeSessionId).toBe("child-session");
-      expect(fake.controls[1]?.launch.resumeSessionFile).toBeUndefined();
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("exposes backend capabilities and rejects unsupported Claude controls", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const untrusted = yield* Effect.flip(
-        service.start(request({ backend: "claude-cli", model: "sonnet", projectTrusted: false })),
-      );
-      expect(untrusted).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        message: "Claude CLI subagents require a trusted project.",
-      });
-      expect(fake.controls).toHaveLength(0);
-
-      const unsupportedContext = yield* Effect.flip(
-        service.start(request({ backend: "claude-cli", context: "fork", model: "sonnet" })),
-      );
-      expect(unsupportedContext).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        code: "claude_context_unsupported",
-        message: "Backend claude-cli does not support fork context.",
-      });
-      expect(fake.controls).toHaveLength(0);
-
-      const invalidModel = yield* Effect.flip(
-        service.start(request({ backend: "claude-cli", model: "--permission-mode" })),
-      );
-      expect(invalidModel).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        message:
-          'Claude model must be fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
-      });
-      const nonClaudeModel = yield* Effect.flip(
-        service.start(request({ backend: "claude-cli", model: "gpt-4o" })),
-      );
-      expect(nonClaudeModel).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        message:
-          'Claude model must be fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
-      });
-      const providerStyleClaudeModel = yield* Effect.flip(
-        service.start(request({ backend: "claude-cli", model: "claude/opus" })),
-      );
-      expect(providerStyleClaudeModel).toMatchObject({
-        _tag: "InvalidSubagentRequestError",
-        code: "claude_model_invalid",
-      });
-      expect(fake.controls).toHaveLength(0);
-
-      const run = yield* service.start(
-        request({ backend: "claude-cli", model: "sonnet", name: "claude-reader" }),
-      );
-      expect(run.backend).toBe("claude-cli");
-      expect(run.model).toBe("claude-sonnet-resolved");
-      expect(run.context).toBe("fresh");
-      expect(fake.controls[0]?.launch.context).toBe("fresh");
-      expect(run.capabilities).toEqual(["resume", "rename-display"]);
-      expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual([
-        "prompt",
-        "get_state",
-      ]);
-
-      const renamed = yield* service.rename(run.id, "claude-local-name");
-      expect(renamed.name).toBe("claude-local-name");
-      expect(
-        fake.controls[0]?.commands.some((command) => command.type === "set_session_name"),
-      ).toBe(false);
-
-      const steering = yield* Effect.flip(service.send(run.id, "Check tests too."));
-      expect(steering).toMatchObject({
-        _tag: "UnsupportedSubagentCapabilityError",
-        backend: "claude-cli",
-        capability: "steer",
-        message: expect.stringContaining(`subagent_await({ runIds: ["${run.id}"]`),
-      });
-      const interrupting = yield* Effect.flip(service.interrupt(run.id));
-      expect(interrupting).toMatchObject({
-        _tag: "UnsupportedSubagentCapabilityError",
-        capability: "interrupt",
-        message: expect.stringContaining(
-          `subagent_lifecycle({ action: "stop", runIds: ["${run.id}"] })`,
-        ),
-      });
-      expect(fake.controls[0]?.commands.some((command) => command.type === "steer")).toBe(false);
-      expect(fake.controls[0]?.commands.some((command) => command.type === "abort")).toBe(false);
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("allows local display rename while a run is still starting", () => {
-    const fake = fakeChildLayer(Effect.void, { dropInitialState: true });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const starting = yield* service
-        .start(request({ name: "initial-name" }))
-        .pipe(Effect.forkScoped);
-      yield* yieldUntil(
-        () => fake.controls[0]?.commands.some((command) => command.type === "get_state") ?? false,
-      );
-      const [run] = yield* service.list;
-      expect(run?.state).toBe("starting");
-
-      const renamed = yield* service.rename(run!.id, "renamed-while-starting");
-      expect(renamed).toMatchObject({ state: "starting", name: "renamed-while-starting" });
-      expect((yield* service.status(run!.id)).name).toBe("renamed-while-starting");
-
-      yield* Fiber.interrupt(starting);
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("allows a longer readiness window for Claude initialization", () => {
-    const fake = fakeChildLayer(Effect.void, { dropInitialState: true });
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const starting = yield* service
-        .start(request({ backend: "claude-cli", model: "sonnet", name: "slow-claude" }))
-        .pipe(Effect.forkScoped);
-      yield* yieldUntil(
-        () => fake.controls[0]?.commands.some((command) => command.type === "get_state") ?? false,
-      );
-
-      yield* TestClock.adjust("10 seconds");
-      expect(projections.at(-1)?.runs[0]?.state).toBe("starting");
-
-      yield* TestClock.adjust("50 seconds");
-      yield* TestClock.adjust("250 millis");
-      yield* yieldUntil(
-        () => fake.controls[1]?.commands.some((command) => command.type === "get_state") ?? false,
-      );
-      expect(fake.controls).toHaveLength(2);
-      expect(projections.at(-1)?.runs[0]?.state).toBe("starting");
-
-      yield* TestClock.adjust("60 seconds");
-      const failure = yield* Fiber.join(starting).pipe(Effect.flip);
-      expect(failure).toMatchObject({
-        _tag: "SubagentProcessError",
-        operation: "await RPC response from",
-      });
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("bootstraps each transient Claude initialization attempt with the task", () => {
-    const fake = fakeChildLayer(Effect.void, { dropInitialStateAttempts: 1 });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const starting = yield* service
-        .start(request({ backend: "claude-cli", model: "sonnet", name: "retry-claude" }))
-        .pipe(Effect.forkScoped);
-      yield* yieldUntil(
-        () => fake.controls[0]?.commands.some((command) => command.type === "get_state") ?? false,
-      );
-      expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual([
-        "prompt",
-        "get_state",
-      ]);
-
-      yield* TestClock.adjust("60 seconds");
-      yield* TestClock.adjust("250 millis");
-      const started = yield* Fiber.join(starting);
-      expect(started.state).toBe("running");
-      expect(fake.controls).toHaveLength(2);
-      expect(fake.controls[1]?.commands.map((command) => command.type)).toEqual([
-        "prompt",
-        "get_state",
-      ]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("retries a Claude bootstrap write that was definitely not sent", () => {
-    const fake = fakeChildLayer(Effect.void, {
-      initialTransportFailures: [{ spawnIndex: 0, type: "prompt", code: "transport_not_sent" }],
-    });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const starting = yield* service
-        .start(request({ backend: "claude-cli", model: "sonnet", name: "retry-not-sent" }))
-        .pipe(Effect.forkScoped);
-      yield* yieldUntil(() => fake.controls.length === 1);
-      yield* TestClock.adjust("250 millis");
-      const started = yield* Fiber.join(starting);
-      expect(started.state).toBe("running");
-      expect(fake.controls).toHaveLength(2);
-      expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual(["prompt"]);
-      expect(fake.controls[1]?.commands.map((command) => command.type)).toEqual([
-        "prompt",
-        "get_state",
-      ]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect(
-    "commits Claude initialization before an immediate terminal result closes scope",
-    () => {
-      const fake = fakeChildLayer(Effect.void, {
-        initialBeforeResponses: [
-          {
-            spawnIndex: 0,
-            type: "prompt",
-            value: {
-              type: "result",
-              subtype: "success",
-              is_error: false,
-              result: "Immediate terminal report.",
-              usage: { input_tokens: 1, output_tokens: 1 },
-            },
-          },
-        ],
-      });
-      const layer = serviceLayer().pipe(Layer.provide(fake.layer));
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
-        const run = yield* service.start(
-          request({ backend: "claude-cli", model: "sonnet", name: "immediate-claude" }),
-        );
-        expect(run).toMatchObject({
-          state: "completed",
-          sessionId: "child-session",
-          model: "claude-sonnet-resolved",
-          finalText: "Immediate terminal report.",
-        });
-        expect(fake.controls).toHaveLength(1);
-        expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual([
-          "prompt",
-          "get_state",
-        ]);
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    },
-  );
-
-  it.effect("never retries a Claude writer after its task frame may have been accepted", () => {
-    const fake = fakeChildLayer(Effect.void, { dropInitialStateAttempts: 1 });
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const starting = yield* service
-        .start(
-          request({
-            backend: "claude-cli",
-            model: "sonnet",
-            name: "uncertain-writer",
-            writeIntent: "writer",
-          }),
-        )
-        .pipe(Effect.forkScoped);
-      yield* yieldUntil(
-        () => fake.controls[0]?.commands.some((command) => command.type === "get_state") ?? false,
-      );
-      yield* TestClock.adjust("60 seconds");
-      const failure = yield* Fiber.join(starting).pipe(Effect.flip);
-      expect(failure).toMatchObject({
-        _tag: "SubagentProcessError",
-        code: "start_outcome_uncertain",
-      });
-      expect(fake.controls).toHaveLength(1);
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("maps Claude stream events into the shared run projection", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const run = yield* service.start(
-        request({ backend: "claude-cli", model: "sonnet", name: "claude-stream" }),
-      );
-      fake.controls[0]?.offerClaude({
-        type: "assistant",
-        message: {
-          content: [
-            { type: "text", text: "Reading authentication." },
-            {
-              type: "tool_use",
-              id: "tool-claude",
-              name: "Read",
-              input: { file_path: "src/auth.ts" },
-            },
-          ],
-        },
-      });
-      fake.controls[0]?.offerClaude({
-        type: "user",
-        message: {
-          content: [{ type: "tool_result", tool_use_id: "tool-claude", content: "source" }],
-        },
-      });
-      const finalReport = "Claude review\ncomplete.";
-      fake.controls[0]?.offerClaude({
-        type: "assistant",
-        message: { content: [{ type: "text", text: finalReport }] },
-      });
-      fake.controls[0]?.offerClaude({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        result: finalReport,
-        total_cost_usd: 0.02,
-        usage: { input_tokens: 10, output_tokens: 5 },
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-
-      const completed = yield* service.status(run.id);
-      expect(completed.finalText).toBe(finalReport);
-      expect(completed.usage).toMatchObject({ input: 10, output: 5, totalTokens: 15, cost: 0.02 });
-      expect(completed.sessionEvents).toMatchObject([
-        { type: "assistant", text: "Reading authentication." },
-        { type: "tool", toolName: "Read", target: "src/auth.ts", state: "completed" },
-        { type: "assistant", text: finalReport },
-      ]);
-      expect(
-        completed.sessionEvents.filter(
-          (event) => event.type === "assistant" && event.text === finalReport,
-        ),
-      ).toHaveLength(1);
-
-      const resumed = yield* service.resume(run.id, "Check one more thing.");
-      expect(resumed.state).toBe("running");
-      expect(fake.controls[1]?.launch.resumeSessionId).toBe("child-session");
-      expect(fake.controls[1]?.commands.map((command) => command.type)).toEqual([
-        "prompt",
-        "get_state",
-      ]);
-      expect(fake.controls[1]?.commands[0]).toMatchObject({
-        type: "prompt",
-        message: "Check one more thing.",
-      });
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("clips an oversized Claude final result instead of failing the run", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const run = yield* service.start(
-        request({ backend: "claude-cli", model: "sonnet", name: "large-result" }),
-      );
-      fake.controls[0]?.offerClaude({
-        type: "result",
-        subtype: "success",
-        result: "x".repeat(1024 * 1024 + 1),
-        usage: { input_tokens: "future-shape" },
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-      const completed = yield* service.status(run.id);
-      expect(completed.finalText?.length).toBe(32 * 1024 + 1);
-      expect(completed.finalText?.endsWith("…")).toBe(true);
-      expect(completed.usage.totalTokens).toBe(0);
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect(
-    "surfaces Claude limit warnings without treating unavailable overage as rejection",
-    () => {
-      const fake = fakeChildLayer();
-      const notifications: SubagentNotification[] = [];
-      const projections: SubagentProjection[] = [];
-      const layer = serviceLayer({
-        publish: (projection) => projections.push(projection),
-        notify: (notification) => notifications.push(notification),
-      }).pipe(Layer.provide(fake.layer));
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
-        const run = yield* service.start(
-          request({ backend: "claude-cli", model: "sonnet", name: "claude-limit-warning" }),
-        );
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "allowed",
-            rateLimitType: "five_hour",
-            overageStatus: "rejected",
-            overageDisabledReason: "org_level_disabled",
-          },
-        });
-        yield* Effect.yieldNow;
-        expect((yield* service.status(run.id)).warning).toBeUndefined();
-
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "allowed_warning",
-            rateLimitType: "five_hour",
-            utilization: 0.85,
-            resetsAt: 7_200,
-          },
-        });
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
-        const warning = yield* service.status(run.id);
-        expect(warning.state).toBe("running");
-        expect(warning.warning).toContain(
-          "approaching its five hour limit (85% used); resets in 2h",
-        );
-        expect(notifications).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              type: "warning",
-              id: run.id,
-              name: "claude-limit-warning",
-              message: warning.warning,
-              triggerTurn: false,
-              generation: expect.any(Number),
-            }),
-          ]),
-        );
-
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "allowed_warning",
-            rateLimitType: "five_hour",
-            utilization: 0.89,
-            resetsAt: 7_200,
-          },
-        });
-        yield* yieldUntil(() =>
-          Boolean(projections.at(-1)?.runs[0]?.warning?.includes("89% used")),
-        );
-        expect(notifications.filter((value) => value.type === "warning")).toHaveLength(1);
-
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "allowed_warning",
-            rateLimitType: "five_hour",
-            utilization: 0.91,
-            resetsAt: 7_200,
-          },
-        });
-        yield* yieldUntil(
-          () => notifications.filter((value) => value.type === "warning").length === 2,
-        );
-
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "allowed_warning",
-            rateLimitType: "five_hour",
-            utilization: 0.94,
-            resetsAt: 7_200,
-          },
-        });
-        yield* yieldUntil(() =>
-          Boolean(projections.at(-1)?.runs[0]?.warning?.includes("94% used")),
-        );
-        expect(notifications.filter((value) => value.type === "warning")).toHaveLength(2);
-
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "allowed_warning",
-            rateLimitType: "five_hour",
-            utilization: 0.96,
-            resetsAt: 7_200,
-          },
-        });
-        yield* yieldUntil(
-          () => notifications.filter((value) => value.type === "warning").length === 3,
-        );
-
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "allowed_warning",
-            rateLimitType: "five_hour",
-            utilization: 0.85,
-            resetsAt: 10_800,
-          },
-        });
-        yield* yieldUntil(
-          () => notifications.filter((value) => value.type === "warning").length === 4,
-        );
-
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: { status: "rejected", rateLimitType: "five_hour" },
-        });
-        yield* yieldUntil(() =>
-          Boolean(projections.at(-1)?.runs[0]?.warning?.includes("was rejected")),
-        );
-        expect(notifications.filter((value) => value.type === "warning")).toHaveLength(5);
-        expect(
-          (yield* service.status(run.id)).sessionEvents.filter(
-            (event) => event.type === "notice" && event.kind === "warning",
-          ),
-        ).toHaveLength(5);
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: { status: "allowed", rateLimitType: "five_hour" },
-        });
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning === undefined);
-        yield* TestClock.adjust("2 seconds");
-        expect((yield* service.status(run.id)).state).toBe("running");
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "correlates rejected settlement by limit key instead of cancelling it with another window",
-    () => {
-      const fake = fakeChildLayer();
-      const projections: SubagentProjection[] = [];
-      const layer = serviceLayer({ publish: (projection) => projections.push(projection) }).pipe(
-        Layer.provide(fake.layer),
-      );
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
-        const run = yield* service.start(
-          request({ backend: "claude-cli", model: "sonnet", name: "mixed-limits" }),
-        );
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "rejected",
-            rateLimitType: "five_hour",
-            overageStatus: "rejected",
-          },
-        });
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: { status: "allowed", rateLimitType: "seven_day" },
-        });
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
-        yield* TestClock.adjust("2 seconds");
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-        expect((yield* service.status(run.id)).error).toContain("five hour limit");
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "retains failed actionable retries for two rejected limit windows through settlement",
-    () => {
-      const fake = fakeChildLayer();
-      const attempts = new Map<string, number>();
-      const delivered: SubagentNotification[] = [];
-      let allowDelivery = false;
-      const projections: SubagentProjection[] = [];
-      const layer = serviceLayer({
-        publish: (projection) => projections.push(projection),
-        notify: (notification) => {
-          if (notification.type !== "warning") return undefined;
-          attempts.set(notification.message, (attempts.get(notification.message) ?? 0) + 1);
-          if (!allowDelivery) return { deliveredActionKeys: [] };
-          delivered.push(notification);
-          return {
-            deliveredActionKeys: [
-              `${notification.id}:warning:${notification.slotKey ?? "default"}:${notification.generation}`,
-            ],
-          };
-        },
-      }).pipe(Layer.provide(fake.layer));
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
-        yield* service.start(
-          request({ backend: "claude-cli", model: "sonnet", name: "two-rejections" }),
-        );
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "rejected",
-            rateLimitType: "five_hour",
-            overageStatus: "rejected",
-            resetsAt: 7_200,
-          },
-        });
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "rejected",
-            rateLimitType: "seven_day",
-            overageStatus: "rejected",
-            resetsAt: 604_800,
-          },
-        });
-        yield* yieldUntil(() => attempts.size === 2);
-        yield* TestClock.adjust("2 seconds");
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-        expect(delivered).toEqual([]);
-
-        allowDelivery = true;
-        yield* TestClock.adjust("4 seconds");
-        yield* yieldUntil(() => delivered.length === 2);
-        expect(delivered.map((notification) => notification.type)).toEqual(["warning", "warning"]);
-        expect(
-          delivered.some(
-            (notification) =>
-              notification.type === "warning" && notification.message.includes("five hour limit"),
-          ),
-        ).toBe(true);
-        expect(
-          delivered.some(
-            (notification) =>
-              notification.type === "warning" && notification.message.includes("seven day limit"),
-          ),
-        ).toBe(true);
-        yield* TestClock.adjust("30 seconds");
-        expect(delivered).toHaveLength(2);
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "clears turn-local rate state on completion/resume while preserving window thresholds",
-    () => {
-      const fake = fakeChildLayer();
-      const notifications: SubagentNotification[] = [];
-      const projections: SubagentProjection[] = [];
-      const layer = serviceLayer({
-        notify: (notification) => notifications.push(notification),
-        publish: (projection) => projections.push(projection),
-      }).pipe(Layer.provide(fake.layer));
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
-        const run = yield* service.start(
-          request({ backend: "claude-cli", model: "sonnet", name: "resume-limits" }),
-        );
-        const warning = {
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "allowed_warning",
-            rateLimitType: "five_hour",
-            utilization: 0.85,
-            resetsAt: 7_200,
-          },
-        } as const;
-        fake.controls[0]?.offerClaude(warning);
-        yield* yieldUntil(() => notifications.some((value) => value.type === "warning"));
-        fake.controls[0]?.offerClaude({
-          type: "result",
-          subtype: "success",
-          result: "Done.",
-        });
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-        expect((yield* service.status(run.id)).warning).toBeUndefined();
-        yield* yieldUntil(() => fake.controls[0]?.released() === 1);
-
-        const resumed = yield* service.resume(run.id, "Continue.");
-        expect(resumed.warning).toBeUndefined();
-        fake.controls[1]?.offerClaude(warning);
-        yield* Effect.yieldNow;
-        expect(notifications.filter((value) => value.type === "warning")).toHaveLength(1);
-
-        fake.controls[1]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "allowed_warning",
-            rateLimitType: "five_hour",
-            utilization: 0.85,
-          },
-        });
-        yield* yieldUntil(
-          () => notifications.filter((value) => value.type === "warning").length === 2,
-        );
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    },
-  );
-
-  it.effect("keeps paid-overage Claude requests running with clear allowance wording", () => {
-    const fake = fakeChildLayer();
-    const notifications: SubagentNotification[] = [];
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-      notify: (notification) => notifications.push(notification),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const run = yield* service.start(
-        request({ backend: "claude-cli", model: "sonnet", name: "claude-paid-overage" }),
-      );
-      const rateLimitEvent = {
-        type: "rate_limit_event",
-        rate_limit_info: {
-          status: "rejected",
-          rateLimitType: "five_hour",
-          utilization: 1,
-          resetsAt: 3_600,
-          overageStatus: "allowed",
-          isUsingOverage: true,
-        },
-      } as const;
-      fake.controls[0]?.offerClaude(rateLimitEvent);
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
-
-      const warning = yield* service.status(run.id);
-      expect(warning.warning).toBe(
-        "Claude exhausted its five hour allowance (100% used); resets in 1h; continuing with paid overage.",
-      );
-      expect(notifications).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "warning",
-            id: run.id,
-            name: "claude-paid-overage",
-            message: warning.warning,
-            triggerTurn: false,
-            generation: expect.any(Number),
-          }),
-        ]),
-      );
-
-      fake.controls[0]?.offerClaude(rateLimitEvent);
-      yield* Effect.yieldNow;
-      expect(notifications.filter((value) => value.type === "warning")).toHaveLength(1);
-      yield* TestClock.adjust("2 seconds");
-      expect((yield* service.status(run.id)).state).toBe("running");
-      expect(fake.controls[0]?.terminations).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("keeps Claude running when paid usage credits are available", () => {
-    const fake = fakeChildLayer();
-    const notifications: SubagentNotification[] = [];
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-      notify: (notification) => notifications.push(notification),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const run = yield* service.start(
-        request({ backend: "claude-cli", model: "sonnet", name: "claude-credits" }),
-      );
-      fake.controls[0]?.offerClaude({
-        type: "rate_limit_event",
-        rate_limit_info: {
-          status: "rejected",
-          rateLimitType: "five_hour",
-          resetsAt: 3_600,
-          overageStatus: "allowed",
-          isUsingOverage: false,
-        },
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
-
-      const warning = yield* service.status(run.id);
-      expect(warning.warning).toBe(
-        "Claude exhausted its five hour allowance; resets in 1h; paid overage is available.",
-      );
-      expect(notifications).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "warning",
-            id: run.id,
-            name: "claude-credits",
-            message: warning.warning,
-            triggerTurn: false,
-            generation: expect.any(Number),
-          }),
-        ]),
-      );
-
-      yield* TestClock.adjust("2 seconds");
-      expect((yield* service.status(run.id)).state).toBe("running");
-      expect(fake.controls[0]?.terminations).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("defers ambiguous Claude limit events to the authoritative result", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const run = yield* service.start(
-        request({ backend: "claude-cli", model: "sonnet", name: "claude-ambiguous-limit" }),
-      );
-      fake.controls[0]?.offerClaude({
-        type: "rate_limit_event",
-        rate_limit_info: { status: "rejected", rateLimitType: "five_hour" },
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
-      yield* TestClock.adjust("2 seconds");
-
-      expect((yield* service.status(run.id)).state).toBe("running");
-      expect(fake.controls[0]?.terminations).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("waits briefly for a Claude result before failing a rejected limit", () => {
-    const fake = fakeChildLayer();
-    const notifications: SubagentNotification[] = [];
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-      notify: (notification) => notifications.push(notification),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const run = yield* service.start(
-        request({ backend: "claude-cli", model: "opus", name: "claude-limit-rejected" }),
-      );
-      fake.controls[0]?.offerClaude({
-        type: "rate_limit_event",
-        rate_limit_info: {
-          status: "rejected",
-          rateLimitType: "seven_day_opus",
-          utilization: 1,
-          resetsAt: 3_600,
-          overageStatus: "rejected",
-          overageDisabledReason: "out_of_credits",
-        },
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
-      expect((yield* service.status(run.id)).state).toBe("running");
-
-      yield* TestClock.adjust("1 second");
-      fake.controls[0]?.offerClaude({
-        type: "result",
-        subtype: "error",
-        is_error: true,
-        errors: ["You've hit your Opus limit."],
-        usage: { input_tokens: 3, output_tokens: 1 },
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-      yield* TestClock.adjust("2 seconds");
-
-      const failed = yield* service.status(run.id);
-      expect(failed.error).toBe("You've hit your Opus limit.");
-      expect(failed.usage).toMatchObject({ input: 3, output: 1, totalTokens: 4 });
-      expect(notifications.filter((value) => value.type === "warning")).toHaveLength(1);
-      expect(fake.controls[0]?.terminations).toEqual(["force"]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("fails a Claude turn whose rejected limit produces no result", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const run = yield* service.start(
-        request({ backend: "claude-cli", model: "opus", name: "claude-limit-hung" }),
-      );
-      fake.controls[0]?.offerClaude({
-        type: "rate_limit_event",
-        rate_limit_info: {
-          status: "rejected",
-          rateLimitType: "five_hour",
-          overageStatus: "rejected",
-          overageDisabledReason: "org_level_disabled",
-        },
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning !== undefined);
-      yield* TestClock.adjust("2 seconds");
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-
-      const failed = yield* service.status(run.id);
-      expect(failed.error).toContain("rejected by its five hour limit");
-      expect(failed.error).toContain("paid overage unavailable (org level disabled)");
-      expect(fake.controls[0]?.terminations).toEqual(["force"]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("retains Claude usage when an error result fails the run", () => {
-    const fake = fakeChildLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const run = yield* service.start(
-        request({ backend: "claude-cli", model: "sonnet", name: "claude-failure" }),
-      );
-      fake.controls[0]?.offerClaude({
-        type: "result",
-        subtype: "error_during_execution",
-        is_error: true,
-        errors: ["Claude request failed."],
-        total_cost_usd: 0.04,
-        usage: { input_tokens: 8, output_tokens: 3 },
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-
-      const failed = yield* service.status(run.id);
-      expect(failed.error).toBe("Claude request failed.");
-      expect(failed.usage).toMatchObject({ input: 8, output: 3, totalTokens: 11, cost: 0.04 });
-      expect(fake.controls[0]?.terminations).toContain("force");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -2647,18 +1701,16 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(
-        request({
-          backend: "claude-cli",
-          model: "sonnet",
-          name: "uncertain-completed-writer",
-          writeIntent: "writer",
-        }),
+        request({ name: "uncertain-completed-writer", writeIntent: "writer" }),
       );
-      fake.controls[0]?.offerClaude({
-        type: "result",
-        subtype: "success",
-        result: "First writer turn complete.",
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "First writer turn complete." }],
+        },
       });
+      fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
 
@@ -3159,97 +2211,65 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.effect(
-    "retries actionable question, warning, and rate-limit delivery once without duplicates",
-    () => {
-      const fake = fakeChildLayer();
-      const attempts = new Map<string, number>();
-      const delivered: SubagentNotification[] = [];
-      const layer = serviceLayer({
-        notify: (notification) => {
-          if (notification.type === "completed") return undefined;
-          const key = notification.type === "question" ? "question" : notification.message;
-          const attempt = (attempts.get(key) ?? 0) + 1;
-          attempts.set(key, attempt);
-          if (attempt === 1) throw new Error("transient parent delivery failure");
-          delivered.push(notification);
-          return {
-            deliveredActionKeys: [
-              `${notification.id}:${notification.type}:${notification.type === "warning" ? (notification.slotKey ?? "default") : "default"}:${notification.generation}`,
-            ],
-          };
-        },
-      }).pipe(Layer.provide(fake.layer));
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
-        const run = yield* service.start(
-          request({ backend: "claude-cli", model: "sonnet", name: "retry-actions" }),
-        );
-        fake.controls[0]?.offerIpc({
-          channel: "pi-subagents",
-          type: "contact_parent",
-          requestId: "retry-question",
-          kind: "question",
-          message: "Retry this question?",
-        });
-        yield* yieldUntil(() => attempts.get("question") === 1);
+  it.effect("retries actionable question and warning delivery once without duplicates", () => {
+    const fake = fakeChildLayer();
+    const attempts = new Map<string, number>();
+    const delivered: SubagentNotification[] = [];
+    const layer = serviceLayer({
+      notify: (notification) => {
+        if (notification.type === "completed") return undefined;
+        const key = notification.type === "question" ? "question" : notification.message;
+        const attempt = (attempts.get(key) ?? 0) + 1;
+        attempts.set(key, attempt);
+        if (attempt === 1) throw new Error("transient parent delivery failure");
+        delivered.push(notification);
+        return {
+          deliveredActionKeys: [
+            `${notification.id}:${notification.type}:${notification.type === "warning" ? (notification.slotKey ?? "default") : "default"}:${notification.generation}`,
+          ],
+        };
+      },
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "retry-actions" }));
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "retry-question",
+        kind: "question",
+        message: "Retry this question?",
+      });
+      yield* yieldUntil(() => attempts.get("question") === 1);
 
-        // A distinct warning must not supersede the still-undelivered question generation.
-        fake.controls[0]?.offerIpc({
-          channel: "pi-subagents",
-          type: "contact_parent",
-          requestId: "retry-warning",
-          kind: "warning",
-          message: "Retry this warning.",
-        });
-        yield* yieldUntil(() => delivered.some((notification) => notification.type === "question"));
-        yield* yieldUntil(() => attempts.get("Retry this warning.") === 1);
-        yield* TestClock.adjust("200 millis");
-        yield* yieldUntil(() =>
-          delivered.some(
-            (notification) =>
-              notification.type === "warning" && notification.message === "Retry this warning.",
-          ),
-        );
-
-        fake.controls[0]?.offerClaude({
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: "allowed_warning",
-            rateLimitType: "seven_day",
-            utilization: 0.81,
-            resetsAt: 7_200,
-          },
-        });
-        const rateMessage = "Claude is approaching its seven day limit (81% used); resets in 2h.";
-        yield* yieldUntil(() => attempts.get(rateMessage) === 1);
-        yield* TestClock.adjust("200 millis");
-        yield* yieldUntil(() =>
-          delivered.some(
-            (notification) =>
-              notification.type === "warning" && notification.message === rateMessage,
-          ),
-        );
-        yield* TestClock.adjust("30 seconds");
-        expect(delivered.filter((notification) => notification.type === "question")).toHaveLength(
-          1,
-        );
-        expect(
-          delivered.filter(
-            (notification) =>
-              notification.type === "warning" && notification.message === "Retry this warning.",
-          ),
-        ).toHaveLength(1);
-        expect(
-          delivered.filter(
-            (notification) =>
-              notification.type === "warning" && notification.message === rateMessage,
-          ),
-        ).toHaveLength(1);
-        expect((yield* service.status(run.id)).state).toBe("waiting_for_parent");
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    },
-  );
+      // A distinct warning must not supersede the still-undelivered question generation.
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "retry-warning",
+        kind: "warning",
+        message: "Retry this warning.",
+      });
+      yield* yieldUntil(() => delivered.some((notification) => notification.type === "question"));
+      yield* yieldUntil(() => attempts.get("Retry this warning.") === 1);
+      yield* TestClock.adjust("200 millis");
+      yield* yieldUntil(() =>
+        delivered.some(
+          (notification) =>
+            notification.type === "warning" && notification.message === "Retry this warning.",
+        ),
+      );
+      yield* TestClock.adjust("30 seconds");
+      expect(delivered.filter((notification) => notification.type === "question")).toHaveLength(1);
+      expect(
+        delivered.filter(
+          (notification) =>
+            notification.type === "warning" && notification.message === "Retry this warning.",
+        ),
+      ).toHaveLength(1);
+      expect((yield* service.status(run.id)).state).toBe("waiting_for_parent");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
 
   it.effect("restarts actionable delivery after a stale queue drains to idle", () => {
     const fake = fakeChildLayer();

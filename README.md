@@ -11,8 +11,9 @@ A pnpm workspace for pi extensions.
 - [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted previews for pi's built-in tool calls.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-directory-models`](packages/pi-directory-models) — per-directory model and thinking-level preferences for fresh Pi sessions.
+- [`pi-herdr`](packages/pi-herdr) — persistent read-only Claude Code delegation through a managed Herdr tab and panes.
 - [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements, beginning with the footer and information area.
-- [`pi-subagents`](packages/pi-subagents) — session-scoped foreground/background subagents with supervisor communication and a `/subagents` fleet UI.
+- [`pi-subagents`](packages/pi-subagents) — session-scoped Pi foreground/background subagents with supervisor communication and a `/subagents` fleet UI.
 
 ## Requirements
 
@@ -30,6 +31,7 @@ pi install npm:pi-background-terminals
 pi install npm:pi-code-previews
 pi install npm:pi-cosmic-ui
 pi install npm:pi-directory-models
+pi install npm:pi-herdr
 pi install npm:pi-subagents
 ```
 
@@ -60,6 +62,7 @@ pnpm --filter pi-better-openai test
 pnpm --filter pi-code-previews build
 pnpm --filter pi-cosmic-ui test
 pnpm --filter pi-directory-models test
+pnpm --filter pi-herdr test
 pnpm --filter pi-subagents test
 ```
 
@@ -71,6 +74,7 @@ pi -e ./packages/pi-better-openai
 pi -e ./packages/pi-code-previews
 pi -e ./packages/pi-cosmic-ui
 pi -e ./packages/pi-directory-models
+pi -e ./packages/pi-herdr
 pi -e ./packages/pi-subagents
 ```
 

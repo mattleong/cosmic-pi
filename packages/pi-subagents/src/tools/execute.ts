@@ -9,9 +9,7 @@ import type {
 import * as Effect from "effect/Effect";
 import {
   hostProfileEnvironment,
-  liveSubagentStartBoundaries,
   resolveProfileStart,
-  type SubagentSessionEnvironment,
 } from "../boundary/host-profile-resolution.ts";
 import { PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
 import { profileCandidateLabel } from "../profiles/resolve.ts";
@@ -47,11 +45,8 @@ import type {
   SubagentProfileView,
   SubagentStartFailure,
   SubagentStartOutcome,
-  SubagentToolBoundaries,
   SubagentToolRuntime,
 } from "./subagent.ts";
-
-const LIVE_TOOL_BOUNDARIES: SubagentToolBoundaries = liveSubagentStartBoundaries;
 
 const requiredRunId = (
   action: SubagentToolInput["action"],
@@ -147,10 +142,9 @@ const profileDiscovery = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   profiles: SubagentProfileServiceShape,
-  sessionEnvironment: SubagentSessionEnvironment,
 ): ReadonlyArray<SubagentProfileView> => {
   const ids = input.profile ? [input.profile] : PROFILE_IDS;
-  const environment = hostProfileEnvironment(pi, ctx, sessionEnvironment.projectTrusted);
+  const environment = hostProfileEnvironment(pi, ctx);
   return ids.flatMap((id) => {
     const definition = profiles.definition(id);
     if (!definition) return [];
@@ -190,7 +184,7 @@ const formatProfileDiscovery = (
 ): string =>
   [
     "Static profile preflight (subagent_start always evaluates the selected profile's ordered candidates first-to-last)",
-    "Each profile context is a preference when context is omitted: candidates use it when supported, while backends without fork support use fresh context. An explicit launch context is a hard requirement and can change eligibility.",
+    "Each profile context is used when context is omitted. Forked context requires a persisted parent session with a stable leaf; an explicit context remains a hard requirement.",
     `Configured default profile: ${defaultProfile}`,
     ...profiles.flatMap((profile) => [
       `${profile.id} · context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"} · ${profile.description}`,
@@ -249,12 +243,11 @@ export const executeSubagentAction = async (
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<unknown> | undefined,
   ctx: ExtensionContext,
-  boundaries: SubagentToolBoundaries = runtime.boundaries ?? LIVE_TOOL_BOUNDARIES,
 ): Promise<AgentToolResult<unknown>> => {
   if (input.action === "models") {
     const discovery = Effect.gen(function* () {
       const profileService = yield* SubagentProfileService;
-      const profiles = profileDiscovery(input, pi, ctx, profileService, runtime.environment);
+      const profiles = profileDiscovery(input, pi, ctx, profileService);
       return {
         content: [
           {
@@ -358,7 +351,7 @@ export const executeSubagentAction = async (
           );
         };
         const resolveRequest = (spec: SubagentStartSpec) =>
-          resolveProfileStart(pi, spec, ctx, runtime.environment, boundaries);
+          resolveProfileStart(pi, spec, ctx, runtime.environment);
         const launchOne = (spec: SubagentStartSpec, index: number, sessionOwned = false) =>
           resolveRequest(spec).pipe(
             Effect.flatMap((request) =>

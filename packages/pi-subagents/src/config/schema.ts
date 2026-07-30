@@ -8,10 +8,8 @@ import {
   type ProfileCandidate,
   type ProfileId,
 } from "../profiles/model.ts";
-import { isClaudeModelSelector } from "../run/model.ts";
-
 export const SUBAGENT_CONFIG_BASENAME = "pi-subagents.json";
-export const SUBAGENT_CONFIG_VERSION = 2;
+export const SUBAGENT_CONFIG_VERSION = 3;
 export const MAX_POLICY_SELECTORS = 256;
 export const MAX_PROFILE_CANDIDATES = 32;
 export const MAX_MODEL_SELECTOR_CHARS = 256;
@@ -33,7 +31,7 @@ export interface DecodedSubagentConfig {
 }
 
 export const ProfileIdSchema = Schema.Literals(PROFILE_IDS);
-export const ProfileBackendSchema = Schema.Literals(["pi", "claude-cli"] as const);
+export const ProfileBackendSchema = Schema.Literal("pi");
 export const ProfileEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
 
 const hasNoTerminalControls = Schema.makeFilter((value: string) => {
@@ -143,8 +141,6 @@ export const isCanonicalProfileModelSelector = (selector: string): boolean => {
   const value = selector.trim();
   if (value.length === 0 || value.length > MAX_MODEL_SELECTOR_CHARS) return false;
   if (value === "parent") return true;
-  if (value.startsWith("claude-cli/"))
-    return isClaudeModelSelector(value.slice("claude-cli/".length));
   if (!value.startsWith("pi/")) return false;
   const canonical = value.slice(3);
   const slash = canonical.indexOf("/");
@@ -206,7 +202,7 @@ const decodeRoute = (
   return invalid ? undefined : candidates;
 };
 
-/** Field-tolerant v2 unknown-boundary decode for one global or project document. */
+/** Field-tolerant v3 unknown-boundary decode for one global or project document. */
 export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedSubagentConfig {
   const diagnostics: string[] = [];
   const decodedRoot = decodedRecord(input);

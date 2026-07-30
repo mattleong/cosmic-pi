@@ -16,7 +16,6 @@ import type {
   SubagentNotification,
   SubagentNotificationDelivery,
 } from "../boundary/host-notifier.ts";
-import type { ChildRateLimitEvent } from "./child-agent.ts";
 import {
   InvalidSubagentRequestError,
   SubagentCapacityError,
@@ -51,11 +50,9 @@ import {
 } from "./limits.ts";
 import {
   backendSupportsContext,
-  CLAUDE_CLI_SUBAGENT_CAPABILITIES,
   emptyUsage,
   hasSubagentCapability,
   isActiveRunState,
-  isClaudeModelSelector,
   isTerminalRunState,
   PI_SUBAGENT_CAPABILITIES,
   type StartSubagentRequest,
@@ -71,12 +68,6 @@ import {
   type RpcStateData,
 } from "./protocol.ts";
 import { sortRuns } from "./projection.ts";
-import {
-  advanceRateLimitNotice,
-  isRejectedRateLimit,
-  rateLimitMessage,
-  rateLimitWindowKey,
-} from "./rate-limit.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import {
   MAX_ERROR_CHARS,
@@ -85,8 +76,6 @@ import {
   sanitizeName,
   snapshotView,
 } from "./state.ts";
-
-const CLAUDE_RATE_LIMIT_RESULT_GRACE = "2 seconds";
 
 let nextRuntimeNamespace = 1;
 const allocateRuntimeNamespace = (): string => `r${(nextRuntimeNamespace++).toString(36)}`;
@@ -128,20 +117,6 @@ const writerConflictError = (
         message: `Writer ${activeWriter.view.name} (${activeWriter.view.id}) already owns the shared cwd.`,
       })
     : undefined;
-};
-
-const recordDeliveredRateLimitRejection = (
-  record: RunRecord | undefined,
-  windowKey: string,
-): void => {
-  if (!record) return;
-  if (!record.deliveredRateLimitRejections.has(windowKey)) {
-    if (record.deliveredRateLimitRejections.size >= 32) {
-      const oldest = record.deliveredRateLimitRejections.values().next().value;
-      if (oldest !== undefined) record.deliveredRateLimitRejections.delete(oldest);
-    }
-    record.deliveredRateLimitRejections.add(windowKey);
-  }
 };
 
 export type SubagentNotificationCallback =
@@ -219,8 +194,7 @@ export interface SubagentServiceShape {
 
 const notFound = (id: string) =>
   new SubagentNotFoundError({ id, message: `Subagent run not found: ${id}` });
-const capabilitiesFor = (request: StartSubagentRequest) =>
-  request.backend === "claude-cli" ? CLAUDE_CLI_SUBAGENT_CAPABILITIES : PI_SUBAGENT_CAPABILITIES;
+const capabilitiesFor = () => PI_SUBAGENT_CAPABILITIES;
 const unsupportedCapabilityMessage = (
   backend: SubagentBackend,
   capability: SubagentCapability,
@@ -451,12 +425,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                           delivery?.deliveredActionKeys ?? [actionDeliveryKey(notification)],
                         );
                         if (!delivered.has(actionDeliveryKey(notification))) continue;
-                        if (notification.type === "warning" && notification.rateLimitRejectionKey) {
-                          recordDeliveredRateLimitRejection(
-                            records.get(notification.id),
-                            notification.rateLimitRejectionKey,
-                          );
-                        }
                         if (
                           pendingActionNotifications.get(actionSlot(notification)) === notification
                         )
@@ -655,12 +623,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     command: A,
   ) => Effect.Effect<RpcResponse, SubagentError>;
   let sendPeerNotices: (changedId: string) => Effect.Effect<void>;
-  let initializeProcess: (
-    record: RunRecord,
-    retriesRemaining: number,
-    claudeBootstrapPrompt: string | undefined,
-    operation: "start" | "resume",
-  ) => Effect.Effect<RpcStateData, SubagentError>;
+  let initializeProcess: (record: RunRecord) => Effect.Effect<RpcStateData, SubagentError>;
 
   const settle = (record: RunRecord, state: "completed" | "failed" | "stopped", error?: string) =>
     Effect.gen(function* () {
@@ -693,47 +656,17 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           record.activeTools.clear();
           const completionGeneration =
             state === "completed" ? ++record.completionGeneration : record.completionGeneration;
-          const turnWarning = record.rateLimitWarning;
-          const rejectedWindows = [
-            ...new Map(
-              [...record.rateLimitSettlements.values()]
-                .filter(
-                  (settlement) => settlement.turn === record.rateLimitTurn && settlement.rejected,
-                )
-                .map((settlement) => [settlement.windowKey, settlement] as const),
-            ).values(),
-          ];
-          const pendingRejectionKeys = new Set<string>();
           for (const [slot, notification] of pendingActionNotifications) {
             if (notification.id !== record.view.id || notification.type !== "warning") continue;
-            const rejectionKey = notification.rateLimitRejectionKey;
-            const preserve =
-              rejectionKey !== undefined &&
-              rejectedWindows.some((window) => window.windowKey === rejectionKey) &&
-              !record.deliveredRateLimitRejections.has(rejectionKey);
-            if (preserve) {
-              pendingRejectionKeys.add(rejectionKey);
-              continue;
-            }
             pendingActionNotifications.delete(slot);
             record.warningNotificationGenerations.delete(slot);
           }
-          const missingRateLimitNotifications = rejectedWindows.filter(
-            (window) =>
-              !record.deliveredRateLimitRejections.has(window.windowKey) &&
-              !pendingRejectionKeys.has(window.windowKey),
-          );
-          record.rateLimitRejected = false;
-          record.rateLimitWarning = undefined;
-          record.rateLimitWarnings.clear();
-          record.rateLimitSettlements.clear();
           record.notificationGeneration += 1;
           record.questionNotificationGeneration = record.notificationGeneration;
           pendingActionNotifications.delete(`${record.view.id}:question:default`);
           record.replyPendingRequestId = undefined;
           record.view = {
             ...record.view,
-            ...(turnWarning && record.view.warning === turnWarning ? { warning: undefined } : {}),
             state,
             endedAt: now,
             lastActivityAt: now,
@@ -752,8 +685,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             pauseOutcome,
             completedScope,
             completionGeneration,
-            rejectedRateLimitWindows: rejectedWindows,
-            missingRateLimitNotifications,
           };
         }),
       );
@@ -803,29 +734,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       if (state === "completed") {
         if (!deliveredToForeground) yield* queueCompletion(record, result.completionGeneration);
       } else if (!deliveredToForeground && state === "failed") {
-        if (result.rejectedRateLimitWindows.length === 0)
-          yield* queueActionNotification(record, {
-            type: "warning",
-            id: view.id,
-            name: view.name,
-            message: error ?? "Run failed.",
-            triggerTurn: true,
-          });
-        else
-          yield* Effect.forEach(
-            result.missingRateLimitNotifications,
-            (window) =>
-              queueActionNotification(record, {
-                type: "warning",
-                id: view.id,
-                name: view.name,
-                message: window.message ?? error ?? "Claude request was rate limited.",
-                triggerTurn: true,
-                slotKey: `rate-limit:${window.windowKey}`,
-                rateLimitRejectionKey: window.windowKey,
-              }),
-            { discard: true },
-          );
+        yield* queueActionNotification(record, {
+          type: "warning",
+          id: view.id,
+          name: view.name,
+          message: error ?? "Run failed.",
+          triggerTurn: true,
+        });
       }
       yield* sendPeerNotices(record.view.id);
       if (result.completedScope)
@@ -861,129 +776,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     );
   };
 
-  const handleRateLimit = (record: RunRecord, event: ChildRateLimitEvent) =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const message = event.status === "allowed" ? undefined : rateLimitMessage(event, now);
-      const rejected = isRejectedRateLimit(event);
-      const update = yield* withLock(
-        Effect.sync(() => {
-          const limitKey = event.rateLimitType ?? "usage";
-          const windowKey = rateLimitWindowKey(event, record.rateLimitTurn);
-          const priorSettlement = record.rateLimitSettlements.get(limitKey);
-          const generation =
-            priorSettlement?.turn === record.rateLimitTurn ? priorSettlement.generation + 1 : 1;
-          record.rateLimitSettlements.set(limitKey, {
-            turn: record.rateLimitTurn,
-            generation,
-            rejected,
-            windowKey,
-            ...(message ? { message } : {}),
-          });
-          record.rateLimitRejected = [...record.rateLimitSettlements.values()].some(
-            (settlement) => settlement.turn === record.rateLimitTurn && settlement.rejected,
-          );
-          if (isInactiveRunRecord(record))
-            return {
-              limitKey,
-              windowKey,
-              turn: record.rateLimitTurn,
-              generation,
-              notifyParent: false,
-            };
-
-          const { notice, notifyParent } = advanceRateLimitNotice(
-            record.rateLimitNotices.get(windowKey),
-            event,
-          );
-          if (!record.rateLimitNotices.has(windowKey) && record.rateLimitNotices.size >= 32) {
-            const oldestWindow = record.rateLimitNotices.keys().next().value;
-            if (oldestWindow !== undefined) record.rateLimitNotices.delete(oldestWindow);
-          }
-          record.rateLimitNotices.set(windowKey, notice);
-
-          if (!message) {
-            record.rateLimitWarnings.delete(limitKey);
-            const replacement = [...record.rateLimitWarnings.values()].at(-1);
-            const priorWarning = record.rateLimitWarning;
-            record.rateLimitWarning = replacement;
-            if (priorWarning && record.view.warning === priorWarning) {
-              record.view = { ...record.view, warning: replacement };
-              publish();
-            }
-            return {
-              limitKey,
-              windowKey,
-              turn: record.rateLimitTurn,
-              generation,
-              notifyParent: false,
-            };
-          }
-          const duplicate = record.view.warning === message;
-          record.rateLimitWarnings.delete(limitKey);
-          record.rateLimitWarnings.set(limitKey, message);
-          record.rateLimitWarning = message;
-          record.view = {
-            ...record.view,
-            warning: message,
-            lastActivityAt: now,
-            sessionEvents:
-              notifyParent && !duplicate
-                ? appendNoticeSessionEvent(record.view.sessionEvents, "warning", message, now)
-                : record.view.sessionEvents,
-          };
-          publish();
-          return { limitKey, windowKey, turn: record.rateLimitTurn, generation, notifyParent };
-        }),
-      );
-      if (event.status === "allowed" || !message) return;
-      if (!rejected) {
-        if (update.notifyParent)
-          yield* queueActionNotification(record, {
-            type: "warning",
-            id: record.view.id,
-            name: record.view.name,
-            message,
-            triggerTurn: false,
-            slotKey: `rate-limit:${update.windowKey}`,
-          });
-        return;
-      }
-      if (update.notifyParent) {
-        yield* queueActionNotification(record, {
-          type: "warning",
-          id: record.view.id,
-          name: record.view.name,
-          message,
-          triggerTurn: true,
-          slotKey: `rate-limit:${update.windowKey}`,
-          rateLimitRejectionKey: update.windowKey,
-        });
-      }
-      yield* Effect.sleep(CLAUDE_RATE_LIMIT_RESULT_GRACE).pipe(
-        Effect.andThen(
-          withLock(
-            Effect.sync(() => {
-              const settlement = record.rateLimitSettlements.get(update.limitKey);
-              return (
-                settlement?.turn === update.turn &&
-                settlement.generation === update.generation &&
-                settlement.rejected &&
-                !record.stoppedByParent &&
-                record.view.state !== "stopping" &&
-                !isTerminalRunState(record.view.state)
-              );
-            }),
-          ),
-        ),
-        Effect.flatMap((stillRejected) =>
-          stillRejected ? failRun(record, message).pipe(Effect.asVoid) : Effect.void,
-        ),
-        Effect.forkIn(record.scope, { startImmediately: true }),
-        Effect.asVoid,
-      );
-    });
-
   const handleWireEvent = makeRunEventHandler({
     mutateView: mutateEventView,
     settle,
@@ -992,7 +784,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     failRun,
     deliverForeground,
     pauseFromEvent,
-    handleRateLimit,
   });
 
   ({ rpc, sendPeerNotices, initializeProcess } = makeRunProcessLifecycle({
@@ -1003,29 +794,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     publish,
     handleWireEvent,
     markCleanupPending,
-    closeRecordScope,
     closeExitedScope,
     failRun,
   }));
 
   const submitPrompt = (record: RunRecord, message: string, operation: "start" | "resume") =>
     rpc(record, { type: "prompt", message }).pipe(
-      Effect.tap(() =>
-        withLock(
-          Effect.sync(() => {
-            record.taskSubmission = "potentially-applied";
-          }),
-        ),
-      ),
-      Effect.tapError((error) =>
-        error._tag === "SubagentProcessError" && error.code === "transport_not_sent"
-          ? Effect.void
-          : withLock(
-              Effect.sync(() => {
-                record.taskSubmission = "potentially-applied";
-              }),
-            ),
-      ),
       Effect.mapError((error) => {
         const outcomeUncertain =
           error._tag === "SubagentProcessError" && error.code?.endsWith("_outcome_uncertain");
@@ -1053,33 +827,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             code: "task_required",
             message: "Subagent task is required.",
           });
-        if (request.backend === "claude-cli" && !request.projectTrusted)
-          return yield* new InvalidSubagentRequestError({
-            code: "claude_untrusted",
-            message: "Claude CLI subagents require a trusted project.",
-          });
         if (!backendSupportsContext(request.backend, request.context))
           return yield* new InvalidSubagentRequestError({
-            code:
-              request.backend === "claude-cli"
-                ? "claude_context_unsupported"
-                : "context_unsupported",
-            message: `Backend ${request.backend} does not support ${request.context} context.`,
-          });
-        if (request.backend === "claude-cli" && !isClaudeModelSelector(request.model))
-          return yield* new InvalidSubagentRequestError({
-            code: "claude_model_invalid",
-            message:
-              'Claude model must be fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
-          });
-        if (
-          request.backend === "claude-cli" &&
-          request.effortWasExplicit &&
-          (request.effort === "off" || request.effort === "minimal")
-        )
-          return yield* new InvalidSubagentRequestError({
-            code: "claude_effort_unsupported",
-            message: `Claude CLI does not support effort ${request.effort}.`,
+            code: "context_unsupported",
+            message: `Pi subagents do not support ${request.context} context.`,
           });
         if (request.task.length > MAX_TASK_CHARS)
           return yield* new InvalidSubagentRequestError({
@@ -1127,7 +878,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               context: request.context,
               writeIntent: request.writeIntent,
               backend: request.backend,
-              capabilities: capabilitiesFor(request),
+              capabilities: capabilitiesFor(),
               model: request.model,
               effort: request.effort,
               startedAt: now,
@@ -1138,7 +889,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             const launch: ChildLaunchRequest = {
               runId: id,
               name,
-              backend: request.backend,
               cwd: request.cwd,
               context: request.context,
               writeIntent: request.writeIntent,
@@ -1168,7 +918,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               stoppedByParent: false,
               cleanupPending: false,
               initializationPending: true,
-              taskSubmission: "not-sent",
               warningTurnTriggered: false,
               notificationGeneration: 0,
               questionNotificationGeneration: 0,
@@ -1177,12 +926,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               completionConsumedGeneration: 0,
               completionNotifiedGeneration: 0,
               completionClaims: 0,
-              rateLimitTurn: 1,
-              rateLimitRejected: false,
-              rateLimitWarnings: new Map(),
-              rateLimitSettlements: new Map(),
-              rateLimitNotices: new Map(),
-              deliveredRateLimitRejections: new Set(),
             };
             records.set(id, record);
             publish();
@@ -1193,20 +936,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         const peerNotice = peerNoticeText(records.values(), reserved.view.id);
         const initialPrompt = taskPrompt(request, peerNotice);
         const initialize = Effect.gen(function* () {
-          const state = yield* initializeProcess(
-            reserved,
-            1,
-            request.backend === "claude-cli" ? initialPrompt : undefined,
-            "start",
-          );
+          const state = yield* initializeProcess(reserved);
           // Let a terminal frame already queued behind the initialization state
           // commit its deferred settlement before this start result is returned.
           yield* Effect.yieldNow;
-          if (
-            request.backend === "pi" &&
-            request.effortWasExplicit &&
-            state.thinkingLevel !== request.effort
-          )
+          if (request.effortWasExplicit && state.thinkingLevel !== request.effort)
             return yield* new InvalidSubagentRequestError({
               code: "pi_effort_unsupported",
               message: `Model ${request.model} does not support requested effort ${request.effort}; effective level was ${state.thinkingLevel}.`,
@@ -1254,7 +988,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               ).pipe(Effect.tap(() => closeRecordScope(reserved)));
             return yield* settle(reserved, pending.state, pending.error);
           }
-          if (request.backend === "pi") yield* submitPrompt(reserved, initialPrompt, "start");
+          yield* submitPrompt(reserved, initialPrompt, "start");
           yield* sendPeerNotices(reserved.view.id);
           return activated.view;
         });
@@ -1626,15 +1360,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 if (needsRespawn) {
                   const capacityFailure = processCapacityError(records, selected);
                   if (capacityFailure) return yield* capacityFailure;
-                  if (selected.view.backend === "pi" && !selected.view.sessionFile)
+                  if (!selected.view.sessionFile)
                     return yield* new InvalidSubagentRequestError({
                       code: "pi_session_unavailable",
                       message: `Subagent ${id} cannot resume because its Pi session file is unavailable.`,
-                    });
-                  if (selected.view.backend === "claude-cli" && !selected.view.sessionId)
-                    return yield* new InvalidSubagentRequestError({
-                      code: "claude_session_unavailable",
-                      message: `Subagent ${id} cannot resume because its Claude session ID is unavailable.`,
                     });
                 }
                 selected.settlement = nextSettlement;
@@ -1650,22 +1379,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 selected.replyPendingRequestId = undefined;
                 selected.initializationPending = needsRespawn;
                 selected.pendingInitializationSettlement = undefined;
-                selected.taskSubmission = "not-sent";
-                selected.rateLimitTurn += 1;
-                selected.rateLimitRejected = false;
-                selected.rateLimitSettlements.clear();
-                selected.rateLimitWarnings.clear();
-                const warning =
-                  selected.rateLimitWarning && selected.view.warning === selected.rateLimitWarning
-                    ? undefined
-                    : selected.view.warning;
-                selected.rateLimitWarning = undefined;
                 selected.view = {
                   ...selected.view,
                   state: "starting",
                   question: undefined,
                   currentTool: undefined,
-                  warning,
+                  warning: undefined,
                   lastActivityAt: now,
                 };
                 publish();
@@ -1674,7 +1393,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             );
             const commit = Effect.gen(function* () {
               const record = claimed.record;
-              let promptSubmittedDuringInitialization = false;
               if (claimed.needsRespawn) {
                 const nextScope = yield* Scope.fork(ownerScope);
                 const installed = yield* withLock(
@@ -1689,15 +1407,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                     record.cleanupPending = false;
                     record.launch = {
                       ...record.launch,
-                      ...(record.view.backend === "pi"
-                        ? {
-                            resumeSessionFile: record.view.sessionFile,
-                            resumeSessionId: undefined,
-                          }
-                        : {
-                            resumeSessionFile: undefined,
-                            resumeSessionId: record.view.sessionId,
-                          }),
+                      resumeSessionFile: record.view.sessionFile,
                     };
                     return true;
                   }),
@@ -1709,10 +1419,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                     message: `Subagent ${id} stopped before its session could be restored.`,
                   });
                 }
-                const claudeBootstrapPrompt =
-                  record.view.backend === "claude-cli" ? prompt : undefined;
-                const state = yield* initializeProcess(record, 1, claudeBootstrapPrompt, "resume");
-                promptSubmittedDuringInitialization = claudeBootstrapPrompt !== undefined;
+                const state = yield* initializeProcess(record);
                 const resolvedModel = rpcStateModelId(state.model) ?? record.view.model;
                 const committed = yield* withLock(
                   Effect.sync(() => {
@@ -1740,8 +1447,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                   return yield* settle(record, committed.state, committed.error);
                 }
               }
-              if (!promptSubmittedDuringInitialization)
-                yield* submitPrompt(claimed.record, prompt, "resume");
+              yield* submitPrompt(claimed.record, prompt, "resume");
               const view = yield* withLock(
                 Effect.sync(() => {
                   const record = claimed.record;

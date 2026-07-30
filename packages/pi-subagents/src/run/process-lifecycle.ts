@@ -1,6 +1,5 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
@@ -25,8 +24,6 @@ import {
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
 
 const RPC_TIMEOUT = "10 seconds";
-const CLAUDE_INITIALIZATION_TIMEOUT = "60 seconds";
-const CLAUDE_INITIALIZATION_RETRY_DELAY = "250 millis";
 
 export interface RunProcessLifecycleDependencies {
   readonly childProcesses: ChildProcessShape;
@@ -39,7 +36,6 @@ export interface RunProcessLifecycleDependencies {
     event: ChildWireEvent,
   ) => Effect.Effect<void, SubagentError>;
   readonly markCleanupPending: (record: RunRecord) => Effect.Effect<void>;
-  readonly closeRecordScope: (record: RunRecord, scope?: Scope.Closeable) => Effect.Effect<void>;
   readonly closeExitedScope: (record: RunRecord, scope: Scope.Closeable) => Effect.Effect<void>;
   readonly failRun: (
     record: RunRecord,
@@ -81,7 +77,6 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
     publish,
     handleWireEvent,
     markCleanupPending,
-    closeRecordScope,
     closeExitedScope,
     failRun,
   } = dependencies;
@@ -114,17 +109,13 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
       const outcome = yield* Effect.acquireUseRelease(
         acquireRegistration,
         (registration) => {
-          const timeout =
-            record.view.backend === "claude-cli" && command.type === "get_state"
-              ? CLAUDE_INITIALIZATION_TIMEOUT
-              : RPC_TIMEOUT;
           const sendAndAwait = Fiber.join(registration.transport).pipe(
             Effect.mapError((error) => mapTransportUncertainty(command, error)),
             Effect.onInterrupt(() => Fiber.interrupt(registration.transport).pipe(Effect.asVoid)),
             Effect.andThen(Deferred.await(response)),
           );
           return Effect.raceFirst(sendAndAwait, Deferred.await(response)).pipe(
-            Effect.timeoutOption(timeout),
+            Effect.timeoutOption(RPC_TIMEOUT),
           );
         },
         (registration) =>
@@ -254,112 +245,14 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
     });
   };
 
-  const isRetryableClaudeInitialization = (error: SubagentError): boolean =>
-    error._tag === "SubagentProcessError" &&
-    (error.code === "transport_not_sent" ||
-      error.operation === "spawn" ||
-      error.operation === "await RPC response from" ||
-      error.operation === "initialize stream");
-
-  const uncertainInitialization = (
-    record: RunRecord,
-    operation: "start" | "resume",
-    error: SubagentError,
-  ): SubagentError =>
-    record.view.writeIntent === "writer" && record.taskSubmission === "potentially-applied"
-      ? new SubagentProcessError({
-          operation,
-          code: `${operation}_outcome_uncertain`,
-          message: `The Claude writer task frame may have been accepted before startup could be confirmed. The service will not retry it automatically. Inspect the workspace and subagent status before starting or resuming another writer. (${error.message})`,
-        })
-      : error;
-
-  const prepareInitializationRetry = (record: RunRecord) =>
-    Effect.gen(function* () {
-      const priorScope = record.scope;
-      yield* markCleanupPending(record);
-      yield* closeRecordScope(record, priorScope);
-      yield* Effect.sleep(CLAUDE_INITIALIZATION_RETRY_DELAY);
-      const nextScope = yield* Scope.fork(ownerScope);
-      const accepted = yield* withLock(
-        Effect.sync(() => {
-          if (
-            record.stoppedByParent ||
-            record.view.state !== "starting" ||
-            record.scope !== priorScope
-          )
-            return false;
-          record.scope = nextScope;
-          record.cleanupPending = false;
-          record.process = undefined;
-          record.taskSubmission = "not-sent";
-          return true;
-        }),
-      );
-      if (!accepted) {
-        yield* Scope.close(nextScope, Exit.void);
-        return yield* new InvalidSubagentRequestError({
-          code: "initialization_retry_cancelled",
-          message: `Subagent ${record.view.id} stopped before initialization retry.`,
-        });
-      }
-    });
-
-  const initializeProcess: (
-    record: RunRecord,
-    retriesRemaining: number,
-    claudeBootstrapPrompt: string | undefined,
-    operation: "start" | "resume",
-  ) => Effect.Effect<RpcStateData, SubagentError> = (
-    record,
-    retriesRemaining,
-    claudeBootstrapPrompt,
-    operation,
-  ) =>
+  const initializeProcess = (record: RunRecord): Effect.Effect<RpcStateData, SubagentError> =>
     Effect.gen(function* () {
       yield* installProcess(record);
-      if (record.view.backend === "claude-cli") {
-        if (claudeBootstrapPrompt === undefined)
-          return yield* protocolError("Claude startup requires an initial prompt.");
-        yield* rpc(record, { type: "prompt", message: claudeBootstrapPrompt }).pipe(
-          Effect.tap(() =>
-            withLock(
-              Effect.sync(() => {
-                record.taskSubmission = "potentially-applied";
-              }),
-            ),
-          ),
-          Effect.tapError((error) =>
-            error._tag === "SubagentProcessError" && error.code === "transport_not_sent"
-              ? Effect.void
-              : withLock(
-                  Effect.sync(() => {
-                    record.taskSubmission = "potentially-applied";
-                  }),
-                ),
-          ),
-        );
-      }
       const stateResponse = yield* rpc(record, { type: "get_state" });
       return yield* decodeRpcStateData(stateResponse.data).pipe(
         Effect.mapError(() => protocolError("Subagent returned invalid startup state.")),
       );
-    }).pipe(
-      Effect.catch((rawError) => {
-        const error = uncertainInitialization(record, operation, rawError);
-        const mayRetryWriter = record.taskSubmission === "not-sent";
-        return record.view.backend === "claude-cli" &&
-          retriesRemaining > 0 &&
-          isRetryableClaudeInitialization(rawError) &&
-          (record.view.writeIntent === "read-only" || mayRetryWriter)
-          ? prepareInitializationRetry(record).pipe(
-              Effect.andThen(
-                initializeProcess(record, retriesRemaining - 1, claudeBootstrapPrompt, operation),
-              ),
-            )
-          : Effect.fail(error);
-      }),
-    );
+    });
 
   return { rpc, sendPeerNotices, initializeProcess };
 }

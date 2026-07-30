@@ -38,7 +38,7 @@ const StartSpecFields = {
   context: Type.Optional(
     StringEnum(["fresh", "fork"] as const, {
       description:
-        'Child context. An explicit value is a hard requirement. When omitted, the profile preference applies if the selected backend supports it; a backend without fork support uses "fresh". Only oracle prefers "fork"; every other profile prefers "fresh". Fork requires effective Pi routing and a persisted parent leaf.',
+        'Child context. An explicit value is a hard requirement. When omitted, the profile preference applies. Only oracle prefers "fork"; every other profile prefers "fresh". Fork requires a persisted Pi parent session with a stable leaf and never degrades silently to fresh.',
     }),
   ),
   profile: Type.Optional(
@@ -56,7 +56,7 @@ const StartSpecFields = {
   effort: Type.Optional(
     StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, {
       description:
-        "Explicit thinking-effort override. Omit to use the candidate effort, then the profile default effort, then the parent effort. claude-cli supports low through max only; off and minimal are rejected.",
+        "Explicit thinking-effort override. Omit to use the candidate effort, then the profile default effort, then the parent effort.",
     }),
   ),
 } as const;

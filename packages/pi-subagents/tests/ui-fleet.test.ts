@@ -280,21 +280,21 @@ describe("/subagents fleet UI", () => {
     expect(component.render(80).at(-1)).toContain("Confirm stop second-reader");
   });
 
-  it("shows only supported actions for Claude runs", () => {
-    const claudeRunning: SubagentProjection = {
+  it("shows only actions advertised by the run projection", () => {
+    const limitedCapabilities: SubagentProjection = {
       revision: 5,
       runs: [
         {
           ...projection.runs[0]!,
-          backend: "claude-cli",
-          model: "opus",
+          backend: "pi",
+          model: "anthropic/claude-opus-5",
           capabilities: ["resume", "rename-display"],
           state: "running",
           question: undefined,
         },
       ],
     };
-    const running = makeComponent(120, 18, claudeRunning);
+    const running = makeComponent(120, 18, limitedCapabilities);
     const runningHelp = running.component.render(120).at(-1) ?? "";
     expect(runningHelp).toContain("n Rename");
     expect(runningHelp).toContain("x Stop");
@@ -307,7 +307,7 @@ describe("/subagents fleet UI", () => {
 
     const completed = makeComponent(120, 18, {
       revision: 6,
-      runs: [{ ...claudeRunning.runs[0]!, state: "completed", endedAt: 2_000 }],
+      runs: [{ ...limitedCapabilities.runs[0]!, state: "completed", endedAt: 2_000 }],
     });
     const completedHelp = completed.component.render(120).at(-1) ?? "";
     expect(completedHelp).toContain("r Resume");

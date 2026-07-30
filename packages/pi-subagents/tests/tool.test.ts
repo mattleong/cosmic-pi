@@ -43,7 +43,6 @@ import {
   renderAwaitProgressComponent,
   renderExpandedStartAwaitResult,
   renderStartAwaitOverviewComponent,
-  type SubagentToolBoundaries,
   type SubagentToolRuntime,
 } from "../src/tools/subagent.ts";
 
@@ -125,7 +124,7 @@ const captureSubagentTools = (
   service: SubagentServiceShape,
   activeTools: ReadonlyArray<string> = ["read"],
   profileService = defaultProfileService,
-  boundaries?: SubagentToolBoundaries,
+  _legacyBoundaries?: unknown,
   environment = { cwd: "/project", projectTrusted: true },
   thinkingLevel: unknown = "high",
   startUiTicker?: SubagentToolRuntime["startUiTicker"],
@@ -140,7 +139,6 @@ const captureSubagentTools = (
     getActiveTools: () => [...activeTools],
   } as unknown as ExtensionAPI;
   registerSubagentTools(pi, {
-    ...(boundaries ? { boundaries } : {}),
     ...(startUiTicker ? { startUiTicker } : {}),
     environment,
     run: (effect, signal) =>
@@ -366,15 +364,11 @@ describe("subagent tool", () => {
     expect(tools.get("subagent_start")?.description).toContain(
       "selected profile always determines the model",
     );
-    expect(tools.get("subagent_status")?.description).toContain("backend capabilities");
-    expect(tools.get("subagent_send")?.description).toContain(
-      "claude-cli runs cannot receive mid-turn guidance",
-    );
-    expect(tools.get("subagent_reply")?.description).toContain(
-      "claude-cli runs do not support parent questions",
-    );
+    expect(tools.get("subagent_status")?.description).toContain("capabilities");
+    expect(tools.get("subagent_send")?.description).toContain("running subagents");
+    expect(tools.get("subagent_reply")?.description).toContain("one subagent");
     expect(tools.get("subagent_lifecycle")?.description).toContain(
-      "claude-cli runs cannot be interrupted",
+      "Message is valid only for resume",
     );
     for (const tool of tools.values()) {
       expect(tool.renderShell).toBe("default");
@@ -891,95 +885,6 @@ describe("subagent tool", () => {
     });
   });
 
-  it("adapts an omitted oracle context to backend capability and keeps explicit fork hard", async () => {
-    const requests: StartSubagentRequest[] = [];
-    const profiles = profileServiceFor({
-      profiles: {
-        oracle: [
-          { model: "claude-cli/opus", effort: "high" },
-          { model: "parent", effort: "default" },
-        ],
-      },
-    });
-    const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles, {
-      ensureClaudeReady: () => Effect.void,
-    }).get("subagent_start");
-
-    await tool?.execute(
-      "call",
-      { agents: [{ profile: "oracle", task: "Advise with profile context" }] },
-      undefined,
-      undefined,
-      context,
-    );
-    await tool?.execute(
-      "call",
-      { agents: [{ profile: "oracle", task: "Advise with fork", context: "fork" }] },
-      undefined,
-      undefined,
-      context,
-    );
-
-    expect(requests[0]).toMatchObject({
-      backend: "claude-cli",
-      model: "opus",
-      context: "fresh",
-      selection: { candidateIndex: 0, skippedCandidates: [] },
-    });
-    expect(requests[1]).toMatchObject({
-      backend: "pi",
-      model: "openai-codex/gpt-5.6-sol",
-      context: "fork",
-      selection: {
-        candidateIndex: 1,
-        skippedCandidates: [{ candidateIndex: 0, code: "claude_context_unsupported" }],
-      },
-    });
-  });
-
-  it("preserves each attempt's context when Claude readiness falls back to Pi", async () => {
-    const requests: StartSubagentRequest[] = [];
-    let preflightCalls = 0;
-    const profiles = profileServiceFor({
-      profiles: {
-        oracle: [
-          { model: "claude-cli/opus", effort: "high" },
-          { model: "parent", effort: "default" },
-        ],
-      },
-    });
-    const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles, {
-      ensureClaudeReady: () => {
-        preflightCalls += 1;
-        return Effect.fail(
-          new SubagentProcessError({
-            operation: "preflight",
-            code: "claude_cli_unauthenticated",
-            message: "Claude CLI is not authenticated.",
-          }),
-        );
-      },
-    }).get("subagent_start");
-
-    await tool?.execute(
-      "call",
-      { agents: [{ profile: "oracle", task: "Advise after readiness fallback" }] },
-      undefined,
-      undefined,
-      context,
-    );
-
-    expect(preflightCalls).toBe(1);
-    expect(requests[0]).toMatchObject({
-      backend: "pi",
-      context: "fork",
-      selection: {
-        candidateIndex: 1,
-        skippedCandidates: [{ candidateIndex: 0, code: "claude_cli_unauthenticated" }],
-      },
-    });
-  });
-
   it("honors a discouraged model deliberately saved in the selected profile route", async () => {
     const requests: StartSubagentRequest[] = [];
     const profiles = profileServiceFor({
@@ -1028,71 +933,12 @@ describe("subagent tool", () => {
     });
   });
 
-  it("memoizes automatic Claude preflight per resolution and falls back only before start", async () => {
-    const requests: StartSubagentRequest[] = [];
-    let preflightCalls = 0;
-    const profiles = profileServiceFor({
-      profiles: {
-        reviewer: [
-          { model: "claude-cli/fable", effort: "default" },
-          { model: "claude-cli/opus", effort: "default" },
-          { model: "pi/openai-codex/gpt-5.6-sol", effort: "default" },
-        ],
-      },
-    });
-    const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles, {
-      ensureClaudeReady: () => {
-        preflightCalls += 1;
-        return Effect.fail(
-          new SubagentProcessError({
-            operation: "preflight",
-            code: "claude_cli_unauthenticated",
-            message: "Claude CLI is not authenticated.",
-          }),
-        );
-      },
-    }).get("subagent_start");
-
-    await tool?.execute(
-      "call",
-      {
-        agents: [{ profile: "reviewer", task: "Review", effort: "max" }],
-      },
-      undefined,
-      undefined,
-      context,
-    );
-
-    expect(preflightCalls).toBe(1);
-    expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({
-      backend: "pi",
-      model: "openai-codex/gpt-5.6-sol",
-      effort: "max",
-      selection: {
-        candidateIndex: 2,
-        skippedCandidates: [
-          {
-            candidateIndex: 0,
-            candidate: "claude-cli/fable:max",
-            code: "claude_cli_unauthenticated",
-          },
-          {
-            candidateIndex: 1,
-            candidate: "claude-cli/opus:max",
-            code: "claude_cli_unauthenticated",
-          },
-        ],
-      },
-    });
-  });
-
   it("does not fall through to another candidate after the selected start reaches the service", async () => {
     const profiles = profileServiceFor({
       profiles: {
         reviewer: [
-          { model: "claude-cli/fable", effort: "default" },
           { model: "pi/openai-codex/gpt-5.6-sol", effort: "default" },
+          { model: "parent", effort: "default" },
         ],
       },
     });
@@ -1111,9 +957,7 @@ describe("subagent tool", () => {
         );
       },
     });
-    const result = await captureSubagentTools(service, ["read"], profiles, {
-      ensureClaudeReady: () => Effect.void,
-    })
+    const result = await captureSubagentTools(service, ["read"], profiles)
       .get("subagent_start")
       ?.execute(
         "call",
@@ -1127,55 +971,6 @@ describe("subagent tool", () => {
     expect(starts).toBe(1);
     expect(result?.details).toMatchObject({
       startFailures: [{ code: "post_selection_start_failed" }],
-    });
-  });
-
-  it("applies request effort before Claude compatibility checks and preflight", async () => {
-    const requests: StartSubagentRequest[] = [];
-    let preflightCalls = 0;
-    const profiles = profileServiceFor({
-      profiles: {
-        reviewer: [
-          { model: "claude-cli/fable", effort: "default" },
-          { model: "pi/openai-codex/gpt-5.6-sol", effort: "default" },
-        ],
-      },
-    });
-    const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles, {
-      ensureClaudeReady: () => {
-        preflightCalls += 1;
-        return Effect.void;
-      },
-    }).get("subagent_start");
-
-    await tool?.execute(
-      "call",
-      {
-        agents: [{ profile: "reviewer", task: "Review with Claude", effort: "high" }],
-      },
-      undefined,
-      undefined,
-      context,
-    );
-    await tool?.execute(
-      "call",
-      {
-        agents: [{ profile: "reviewer", task: "Review without Claude", effort: "off" }],
-      },
-      undefined,
-      undefined,
-      context,
-    );
-
-    expect(preflightCalls).toBe(1);
-    expect(requests[0]).toMatchObject({ backend: "claude-cli", model: "fable", effort: "high" });
-    expect(requests[1]).toMatchObject({
-      backend: "pi",
-      effort: "off",
-      selection: {
-        candidateIndex: 1,
-        skippedCandidates: [{ candidateIndex: 0, code: "claude_effort_unsupported" }],
-      },
     });
   });
 
@@ -1602,13 +1397,10 @@ describe("subagent tool", () => {
     } as unknown as ExtensionAPI;
     const reject = (input: SubagentProfileStartSpec) =>
       Effect.runPromise(
-        resolveProfileStart(
-          pi,
-          input,
-          context,
-          { cwd: "/project", projectTrusted: true },
-          { ensureClaudeReady: () => Effect.void },
-        ).pipe(Effect.provideService(SubagentProfileService, defaultProfileService)),
+        resolveProfileStart(pi, input, context, {
+          cwd: "/project",
+          projectTrusted: true,
+        }).pipe(Effect.provideService(SubagentProfileService, defaultProfileService)),
       );
 
     await expect(
@@ -1617,58 +1409,6 @@ describe("subagent tool", () => {
     await expect(
       reject({ task: "Probe", backend: "claude-cli" } as SubagentProfileStartSpec),
     ).rejects.toMatchObject({ code: "backend_not_supported" });
-  });
-
-  it("resolves Claude aliases without Pi model-registry authentication", async () => {
-    let request: StartSubagentRequest | undefined;
-    const service = subagentServiceDouble({
-      start: (input: StartSubagentRequest) =>
-        Effect.sync(
-          () => (
-            (request = input),
-            view({
-              backend: "claude-cli",
-              capabilities: ["resume", "rename-display"],
-              model: input.model,
-            })
-          ),
-        ),
-      waitForForeground: () => Effect.succeed(view()),
-      awaitTerminal: () => Effect.succeed([view()]),
-      list: Effect.succeed([]),
-      status: () => Effect.succeed(view()),
-      send: () => Effect.succeed(view()),
-      reply: () => Effect.succeed(view()),
-      interrupt: () => Effect.succeed(view()),
-      resume: () => Effect.succeed(view()),
-      rename: () => Effect.succeed(view()),
-      stop: () => Effect.succeed(view()),
-      projection: Effect.succeed({ revision: 0, runs: [] }),
-    });
-    const profiles = profileServiceFor({
-      profiles: { reviewer: { model: "claude-cli/opus", effort: "default" } },
-    });
-    const tool = captureSubagentTools(service, ["read", "edit"], profiles, {
-      ensureClaudeReady: () => Effect.void,
-    }).get("subagent_start");
-
-    const result = await tool?.execute(
-      "call",
-      {
-        agents: [{ profile: "reviewer", task: "Review auth" }],
-      },
-      undefined,
-      undefined,
-      context,
-    );
-
-    expect(request).toMatchObject({
-      backend: "claude-cli",
-      model: "opus",
-      context: "fresh",
-      activeTools: [],
-    });
-    expect(result?.content[0]?.text).toContain("claude-cli/opus");
   });
 
   it("transfers runtime-only authentication without exposing it in the model id", async () => {
@@ -2450,7 +2190,7 @@ describe("subagent tool", () => {
     expect(text).toContain("Forked context requires a persisted parent session");
   });
 
-  it("states that discovery adapts omitted context by backend and keeps explicit context hard", async () => {
+  it("states the Pi fork requirement and keeps explicit context hard", async () => {
     const ephemeral = {
       ...(context as unknown as Record<string, unknown>),
       sessionManager: {
@@ -2463,21 +2203,9 @@ describe("subagent tool", () => {
       .get("subagent_models")
       ?.execute("call", { profile: "oracle" }, undefined, undefined, ephemeral);
     const text = models?.content[0]?.text ?? "";
-    expect(text).toContain("Each profile context is a preference when context is omitted");
-    expect(text).toContain("backends without fork support use fresh context");
-    expect(text).toContain("An explicit launch context is a hard requirement");
-  });
-
-  it("shows an oracle Claude candidate's effective fresh context", async () => {
-    const profiles = profileServiceFor({
-      profiles: { oracle: { model: "claude-cli/opus", effort: "high" } },
-    });
-    const models = await captureSubagentTools(startCapturingService([]), ["read"], profiles)
-      .get("subagent_models")
-      ?.execute("call", { profile: "oracle" }, undefined, undefined, context);
-    const text = models?.content[0]?.text ?? "";
-    expect(text).toContain("oracle · context=fork · intent=read-only · effort=high");
-    expect(text).toContain("claude-cli/opus:high · eligible · context=fresh");
+    expect(text).toContain("Each profile context is used when context is omitted");
+    expect(text).toContain("Forked context requires a persisted parent session");
+    expect(text).toContain("an explicit context remains a hard requirement");
   });
 
   it("renders explicitly repeated parent candidates in declared order", async () => {

@@ -34,35 +34,32 @@ describe("bounded child line parser", () => {
     expect(overflow).not.toHaveBeenCalled();
   });
 
-  it.each(["Pi", "Claude"])(
-    "bounds ordinary sequential %s line backlog until downstream acknowledgement",
-    () => {
-      const stream = new PassThrough();
-      const queue = Effect.runSync(Queue.dropping<object>(512));
-      const retained: object[] = [];
-      const overflow = vi.fn();
-      const room = makeByteBoundedQueueRoom(queue, 42, overflow);
-      attachBoundedLineParser(stream, {
-        maxLineBytes: 64,
-        maxQueuedBytes: 128,
-        onLine: (line) => {
-          const event = { line };
-          if (room.offer(event, Buffer.byteLength(line, "utf8") + 1)) retained.push(event);
-        },
-        onOverflow: overflow,
-      });
+  it("bounds ordinary sequential line backlog until downstream acknowledgement", () => {
+    const stream = new PassThrough();
+    const queue = Effect.runSync(Queue.dropping<object>(512));
+    const retained: object[] = [];
+    const overflow = vi.fn();
+    const room = makeByteBoundedQueueRoom(queue, 42, overflow);
+    attachBoundedLineParser(stream, {
+      maxLineBytes: 64,
+      maxQueuedBytes: 128,
+      onLine: (line) => {
+        const event = { line };
+        if (room.offer(event, Buffer.byteLength(line, "utf8") + 1)) retained.push(event);
+      },
+      onOverflow: overflow,
+    });
 
-      stream.write(`${"a".repeat(20)}\n`);
-      stream.write(`${"b".repeat(20)}\n`);
-      stream.write(`${"c".repeat(20)}\n`);
+    stream.write(`${"a".repeat(20)}\n`);
+    stream.write(`${"b".repeat(20)}\n`);
+    stream.write(`${"c".repeat(20)}\n`);
 
-      expect(retained).toHaveLength(2);
-      expect(room.queuedBytes()).toBe(42);
-      expect(overflow).toHaveBeenCalledOnce();
-      room.acknowledge(retained[0]!);
-      expect(room.queuedBytes()).toBe(21);
-    },
-  );
+    expect(retained).toHaveLength(2);
+    expect(room.queuedBytes()).toBe(42);
+    expect(overflow).toHaveBeenCalledOnce();
+    room.acknowledge(retained[0]!);
+    expect(room.queuedBytes()).toBe(21);
+  });
 
   it("fails one parser room safely when re-entrant chunks overflow", () => {
     const stream = new PassThrough();

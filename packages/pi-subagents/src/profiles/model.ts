@@ -37,7 +37,7 @@ export interface ModelPolicySelector {
   readonly model: string;
 }
 
-/** A v2 route candidate. Selectors are canonical and effort is always declared. */
+/** A v3 route candidate. Selectors are canonical and effort is always declared. */
 export interface ProfileCandidate {
   readonly model: string;
   readonly effort: ProfileCandidateEffort;

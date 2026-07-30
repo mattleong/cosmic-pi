@@ -17,7 +17,7 @@ import { PROFILE_IDS } from "../src/profiles/model.ts";
 import { resolveProfilePlan } from "../src/profiles/resolve.ts";
 import { SubagentProfileService, subagentProfileServiceLayer } from "../src/profiles/service.ts";
 
-const document = (value: Record<string, unknown> = {}) => ({ version: 2, ...value });
+const document = (value: Record<string, unknown> = {}) => ({ version: 3, ...value });
 const resolved = (global: unknown = document(), project?: unknown, projectTrusted = true) =>
   resolveSubagentConfig({
     globalConfigPath: "/agent/pi-subagents.json",
@@ -35,13 +35,12 @@ const environment = {
     { provider: "openai", id: "gpt-review", supportedEfforts: ["off", "medium", "high"] as const },
   ],
   parentModel: { model: "openai/gpt-parent", effort: "high" as const },
-  projectTrusted: true,
   forkAvailable: true,
 };
 
-describe("subagent v2 profile configuration and resolution", () => {
+describe("subagent v3 Pi-only profile configuration and resolution", () => {
   it("ships seven neutral parent/default profiles with role effort defaults", () => {
-    expect(SUBAGENT_CONFIG_VERSION).toBe(2);
+    expect(SUBAGENT_CONFIG_VERSION).toBe(3);
     expect(PROFILE_IDS).toHaveLength(7);
     expect(PROFILE_DEFINITIONS.oracle.defaultContext).toBe("fork");
     expect(PROFILE_DEFINITIONS.delegate.defaultEffort).toBeUndefined();
@@ -59,7 +58,7 @@ describe("subagent v2 profile configuration and resolution", () => {
           scout: { model: "parent", effort: "default" },
           worker: [
             { model: "pi/openai/gpt-review", effort: "medium" },
-            { model: "claude-cli/sonnet", effort: "high" },
+            { model: "parent", effort: "high" },
           ],
           reviewer: "disabled",
         },
@@ -71,7 +70,7 @@ describe("subagent v2 profile configuration and resolution", () => {
       scout: { model: "parent", effort: "default" },
       worker: [
         { model: "pi/openai/gpt-review", effort: "medium" },
-        { model: "claude-cli/sonnet", effort: "high" },
+        { model: "parent", effort: "high" },
       ],
       reviewer: "disabled",
     });
@@ -81,7 +80,6 @@ describe("subagent v2 profile configuration and resolution", () => {
     expect(isCanonicalProfileModelSelector("parent")).toBe(true);
     expect(isCanonicalProfileModelSelector("pi/openai/gpt-5.6-sol")).toBe(true);
     expect(isCanonicalProfileModelSelector("pi/fireworks/accounts/team/models/model")).toBe(true);
-    expect(isCanonicalProfileModelSelector("claude-cli/claude-opus-5-20260115")).toBe(true);
     for (const selector of [
       "openai/gpt-5",
       "pi/gpt-5",
@@ -89,6 +87,7 @@ describe("subagent v2 profile configuration and resolution", () => {
       "pi/openai/../gpt-5",
       "pi/openai/model\u001b",
       `pi/openai/${"x".repeat(300)}`,
+      "claude-cli/claude-opus-5-20260115",
       "claude-cli/not-claude",
     ])
       expect(isCanonicalProfileModelSelector(selector)).toBe(false);
@@ -268,88 +267,57 @@ describe("subagent v2 profile configuration and resolution", () => {
     });
   });
 
-  it("resolves omitted context per candidate while keeping explicit context hard", () => {
-    const claudeOracle = resolved(
-      document({ profiles: { oracle: { model: "claude-cli/sonnet", effort: "high" } } }),
+  it("requires fork availability for Pi oracle routes and honors explicit fresh context", () => {
+    const oracle = resolved(
+      document({ profiles: { oracle: { model: "parent", effort: "high" } } }),
     );
-    expect(resolveProfilePlan("oracle", claudeOracle, environment)).toMatchObject({
+    expect(resolveProfilePlan("oracle", oracle, environment)).toMatchObject({
       kind: "resolved",
       preferredContext: "fork",
-      attempts: [{ backend: "claude-cli", effectiveContext: "fresh" }],
+      attempts: [{ backend: "pi", effectiveContext: "fork" }],
     });
-    expect(resolveProfilePlan("oracle", claudeOracle, environment, "fork")).toMatchObject({
-      kind: "failed",
-      code: "profile_no_eligible_model",
-      skippedCandidates: [{ code: "claude_context_unsupported" }],
-    });
-    expect(resolveProfilePlan("oracle", claudeOracle, environment, "fresh")).toMatchObject({
-      kind: "resolved",
-      preferredContext: "fresh",
-      attempts: [{ effectiveContext: "fresh" }],
-    });
-
-    const mixed = resolved(
-      document({
-        profiles: {
-          oracle: [
-            { model: "parent", effort: "default" },
-            { model: "claude-cli/sonnet", effort: "high" },
-          ],
-        },
-      }),
-    );
-    const withoutFork = { ...environment, forkAvailable: false };
-    expect(resolveProfilePlan("oracle", mixed, withoutFork)).toMatchObject({
-      kind: "resolved",
-      preferredContext: "fork",
-      attempts: [
-        {
-          backend: "claude-cli",
-          candidateIndex: 1,
-          effectiveContext: "fresh",
-          skippedBefore: [{ candidateIndex: 0, code: "fork_context_unavailable" }],
-        },
-      ],
-    });
-    expect(resolveProfilePlan("oracle", mixed, environment, "fork")).toMatchObject({
-      kind: "resolved",
-      attempts: [
-        {
-          backend: "pi",
-          candidateIndex: 0,
-          effectiveContext: "fork",
-        },
-      ],
-      trailingSkippedCandidates: [{ candidateIndex: 1, code: "claude_context_unsupported" }],
-    });
-    expect(resolveProfilePlan("oracle", resolved(), withoutFork)).toMatchObject({
+    expect(
+      resolveProfilePlan("oracle", oracle, { ...environment, forkAvailable: false }),
+    ).toMatchObject({
       kind: "failed",
       code: "fork_context_unavailable",
       skippedCandidates: [{ code: "fork_context_unavailable" }],
     });
-  });
-
-  it("retains Claude trust and effort rules after context adaptation", () => {
-    const fresh = resolved(
-      document({ profiles: { worker: { model: "claude-cli/sonnet", effort: "off" } } }),
-    );
-    expect(resolveProfilePlan("worker", fresh, environment)).toMatchObject({
-      kind: "failed",
-      skippedCandidates: [{ code: "claude_effort_unsupported" }],
+    expect(resolveProfilePlan("oracle", oracle, environment, "fresh")).toMatchObject({
+      kind: "resolved",
+      preferredContext: "fresh",
+      attempts: [{ backend: "pi", effectiveContext: "fresh" }],
     });
   });
 
-  it("accepts only declared v2 and marks v1/malformed versions unsupported", () => {
-    expect(decodeSubagentConfig({ version: 2 }, "global").unsupportedVersion).toBe(false);
+  it("rejects legacy Claude routes as whole invalid Pi-only routes", () => {
+    const decoded = decodeSubagentConfig(
+      document({
+        profiles: {
+          reviewer: [
+            { model: "pi/openai/gpt-review", effort: "high" },
+            { model: "claude-cli/sonnet", effort: "high" },
+          ],
+        },
+      }),
+      "global",
+    );
+    expect(decoded.invalidProfileRoutes).toEqual(["reviewer"]);
+    expect(decoded.file.profiles).toBeUndefined();
+    expect(decoded.diagnostics).toContain("global.profiles.reviewer[1]");
+  });
+
+  it("accepts only declared v3 and marks older or malformed versions unsupported", () => {
+    expect(decodeSubagentConfig({ version: 3 }, "global").unsupportedVersion).toBe(false);
     expect(decodeSubagentConfig({}, "global").unsupportedVersion).toBe(true);
-    for (const version of [1, "2", null, false, 2.5]) {
+    for (const version of [1, 2, "3", null, false, 3.5]) {
       const decoded = decodeSubagentConfig({ version }, "global");
       expect(decoded.unsupportedVersion).toBe(true);
       expect(decoded.diagnostics).toContain("global.version");
     }
   });
 
-  it("logs path-safe diagnostics from the loaded v2 configuration", async () => {
+  it("logs path-safe diagnostics from the loaded v3 configuration", async () => {
     const captured = makeCapturedLogger();
     const config = resolved(document({ discouraged: "not-an-array" }));
     const store = Layer.succeed(SubagentConfigStore, {

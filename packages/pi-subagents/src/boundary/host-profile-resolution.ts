@@ -1,13 +1,11 @@
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/coordination.ts";
-import { InvalidSubagentRequestError, type SubagentProcessError } from "../run/errors.ts";
+import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
 import {
   decodeSubagentEffort,
-  isClaudeModelSelector,
   type StartSubagentRequest,
   type SubagentBackend,
   type SubagentContextMode,
@@ -22,7 +20,6 @@ import {
 } from "../profiles/model.ts";
 import type { ProfileCandidateAttempt, ProfileResolutionEnvironment } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
-import { ensureClaudeCliReady } from "./claude-preflight.ts";
 
 export interface SubagentProfileStartSpec {
   readonly task: string;
@@ -38,14 +35,6 @@ export interface SubagentSessionEnvironment {
   readonly cwd: string;
   readonly projectTrusted: boolean;
 }
-
-export interface SubagentStartBoundaries {
-  readonly ensureClaudeReady: () => Effect.Effect<void, SubagentProcessError>;
-}
-
-export const liveSubagentStartBoundaries: SubagentStartBoundaries = {
-  ensureClaudeReady: ensureClaudeCliReady,
-};
 
 const stableParentLeaf = (ctx: ExtensionContext): string | undefined => {
   const leaf = ctx.sessionManager.getLeafEntry();
@@ -146,7 +135,7 @@ interface ResolvedConcreteModel {
 
 /**
  * Host thinking levels arrive untyped. Unknown or malformed values clamp to the shared "high"
- * inheritance default so an unrecognized level is never forwarded to a Pi or Claude child.
+ * inheritance default so an unrecognized level is never forwarded to a Pi child.
  */
 const inheritedParentEffort = (pi: ExtensionAPI): SubagentEffort =>
   decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
@@ -154,7 +143,6 @@ const inheritedParentEffort = (pi: ExtensionAPI): SubagentEffort =>
 export const hostProfileEnvironment = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  projectTrusted: boolean,
 ): ProfileResolutionEnvironment => ({
   availablePiModels: ctx.modelRegistry.getAvailable().map((model) => ({
     provider: model.provider,
@@ -169,50 +157,24 @@ export const hostProfileEnvironment = (
         },
       }
     : {}),
-  projectTrusted,
   forkAvailable: Boolean(ctx.sessionManager.getSessionFile() && stableParentLeaf(ctx)),
 });
 
 const resolveConcreteModel = (
-  backend: SubagentBackend,
   selector: string | undefined,
   effort: SubagentEffort,
   effortWasExplicit: boolean,
-  projectTrusted: boolean,
   ctx: ExtensionContext,
   isPiModelDenied: (model: string) => boolean,
 ): Effect.Effect<ResolvedConcreteModel, InvalidSubagentRequestError> =>
-  Effect.gen(function* () {
-    if (backend === "pi") {
-      const resolved = yield* resolvePiModel(
-        selector,
-        effort,
-        effortWasExplicit,
-        ctx,
-        isPiModelDenied,
-      );
-      return { backend, ...resolved, effort, effortWasExplicit };
-    }
-    if (!projectTrusted)
-      return yield* new InvalidSubagentRequestError({
-        code: "claude_untrusted",
-        message:
-          "Claude CLI subagents require a trusted project because claude -p skips its trust dialog.",
-      });
-    if (effortWasExplicit && (effort === "off" || effort === "minimal"))
-      return yield* new InvalidSubagentRequestError({
-        code: "claude_effort_unsupported",
-        message: `Claude CLI does not support effort ${effort}; use low through max.`,
-      });
-    const requested = selector?.trim() || "sonnet";
-    if (!isClaudeModelSelector(requested))
-      return yield* new InvalidSubagentRequestError({
-        code: "claude_model_invalid",
-        message:
-          'The profile route must use Claude model fable, sonnet, opus, haiku, or a full model ID beginning with "claude" (at most 128 characters).',
-      });
-    return { backend, model: requested, effort, effortWasExplicit };
-  });
+  resolvePiModel(selector, effort, effortWasExplicit, ctx, isPiModelDenied).pipe(
+    Effect.map((resolved) => ({
+      backend: "pi" as const,
+      ...resolved,
+      effort,
+      effortWasExplicit,
+    })),
+  );
 
 const dynamicCandidateSkip = (
   attempt: ProfileCandidateAttempt,
@@ -230,7 +192,6 @@ export const resolveProfileStart = (
   rawInput: SubagentProfileStartSpec,
   ctx: ExtensionContext,
   environment: SubagentSessionEnvironment,
-  boundaries: SubagentStartBoundaries,
 ): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError, SubagentProfileService> =>
   Effect.gen(function* () {
     const profiles = yield* SubagentProfileService;
@@ -270,24 +231,12 @@ export const resolveProfileStart = (
     const parentSessionFile = ctx.sessionManager.getSessionFile();
     const parentLeafId = stableParentLeaf(ctx);
 
-    let claudeReadiness: Exit.Exit<void, SubagentProcessError> | undefined;
-    const ensureClaudeReady = (): Effect.Effect<void, SubagentProcessError> =>
-      claudeReadiness ??
-      boundaries.ensureClaudeReady().pipe(
-        Effect.exit,
-        Effect.tap((exit) =>
-          Effect.sync(() => {
-            claudeReadiness = exit;
-          }),
-        ),
-        Effect.flatMap((exit) => exit),
-      );
     const isPiModelDenied = (model: string): boolean =>
       profiles.policyFor("pi", model) === "denied";
     const profile = definition.id;
     const plan = profiles.resolve(
       profile,
-      hostProfileEnvironment(pi, ctx, projectTrusted),
+      hostProfileEnvironment(pi, ctx),
       input.context,
       input.effort,
     );
@@ -324,21 +273,13 @@ export const resolveProfileStart = (
       const effort = input.effort ?? attempt.effort;
       const effortWasExplicit = input.effort !== undefined || attempt.effortWasExplicit;
       const concreteAttempt = resolveConcreteModel(
-        attempt.backend,
         attempt.model,
         effort,
         effortWasExplicit,
-        projectTrusted,
         ctx,
         isPiModelDenied,
       );
-      // Pure backend/model/effort checks must reject before an executable/auth probe is run.
       return concreteAttempt.pipe(
-        Effect.flatMap((resolved) =>
-          attempt.backend === "claude-cli"
-            ? ensureClaudeReady().pipe(Effect.as(resolved))
-            : Effect.succeed(resolved),
-        ),
         Effect.matchEffect({
           onFailure: (error) =>
             tryAttempt(index + 1, [
@@ -392,13 +333,10 @@ export const resolveProfileStart = (
       ...(concrete.runtimeApiKey ? { runtimeApiKey: concrete.runtimeApiKey } : {}),
       effort: concrete.effort,
       effortWasExplicit: concrete.effortWasExplicit,
-      activeTools:
-        concrete.backend === "pi"
-          ? piToolsForWriteIntent(
-              pi.getActiveTools().filter((name) => !ORCHESTRATION_TOOL_DENYLIST.has(name)),
-              input.writeIntent,
-            )
-          : [],
+      activeTools: piToolsForWriteIntent(
+        pi.getActiveTools().filter((name) => !ORCHESTRATION_TOOL_DENYLIST.has(name)),
+        input.writeIntent,
+      ),
       projectTrusted,
       parentSessionId: ctx.sessionManager.getSessionId(),
       ...(parentSessionFile ? { parentSessionFile } : {}),

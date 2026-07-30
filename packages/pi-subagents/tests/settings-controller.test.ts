@@ -12,7 +12,7 @@ import {
   type FleetManagerActions,
 } from "../src/settings/controller.ts";
 
-const globalDocument = { version: 2 };
+const globalDocument = { version: 3 };
 const inspection = (
   global: Record<string, unknown> = globalDocument,
   project?: Record<string, unknown>,
@@ -151,17 +151,17 @@ describe("/subagents command and profile settings", () => {
   it("keeps global summaries scoped when a project route overrides them", () => {
     const value = inspection(
       {
-        version: 2,
-        profiles: { reviewer: { model: "claude-cli/fable", effort: "medium" } },
+        version: 3,
+        profiles: { reviewer: { model: "pi/openai/reviewer", effort: "medium" } },
       },
       {
-        version: 2,
+        version: 3,
         profiles: { reviewer: { model: "pi/openai-codex/gpt-5.6-sol", effort: "xhigh" } },
       },
     );
 
     expect(_profileSettingsTest.profileSummary(value, "global", "reviewer")).toBe(
-      "reviewer · global · claude-cli/fable · medium",
+      "reviewer · global · pi/openai/reviewer · medium",
     );
     expect(_profileSettingsTest.profileSummary(value, "project", "reviewer")).toBe(
       "reviewer · project · pi/openai-codex/gpt-5.6-sol · xhigh",
@@ -264,7 +264,7 @@ describe("/subagents command and profile settings", () => {
 
   it("protects existing ordered routes as read-only", async () => {
     const value = inspection({
-      version: 2,
+      version: 3,
       profiles: {
         worker: [
           { model: "pi/openai/one", effort: "low" },
@@ -289,7 +289,7 @@ describe("/subagents command and profile settings", () => {
   it("keeps an inherited global ordered route editable from project scope", async () => {
     const value = inspection(
       {
-        version: 2,
+        version: 3,
         profiles: {
           worker: [
             { model: "pi/openai/one", effort: "low" },
@@ -297,7 +297,7 @@ describe("/subagents command and profile settings", () => {
           ],
         },
       },
-      { version: 2 },
+      { version: 3 },
     );
     expect(_profileSettingsTest.currentSelectorFor(value, "project", "worker")).toBe("inherit");
     const managerActions = actions(value);
@@ -330,9 +330,9 @@ describe("/subagents command and profile settings", () => {
 
   it("keeps project-declared ordered routes read-only and names the project document", async () => {
     const value = inspection(
-      { version: 2 },
+      { version: 3 },
       {
-        version: 2,
+        version: 3,
         profiles: {
           worker: [
             { model: "pi/openai/one", effort: "low" },
@@ -360,8 +360,8 @@ describe("/subagents command and profile settings", () => {
 
   it("marks a malformed project route invalid instead of current inherit and lets inherit remove it", async () => {
     const value = inspection(
-      { version: 2 },
-      { version: 2, profiles: { worker: { model: "bare", effort: "high" } } },
+      { version: 3 },
+      { version: 3, profiles: { worker: { model: "bare", effort: "high" } } },
     );
     expect(value.project?.invalidProfileRoutes).toEqual(["worker"]);
     expect(_profileSettingsTest.currentSelectorFor(value, "project", "worker")).toBeUndefined();
@@ -391,7 +391,7 @@ describe("/subagents command and profile settings", () => {
 
   it("mirrors invalid fail-closed handling for a malformed global route", () => {
     const value = inspection({
-      version: 2,
+      version: 3,
       profiles: { worker: { model: "bare", effort: "high" } },
     });
     expect(value.global.invalidProfileRoutes).toEqual(["worker"]);
@@ -415,11 +415,7 @@ describe("/subagents command and profile settings", () => {
     const efforts = _profileSettingsTest.effortPickerOptions(plain?.supportedEfforts ?? []);
     expect(efforts[0]).toEqual({ label: "Profile default", effort: "default" });
     expect(efforts.map((entry) => entry.effort)).toEqual(["default", "off"]);
-    const claudeDescription = choices.find((choice) => choice.item.value === "claude-cli/sonnet")
-      ?.item.description;
-    expect(claudeDescription).toContain("fresh context only");
-    expect(claudeDescription).toContain("an omitted fork preference adapts to fresh");
-    expect(claudeDescription).toContain("launch readiness checked only when starting");
+    expect(choices.some((choice) => choice.item.value.startsWith("claude-cli/"))).toBe(false);
   });
 
   it("stages disabled, saves once, and declining reload explains next application", async () => {
@@ -478,9 +474,9 @@ describe("/subagents command and profile settings", () => {
 
   it("removes a project profile declaration when Inherit global is selected", async () => {
     const value = inspection(
-      { version: 2 },
+      { version: 3 },
       {
-        version: 2,
+        version: 3,
         profiles: { worker: { model: "pi/openai/parent", effort: "high" } },
       },
     );
@@ -508,7 +504,7 @@ describe("/subagents command and profile settings", () => {
 
   it("requires explicit confirmation before saving a discouraged model", async () => {
     const value = inspection({
-      version: 2,
+      version: 3,
       discouraged: [{ backend: "pi", model: "zai/plain" }],
     });
     const worker = _profileSettingsTest.profileSummary(value, "global", "worker");

@@ -1,12 +1,6 @@
 import { modelPolicyFor, type ResolvedSubagentConfig } from "../config/options.ts";
 import { resolvePiModelSelector, type PiCatalogModel } from "../run/model-catalog.ts";
-import {
-  backendSupportsContext,
-  isClaudeModelSelector,
-  type SubagentBackend,
-  type SubagentContextMode,
-  type SubagentEffort,
-} from "../run/model.ts";
+import type { SubagentBackend, SubagentContextMode, SubagentEffort } from "../run/model.ts";
 import { profileDefinition } from "./definitions.ts";
 import {
   isProfileId,
@@ -24,7 +18,6 @@ export interface ParentProfileModel {
 export interface ProfileResolutionEnvironment {
   readonly availablePiModels: ReadonlyArray<PiCatalogModel>;
   readonly parentModel?: ParentProfileModel | undefined;
-  readonly projectTrusted: boolean;
   readonly forkAvailable: boolean;
 }
 
@@ -126,38 +119,12 @@ interface CandidateContextResolution {
 }
 
 const resolveCandidateContext = (
-  backend: SubagentBackend,
   preferredContext: SubagentContextMode,
-  contextWasExplicit: boolean,
   environment: ProfileResolutionEnvironment,
   label: string,
   candidateIndex: number,
 ): CandidateContextResolution => {
-  let effectiveContext = preferredContext;
-  if (!backendSupportsContext(backend, preferredContext)) {
-    if (contextWasExplicit)
-      return {
-        skipped: skip(
-          label,
-          backend === "claude-cli" ? "claude_context_unsupported" : "context_unsupported",
-          backend === "claude-cli"
-            ? "Claude CLI candidates cannot use forked Pi context."
-            : `Backend ${backend} does not support ${preferredContext} context.`,
-          candidateIndex,
-        ),
-      };
-    if (!backendSupportsContext(backend, "fresh"))
-      return {
-        skipped: skip(
-          label,
-          "context_unsupported",
-          `Backend ${backend} supports neither the profile's ${preferredContext} context preference nor fresh context.`,
-          candidateIndex,
-        ),
-      };
-    effectiveContext = "fresh";
-  }
-  if (effectiveContext === "fork" && !environment.forkAvailable)
+  if (preferredContext === "fork" && !environment.forkAvailable)
     return {
       skipped: skip(
         label,
@@ -166,7 +133,7 @@ const resolveCandidateContext = (
         candidateIndex,
       ),
     };
-  return { effectiveContext };
+  return { effectiveContext: preferredContext };
 };
 
 const resolveCandidate = (
@@ -174,7 +141,6 @@ const resolveCandidate = (
   candidate: ProfileCandidate,
   candidateIndex: number,
   preferredContext: SubagentContextMode,
-  contextWasExplicit: boolean,
   config: ResolvedSubagentConfig,
   environment: ProfileResolutionEnvironment,
   profileDefaultEffort: SubagentEffort | undefined,
@@ -184,11 +150,8 @@ const resolveCandidate = (
   const configuredEffort = candidate.effort === "default" ? undefined : candidate.effort;
   const hardEffort = effortOverride ?? configuredEffort;
   const selectedEffort = hardEffort ?? softEffort(profileDefaultEffort, environment.parentModel);
-  const backend: SubagentBackend = candidate.model.startsWith("claude-cli/") ? "claude-cli" : "pi";
   const contextResolution = resolveCandidateContext(
-    backend,
     preferredContext,
-    contextWasExplicit,
     environment,
     label,
     candidateIndex,
@@ -242,55 +205,6 @@ const resolveCandidate = (
         effort: selectedEffort,
         effortWasExplicit: hardEffort !== undefined,
         reason: `Profile ${profile} selected parent candidate ${candidateIndex + 1}.`,
-      },
-    };
-  }
-
-  if (candidate.model.startsWith("claude-cli/")) {
-    const model = candidate.model.slice("claude-cli/".length);
-    if (!environment.projectTrusted)
-      return {
-        skipped: skip(
-          label,
-          "claude_untrusted",
-          "Claude CLI candidates require a trusted project.",
-          candidateIndex,
-        ),
-      };
-    if (!isClaudeModelSelector(model))
-      return {
-        skipped: skip(
-          label,
-          "claude_model_invalid",
-          "Candidate is not a valid Claude alias or full Claude model ID.",
-          candidateIndex,
-        ),
-      };
-    if (hardEffort === "off" || hardEffort === "minimal")
-      return {
-        skipped: skip(
-          label,
-          "claude_effort_unsupported",
-          `Claude CLI does not support effort ${hardEffort}.`,
-          candidateIndex,
-        ),
-      };
-    const policySkip = automaticPolicySkip(config, "claude-cli", model, label, candidateIndex);
-    if (policySkip) return { skipped: policySkip };
-    const effort =
-      hardEffort ??
-      (selectedEffort === "off" || selectedEffort === "minimal" ? "low" : selectedEffort);
-    return {
-      attempt: {
-        profile,
-        source: "profile-candidate",
-        candidateIndex,
-        backend: "claude-cli",
-        model,
-        effectiveContext,
-        effort,
-        effortWasExplicit: hardEffort !== undefined,
-        reason: `Profile ${profile} selected configured candidate ${candidateIndex + 1}.`,
       },
     };
   }
@@ -354,7 +268,6 @@ export function resolveProfilePlan(
     };
   const definition = profileDefinition(requestedProfile);
   const preferredContext = contextOverride ?? definition.defaultContext;
-  const contextWasExplicit = contextOverride !== undefined;
   const route = config.profiles[requestedProfile];
   if (route.candidates.length === 0) {
     const source = config.profileSources[requestedProfile];
@@ -379,7 +292,6 @@ export function resolveProfilePlan(
       candidate,
       candidateIndex,
       preferredContext,
-      contextWasExplicit,
       config,
       environment,
       definition.defaultEffort,

@@ -4,7 +4,6 @@ import { DynamicBorder, type ExtensionCommandContext } from "@earendil-works/pi-
 import { fuzzyFilter, Input, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import type { ModelPolicy } from "../../config/options.ts";
 import type { ProfileCandidateEffort, ProfileId } from "../../profiles/model.ts";
-import { CLAUDE_CLI_ALIAS_MODELS } from "../../run/model-catalog.ts";
 import type { SubagentEffort } from "../../run/model.ts";
 
 export type ProfileModelChoice =
@@ -28,7 +27,7 @@ export function createProfileModelChoices(input: {
   readonly parentModel?: Model<Api> | undefined;
   readonly currentSelector?: string | undefined;
   readonly projectScope: boolean;
-  readonly policyFor: (backend: "pi" | "claude-cli", model: string) => ModelPolicy;
+  readonly policyFor: (backend: "pi", model: string) => ModelPolicy;
 }): ProfileModelPickerChoice[] {
   const result: ProfileModelPickerChoice[] = [];
   if (input.projectScope)
@@ -74,29 +73,6 @@ export function createProfileModelChoices(input: {
       },
       searchText: `${canonical} ${model.name ?? ""}`,
       supportedEfforts: efforts,
-    });
-  }
-  const claudeSelectors = new Set(
-    input.currentSelector?.startsWith("claude-cli/")
-      ? [
-          ...CLAUDE_CLI_ALIAS_MODELS.map((model) => model.id),
-          input.currentSelector.slice("claude-cli/".length),
-        ]
-      : CLAUDE_CLI_ALIAS_MODELS.map((model) => model.id),
-  );
-  for (const id of claudeSelectors) {
-    const policy = input.policyFor("claude-cli", id);
-    if (policy === "denied") continue;
-    const selector = `claude-cli/${id}`;
-    result.push({
-      choice: { kind: "model", selector, policy },
-      item: {
-        value: selector,
-        label: `${selector}${input.currentSelector === selector ? " (current)" : ""}`,
-        description: `reasoning · efforts: low, medium, high, xhigh, max · fresh context only · an omitted fork preference adapts to fresh · requires a trusted project · launch readiness checked only when starting${policy === "discouraged" ? " · discouraged" : ""}`,
-      },
-      searchText: `${selector} claude cli`,
-      supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
     });
   }
   result.push({
