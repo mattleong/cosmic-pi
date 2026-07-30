@@ -3,7 +3,7 @@ import { Type, type Static } from "typebox";
 import { HERDR_AGENT_KINDS } from "../herd/model.ts";
 
 const NONBLANK_PATTERN = String.raw`\s*\S[\s\S]*`;
-const MODEL_PATTERN = String.raw`^(?!-)[^\u0000-\u001f\u007f]+$`;
+const MODEL_PATTERN = String.raw`^[^-\u0000-\u001f\u007f][^\u0000-\u001f\u007f]*$`;
 
 const RunIds = Type.Array(
   Type.String({
