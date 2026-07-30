@@ -56,12 +56,22 @@ const baseSnapshot = (): HerdrSnapshot => ({
   layouts: [],
 });
 
-const fixture = (options: { readonly busyStarts?: number } = {}) => {
+const fixture = (
+  options: {
+    readonly busyStarts?: number;
+    readonly focusOnStart?: boolean;
+    readonly kindMismatchStarts?: number;
+  } = {},
+) => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdr-service-"));
   roots.push(root);
   let snapshot = baseSnapshot();
   let closeCalls = 0;
+  let splitCalls = 0;
   let startAttempts = 0;
+  let prepareCount = 0;
+  let nextPaneOrdinal = 3;
+  let lastStartedPaneId: string | undefined;
   let report: HerdrReport | undefined;
   const focusCalls: string[] = [];
   const saved: PersistedHerdrProject[] = [];
@@ -103,28 +113,37 @@ const fixture = (options: { readonly busyStarts?: number } = {}) => {
         };
         return { tab, rootPane };
       }),
-    splitPane: (_paneId, cwd) =>
+    splitPane: (sourcePaneId, cwd) =>
       Effect.sync(() => {
+        splitCalls += 1;
+        const source = snapshot.panes.find((pane) => pane.paneId === sourcePaneId);
+        if (!source) throw new Error("missing split source");
+        const paneId = `w1:p${nextPaneOrdinal++}`;
         const pane = {
-          paneId: "w1:p3",
-          terminalId: "term-agent",
-          workspaceId: "w1",
-          tabId: "w1:t2",
+          paneId,
+          terminalId: `term-${paneId}`,
+          workspaceId: source.workspaceId,
+          tabId: source.tabId,
           cwd,
           focused: false,
           agentStatus: "idle" as const,
         };
+        const tabPanes = [
+          ...snapshot.panes.filter((candidate) => candidate.tabId === source.tabId),
+          pane,
+        ];
         snapshot = {
           ...snapshot,
           panes: [...snapshot.panes, pane],
           layouts: [
             {
-              workspaceId: "w1",
-              tabId: "w1:t2",
-              panes: [
-                { paneId: "w1:p2", width: 60, height: 40 },
-                { paneId: "w1:p3", width: 60, height: 40 },
-              ],
+              workspaceId: source.workspaceId,
+              tabId: source.tabId,
+              panes: tabPanes.map((candidate) => ({
+                paneId: candidate.paneId,
+                width: 60,
+                height: 40,
+              })),
             },
           ],
         };
@@ -141,13 +160,24 @@ const fixture = (options: { readonly busyStarts?: number } = {}) => {
             message: "agent target pane is not an available shell",
           }),
         );
+      if (startAttempts <= (options.kindMismatchStarts ?? 0))
+        return Effect.fail(
+          new HerdrCommandError({
+            operation: "start Claude Code",
+            code: "agent_kind_mismatch",
+            message: "expected Claude, detected Codex",
+          }),
+        );
       return Effect.sync(() => {
+        const ownedPane = snapshot.panes.find((pane) => pane.paneId === paneId);
+        if (!ownedPane) throw new Error("missing fake agent pane");
+        lastStartedPaneId = paneId;
         const agent = {
           paneId,
-          terminalId: "term-agent",
-          workspaceId: "w1",
-          tabId: "w1:t2",
-          cwd: "/repo",
+          terminalId: ownedPane.terminalId,
+          workspaceId: ownedPane.workspaceId,
+          tabId: ownedPane.tabId,
+          cwd: ownedPane.cwd ?? "/repo",
           focused: false,
           agentStatus: "idle" as const,
           name,
@@ -155,7 +185,21 @@ const fixture = (options: { readonly busyStarts?: number } = {}) => {
           stateChangeSeq: 1,
           interactiveReady: true,
         };
-        snapshot = { ...snapshot, agents: [agent] };
+        snapshot = {
+          ...snapshot,
+          ...(options.focusOnStart
+            ? { focusedTabId: agent.tabId, focusedPaneId: agent.paneId }
+            : {}),
+          tabs: snapshot.tabs.map((tab) => ({
+            ...tab,
+            focused: options.focusOnStart ? tab.tabId === agent.tabId : tab.focused,
+          })),
+          panes: snapshot.panes.map((candidate) => ({
+            ...candidate,
+            focused: options.focusOnStart ? candidate.paneId === agent.paneId : candidate.focused,
+          })),
+          agents: [...snapshot.agents.filter((candidate) => candidate.name !== name), agent],
+        };
         return agent;
       });
     },
@@ -164,7 +208,12 @@ const fixture = (options: { readonly busyStarts?: number } = {}) => {
         const current = snapshot.agents.find((agent) => agent.name === target);
         if (!current) throw new Error("missing fake agent");
         const agent = { ...current, agentStatus: "working" as const, stateChangeSeq: 2 };
-        snapshot = { ...snapshot, agents: [agent] };
+        snapshot = {
+          ...snapshot,
+          agents: snapshot.agents.map((candidate) =>
+            candidate.name === target ? agent : candidate,
+          ),
+        };
         return agent;
       }),
     listAgents: Effect.sync(() => snapshot.agents),
@@ -185,6 +234,7 @@ const fixture = (options: { readonly busyStarts?: number } = {}) => {
             ...pane,
             focused: pane.paneId === focusedPane?.paneId,
           })),
+          agents: snapshot.agents.filter((agent) => agent.paneId !== paneId),
         };
       }),
     focusTab: (tabId) =>
@@ -205,12 +255,16 @@ const fixture = (options: { readonly busyStarts?: number } = {}) => {
     focusAgent: () => Effect.void,
   };
   const reports: ReportChannelShape = {
-    prepare: Effect.succeed({
-      runId: "herdr-test-run",
-      agentName: "pih-test-run",
-      generation: "herdr-test-run",
-      directory: "/private/run",
-      mcpConfigPath: "/private/run/mcp.json",
+    prepare: Effect.sync(() => {
+      prepareCount += 1;
+      const suffix = prepareCount === 1 ? "" : `-${prepareCount}`;
+      return {
+        runId: `herdr-test-run${suffix}`,
+        agentName: `pih-test-run${suffix}`,
+        generation: `herdr-test-run${suffix}`,
+        directory: `/private/run${suffix}`,
+        mcpConfigPath: `/private/run${suffix}/mcp.json`,
+      };
     }),
     read: () => Effect.succeed(report),
     remove: () => Effect.void,
@@ -235,8 +289,14 @@ const fixture = (options: { readonly busyStarts?: number } = {}) => {
     layer,
     saved,
     closeCalls: () => closeCalls,
+    splitCalls: () => splitCalls,
     managedTabExists: () => snapshot.tabs.some((tab) => tab.label === "pi-herdr · Claude"),
     managedPaneCount: () => snapshot.panes.filter((pane) => pane.tabId === "w1:t2").length,
+    managedBlankPaneCount: () =>
+      snapshot.panes.filter(
+        (pane) =>
+          pane.tabId === "w1:t2" && !snapshot.agents.some((agent) => agent.paneId === pane.paneId),
+      ).length,
     focusCalls: () => [...focusCalls],
     startAttempts: () => startAttempts,
     completeReport: () => {
@@ -247,14 +307,27 @@ const fixture = (options: { readonly busyStarts?: number } = {}) => {
         submittedAt: 2_000,
       };
     },
+    settleLastAgentWithoutReport: () => {
+      snapshot = {
+        ...snapshot,
+        agents: snapshot.agents.map((agent) =>
+          agent.paneId === lastStartedPaneId
+            ? { ...agent, agentStatus: "done", stateChangeSeq: agent.stateChangeSeq + 1 }
+            : agent,
+        ),
+      };
+    },
     removeAgentPane: () => {
-      snapshot = { ...snapshot, panes: snapshot.panes.filter((pane) => pane.paneId !== "w1:p3") };
+      snapshot = {
+        ...snapshot,
+        panes: snapshot.panes.filter((pane) => pane.paneId !== lastStartedPaneId),
+      };
     },
     replaceAgentTerminal: () => {
       snapshot = {
         ...snapshot,
         panes: snapshot.panes.map((pane) =>
-          pane.paneId === "w1:p3" ? { ...pane, terminalId: "foreign-terminal" } : pane,
+          pane.paneId === lastStartedPaneId ? { ...pane, terminalId: "foreign-terminal" } : pane,
         ),
       };
     },
@@ -276,7 +349,7 @@ describe("HerdrService", () => {
               agentName: "pih-test-run",
               workspaceId: "w1",
               tabId: "w1:t2",
-              paneId: "w1:p3",
+              paneId: "w1:p2",
               state: "working",
             });
             return started;
@@ -289,10 +362,61 @@ describe("HerdrService", () => {
           anchorPaneId: "w1:p2",
         });
         expect(test.closeCalls()).toBe(0);
+        expect(test.splitCalls()).toBe(0);
+        expect(test.managedBlankPaneCount()).toBe(0);
       }),
   );
 
-  it.effect("retries a newly split pane until its shell becomes available", () =>
+  it.effect("uses the root pane first and splits only for additional agents", () =>
+    Effect.gen(function* () {
+      const test = fixture();
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* HerdrService;
+          const first = yield* service.start({ task: "Review auth" });
+          const second = yield* service.start({ task: "Review config" });
+          expect(first.paneId).toBe("w1:p2");
+          expect(second.paneId).toBe("w1:p3");
+          expect(test.splitCalls()).toBe(1);
+          expect(test.managedPaneCount()).toBe(2);
+          expect(test.managedBlankPaneCount()).toBe(0);
+        }).pipe(Effect.provide(test.layer)),
+      );
+    }),
+  );
+
+  it.effect("restores focus if starting in the root pane activates the managed tab", () =>
+    Effect.gen(function* () {
+      const test = fixture({ focusOnStart: true });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* HerdrService;
+          yield* service.start({ task: "Review auth" });
+          expect(test.focusCalls()).toEqual(["w1:t1"]);
+        }).pipe(Effect.provide(test.layer)),
+      );
+    }),
+  );
+
+  it.effect("replaces and retries a pane after transient agent kind misdetection", () =>
+    Effect.gen(function* () {
+      const test = fixture({ kindMismatchStarts: 1 });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* HerdrService;
+          const started = yield* service.start({ task: "Review auth" });
+          expect(test.startAttempts()).toBe(2);
+          expect(started.state).toBe("working");
+          expect(test.startAttempts()).toBe(2);
+          expect(test.closeCalls()).toBe(1);
+          expect(test.splitCalls()).toBe(1);
+          expect(test.managedBlankPaneCount()).toBe(0);
+        }).pipe(Effect.provide(test.layer)),
+      );
+    }),
+  );
+
+  it.effect("retries a newly available pane until its shell becomes available", () =>
     Effect.gen(function* () {
       const test = fixture({ busyStarts: 2 });
       yield* Effect.scoped(
@@ -309,7 +433,7 @@ describe("HerdrService", () => {
     }),
   );
 
-  it.effect("retains the managed tab and agent pane after completion", () =>
+  it.effect("closes a reported agent and retains the required replacement shell", () =>
     Effect.gen(function* () {
       const test = fixture();
       yield* Effect.scoped(
@@ -325,7 +449,35 @@ describe("HerdrService", () => {
           }
           expect(completed.report).toBe("done");
           expect(test.managedTabExists()).toBe(true);
-          expect(test.managedPaneCount()).toBe(2);
+          expect(test.managedPaneCount()).toBe(1);
+          expect(test.managedBlankPaneCount()).toBe(1);
+          expect(test.closeCalls()).toBe(1);
+        }).pipe(Effect.provide(test.layer)),
+      );
+    }),
+  );
+
+  it.effect("retains an agent pane when it fails without a durable report", () =>
+    Effect.gen(function* () {
+      const test = fixture();
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* HerdrService;
+          const started = yield* service.start({ task: "Review auth" });
+          test.settleLastAgentWithoutReport();
+          yield* Effect.yieldNow;
+          yield* TestClock.adjust("1 second");
+          for (let index = 0; index < 100; index++) yield* Effect.yieldNow;
+          const observed = yield* service.status(started.id);
+          expect(observed.state).toBe("awaiting_report");
+          yield* Effect.yieldNow;
+          yield* TestClock.adjust("16 seconds");
+          for (let index = 0; index < 100; index++) yield* Effect.yieldNow;
+          const failed = yield* service.status(started.id);
+          expect(failed.state).toBe("failed");
+          expect(failed.report).toBeUndefined();
+          expect(test.managedBlankPaneCount()).toBe(0);
+          expect(test.closeCalls()).toBe(0);
         }).pipe(Effect.provide(test.layer)),
       );
     }),
@@ -343,8 +495,10 @@ describe("HerdrService", () => {
           expect(test.closeCalls()).toBe(1);
           expect(test.managedTabExists()).toBe(true);
           expect(test.managedPaneCount()).toBe(1);
+          expect(test.managedBlankPaneCount()).toBe(1);
           expect(test.focusCalls()).toEqual(["w1:t1"]);
           expect((yield* service.start({ task: "Review auth again" })).state).toBe("working");
+          expect(test.managedBlankPaneCount()).toBe(0);
         }).pipe(Effect.provide(test.layer)),
       );
     }),

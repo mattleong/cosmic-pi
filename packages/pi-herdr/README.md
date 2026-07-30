@@ -17,7 +17,7 @@ Persistent read-only Claude Code delegation for Pi through [Herdr](https://herdr
 - Project access is read-only: Claude receives Read, Glob, Grep, WebFetch, WebSearch, and one private final-report MCP tool. Bash, Edit, Write, notebook mutation, and recursive agent tools are denied.
 - The extension uses the configured Herdr session, otherwise the session inherited by Pi, otherwise Herdr's default session.
 - It reuses one unambiguous workspace matching the Pi cwd. With no unambiguous match it creates an extension-owned workspace without taking focus.
-- On the first agent start, it creates one owned tab named `pi-herdr · Claude` in that workspace, retains its anchor shell, and adds one owned split pane per Claude instance. The managed tab remains open after agents finish, and there is no extension pane-count limit.
+- On the first agent start, it creates one owned tab named `pi-herdr · Claude` and launches Claude in that tab's root pane. Additional agents receive split panes, so there is no unused anchor while agents are present and no extension pane-count limit. After a durable completed or failed report, the agent pane closes automatically; a missing-report failure stays open for inspection. The managed tab remains open, creating the replacement shell Herdr requires when the final reported agent closes.
 - Automatic operations preserve the previously focused user tab. `/herdr` provides deliberate human focus and inspection.
 - Claude processes and panes survive Pi session replacement or shutdown. Pi only owns its monitor fibers and immutable projection.
 - Final reports are submitted through a private per-run stdio MCP helper into the Pi agent directory. Users never manage report files.

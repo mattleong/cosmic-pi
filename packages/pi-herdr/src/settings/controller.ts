@@ -40,11 +40,13 @@ async function openManager(
     if (!selected) return;
     const agent = agents.find((candidate) => label(candidate) === selected);
     if (!agent) continue;
+    const reportedTerminal =
+      agent.report !== undefined && (agent.state === "completed" || agent.state === "failed");
+    const paneAvailable = agent.state !== "stopped" && !reportedTerminal;
     const choices = [
-      "Focus Herdr pane",
-      "Read terminal output",
+      ...(paneAvailable ? ["Focus Herdr pane", "Read terminal output"] : []),
       ...(agent.report ? ["Read final report"] : []),
-      "Stop and close pane",
+      ...(paneAvailable ? ["Stop and close pane"] : []),
       "Back",
     ];
     const action = await ctx.ui.select(`${agent.name} · ${agent.state}`, choices);
