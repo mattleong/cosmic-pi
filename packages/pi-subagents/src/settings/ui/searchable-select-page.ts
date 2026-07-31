@@ -10,7 +10,9 @@ import {
   SelectList,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 
 export interface SearchableSelectPageChoice<A> {
   readonly value: string;
@@ -83,9 +85,17 @@ export class SearchableSelectPage<A> implements Component {
     this.input.focused = value;
   }
 
-  private resolveListHeight(): number {
+  private resolveListHeight(extraReservedRows = 0): number {
     const height = this.options.getHeight();
-    return Math.max(1, height < 10 ? height - 3 : height - 10);
+    return Math.max(1, height < 10 ? height - 3 : height - 10 - extraReservedRows);
+  }
+
+  private resizeList(height: number): void {
+    const next = Math.max(1, height);
+    if (next === this.listHeight) return;
+    const selected = this.selectedChoice();
+    this.listHeight = next;
+    this.list = this.buildList(selected);
   }
 
   private selectedChoice(): SearchableSelectPageChoice<A> | undefined {
@@ -181,32 +191,73 @@ export class SearchableSelectPage<A> implements Component {
     const height = Math.max(0, Math.floor(this.options.getHeight()));
     if (safeWidth === 0 || height === 0) return [];
     if (safeWidth < 4) return Array.from({ length: height }, () => " ".repeat(safeWidth));
-    const nextListHeight = this.resolveListHeight();
-    if (nextListHeight !== this.listHeight) {
-      const selected = this.selectedChoice();
-      this.listHeight = nextListHeight;
-      this.list = this.buildList(selected);
-    }
-
     const theme = this.options.theme;
     const inner = safeWidth - 2;
+    const title = truncateToWidth(` ${this.options.breadcrumb} `, inner, "");
+    const top = `${theme.fg("borderAccent", "╭")}${title}${theme.fg(
+      "borderAccent",
+      `${"─".repeat(Math.max(0, inner - visibleWidth(title)))}╮`,
+    )}`;
+    if (height === 1) return [truncateToWidth(top, safeWidth, "")];
     const activeNotice = this.feedback ?? this.options.notice;
     const body: string[] = [];
     if (height < 10) {
       const bodyHeight = Math.max(0, height - 2);
-      if (bodyHeight >= 3) body.push(theme.fg("accent", theme.bold(this.options.title)));
-      if (bodyHeight >= 2) body.push(...this.input.render(Math.max(1, inner)).slice(0, 1));
-      const remaining = Math.max(0, bodyHeight - body.length);
-      body.push(...this.list.render(inner).slice(0, remaining));
+      const inputLine = this.input.render(Math.max(1, inner)).slice(0, 1);
+      const noticeLine = activeNotice
+        ? theme.fg("warning", truncateToWidth(activeNotice, inner, "…"))
+        : undefined;
+      const compactHeader =
+        bodyHeight <= 0
+          ? []
+          : bodyHeight === 1
+            ? noticeLine
+              ? [noticeLine]
+              : []
+            : bodyHeight === 2
+              ? noticeLine
+                ? [noticeLine]
+                : inputLine
+              : noticeLine
+                ? [...inputLine, noticeLine]
+                : [theme.fg("accent", theme.bold(this.options.title)), ...inputLine];
+      const listRows = Math.max(1, bodyHeight - compactHeader.length);
+      this.resizeList(listRows);
+      body.push(...compactHeader, ...this.list.render(inner).slice(0, listRows));
     } else {
-      body.push(
+      const limitedWrap = (value: string, maximumLines: number): ReadonlyArray<string> => {
+        const lines = wrapTextWithAnsi(value, Math.max(1, inner));
+        if (lines.length <= maximumLines) return lines;
+        const shown = lines.slice(0, maximumLines);
+        shown[maximumLines - 1] = truncateToWidth(`${shown[maximumLines - 1] ?? ""}…`, inner, "");
+        return shown;
+      };
+      const bodyHeight = Math.max(0, height - 2);
+      const metadataBudget = Math.max(1, bodyHeight - 7);
+      const noticeLines = activeNotice
+        ? limitedWrap(activeNotice, Math.min(3, metadataBudget)).map((line) =>
+            theme.fg("warning", line),
+          )
+        : [];
+      const subtitleBudget = Math.max(0, metadataBudget - noticeLines.length);
+      const subtitleLines =
+        subtitleBudget > 0
+          ? limitedWrap(this.options.subtitle, Math.min(2, subtitleBudget)).map((line) =>
+              theme.fg("dim", line),
+            )
+          : [];
+      const inputLines = this.input.render(Math.max(1, inner));
+      const header = [
         theme.fg("accent", theme.bold(this.options.title)),
-        theme.fg("dim", this.options.subtitle),
-        ...(activeNotice ? [theme.fg("warning", activeNotice)] : [""]),
+        ...subtitleLines,
+        ...noticeLines,
         theme.fg("dim", "Search:"),
-        ...this.input.render(Math.max(1, inner)),
+        ...inputLines,
         "",
-      );
+      ];
+      const desiredListHeight = Math.max(1, bodyHeight - header.length - 2);
+      this.resizeList(desiredListHeight);
+      body.push(...header);
       const dropdownWidth = Math.max(0, inner - 2);
       const dropdownTitle = truncateToWidth(
         ` Options · ${this.filtered.length}/${this.options.choices.length} `,
@@ -228,21 +279,23 @@ export class SearchableSelectPage<A> implements Component {
       );
     }
 
-    const title = truncateToWidth(` ${this.options.breadcrumb} `, inner, "");
-    const top = `${theme.fg("borderAccent", "╭")}${title}${theme.fg(
-      "borderAccent",
-      `${"─".repeat(Math.max(0, inner - visibleWidth(title)))}╮`,
-    )}`;
     const key = (id: SettingsSelectKeybindingId, fallback: string): string =>
       this.options.keybindingLabel?.(id, fallback) || fallback;
     const navigation = this.options.keybindingLabel
       ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
       : "↑↓";
-    const footer = truncateToWidth(
-      `Type to search · ${navigation} navigate · ${key("tui.select.confirm", "Enter")} select · ${key("tui.select.cancel", "Esc")} back`,
-      inner,
-      "",
-    );
+    const pages = `${key("tui.select.pageUp", "PgUp")}/${key("tui.select.pageDown", "PgDn")}`;
+    const confirm = key("tui.select.confirm", "Enter");
+    const cancel = key("tui.select.cancel", "Esc");
+    const footer = renderResponsiveManagerFooter(inner, [
+      [
+        "Type to search",
+        `${navigation} Navigate · ${pages} Page · Home/End`,
+        `${confirm} Select · ${cancel} Back`,
+      ],
+      [`${navigation} Navigate · ${pages}`, `${confirm} Select`, `${cancel} Back`],
+      [`${cancel} Back`, `${confirm} Select`],
+    ]);
     const bottom = `${theme.fg("borderAccent", "╰")}${theme.fg(
       "borderAccent",
       "─".repeat(Math.max(0, inner - visibleWidth(footer))),

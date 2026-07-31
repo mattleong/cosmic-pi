@@ -114,19 +114,51 @@ export async function loadCandidateModelPicker(
   const parentModel = ctx.model
     ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
     : undefined;
-  const choices = createProfileModelChoices({
+  const advertisedChoices = createProfileModelChoices({
     models: availableModels,
     parentModel,
     currentSelector: candidate.model,
     allowParent: candidate.host === "local",
   });
+  const currentAvailable = advertisedChoices.some((choice) =>
+    candidate.model === "parent"
+      ? choice.choice.kind === "parent"
+      : choice.choice.kind === "model" && choice.choice.selector === candidate.model,
+  );
+  const unavailableCurrent: ProfileModelPickerChoice | undefined = currentAvailable
+    ? undefined
+    : {
+        choice:
+          candidate.model === "parent"
+            ? { kind: "parent" }
+            : { kind: "model", selector: candidate.model },
+        item: {
+          value: candidate.model,
+          label: `${candidate.model} (current · unavailable)`,
+          description: "Keep the configured value or choose an authenticated replacement",
+        },
+        searchText: `${candidate.model} current unavailable configured`,
+      };
+  const choices = unavailableCurrent
+    ? [unavailableCurrent, ...advertisedChoices]
+    : advertisedChoices;
+  const unsafeModels = availableModels.filter(
+    (model) => !isSafeNativeModelSelector(`${model.provider}/${model.id}`),
+  ).length;
+  const warnings = [
+    unavailableCurrent
+      ? "The configured model is not currently authenticated. Keeping it makes no change; choose another model to replace it."
+      : undefined,
+    unsafeModels > 0
+      ? `${unsafeModels} authenticated model${unsafeModels === 1 ? " was" : "s were"} omitted because the canonical selector is unsafe.`
+      : undefined,
+    choices.length === 0 ? "No authenticated canonical Pi models are available." : undefined,
+  ].filter((warning): warning is string => warning !== undefined);
   return {
     choices,
     current: candidate.model,
     context: pickerContext(input),
-    ...(choices.length === 0
-      ? { warning: "No authenticated canonical Pi models are available." }
-      : {}),
+    ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
   };
 }
 

@@ -58,6 +58,7 @@ describe("persisted subagent card details", () => {
       runtime: "claude",
       closeOnReport: false,
       reportGeneration: 1,
+      finalTextTruncated: true,
       selection: { host: "herdr", runtime: "claude", closeOnReport: false },
     });
     expect(serialized.length).toBeLessThanOrEqual(48_000);
@@ -88,6 +89,9 @@ describe("persisted subagent card details", () => {
       })),
     });
     expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
+    expect(details.contentOmitted || details.cards.some((card) => card.finalTextTruncated)).toBe(
+      true,
+    );
     expect(Object.isFrozen(details.cards)).toBe(true);
 
     expect(

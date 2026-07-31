@@ -23,6 +23,7 @@ import {
 } from "./ui/profile-workspace.ts";
 
 export interface FleetManagerActions {
+  readonly isAvailable: () => boolean;
   readonly stop: (id: string) => Promise<void>;
   readonly interrupt: (id: string) => Promise<void>;
   readonly resume: (id: string, message?: string) => Promise<void>;
@@ -45,15 +46,16 @@ const formatKeyId = (value: string): string => {
     escape: "Esc",
     pageUp: "PgUp",
     pageDown: "PgDn",
+    tab: "Tab",
   };
-  return labels[value] ?? value.replace(/^ctrl\+/, "C-").replace(/^shift\+/, "⇧");
+  const parts = value.split("+");
+  const base = parts.pop() ?? value;
+  const modifiers = parts
+    .map((part) => (part === "ctrl" ? "C-" : part === "shift" ? "⇧" : part === "alt" ? "A-" : "⌘"))
+    .join("");
+  const key = labels[base] ?? (base.length === 1 ? base.toUpperCase() : base);
+  return `${modifiers}${key}`;
 };
-
-const report = (ctx: ExtensionCommandContext, operation: Promise<void>) =>
-  void operation.catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : "Subagent operation failed.";
-    ctx.ui.notify(message, "error");
-  });
 
 async function openFleetManager(
   ctx: ExtensionCommandContext,
@@ -64,38 +66,13 @@ async function openFleetManager(
     if (ctx.hasUI) ctx.ui.notify("/subagents requires interactive TUI mode.", "warning");
     return;
   }
+  if (!actions.isAvailable()) {
+    ctx.ui.notify("Subagents are not active. Run /reload, then reopen /subagents.", "warning");
+    return;
+  }
   await ctx.ui.custom<void>(
     (tui, theme, keybindings, done) => {
       let unsubscribe = () => {};
-      const promptMessage = (id: string, mode: "guidance" | "reply" | "next-assignment") => {
-        const title =
-          mode === "reply"
-            ? "Reply to subagent"
-            : mode === "next-assignment"
-              ? "Start next subagent assignment"
-              : "Guide subagent";
-        const placeholder =
-          mode === "next-assignment" ? "Guidance for the next report" : "Enter guidance";
-        void ctx.ui.input(title, placeholder).then((message) => {
-          if (!message?.trim()) return;
-          report(
-            ctx,
-            mode === "reply" ? actions.reply(id, message.trim()) : actions.send(id, message.trim()),
-          );
-        });
-      };
-      const promptResume = (id: string) => {
-        void ctx.ui.input("Resume subagent", "Optional continuation message").then((message) => {
-          if (message === undefined) return;
-          report(ctx, actions.resume(id, message.trim() || undefined));
-        });
-      };
-      const promptRename = (id: string) => {
-        void ctx.ui.input("Rename subagent", "New display name").then((name) => {
-          if (!name?.trim()) return;
-          report(ctx, actions.rename(id, name.trim()));
-        });
-      };
       const manager = new SubagentFleetComponent({
         theme,
         getProjection: bridge.get,
@@ -109,11 +86,12 @@ async function openFleetManager(
         requestRender: () => tui.requestRender(),
         close: () => done(undefined),
         actions: {
-          stop: (id) => report(ctx, actions.stop(id)),
-          interrupt: (id) => report(ctx, actions.interrupt(id)),
-          resume: promptResume,
-          message: promptMessage,
-          rename: promptRename,
+          stop: actions.stop,
+          interrupt: actions.interrupt,
+          resume: actions.resume,
+          message: (id, mode, message) =>
+            mode === "reply" ? actions.reply(id, message) : actions.send(id, message),
+          rename: actions.rename,
         },
       });
       unsubscribe = bridge.subscribe(() => {

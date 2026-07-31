@@ -15,7 +15,7 @@ import {
   type SubagentRunView,
   type SubagentSessionEvent,
 } from "../run/model.ts";
-import { runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
+import { animatedRunStateGlyph, runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "./sanitize.ts";
 
 export interface SessionOutputRenderOptions {
@@ -54,7 +54,9 @@ export const formatRelativeAge = (milliseconds: number): string => {
 
 const runDuration = (run: SubagentRunView, now: number): string => {
   const active = isActiveRunState(run.state);
-  const end = run.endedAt ?? (active ? now : run.lastActivityAt);
+  const end =
+    run.endedAt ??
+    (run.state === "paused" ? run.lastActivityAt : active ? now : run.lastActivityAt);
   const elapsed = formatDuration(end - run.startedAt);
   if (run.state === "paused") return `paused after ${elapsed}`;
   if (run.state === "reported") return `idle after report ${run.reportGeneration}`;
@@ -134,10 +136,20 @@ const toolDuration = (events: ReadonlyArray<ToolEvent>): string => {
   return elapsed > 0 ? formatDuration(elapsed) : "";
 };
 
-function addToolGroup(container: Container, events: ReadonlyArray<ToolEvent>, theme: Theme): void {
+function addToolGroup(
+  container: Container,
+  events: ReadonlyArray<ToolEvent>,
+  theme: Theme,
+  frame: number,
+): void {
   const first = events[0];
   if (!first) return;
-  const glyph = first.state === "running" ? "●" : first.state === "failed" ? "×" : "✓";
+  const glyph =
+    first.state === "running"
+      ? animatedRunStateGlyph("running", frame)
+      : first.state === "failed"
+        ? "×"
+        : "✓";
   const color =
     first.state === "running" ? "accent" : first.state === "failed" ? "error" : "success";
   const count = events.length > 1 ? ` ×${events.length}` : "";
@@ -163,7 +175,12 @@ function addToolGroup(container: Container, events: ReadonlyArray<ToolEvent>, th
 
 function addNotice(container: Container, event: NoticeEvent, theme: Theme): void {
   const glyph = event.kind === "parent" ? "←" : event.kind === "question" ? "?" : "!";
-  const color = event.kind === "parent" ? "muted" : event.kind === "question" ? "warning" : "error";
+  const color =
+    event.kind === "parent"
+      ? "muted"
+      : event.kind === "question" || event.kind === "warning"
+        ? "warning"
+        : "error";
   container.addChild(
     new HangingText(
       `${theme.fg(color, glyph)} `,
@@ -288,8 +305,9 @@ export function renderSubagentSessionOutput(
   container.addChild(new Text(theme.fg("muted", theme.bold("Activity")), 0, 0));
 
   const items = activityItems(run.sessionEvents);
+  const frame = Math.floor(now / 160);
   for (const item of items) {
-    if (item.type === "tools") addToolGroup(container, item.events, theme);
+    if (item.type === "tools") addToolGroup(container, item.events, theme, frame);
     else addNotice(container, item.event, theme);
   }
   const noticeKinds = new Set(
@@ -351,6 +369,10 @@ export function renderSubagentSessionOutput(
         color: (text) => theme.fg("toolOutput", text),
       }),
     );
+  }
+  if (run.state === "completed" && !assistantOutput && !run.error) {
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("dim", "Completed without a final report."), 0, 0));
   }
   if (run.error) {
     container.addChild(new Spacer(1));

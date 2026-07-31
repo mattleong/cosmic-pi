@@ -30,9 +30,17 @@ export const attentionRecoveryText = (runs: ReadonlyArray<SubagentRunCard>): str
   if (waiting.length === 0) return "";
   return [
     "Parent reply required; other unfinished subagents continue independently.",
-    ...waiting.flatMap((run) => [
-      `Question from ${sanitizeTerminalLine(run.name)}: ${safeTextPrefix(sanitizeTerminalLine(run.question?.message ?? ""), 512)}`,
-      `Reply with subagent_reply({ runId: ${JSON.stringify(run.id)}, message: "..." }), then call subagent_await again.`,
-    ]),
+    ...waiting.flatMap((run) => {
+      const question = sanitizeTerminalLine(run.question?.message ?? "");
+      const marker = "… [truncated]";
+      const bounded =
+        question.length <= 512
+          ? question
+          : `${safeTextPrefix(question, 512 - marker.length)}${marker}`;
+      return [
+        `Question from ${sanitizeTerminalLine(run.name)}: ${bounded}`,
+        `Reply with subagent_reply({ runId: ${JSON.stringify(run.id)}, message: "..." }), then call subagent_await again.`,
+      ];
+    }),
   ].join("\n");
 };

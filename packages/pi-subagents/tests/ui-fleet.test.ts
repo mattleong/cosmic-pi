@@ -1,3 +1,5 @@
+// Promise assertions are test-runner boundaries.
+// @effect-diagnostics effect/asyncFunction:off
 import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -80,11 +82,11 @@ const makeComponent = (
   matchesKeybinding?: (data: string, id: string) => boolean,
 ) => {
   const actions = {
-    stop: vi.fn(),
-    interrupt: vi.fn(),
-    resume: vi.fn(),
-    message: vi.fn(),
-    rename: vi.fn(),
+    stop: vi.fn(() => Promise.resolve()),
+    interrupt: vi.fn(() => Promise.resolve()),
+    resume: vi.fn(() => Promise.resolve()),
+    message: vi.fn(() => Promise.resolve()),
+    rename: vi.fn(() => Promise.resolve()),
   };
   const close = vi.fn();
   const component = new SubagentFleetComponent({
@@ -149,9 +151,10 @@ describe("/subagents fleet UI", () => {
 
   it("groups navigation, available actions, and global footer controls", () => {
     const footer = makeComponent(120, 18).lines.at(-1) ?? "";
-    expect(footer).toContain("↑↓ Select · C-u/d Scroll");
-    expect(footer).toContain("m Reply · i Interrupt");
-    expect(footer).toContain("t Technical · ? More · Esc Close");
+    expect(footer).toContain("↑↓");
+    expect(footer).toContain("PgUp/PgDn");
+    expect(footer).toContain("m Reply · i Int");
+    expect(footer).toContain("t Technical · ? More · Esc");
     expect(footer).not.toContain("r Resume");
   });
 
@@ -185,7 +188,14 @@ describe("/subagents fleet UI", () => {
     expect(component.render(120).at(-1)).toContain("x Stop");
     expect(component.render(120).at(-1)).not.toContain("r Resume");
     component.handleInput("m");
-    expect(actions.message).toHaveBeenCalledWith("agent-1", "next-assignment");
+    expect(component.render(120).join("\n")).toContain("Next assignment for auth-reader");
+    component.handleInput("Review the next area");
+    component.handleInput("\r");
+    expect(actions.message).toHaveBeenCalledWith(
+      "agent-1",
+      "next-assignment",
+      "Review the next area",
+    );
   });
 
   it("uses the shared Braille spinner for running fleet rows", () => {
@@ -296,7 +306,7 @@ describe("/subagents fleet UI", () => {
     expect(component.render(width).join("\n")).toBe(before);
   });
 
-  it("clears pending stop confirmation when selection changes", () => {
+  it("keeps stop confirmation modal and cancels before selection changes", () => {
     const twoRuns: SubagentProjection = {
       revision: 4,
       runs: [projection.runs[0]!, { ...projection.runs[0]!, id: "agent-2", name: "second-reader" }],
@@ -305,7 +315,8 @@ describe("/subagents fleet UI", () => {
     component.handleInput("x");
     expect(component.render(80).at(-1)).toContain("Confirm stop auth-reader");
     component.handleInput("j");
-    expect(component.render(80).at(-1)).not.toContain("Confirm stop auth-reader");
+    expect(component.render(80).join("\n")).toContain("Stop canceled");
+    component.handleInput("j");
     component.handleInput("x");
     expect(actions.stop).not.toHaveBeenCalled();
     expect(component.render(80).at(-1)).toContain("Confirm stop second-reader");
@@ -362,7 +373,10 @@ describe("/subagents fleet UI", () => {
   it("allows completed rename but does not offer terminal stop", () => {
     const { actions, component } = makeComponent(80, 18, completedProjection);
     component.handleInput("n");
-    expect(actions.rename).toHaveBeenCalledWith("agent-1");
+    expect(component.render(80).join("\n")).toContain("Rename auth-reader");
+    component.handleInput("security-reader");
+    component.handleInput("\r");
+    expect(actions.rename).toHaveBeenCalledWith("agent-1", "security-reader");
     component.handleInput("x");
     component.handleInput("x");
     expect(actions.stop).not.toHaveBeenCalled();
@@ -376,17 +390,66 @@ describe("/subagents fleet UI", () => {
     const { actions, component } = makeComponent(100, 18, runningProjection);
     expect(component.render(100).at(-1)).toContain("m Guide");
     component.handleInput("m");
-    expect(actions.message).toHaveBeenCalledWith("agent-1", "guidance");
+    component.handleInput("Check the fallback");
+    component.handleInput("\r");
+    expect(actions.message).toHaveBeenCalledWith("agent-1", "guidance", "Check the fallback");
   });
 
-  it("routes message, interrupt, rename, and confirmed stop controls", () => {
+  it("accepts Kitty CSI-u printable action shortcuts", () => {
+    const { component } = makeComponent(80, 18);
+    component.handleInput("\u001b[109u");
+    expect(component.render(80).join("\n")).toContain("Reply to auth-reader");
+  });
+
+  it("shows action failures inside the fleet instead of behind the overlay", async () => {
+    const { actions, component } = makeComponent(80, 18);
+    actions.interrupt.mockRejectedValueOnce(new Error("Interrupt channel unavailable"));
+    component.handleInput("i");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(component.render(80).join("\n")).toContain("Interrupt channel unavailable");
+  });
+
+  it("pages a narrow run list and shows list position cues", () => {
+    const runs = Array.from({ length: 20 }, (_, index) => ({
+      ...projection.runs[0]!,
+      id: `agent-${index}`,
+      name: `reader-${index}`,
+    }));
+    const { component } = makeComponent(42, 8, { revision: 8, runs });
+    expect(component.render(42).join("\n")).toContain("↓ more");
+    component.handleInput("\u001b[6~");
+    const rendered = component.render(42).join("\n");
+    expect(rendered).toContain("reader-5");
+    expect(rendered).toContain("↑ more");
+  });
+
+  it("disambiguates duplicate run names with IDs", () => {
+    const duplicate: SubagentProjection = {
+      revision: 9,
+      runs: [projection.runs[0]!, { ...projection.runs[0]!, id: "agent-2" }],
+    };
+    const rendered = makeComponent(80, 18, duplicate).component.render(80).join("\n");
+    expect(rendered).toContain("[agent-1] auth-reader");
+    expect(rendered).toContain("[agent-2] auth-reader");
+  });
+
+  it("routes inline reply, interrupt, rename, and confirmed stop controls", async () => {
     const { actions, component } = makeComponent(80, 18);
     component.handleInput("m");
-    expect(actions.message).toHaveBeenCalledWith("agent-1", "reply");
+    expect(component.render(80).join("\n")).toContain("Question: Which API?");
+    component.handleInput("Use v2");
+    component.handleInput("\r");
+    expect(actions.message).toHaveBeenCalledWith("agent-1", "reply", "Use v2");
+    await Promise.resolve();
     component.handleInput("i");
     expect(actions.interrupt).toHaveBeenCalledWith("agent-1");
+    await Promise.resolve();
     component.handleInput("n");
-    expect(actions.rename).toHaveBeenCalledWith("agent-1");
+    component.handleInput("renamed-reader");
+    component.handleInput("\r");
+    expect(actions.rename).toHaveBeenCalledWith("agent-1", "renamed-reader");
+    await Promise.resolve();
     component.handleInput("x");
     expect(actions.stop).not.toHaveBeenCalled();
     component.handleInput("x");

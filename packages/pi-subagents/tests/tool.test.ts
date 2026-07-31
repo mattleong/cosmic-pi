@@ -358,9 +358,16 @@ describe("subagent tool", () => {
     expect(schema("subagent_await")?.required).toEqual(["runIds", "until"]);
     expect(properties("subagent_send")).toEqual(["runIds", "message"]);
     expect(properties("subagent_reply")).toEqual(["runId", "message"]);
-    expect(properties("subagent_lifecycle")).toEqual(["action", "runIds", "message"]);
-    expect(schema("subagent_lifecycle")?.required).toEqual(["action", "runIds"]);
-    expect(schema("subagent_lifecycle")?.anyOf).toBeUndefined();
+    expect(properties("subagent_lifecycle")).toEqual([]);
+    const lifecycleBranches = schema("subagent_lifecycle")?.anyOf ?? [];
+    expect(lifecycleBranches).toHaveLength(2);
+    expect(Object.keys(lifecycleBranches[0]?.properties ?? {})).toEqual([
+      "action",
+      "runIds",
+      "message",
+    ]);
+    expect(Object.keys(lifecycleBranches[1]?.properties ?? {})).toEqual(["action", "runIds"]);
+    expect(lifecycleBranches.every((branch) => branch.additionalProperties === false)).toBe(true);
     expect(properties("subagent_rename")).toEqual(["runId", "name"]);
     for (const name of [
       "subagent_models",
@@ -370,7 +377,6 @@ describe("subagent tool", () => {
       "subagent_await",
       "subagent_send",
       "subagent_reply",
-      "subagent_lifecycle",
       "subagent_rename",
     ])
       expect(schema(name)?.additionalProperties).toBe(false);
@@ -438,7 +444,7 @@ describe("subagent tool", () => {
     expect(tools.get("subagent_send")?.description).toContain("running subagents");
     expect(tools.get("subagent_reply")?.description).toContain("one subagent");
     expect(tools.get("subagent_lifecycle")?.description).toContain(
-      "Message is valid only for resume",
+      "Message is accepted only for resume",
     );
     for (const tool of tools.values()) {
       expect(tool.renderShell).toBe("default");
@@ -598,7 +604,7 @@ describe("subagent tool", () => {
     ) as { render: (width: number) => string[] } | undefined;
     const rendered = component?.render(100).join("\n") ?? "";
     expect(rendered).toContain("Started 1 of 3");
-    expect(rendered).toContain("<success>● scout-one</success>");
+    expect(rendered).toMatch(/<success>[⠋-⣿] scout-one<\/success>/);
   });
 
   it("projects legacy timeout, cancellation, and first-finished await outcomes", () => {
@@ -684,6 +690,80 @@ describe("subagent tool", () => {
     const markdown = renderExpandedStartAwaitResult([run], theme).render(80).join("\n");
     expect(markdown).toContain("Findings");
     expect(markdown).not.toContain("## Findings");
+  });
+
+  it("renders both a final report and failure when a run preserves both", () => {
+    const theme = {
+      fg: (_color: string, text: string) => text,
+    } as unknown as Theme;
+    const rendered = renderExpandedStartAwaitResult(
+      [view({ state: "failed", finalText: "Partial findings", error: "Transport failed" })],
+      theme,
+    )
+      .render(100)
+      .join("\n");
+    expect(rendered).toContain("Final report — auth-review");
+    expect(rendered).toContain("Partial findings");
+    expect(rendered).toContain("Failure — auth-review");
+    expect(rendered).toContain("Transport failed");
+  });
+
+  it("marks omitted card content and report truncation explicitly", () => {
+    const theme = {
+      fg: (_color: string, text: string) => text,
+    } as unknown as Theme;
+    const rendered = renderExpandedStartAwaitResult(
+      [
+        {
+          ...view({ state: "completed", finalText: "Partial report" }),
+          finalTextTruncated: true,
+        },
+      ],
+      theme,
+    )
+      .render(100)
+      .join("\n");
+    expect(rendered).toContain("content truncated; use subagent_status");
+
+    const compact = renderStartAwaitOverviewComponent(
+      [view({ state: "completed", finalText: undefined })],
+      theme,
+    )
+      .render(100)
+      .join("\n");
+    expect(compact).toContain("completed without a final report");
+  });
+
+  it("shows bounded raw tool output when persisted card content was omitted", () => {
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const tool = captureSubagentTools(startCapturingService([])).get("subagent_start");
+    const details = makeStartAwaitCardDetails({
+      action: "start",
+      runs: [
+        {
+          ...view({ state: "completed", finalText: undefined }),
+          finalTextTruncated: true,
+        },
+      ],
+      contentOmitted: true,
+    });
+    const component = tool?.renderResult?.(
+      { content: [{ type: "text", text: "Recovered bounded report text." }], details },
+      { isPartial: false, expanded: true },
+      theme,
+    ) as { readonly render: (width: number) => ReadonlyArray<string> } | undefined;
+    const rendered = component?.render(100).join("\n") ?? "";
+    expect(rendered).toContain("Bounded tool output");
+    expect(rendered).toContain("Recovered bounded report text.");
+    const collapsed = tool?.renderResult?.(
+      { content: [{ type: "text", text: "Recovered bounded report text." }], details },
+      { isPartial: false, expanded: false },
+      theme,
+    ) as { readonly render: (width: number) => ReadonlyArray<string> } | undefined;
+    expect(collapsed?.render(120).join("\n")).toContain("Some report content was omitted");
   });
 
   it("aligns wide summary columns and truncates models first on narrow terminals", () => {

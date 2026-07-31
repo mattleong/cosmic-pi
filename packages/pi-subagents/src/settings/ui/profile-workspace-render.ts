@@ -1,10 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
 import type { SubagentConfigInspection, SubagentConfigScope } from "../../config/store.ts";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import { PROFILE_IDS } from "../../profiles/model.ts";
-import { candidateMenuSummary, type ProfileRouteDraft } from "../profile-route-editor.ts";
+import type { ProfileRouteDraft } from "../profile-route-editor.ts";
 import {
   candidateFieldRows,
   draftKindLabel,
@@ -69,12 +70,36 @@ const scopeLine = (state: ProfileWorkspaceRenderState, theme: Theme): string => 
 const wrapped = (value: string, width: number): ReadonlyArray<string> =>
   wrapTextWithAnsi(value, Math.max(1, width));
 
+const projectOverrideActive = (state: ProfileWorkspaceRenderState): boolean => {
+  if (state.scope !== "global") return false;
+  const project = state.inspection.project;
+  const profile = selectedProfile(state);
+  return Boolean(
+    project &&
+    (project.invalidProfileRoutes.includes(profile) ||
+      Object.prototype.hasOwnProperty.call(project.file.profiles ?? {}, profile)),
+  );
+};
+
 const commonNotices = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
   width: number,
+  cancelKey = "Esc",
 ): ReadonlyArray<string> => {
   const lines: string[] = [];
+  if (projectOverrideActive(state)) {
+    lines.push(
+      ...wrapped(
+        theme.fg(
+          "warning",
+          `! Project override active for ${selectedProfile(state)}; global edits are saved but do not change its effective route until the project override is reset.`,
+        ),
+        width,
+      ),
+      "",
+    );
+  }
   if (state.pendingConfirmation) {
     lines.push(
       ...wrapped(
@@ -85,7 +110,7 @@ const commonNotices = (
       ...wrapped(
         theme.fg(
           "warning",
-          `Press ${state.pendingConfirmation.key} again to confirm · Esc cancels`,
+          `Press ${state.pendingConfirmation.key} again to confirm · ${cancelKey} cancels`,
         ),
         width,
       ),
@@ -124,9 +149,10 @@ const boundedMiddle = (value: string, maximum: number): string => {
   if (maximum <= 0) return "";
   if (visibleWidth(value) <= maximum) return value;
   if (maximum === 1) return "…";
+  const characters = [...value];
   const left = Math.max(1, Math.floor((maximum - 1) / 2));
   const right = Math.max(0, maximum - left - 1);
-  return `${value.slice(0, left)}…${right > 0 ? value.slice(-right) : ""}`;
+  return `${characters.slice(0, left).join("")}…${right > 0 ? characters.slice(-right).join("") : ""}`;
 };
 
 const windowStart = (length: number, selected: number, visibleCount: number): number =>
@@ -135,14 +161,67 @@ const windowStart = (length: number, selected: number, visibleCount: number): nu
     Math.min(Math.max(0, length - visibleCount), selected - Math.floor(visibleCount / 2)),
   );
 
+const candidateSummary = (
+  candidate: ProfileRouteDraft["candidates"][number],
+  index: number,
+  maximum: number,
+): string => {
+  const prefix = `${String(index + 1).padStart(2, "0")} · ${candidate.host}/${candidate.runtime} · `;
+  const lifecycle = candidate.closeOnReport ? "close" : "retain";
+  const suffix = ` · ${candidate.effort} · ${candidate.context} · ${candidate.writeIntent} · ${lifecycle}`;
+  const modelWidth = Math.max(4, maximum - visibleWidth(prefix) - visibleWidth(suffix));
+  return truncateToWidth(
+    `${prefix}${boundedMiddle(candidate.model, modelWidth)}${suffix}`,
+    maximum,
+  );
+};
+
+const sameCandidates = (
+  left: ProfileRouteDraft["candidates"],
+  right: ProfileRouteDraft["candidates"],
+): boolean =>
+  left.length === right.length &&
+  left.every((candidate, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      candidate.host === other.host &&
+      candidate.runtime === other.runtime &&
+      candidate.model === other.model &&
+      candidate.effort === other.effort &&
+      candidate.context === other.context &&
+      candidate.writeIntent === other.writeIntent &&
+      candidate.closeOnReport === other.closeOnReport
+    );
+  });
+
+const routeActions = (state: ProfileWorkspaceRenderState) => {
+  const count = state.draft.candidates.length;
+  return {
+    add: count < MAX_PROFILE_CANDIDATES,
+    clone: count > 0 && count < MAX_PROFILE_CANDIDATES,
+    moveUp: count > 1 && state.candidateIndex > 0,
+    moveDown: count > 1 && state.candidateIndex < count - 1,
+    remove: count > 0,
+    disable: state.draft.kind !== "disabled",
+    reset: !(
+      (state.scope === "global" && state.draft.kind === "reset") ||
+      (state.scope === "project" && state.draft.kind === "inherit")
+    ),
+  };
+};
+
 const profilesPage = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
   availableHeight: number,
   width: number,
+  confirmKey: string,
+  cancelKey: string,
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
-  const notices = commonNotices(state, theme, width);
+  const actions = routeActions(state);
+  const notices = commonNotices(state, theme, width, cancelKey);
   const visibleCount = Math.max(1, availableHeight - 9 - notices.length);
   const start = windowStart(PROFILE_IDS.length, state.profileIndex, visibleCount);
   const visibleProfiles = PROFILE_IDS.slice(start, start + visibleCount);
@@ -151,7 +230,7 @@ const profilesPage = (
       "accent",
       theme.bold(`Profiles${windowLabel(start, visibleProfiles.length, PROFILE_IDS.length)}`),
     ),
-    "Choose a profile to inspect its effective route or edit its declaration.",
+    "Choose a profile to inspect its effective route or edit its declaration. ★ marks the default.",
     scopeLine(state, theme),
     "",
     ...notices,
@@ -163,9 +242,13 @@ const profilesPage = (
     }),
     "",
     theme.fg("muted", "Actions"),
-    `  Enter  Open ${profile} route`,
+    `  ${confirmKey.padEnd(6)} Open ${profile} route`,
     "  /      Search profiles",
-    `  i      Reset ${profile} ${state.scope === "global" ? "to built-in" : "to inherit global"}`,
+    ...(actions.reset
+      ? [
+          `  i      Reset ${profile} ${state.scope === "global" ? "to built-in" : "to inherit global"}`,
+        ]
+      : []),
   ];
 };
 
@@ -174,12 +257,15 @@ const routePage = (
   theme: Theme,
   availableHeight: number,
   width: number,
+  confirmKey: string,
+  cancelKey: string,
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
   const effective = state.inspection.config.profiles[profile];
   const candidates = state.draft.candidates;
-  const notices = commonNotices(state, theme, width);
-  const hasPreview = effective.candidates.length !== candidates.length;
+  const notices = commonNotices(state, theme, width, cancelKey);
+  const hasPreview =
+    !projectOverrideActive(state) && !sameCandidates(effective.candidates, candidates);
   const reserved = 16 + (hasPreview ? 1 : 0) + notices.length;
   const visibleCount = Math.max(1, availableHeight - reserved);
   const start = windowStart(candidates.length, state.candidateIndex, visibleCount);
@@ -193,8 +279,9 @@ const routePage = (
         ]
       : visible.map((candidate, offset) => {
           const index = start + offset;
-          return `${index === state.candidateIndex ? ">" : " "} ${candidateMenuSummary(candidate, index)}`;
+          return `${index === state.candidateIndex ? ">" : " "} ${candidateSummary(candidate, index, Math.max(1, width - 2))}`;
         });
+  const actions = routeActions(state);
   return [
     theme.fg("accent", theme.bold(`${profile} route`)),
     PROFILE_DEFINITIONS[profile].description,
@@ -212,17 +299,18 @@ const routePage = (
     ...rows,
     "",
     theme.fg("muted", "Actions"),
-    ...(candidates.length > 0
+    ...(candidates.length > 0 ? [`  ${confirmKey.padEnd(6)} Edit selected candidate`] : []),
+    ...(actions.add ? ["  a      Add candidate"] : []),
+    ...(actions.clone ? ["  c      Clone selected candidate"] : []),
+    ...(actions.moveDown ? ["  J      Move selected down"] : []),
+    ...(actions.moveUp ? ["  K      Move selected up"] : []),
+    ...(actions.remove ? ["  x      Remove selected candidate"] : []),
+    ...(actions.disable ? ["  d      Disable route"] : []),
+    ...(actions.reset
       ? [
-          "  Enter  Edit selected candidate",
-          "  a      Add candidate",
-          "  c      Clone selected candidate",
-          "  J / K  Move selected down / up",
-          "  x      Remove selected candidate",
+          `  i      Reset ${profile} ${state.scope === "global" ? "to built-in" : "to inherit global"}`,
         ]
-      : ["  a      Add candidate"]),
-    "  d      Disable route",
-    `  i      Reset ${profile} ${state.scope === "global" ? "to built-in" : "to inherit global"}`,
+      : []),
   ];
 };
 
@@ -231,10 +319,12 @@ const candidatePage = (
   theme: Theme,
   availableHeight: number,
   width: number,
+  confirmKey: string,
+  cancelKey: string,
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
   const candidate = state.draft.candidates[state.candidateIndex];
-  const notices = commonNotices(state, theme, width);
+  const notices = commonNotices(state, theme, width, cancelKey);
   const fields = candidate ? candidateFieldRows(candidate) : [];
   const visibleCount = Math.max(1, availableHeight - 9 - notices.length);
   const start = windowStart(fields.length, state.fieldIndex, visibleCount);
@@ -242,11 +332,13 @@ const candidatePage = (
     ? fields.slice(start, start + visibleCount).map((row, offset) => {
         const index = start + offset;
         const marker = index === state.fieldIndex ? ">" : " ";
-        const action = row.fixed ? "fixed by policy" : "Enter to choose";
+        const action = row.fixed ? "fixed by policy" : `${confirmKey} to choose`;
+        const compactAction = row.fixed ? "fixed" : "edit";
         const showAction = width >= 46;
-        const valueWidth = Math.max(6, width - 17 - (showAction ? action.length + 2 : 0));
+        const actionLabel = showAction ? action : compactAction;
+        const valueWidth = Math.max(1, width - 17 - actionLabel.length - 3);
         const value = boundedMiddle(row.value, valueWidth);
-        return `${marker} ${row.label.padEnd(14)} ${value.padEnd(valueWidth)}${showAction ? `  ${action}` : ""}`;
+        return `${marker} ${row.label.padEnd(14)} ${value.padEnd(valueWidth)} · ${actionLabel}`;
       })
     : ["No candidate exists. Return to the route and add one."];
   return [
@@ -262,8 +354,8 @@ const candidatePage = (
     ...rows,
     "",
     theme.fg("muted", "Actions"),
-    "  Enter  Choose value for selected field",
-    "  Esc    Back to ordered route",
+    `  ${confirmKey.padEnd(6)} Choose value for selected field`,
+    `  ${cancelKey.padEnd(6)} Back to ordered route`,
   ];
 };
 
@@ -279,6 +371,7 @@ const helpText = (
     : "↑↓";
   const enter = key("tui.select.confirm", "Enter");
   const escape = key("tui.select.cancel", "Esc");
+  const pages = `${key("tui.select.pageUp", "PgUp")}/${key("tui.select.pageDown", "PgDn")}`;
   if (state.pendingConfirmation)
     return renderResponsiveManagerFooter(Math.max(0, width), [
       [`${state.pendingConfirmation.key} Confirm`, `${escape} Cancel`],
@@ -290,40 +383,135 @@ const helpText = (
         state.cancellableBusy ? `${escape} Cancel` : `${escape} Wait`,
       ],
     ]);
-  if (state.pane === "profiles")
+  if (state.pane === "profiles") {
+    const canReset = routeActions(state).reset;
     return renderResponsiveManagerFooter(Math.max(0, width), [
       [
-        `${navigation} Select · ${enter} Route · / Search`,
-        "g Global · p Project · i Reset · Tab Next",
+        `${navigation} Select · ${pages} Page · Home/End`,
+        `${enter} Route · / Search · g Global · ${state.projectTrusted ? "p Project" : "p Project unavailable"}`,
+        `${canReset ? "i Reset · " : ""}Tab Next`,
         state.reloadRequired ? `r Reload · ${escape} Close` : `${escape} Close`,
       ],
       [
-        `${navigation} · ${enter} · / Search`,
-        "g/p Scope · i Reset · Tab",
+        `${navigation} · ${pages} · ${enter} · / Search`,
+        `${state.projectTrusted ? "g/p Scope" : "g Global"}${canReset ? " · i Reset" : ""} · Tab`,
         state.reloadRequired ? `r Reload · ${escape}` : `${escape} Close`,
       ],
     ]);
-  if (state.pane === "candidates")
+  }
+  if (state.pane === "candidates") {
+    const actions = routeActions(state);
+    const actionLabels = [
+      actions.add ? "a Add" : undefined,
+      actions.clone ? "c Clone" : undefined,
+      actions.moveDown ? "J Down" : undefined,
+      actions.moveUp ? "K Up" : undefined,
+      actions.remove ? "x Remove" : undefined,
+      actions.disable ? "d Disable" : undefined,
+      actions.reset ? "i Reset" : undefined,
+    ].filter((label): label is string => label !== undefined);
     return renderResponsiveManagerFooter(Math.max(0, width), [
       [
-        `${navigation} Select · ${enter} Candidate`,
-        "a Add · c Clone · J/K Move · x Remove",
-        `d Disable · i Reset · ${escape} Profiles · Tab/⇧Tab Pages`,
+        `${navigation} Select · ${pages} Page · Home/End · ${enter} Candidate`,
+        actionLabels.join(" · ") || "No route changes available",
+        `${escape} Profiles · Tab/⇧Tab Pages`,
         state.reloadRequired ? "r Reload" : "",
       ],
       [
-        `${navigation} · ${enter} · a Add`,
-        "c Clone · J/K · x Remove",
-        `d Disable · i Reset · ${escape}`,
+        `${navigation} · ${pages} · ${enter}`,
+        actionLabels.join(" · ") || "No changes",
+        `${escape} · Tab/⇧Tab`,
       ],
     ]);
+  }
   return renderResponsiveManagerFooter(Math.max(0, width), [
     [
-      `${navigation} Field · ${enter} Choose`,
-      `g/p Scope · ${escape} Route · ⇧Tab Back`,
+      `${navigation} Field · ${pages} Page · Home/End · ${enter} Choose`,
+      `${state.projectTrusted ? "g/p Scope" : "g Global"} · ${escape} Route · ⇧Tab Back`,
       state.reloadRequired ? "r Reload" : "",
     ],
   ]);
+};
+
+const compactWorkspacePage = (
+  state: ProfileWorkspaceRenderState,
+  theme: Theme,
+  height: number,
+  width: number,
+  confirmKey: string,
+  cancelKey: string,
+): ReadonlyArray<string> => {
+  const profile = selectedProfile(state);
+  const candidate = state.draft.candidates[state.candidateIndex];
+  const field = candidate ? candidateFieldRows(candidate)[state.fieldIndex] : undefined;
+  const heading =
+    state.pane === "profiles"
+      ? `Profiles · ${state.profileIndex + 1}/${PROFILE_IDS.length}`
+      : state.pane === "candidates"
+        ? `${profile} route · ${state.draft.candidates.length === 0 ? 0 : state.candidateIndex + 1}/${state.draft.candidates.length}`
+        : `${profile} · candidate ${state.candidateIndex + 1}`;
+  const selected =
+    state.pane === "profiles"
+      ? `${profile === state.inspection.config.defaultProfile ? "★ " : ""}${profile} · ${effectiveProfileSummary(state.inspection, profile)}`
+      : state.pane === "candidates"
+        ? candidate
+          ? candidateSummary(candidate, state.candidateIndex, Math.max(1, width))
+          : state.draft.kind === "invalid"
+            ? "Invalid declaration · route fails closed"
+            : "No candidates · route disabled"
+        : field
+          ? `${field.label}: ${boundedMiddle(field.value, Math.max(1, width - field.label.length - 12))} · ${field.fixed ? "fixed" : "edit"}`
+          : "No candidate · return to route";
+  const actions =
+    state.pane === "profiles"
+      ? `${confirmKey} route · / search · g/p scope${routeActions(state).reset ? " · i reset" : ""}`
+      : state.pane === "candidates"
+        ? state.draft.candidates.length > 0
+          ? `${confirmKey} edit · a add · x remove · ${cancelKey} profiles`
+          : `a add · d disable · ${cancelKey} profiles`
+        : field?.fixed
+          ? `Fixed by policy · ${cancelKey} route`
+          : `${confirmKey} choose · ${cancelKey} route`;
+  const status: string[] = [];
+  if (state.pendingConfirmation) {
+    status.push(
+      theme.fg(
+        "warning",
+        `Confirm ${state.pendingConfirmation.key}: ${state.pendingConfirmation.title}`,
+      ),
+      theme.fg("warning", state.pendingConfirmation.detail),
+    );
+  } else if (state.message) {
+    const color =
+      state.message.kind === "error"
+        ? "error"
+        : state.message.kind === "warning"
+          ? "warning"
+          : state.message.kind === "success"
+            ? "success"
+            : "muted";
+    const shadow = projectOverrideActive(state)
+      ? " · Project override active; global edit is shadowed"
+      : "";
+    status.push(theme.fg(color, `${state.message.text}${shadow}`));
+  } else if (projectOverrideActive(state)) {
+    status.push(theme.fg("warning", "Project override active · global edit is shadowed"));
+  }
+  if (height <= 1) return [theme.fg("accent", selected)];
+  if (height === 2) return [theme.fg("accent", selected), theme.fg("dim", actions)];
+  const availableStatus = Math.max(0, height - 3);
+  const middle =
+    status.length > 0
+      ? status.slice(0, availableStatus)
+      : availableStatus > 0
+        ? [scopeLine(state, theme)]
+        : [];
+  return [
+    theme.fg("accent", theme.bold(heading)),
+    ...middle,
+    theme.fg("accent", selected),
+    theme.fg("dim", actions),
+  ].slice(0, height);
 };
 
 const breadcrumb = (state: ProfileWorkspaceRenderState): string => {
@@ -344,7 +532,7 @@ export const renderProfileWorkspace = (
   const theme = options.theme;
   const inner = width - 2;
   const status = state.busy
-    ? theme.fg("warning", "saving/loading")
+    ? theme.fg("warning", state.cancellableBusy ? "◌ loading catalog" : "◌ saving/reloading")
     : state.reloadRequired
       ? theme.fg("warning", "reload required")
       : theme.fg("muted", "ready");
@@ -355,18 +543,31 @@ export const renderProfileWorkspace = (
     `${"─".repeat(Math.max(0, inner - visibleWidth(title)))}╮`,
   )}`;
   if (height === 1) return [truncateToWidth(top, width, "")];
+  const key = (id: SettingsSelectKeybindingId, fallback: string): string =>
+    options.keybindingLabel?.(id, fallback) || fallback;
+  const confirmKey = key("tui.select.confirm", "Enter");
+  const cancelKey = key("tui.select.cancel", "Esc");
   const footer = truncateToWidth(helpText(state, inner, options.keybindingLabel), inner, "");
   const bottom = `${theme.fg("borderAccent", "╰")}${theme.fg(
     "borderAccent",
     "─".repeat(Math.max(0, inner - visibleWidth(footer))),
   )}${footer}${theme.fg("borderAccent", "╯")}`;
   const bodyHeight = Math.max(0, height - 2);
-  const rows =
+  const noticeRows = commonNotices(state, theme, inner, cancelKey).length;
+  const minimumSelectedRow =
     state.pane === "profiles"
-      ? profilesPage(state, theme, bodyHeight, inner)
+      ? 5 + noticeRows
       : state.pane === "candidates"
-        ? routePage(state, theme, bodyHeight, inner)
-        : candidatePage(state, theme, bodyHeight, inner);
+        ? 8 + noticeRows
+        : 6 + noticeRows;
+  const rows =
+    bodyHeight <= 6 || bodyHeight < minimumSelectedRow
+      ? compactWorkspacePage(state, theme, bodyHeight, inner, confirmKey, cancelKey)
+      : state.pane === "profiles"
+        ? profilesPage(state, theme, bodyHeight, inner, confirmKey, cancelKey)
+        : state.pane === "candidates"
+          ? routePage(state, theme, bodyHeight, inner, confirmKey, cancelKey)
+          : candidatePage(state, theme, bodyHeight, inner, confirmKey, cancelKey);
   const body = rows
     .slice(0, bodyHeight)
     .map(

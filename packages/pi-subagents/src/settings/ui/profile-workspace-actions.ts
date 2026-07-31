@@ -105,27 +105,40 @@ export const profileWorkspaceConfirmation = (input: {
   readonly action: "remove" | "disable" | "reset";
   readonly profile: ProfileId;
   readonly candidateIndex: number;
+  readonly candidateCount: number;
   readonly scope: SubagentConfigScope;
+  readonly projectOverrideActive?: boolean | undefined;
 }): ProfileWorkspaceConfirmation => {
+  const shadowed = input.projectOverrideActive
+    ? " The project override remains effective until it is reset."
+    : "";
   if (input.action === "remove")
     return {
       key: "x",
       title: `Remove candidate ${input.candidateIndex + 1} from ${input.profile}?`,
       detail:
-        "The remaining candidates keep their current order. The valid route is saved immediately.",
+        input.candidateCount === 1
+          ? input.projectOverrideActive
+            ? "This is the last global candidate. Removing it disables the global declaration; the project override remains effective."
+            : "This is the last candidate. Removing it disables the route after reload."
+          : `The remaining candidates keep their order and the route is saved immediately.${shadowed}`,
     };
   if (input.action === "disable")
     return {
       key: "d",
       title: `Disable the ${input.profile} route?`,
-      detail: "No candidate will launch for this profile after reload.",
+      detail: input.projectOverrideActive
+        ? "The global route declaration will be disabled; the project override remains effective."
+        : "No candidate will launch for this profile after reload.",
     };
   return {
     key: "i",
     title: `Reset ${input.profile}?`,
     detail:
       input.scope === "global"
-        ? "The global declaration will be removed. The effective route will return to the built-in profile."
-        : "The project declaration will be removed. The effective route will come from global settings.",
+        ? input.projectOverrideActive
+          ? "The global declaration will be removed. The project override remains effective."
+          : "The global declaration will be removed. The effective route will return to the built-in profile."
+        : "The project declaration will be removed. The effective route will come from global settings or the built-in profile.",
   };
 };

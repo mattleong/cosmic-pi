@@ -1,10 +1,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import {
+  decodeKittyPrintable,
+  Input,
   Key,
   matchesKey,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
   type Component,
 } from "@earendil-works/pi-tui";
 import {
@@ -20,11 +23,11 @@ import { sanitizeTerminalLine } from "./sanitize.ts";
 export type FleetMessageMode = "guidance" | "reply" | "next-assignment";
 
 export interface FleetActions {
-  readonly stop: (id: string) => void;
-  readonly interrupt: (id: string) => void;
-  readonly resume: (id: string) => void;
-  readonly message: (id: string, mode: FleetMessageMode) => void;
-  readonly rename: (id: string) => void;
+  readonly stop: (id: string) => Promise<void>;
+  readonly interrupt: (id: string) => Promise<void>;
+  readonly resume: (id: string, message?: string) => Promise<void>;
+  readonly message: (id: string, mode: FleetMessageMode, message: string) => Promise<void>;
+  readonly rename: (id: string, name: string) => Promise<void>;
 }
 
 export type FleetKeybindingId =
@@ -76,12 +79,22 @@ const canRename = (run: SubagentRunView | undefined): boolean =>
     run.state !== "failed",
   );
 const canStop = (run: SubagentRunView | undefined): boolean =>
-  Boolean(run && isActiveRunState(run.state));
+  Boolean(run && isActiveRunState(run.state) && run.state !== "stopping");
 
 type FleetLayout = "wide" | "stacked" | "narrow";
+type FleetPromptKind = "guidance" | "reply" | "next-assignment" | "resume" | "rename";
+type FleetNotice = { readonly kind: "info" | "success" | "error"; readonly text: string };
+type FleetPrompt = {
+  readonly kind: FleetPromptKind;
+  readonly runId: string;
+  readonly runName: string;
+  readonly input: Input;
+  readonly context?: string | undefined;
+  feedback?: string | undefined;
+};
 
 const pad = (text: string, width: number): string => {
-  const clipped = truncateToWidth(text, Math.max(0, width), "");
+  const clipped = truncateToWidth(text, Math.max(0, width));
   return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
 };
 
@@ -96,6 +109,9 @@ export class SubagentFleetComponent implements Component {
   private showTechnicalDetails = false;
   private alternateHelp = false;
   private pendingStop: string | undefined;
+  private prompt: FleetPrompt | undefined;
+  private notice: FleetNotice | undefined;
+  private busyAction: string | undefined;
   private layout: FleetLayout = "narrow";
   private readonly options: FleetOptions;
 
@@ -119,6 +135,96 @@ export class SubagentFleetComponent implements Component {
     const selected = runs[this.selected];
     if (this.pendingStop && (this.pendingStop !== selected?.id || !canStop(selected)))
       this.pendingStop = undefined;
+    if (this.prompt && this.prompt.runId !== selected?.id) this.prompt = undefined;
+  }
+
+  private printableKey(data: string): string | undefined {
+    return data.length === 1 ? data : decodeKittyPrintable(data);
+  }
+
+  private openPrompt(run: SubagentRunView, kind: FleetPromptKind): void {
+    const input = new Input();
+    input.focused = true;
+    this.prompt = {
+      kind,
+      runId: run.id,
+      runName: sanitizeTerminalLine(run.name),
+      input,
+      ...(kind === "reply" && run.question?.message
+        ? { context: sanitizeTerminalLine(run.question.message) }
+        : {}),
+    };
+    this.notice = undefined;
+  }
+
+  private performAction(progress: string, success: string, operation: () => Promise<void>): void {
+    this.busyAction = progress;
+    this.notice = { kind: "info", text: progress };
+    this.options.requestRender();
+    let result: Promise<void>;
+    try {
+      result = operation();
+    } catch (error) {
+      result = Promise.reject(error);
+    }
+    void Promise.resolve(result).then(
+      () => {
+        this.busyAction = undefined;
+        this.notice = { kind: "success", text: success };
+        this.options.requestRender();
+      },
+      (error: unknown) => {
+        this.busyAction = undefined;
+        this.notice = {
+          kind: "error",
+          text: error instanceof Error ? error.message : "Subagent operation failed.",
+        };
+        this.options.requestRender();
+      },
+    );
+  }
+
+  private submitPrompt(): void {
+    const prompt = this.prompt;
+    if (!prompt) return;
+    const message = prompt.input.getValue().trim();
+    if (prompt.kind !== "resume" && !message) {
+      prompt.feedback = prompt.kind === "rename" ? "Enter a new display name." : "Enter a message.";
+      this.options.requestRender();
+      return;
+    }
+    this.prompt = undefined;
+    const name = prompt.runName;
+    if (prompt.kind === "resume") {
+      this.performAction(`Resuming ${name}…`, `Resumed ${name}.`, () =>
+        this.options.actions.resume(prompt.runId, message || undefined),
+      );
+      return;
+    }
+    if (prompt.kind === "rename") {
+      this.performAction(
+        `Renaming ${name}…`,
+        `Renamed ${name} to ${sanitizeTerminalLine(message)}.`,
+        () => this.options.actions.rename(prompt.runId, message),
+      );
+      return;
+    }
+    const mode: FleetMessageMode = prompt.kind;
+    const verb =
+      mode === "reply"
+        ? "Sending reply"
+        : mode === "next-assignment"
+          ? "Starting next assignment"
+          : "Sending guidance";
+    const success =
+      mode === "reply"
+        ? `Reply sent to ${name}.`
+        : mode === "next-assignment"
+          ? `Next assignment sent to ${name}.`
+          : `Guidance sent to ${name}.`;
+    this.performAction(`${verb}…`, success, () =>
+      this.options.actions.message(prompt.runId, mode, message),
+    );
   }
 
   handleInput(data: string): void {
@@ -132,9 +238,17 @@ export class SubagentFleetComponent implements Component {
       this.options.matchesKeybinding
         ? this.options.matchesKeybinding(data, id)
         : matchesKey(data, fallback);
-    if (configured("tui.select.cancel", Key.escape)) {
+    const cancel = configured("tui.select.cancel", Key.escape);
+    if (cancel) {
+      if (this.prompt) {
+        this.prompt = undefined;
+        this.notice = { kind: "info", text: "Input canceled." };
+        this.options.requestRender();
+        return;
+      }
       if (this.pendingStop) {
         this.pendingStop = undefined;
+        this.notice = { kind: "info", text: "Stop canceled." };
         this.options.requestRender();
         return;
       }
@@ -147,48 +261,84 @@ export class SubagentFleetComponent implements Component {
       this.options.close();
       return;
     }
+    if (this.busyAction) return;
+    if (this.prompt) {
+      if (configured("tui.select.confirm", Key.enter)) this.submitPrompt();
+      else {
+        this.prompt.feedback = undefined;
+        this.prompt.input.handleInput(data);
+        this.options.requestRender();
+      }
+      return;
+    }
+
+    const printable = this.printableKey(data);
+    if (this.pendingStop) {
+      const run = selected && this.pendingStop === selected.id ? selected : undefined;
+      this.pendingStop = undefined;
+      if (printable === "x" && run && canStop(run))
+        this.performAction(
+          `Stopping ${sanitizeTerminalLine(run.name)}…`,
+          `Stopped ${sanitizeTerminalLine(run.name)}.`,
+          () => this.options.actions.stop(run.id),
+        );
+      else {
+        this.notice = { kind: "info", text: "Stop canceled." };
+        this.options.requestRender();
+      }
+      return;
+    }
+    this.notice = undefined;
+
     const halfPage = Math.max(1, Math.floor(this.detailPageSize / 2));
     const pageUp = configured("tui.select.pageUp", Key.pageUp);
     const pageDown = configured("tui.select.pageDown", Key.pageDown);
-    if (matchesKey(data, Key.ctrl("u")) || pageUp) {
+    const halfUp = matchesKey(data, Key.ctrl("u"));
+    const halfDown = matchesKey(data, Key.ctrl("d"));
+    const browsingNarrowList = this.layout === "narrow" && !this.details;
+    if (halfUp || pageUp) {
       const step = pageUp ? this.detailPageSize : halfPage;
-      this.detailScroll = Math.min(this.detailMaxScroll, this.detailScroll + step);
-    } else if (matchesKey(data, Key.ctrl("d")) || pageDown) {
+      if (browsingNarrowList)
+        this.select(this.selected - Math.max(1, this.options.getHeight() - 3), runs);
+      else this.detailScroll = Math.min(this.detailMaxScroll, this.detailScroll + step);
+    } else if (halfDown || pageDown) {
       const step = pageDown ? this.detailPageSize : halfPage;
-      this.detailScroll = Math.max(0, this.detailScroll - step);
-    } else if (configured("tui.select.up", Key.up) || data === "k") {
+      if (browsingNarrowList)
+        this.select(this.selected + Math.max(1, this.options.getHeight() - 3), runs);
+      else this.detailScroll = Math.max(0, this.detailScroll - step);
+    } else if (browsingNarrowList && matchesKey(data, Key.home)) this.select(0, runs);
+    else if (browsingNarrowList && matchesKey(data, Key.end)) this.select(runs.length - 1, runs);
+    else if (configured("tui.select.up", Key.up) || printable === "k")
       this.select(this.selected - 1, runs);
-    } else if (configured("tui.select.down", Key.down) || data === "j") {
+    else if (configured("tui.select.down", Key.down) || printable === "j")
       this.select(this.selected + 1, runs);
-    } else if (configured("tui.select.confirm", Key.enter) && this.layout === "narrow") {
+    else if (configured("tui.select.confirm", Key.enter) && this.layout === "narrow") {
       this.details = !this.details;
       this.detailScroll = 0;
-    } else if (data === "t") {
+    } else if (printable === "t") {
       this.showTechnicalDetails = !this.showTechnicalDetails;
       this.detailScroll = 0;
-    } else if (data === "?") {
-      this.alternateHelp = !this.alternateHelp;
-    } else if (data === "x" && selected && canStop(selected)) {
-      if (this.pendingStop === selected.id) {
-        this.pendingStop = undefined;
-        this.options.actions.stop(selected.id);
-      } else this.pendingStop = selected.id;
-    } else if (data === "i" && selected && canInterrupt(selected)) {
-      this.options.actions.interrupt(selected.id);
-    } else if (data === "r" && selected && canResume(selected)) {
-      this.options.actions.resume(selected.id);
-    } else if (data === "m" && selected && canMessage(selected)) {
-      this.options.actions.message(
-        selected.id,
+    } else if (printable === "?") this.alternateHelp = !this.alternateHelp;
+    else if (printable === "x" && selected && canStop(selected)) this.pendingStop = selected.id;
+    else if (printable === "i" && selected && canInterrupt(selected))
+      this.performAction(
+        `Interrupting ${sanitizeTerminalLine(selected.name)}…`,
+        `Interrupted ${sanitizeTerminalLine(selected.name)}.`,
+        () => this.options.actions.interrupt(selected.id),
+      );
+    else if (printable === "r" && selected && canResume(selected))
+      this.openPrompt(selected, "resume");
+    else if (printable === "m" && selected && canMessage(selected))
+      this.openPrompt(
+        selected,
         selected.state === "waiting_for_parent"
           ? "reply"
           : selected.state === "reported"
             ? "next-assignment"
             : "guidance",
       );
-    } else if (data === "n" && selected && canRename(selected)) {
-      this.options.actions.rename(selected.id);
-    }
+    else if (printable === "n" && selected && canRename(selected))
+      this.openPrompt(selected, "rename");
     this.options.requestRender();
   }
 
@@ -220,12 +370,19 @@ export class SubagentFleetComponent implements Component {
     if (height === 1) return [truncateToWidth(top, safeWidth, "")];
     if (safeWidth === 1) return Array.from({ length: height }, () => " ");
     const bodyHeight = height - 2;
-    const body =
-      safeWidth >= 100
-        ? this.renderWide(safeWidth, bodyHeight, runs, selected)
-        : safeWidth >= 60
-          ? this.renderStacked(safeWidth, bodyHeight, runs, selected)
-          : this.renderNarrow(safeWidth, bodyHeight, runs, selected);
+    let body: string[];
+    if (this.prompt) body = this.renderPrompt(safeWidth, bodyHeight, this.prompt);
+    else {
+      const showNotice = this.notice !== undefined && bodyHeight > 0;
+      const contentHeight = Math.max(0, bodyHeight - (showNotice ? 1 : 0));
+      const content =
+        safeWidth >= 100
+          ? this.renderWide(safeWidth, contentHeight, runs, selected)
+          : safeWidth >= 60
+            ? this.renderStacked(safeWidth, contentHeight, runs, selected)
+            : this.renderNarrow(safeWidth, contentHeight, runs, selected);
+      body = showNotice ? [this.renderNotice(safeWidth, this.notice!), ...content] : content;
+    }
     return [truncateToWidth(top, safeWidth, ""), ...body, truncateToWidth(bottom, safeWidth, "")];
   }
 
@@ -237,7 +394,81 @@ export class SubagentFleetComponent implements Component {
     return this.options.theme.fg("borderMuted", text);
   }
 
-  private runLine(run: SubagentRunView, index: number, width: number): string {
+  private renderNotice(width: number, notice: FleetNotice): string {
+    const inner = Math.max(0, width - 2);
+    const glyph = notice.kind === "error" ? "×" : notice.kind === "success" ? "✓" : "ℹ";
+    const color =
+      notice.kind === "error" ? "error" : notice.kind === "success" ? "success" : "muted";
+    return `${this.outerBorder("│")}${pad(
+      this.options.theme.fg(color, `${glyph} ${sanitizeTerminalLine(notice.text)}`),
+      inner,
+    )}${this.outerBorder("│")}`;
+  }
+
+  private renderPrompt(width: number, height: number, prompt: FleetPrompt): string[] {
+    const inner = Math.max(0, width - 2);
+    const title =
+      prompt.kind === "reply"
+        ? `Reply to ${prompt.runName}`
+        : prompt.kind === "next-assignment"
+          ? `Next assignment for ${prompt.runName}`
+          : prompt.kind === "guidance"
+            ? `Guide ${prompt.runName}`
+            : prompt.kind === "resume"
+              ? `Resume ${prompt.runName}`
+              : `Rename ${prompt.runName}`;
+    const instruction =
+      prompt.kind === "reply"
+        ? "Answer the pending question"
+        : prompt.kind === "next-assignment"
+          ? "Describe the next assignment"
+          : prompt.kind === "guidance"
+            ? "Enter guidance for the active assignment"
+            : prompt.kind === "resume"
+              ? "Optional continuation message; submit blank to resume"
+              : "Enter a new display name";
+    const inputLines = prompt.input.render(Math.max(1, inner)).slice(0, 1);
+    const feedback = prompt.feedback ? [this.options.theme.fg("warning", prompt.feedback)] : [];
+    const contextLines = prompt.context
+      ? wrapTextWithAnsi(
+          this.options.theme.fg("warning", `Question: ${prompt.context}`),
+          Math.max(1, inner),
+        )
+      : [];
+    const rows =
+      height <= 1
+        ? inputLines
+        : height === 2
+          ? [
+              ...inputLines,
+              ...(feedback.length > 0 ? feedback : [this.options.theme.fg("dim", instruction)]),
+            ]
+          : height === 3 && feedback.length > 0
+            ? [
+                this.options.theme.fg("accent", this.options.theme.bold(title)),
+                ...inputLines,
+                ...feedback,
+              ]
+            : [
+                this.options.theme.fg("accent", this.options.theme.bold(title)),
+                ...contextLines.slice(0, Math.max(0, height - 3 - feedback.length)),
+                this.options.theme.fg("dim", instruction),
+                ...inputLines,
+                ...feedback,
+              ];
+    const frame = (line: string) =>
+      `${this.outerBorder("│")}${pad(line, inner)}${this.outerBorder("│")}`;
+    const rendered = rows.slice(0, height).map(frame);
+    while (rendered.length < height) rendered.push(frame(""));
+    return rendered;
+  }
+
+  private runLine(
+    run: SubagentRunView,
+    index: number,
+    width: number,
+    runs: ReadonlyArray<SubagentRunView>,
+  ): string {
     const selected = index === this.selected;
     const prefix = selected ? this.options.theme.fg("accent", ">") : " ";
     const frame = Math.floor(this.options.getNow() / 160);
@@ -251,7 +482,12 @@ export class SubagentFleetComponent implements Component {
         : run.state === "reported"
           ? `report ${run.reportGeneration} · retained`
           : runStateLabel(run.state);
-    const label = sanitizeTerminalLine(`${run.name} · ${state} · ${run.writeIntent}`);
+    const duplicateName = runs.some(
+      (candidate) => candidate.id !== run.id && candidate.name === run.name,
+    );
+    const shortId = run.id.length <= 14 ? run.id : `…${run.id.slice(-13)}`;
+    const identity = duplicateName ? `[${shortId}] ${run.name}` : run.name;
+    const label = sanitizeTerminalLine(`${identity} · ${state} · ${run.writeIntent}`);
     return pad(
       `${prefix} ${glyph} ${selected ? this.options.theme.fg("accent", label) : label}`,
       width,
@@ -267,6 +503,16 @@ export class SubagentFleetComponent implements Component {
     return runs.slice(start, start + size).map((run, offset) => ({ run, index: start + offset }));
   }
 
+  private listHeading(
+    runs: ReadonlyArray<SubagentRunView>,
+    visible: ReadonlyArray<{ readonly index: number }>,
+  ): string {
+    if (runs.length === 0) return "Subagents · none";
+    const start = (visible[0]?.index ?? 0) + 1;
+    const end = (visible.at(-1)?.index ?? 0) + 1;
+    return `Subagents · ${start}–${end} of ${runs.length}${start > 1 ? " · ↑ more" : ""}${end < runs.length ? " · ↓ more" : ""}`;
+  }
+
   private helpText(width: number, selected: SubagentRunView | undefined): string {
     const contentWidth = Math.max(0, width - 2);
     const key = (id: FleetKeybindingId, fallback: string): string =>
@@ -276,6 +522,11 @@ export class SubagentFleetComponent implements Component {
       : "↑↓";
     const enter = key("tui.select.confirm", "Enter");
     const escape = key("tui.select.cancel", "Esc");
+    const pages = `${key("tui.select.pageUp", "PgUp")}/${key("tui.select.pageDown", "PgDn")}`;
+    if (this.prompt)
+      return renderResponsiveManagerFooter(contentWidth, [[`${enter} Submit`, `${escape} Cancel`]]);
+    if (this.busyAction)
+      return renderResponsiveManagerFooter(contentWidth, [[this.busyAction, `${escape} Close`]]);
     if (this.pendingStop)
       return renderResponsiveManagerFooter(contentWidth, [
         [
@@ -290,6 +541,8 @@ export class SubagentFleetComponent implements Component {
         : selected?.state === "reported"
           ? "m New task"
           : "m Guide";
+    if (!selected)
+      return renderResponsiveManagerFooter(contentWidth, [[`No runs · ? More`, `${escape} Close`]]);
     const actions = [
       messageAction,
       canInterrupt(selected) ? "i Interrupt" : undefined,
@@ -304,15 +557,19 @@ export class SubagentFleetComponent implements Component {
       canRename(selected) ? "n Name" : undefined,
       canStop(selected) ? "x Stop" : undefined,
     ].filter((item): item is string => item !== undefined);
+    const scrollHelp =
+      this.layout === "narrow" && !this.details
+        ? `${pages} Page list · Home/End`
+        : `C-u/d Half-page · ${pages} Page detail`;
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [
         [
-          `${navigation} Select · ${enter} Details (narrow) · C-u/d Half-page · PgUp/PgDn Page`,
+          `${navigation} Select · ${enter} Details (narrow) · ${scrollHelp}`,
           compactActions.length > 0 ? compactActions.join(" · ") : "No run actions",
           `t Technical · ? Back · ${escape} Close`,
         ],
         [
-          `${navigation} · ${enter} Details · C-u/d Scroll`,
+          `${navigation} · ${enter} Details · ${scrollHelp}`,
           compactActions.length > 0 ? compactActions.join(" · ") : "No actions",
           `t Technical · ? Back · ${escape}`,
         ],
@@ -323,18 +580,22 @@ export class SubagentFleetComponent implements Component {
       ]);
     return renderResponsiveManagerFooter(contentWidth, [
       [
-        `${navigation} Select · C-u/d Scroll`,
+        `${navigation} Select · ${scrollHelp}`,
         actions.length > 0 ? actions.join(" · ") : undefined,
         `t Technical · ? More · ${escape} Close`,
       ],
       [
-        `${navigation} · C-u/d`,
+        `${navigation} · ${scrollHelp}`,
         compactActions.length > 0 ? compactActions.join(" · ") : undefined,
         `t Technical · ? More · ${escape}`,
       ],
       width >= 60
-        ? [`${navigation} Select · C-u/d`, `t Technical · ? More · ${escape}`]
-        : [`${navigation} · ${enter}`, "t Technical", `? More · ${escape}`],
+        ? [
+            `${navigation} · ${pages}`,
+            compactActions.length > 0 ? compactActions.join(" · ") : undefined,
+            `? More · ${escape}`,
+          ]
+        : [`${navigation} · ${enter}`, `? More · ${escape}`],
     ]);
   }
 
@@ -365,9 +626,11 @@ export class SubagentFleetComponent implements Component {
     const visible = lines.slice(start, start + bodyHeight);
     if (!hasOverflow) return visible;
     const end = Math.min(lines.length, start + bodyHeight);
+    const pageUp = this.options.keybindingLabel?.("tui.select.pageUp", "PgUp") || "PgUp";
+    const pageDown = this.options.keybindingLabel?.("tui.select.pageDown", "PgDn") || "PgDn";
     const position = this.options.theme.fg(
       "dim",
-      ` ${start + 1}–${end} of ${lines.length} · C-u/d half-page · PgUp/PgDn page `,
+      ` ${start + 1}–${end} of ${lines.length} · C-u/d half-page · ${pageUp}/${pageDown} page `,
     );
     return [pad(position, width), ...visible];
   }
@@ -381,11 +644,10 @@ export class SubagentFleetComponent implements Component {
     const inner = width - 2;
     const leftWidth = Math.max(38, Math.floor(inner * 0.42));
     const rightWidth = inner - leftWidth - 1;
+    const visible = this.visibleRuns(runs, Math.max(1, height - 1));
     const left = [
-      this.options.theme.fg("accent", "Subagents"),
-      ...this.visibleRuns(runs, Math.max(1, height - 1)).map(({ run, index }) =>
-        this.runLine(run, index, leftWidth),
-      ),
+      this.options.theme.fg("accent", this.listHeading(runs, visible)),
+      ...visible.map(({ run, index }) => this.runLine(run, index, leftWidth, runs)),
     ];
     const detail = this.detailWindow(this.detailLines(selected, rightWidth), height, rightWidth);
     return Array.from(
@@ -405,11 +667,10 @@ export class SubagentFleetComponent implements Component {
   ): string[] {
     const inner = width - 2;
     const listHeight = Math.max(3, Math.min(runs.length + 1, Math.floor(height * 0.4)));
+    const visible = this.visibleRuns(runs, listHeight - 1);
     const list = [
-      this.options.theme.fg("accent", "Subagents"),
-      ...this.visibleRuns(runs, listHeight - 1).map(({ run, index }) =>
-        this.runLine(run, index, inner),
-      ),
+      this.options.theme.fg("accent", this.listHeading(runs, visible)),
+      ...visible.map(({ run, index }) => this.runLine(run, index, inner, runs)),
     ];
     const divider = `${this.outerBorder("├")}${this.innerBorder("─".repeat(inner))}${this.outerBorder("┤")}`;
     const remaining = Math.max(0, height - list.length - 1);
@@ -432,8 +693,16 @@ export class SubagentFleetComponent implements Component {
       this.details && selected
         ? this.detailWindow(this.detailLines(selected, inner), height, inner)
         : runs.length
-          ? this.visibleRuns(runs, height).map(({ run, index }) => this.runLine(run, index, inner))
-          : [this.options.theme.fg("dim", "No subagents.")];
+          ? (() => {
+              const visible = this.visibleRuns(runs, Math.max(1, height - 1));
+              if (height <= 1)
+                return visible.map(({ run, index }) => this.runLine(run, index, inner, runs));
+              return [
+                this.options.theme.fg("accent", this.listHeading(runs, visible)),
+                ...visible.map(({ run, index }) => this.runLine(run, index, inner, runs)),
+              ];
+            })()
+          : [this.options.theme.fg("dim", "No subagents. Start one with subagent_start.")];
     if (!this.details) {
       this.detailMaxScroll = 0;
       this.detailLineCount = 0;
@@ -445,5 +714,7 @@ export class SubagentFleetComponent implements Component {
     return rendered;
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.prompt?.input.invalidate();
+  }
 }

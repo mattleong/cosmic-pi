@@ -19,6 +19,7 @@ const page = (
   options: {
     current?: string;
     initialQuery?: string;
+    notice?: string;
     select?: (payload: string) => void;
     cancel?: () => void;
     matchesKeybinding?: (data: string, id: string) => boolean;
@@ -34,6 +35,7 @@ const page = (
     choices,
     current: options.current,
     initialQuery: options.initialQuery,
+    notice: options.notice,
     getHeight: () => options.height ?? 20,
     requestRender: vi.fn(),
     matchesKeybinding: options.matchesKeybinding,
@@ -83,6 +85,24 @@ describe("searchable settings selector", () => {
     expect(rendered.join("\n")).toContain("Model alpha");
   });
 
+  it("keeps warnings visible in compact and wrapped selector layouts", () => {
+    const notice =
+      "The configured model catalog could not be loaded, so safe fallback choices are shown instead.";
+    const compact = page([choice("a", "Model alpha", "alpha")], { height: 4, notice });
+    expect(compact.render(50).join("\n")).toContain("configured model catalog");
+    expect(compact.render(50).join("\n")).toContain("Model alpha");
+
+    const wrapped = page([choice("a", "Model alpha", "alpha")], { height: 14, notice });
+    const rendered = wrapped.render(34).join("\n");
+    expect(rendered).toContain("configured model");
+    expect(rendered).toContain("fallback choices");
+    expect(wrapped.render(34).at(-1)).toContain("Back");
+    expect(wrapped.render(20).at(-1)).toContain("Esc Back");
+
+    const oneRow = page([choice("a", "Model alpha", "alpha")], { height: 1, notice });
+    expect(oneRow.render(30)).toHaveLength(1);
+  });
+
   it("supports Home, End, PageUp, and PageDown list navigation", () => {
     const select = vi.fn();
     const choices = Array.from({ length: 20 }, (_, index) =>
@@ -112,7 +132,9 @@ describe("searchable settings selector", () => {
           "tui.select.cancel": "Q",
         })[id] ?? fallback,
     });
-    expect(selector.render(100).at(-1)).toContain("P/N navigate · Y select · Q back");
+    const footer = selector.render(100).at(-1) ?? "";
+    expect(footer).toContain("P/N Navigate");
+    expect(footer).toContain("Y Select · Q Back");
   });
 
   it("preselects the current filtered choice and honors configured keybindings", () => {

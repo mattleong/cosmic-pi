@@ -23,9 +23,10 @@ const choiceValue = (choice: ProfileModelChoice): string =>
   choice.kind === "model" ? choice.selector : "parent";
 
 const boundedMiddle = (value: string, maximum: number): string => {
-  if (value.length <= maximum) return value;
+  const characters = [...value];
+  if (characters.length <= maximum) return value;
   const left = Math.max(1, Math.floor((maximum - 1) / 2));
-  return `${value.slice(0, left)}…${value.slice(value.length - (maximum - left - 1))}`;
+  return `${characters.slice(0, left).join("")}…${characters.slice(characters.length - (maximum - left - 1)).join("")}`;
 };
 
 /** Authenticated canonical Pi models, plus local Pi's special parent selector. */
@@ -58,6 +59,7 @@ export function createProfileModelChoices(input: {
   }
   for (const model of input.models) {
     const canonical = `${model.provider}/${model.id}`;
+    if (!isSafeNativeModelSelector(canonical)) continue;
     const efforts = getSupportedThinkingLevels(model) as ReadonlyArray<SubagentEffort>;
     result.push({
       choice: { kind: "model", selector: canonical },

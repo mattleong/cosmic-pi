@@ -138,6 +138,7 @@ export function registerSubagentApplication(
     slot.run(effect, signal);
 
   registerSubagentManagerCommand(pi, bridge, {
+    isAvailable: () => currentActivation !== undefined,
     stop: (id) => run(SubagentService.use((service) => service.stop(id))).then(() => undefined),
     interrupt: (id) =>
       run(SubagentService.use((service) => service.interrupt(id))).then(() => undefined),

@@ -1,7 +1,14 @@
 // Profile settings are a Promise-shaped Pi host UI boundary.
 // @effect-diagnostics effect/asyncFunction:off
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, type Component, type KeyId } from "@earendil-works/pi-tui";
+import {
+  decodeKittyPrintable,
+  Key,
+  matchesKey,
+  type Component,
+  type KeyId,
+} from "@earendil-works/pi-tui";
+import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
 import type { SubagentConfigInspection, SubagentConfigScope } from "../../config/store.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../run/model.ts";
@@ -152,6 +159,19 @@ export class ProfileWorkspaceComponent implements Component {
 
   private clearMessage(): void {
     this.message = undefined;
+  }
+
+  private printableKey(data: string): string | undefined {
+    return data.length === 1 ? data : decodeKittyPrintable(data);
+  }
+
+  private projectOverrideActive(profile = this.profile()): boolean {
+    const project = this.inspection.project;
+    return Boolean(
+      project &&
+      (project.invalidProfileRoutes.includes(profile) ||
+        Object.prototype.hasOwnProperty.call(project.file.profiles ?? {}, profile)),
+    );
   }
 
   private selectProfile(offset: number): void {
@@ -516,6 +536,17 @@ export class ProfileWorkspaceComponent implements Component {
 
   private arm(action: PendingAction): void {
     if (this.busy) return;
+    const draft = this.draft();
+    if (
+      (action === "disable" && draft.kind === "disabled") ||
+      (action === "reset" &&
+        ((this.scope === "global" && draft.kind === "reset") ||
+          (this.scope === "project" && draft.kind === "inherit")))
+    ) {
+      this.setMessage("info", "No profile change was needed.");
+      this.renderSoon();
+      return;
+    }
     this.pendingAction = action;
     this.renderSoon();
   }
@@ -605,8 +636,10 @@ export class ProfileWorkspaceComponent implements Component {
       return;
     }
 
+    const printable = this.printableKey(data);
+
     if (this.pendingAction) {
-      if (data === confirmationKey(this.pendingAction)) this.confirmPending();
+      if (printable === confirmationKey(this.pendingAction)) this.confirmPending();
       else {
         this.pendingAction = undefined;
         this.setMessage("info", "Confirmation canceled.");
@@ -639,11 +672,11 @@ export class ProfileWorkspaceComponent implements Component {
       else this.fieldIndex = PROFILE_WORKSPACE_FIELDS.length - 1;
       this.pendingAction = undefined;
       this.clearMessage();
-    } else if (this.matches(data, Key.up, "tui.select.up") || data === "k") {
+    } else if (this.matches(data, Key.up, "tui.select.up") || printable === "k") {
       if (this.pane === "profiles") this.selectProfile(-1);
       else if (this.pane === "candidates") this.selectCandidate(-1);
       else this.selectField(-1);
-    } else if (this.matches(data, Key.down, "tui.select.down") || data === "j") {
+    } else if (this.matches(data, Key.down, "tui.select.down") || printable === "j") {
       if (this.pane === "profiles") this.selectProfile(1);
       else if (this.pane === "candidates") this.selectCandidate(1);
       else this.selectField(1);
@@ -651,21 +684,35 @@ export class ProfileWorkspaceComponent implements Component {
       if (this.pane !== "profiles") this.back();
     } else if (matchesKey(data, Key.right) || this.matches(data, Key.enter, "tui.select.confirm"))
       this.forward();
-    else if (data === "/" && this.pane === "profiles") this.openProfileSearch();
-    else if (data === "g") this.changeScope("global");
-    else if (data === "p") this.changeScope("project");
-    else if (data === "a" && this.pane === "candidates") this.performDraftAction("add");
-    else if (data === "c" && this.pane === "candidates" && this.draft().candidates.length > 0)
+    else if (printable === "/" && this.pane === "profiles") this.openProfileSearch();
+    else if (printable === "g") this.changeScope("global");
+    else if (printable === "p") this.changeScope("project");
+    else if (
+      printable === "a" &&
+      this.pane === "candidates" &&
+      this.draft().candidates.length < MAX_PROFILE_CANDIDATES
+    )
+      this.performDraftAction("add");
+    else if (
+      printable === "c" &&
+      this.pane === "candidates" &&
+      this.draft().candidates.length > 0 &&
+      this.draft().candidates.length < MAX_PROFILE_CANDIDATES
+    )
       this.performDraftAction("clone");
-    else if (data === "K" && this.pane === "candidates" && this.draft().candidates.length > 1)
+    else if (printable === "K" && this.pane === "candidates" && this.candidateIndex > 0)
       this.performDraftAction("move-up");
-    else if (data === "J" && this.pane === "candidates" && this.draft().candidates.length > 1)
+    else if (
+      printable === "J" &&
+      this.pane === "candidates" &&
+      this.candidateIndex < this.draft().candidates.length - 1
+    )
       this.performDraftAction("move-down");
-    else if (data === "x" && this.pane === "candidates" && this.draft().candidates.length > 0)
+    else if (printable === "x" && this.pane === "candidates" && this.draft().candidates.length > 0)
       this.arm("remove");
-    else if (data === "d" && this.pane === "candidates") this.arm("disable");
-    else if (data === "i" && this.pane !== "fields") this.arm("reset");
-    else if (data === "r") this.requestReload();
+    else if (printable === "d" && this.pane === "candidates") this.arm("disable");
+    else if (printable === "i" && this.pane !== "fields") this.arm("reset");
+    else if (printable === "r") this.requestReload();
     this.renderSoon();
   }
 
@@ -692,7 +739,9 @@ export class ProfileWorkspaceComponent implements Component {
               action: this.pendingAction,
               profile: this.profile(),
               candidateIndex: this.candidateIndex,
+              candidateCount: this.draft().candidates.length,
               scope: this.scope,
+              projectOverrideActive: this.scope === "global" && this.projectOverrideActive(),
             })
           : undefined,
       },

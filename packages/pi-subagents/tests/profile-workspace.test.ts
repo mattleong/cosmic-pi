@@ -137,7 +137,9 @@ describe("profile settings workspace", () => {
       const lines = component.render(width);
       expect(lines).toHaveLength(height);
       expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
-      expect(lines.join("\n")).toContain(width > 12 ? "/subagents" : "/subagent");
+      const rendered = lines.join("\n");
+      expect(rendered).toContain(width > 12 ? "/subagents" : "/subagent");
+      expect(rendered).toContain("delegate");
     }
   });
 
@@ -171,6 +173,81 @@ describe("profile settings workspace", () => {
     const fields = component.render(60).join("\n");
     expect(fields).toContain("…");
     expect(fields).toContain("Enter to choose");
+  });
+
+  it("warns when a project override shadows global edits", () => {
+    const value = inspection(
+      { version: 4, profiles: { reviewer: candidate("openai/global") } },
+      {
+        version: 4,
+        defaultProfile: "reviewer",
+        profiles: { reviewer: candidate("openai/project") },
+      },
+    );
+    const { component } = makeComponent(value);
+    component.handleInput("g");
+    const rendered = component.render(100).join("\n");
+    expect(rendered).toContain("Project override active for reviewer");
+    expect(rendered).toContain("global edits are saved but do not change its effective");
+    expect(rendered).toContain("route until the project override is reset");
+    component.handleInput(input.enter);
+    component.handleInput("d");
+    expect(component.render(100).join("\n")).toContain("project override remains effective");
+
+    const compact = makeComponent(value, { getHeight: () => 8 }).component;
+    compact.handleInput("g");
+    const compactRendered = compact.render(100).join("\n");
+    expect(compactRendered).toContain("Global scope overrides built-in");
+    expect(compactRendered).toContain("Project override active");
+  });
+
+  it("shows same-count route reorder previews while a save is pending", () => {
+    const value = inspection(
+      { version: 4 },
+      {
+        version: 4,
+        defaultProfile: "reviewer",
+        profiles: { reviewer: [candidate("openai/first"), candidate("openai/second")] },
+      },
+    );
+    let resolveSave: ((value: ProfileWorkspaceSaveResult) => void) | undefined;
+    const pendingSave = new Promise<ProfileWorkspaceSaveResult>((resolve) => {
+      resolveSave = resolve;
+    });
+    const { component } = makeComponent(value, {
+      saveDraft: () => pendingSave,
+    });
+    component.handleInput(input.enter);
+    component.handleInput("J");
+    expect(component.render(100).join("\n")).toContain("Preview    2 candidates");
+    resolveSave?.({ inspection: value });
+  });
+
+  it("explains that removing the last candidate disables the route", () => {
+    const { component } = makeComponent();
+    component.handleInput(input.enter);
+    component.handleInput("x");
+    const rendered = component.render(100).join("\n");
+    expect(rendered).toContain("This is the last candidate");
+    expect(rendered).toContain("disables the route after reload");
+  });
+
+  it("hides no-op route actions and marks narrow fixed fields", () => {
+    const { component } = makeComponent();
+    component.handleInput("g");
+    component.handleInput(input.enter);
+    const route = component.render(100).join("\n");
+    expect(route).not.toContain("i      Reset");
+    expect(route).not.toContain("J      Move");
+    expect(route).not.toContain("K      Move");
+    component.handleInput(input.enter);
+    expect(component.render(40).join("\n")).toContain("· fixed");
+  });
+
+  it("accepts Kitty CSI-u printable action shortcuts", () => {
+    const { component } = makeComponent();
+    component.handleInput("\u001b[47u");
+    expect(component.render(100).join("\n")).toContain("Search profiles");
   });
 
   it("returns to the route when a deep scope switch has no candidate", () => {
@@ -224,8 +301,15 @@ describe("profile settings workspace", () => {
           }) as Readonly<Record<string, string>>
         )[id] ?? fallback,
     });
-    expect(component.render(120).at(-1)).toContain("P/N Select · Y Route");
+    expect(component.render(120).at(-1)).toContain("P/N Select");
+    expect(component.render(120).at(-1)).toContain("Y Route");
     expect(component.render(120).at(-1)).toContain("Q Close");
+    expect(component.render(120).join("\n")).toContain("Y      Open delegate route");
+    component.handleInput(input.enter);
+    component.handleInput(input.enter);
+    const candidatePage = component.render(120).join("\n");
+    expect(candidatePage).toContain("Y      Choose value");
+    expect(candidatePage).toContain("Q      Back to ordered route");
   });
 
   it("navigates Profiles → Route → Candidate with scope and effective context", () => {
@@ -260,7 +344,7 @@ describe("profile settings workspace", () => {
     expect(details).toContain("Candidate fields");
     expect(details).toContain("Host");
     expect(details).toContain("Runtime");
-    expect(details).toContain("After report");
+    expect(details).toContain("Report policy");
   });
 
   it("keeps selected profiles and candidate fields visible in short terminals", () => {
@@ -270,7 +354,7 @@ describe("profile settings workspace", () => {
     component.handleInput(input.enter);
     component.handleInput(input.enter);
     for (let index = 0; index < 6; index += 1) component.handleInput(input.down);
-    expect(component.render(100).join("\n")).toContain("After report");
+    expect(component.render(100).join("\n")).toContain("Report policy");
   });
 
   it("keeps route-only actions out of the profiles pane and blocks empty-route Tab navigation", () => {

@@ -131,9 +131,10 @@ export const syncAwaitProgressTicker = (
   if (!context?.state) return;
   const shouldAnimate =
     isPartial &&
-    details?.action === "await" &&
-    details.cancelled !== true &&
-    details.cards.some((run) => run.state === "starting" || run.state === "running");
+    details?.cancelled !== true &&
+    (details?.action === "start" ||
+      (details?.action === "await" &&
+        details.cards.some((run) => run.state === "starting" || run.state === "running")));
   if (shouldAnimate) {
     context.state.piSubagentsAwaitInvalidate = context.invalidate;
     if (!context.state.piSubagentsAwaitTicker) {
@@ -205,9 +206,33 @@ const expandedRunReportSections = (
 ): ReadonlyArray<RunReportSection> => {
   const candidates = runs.flatMap((run): ReadonlyArray<RunReportSection> => {
     const name = sanitizeTerminalLine(run.name);
-    if (run.finalText) return [{ name, kind: "report", text: sanitizeTerminalText(run.finalText) }];
-    if (run.error) return [{ name, kind: "failure", text: sanitizeTerminalText(run.error) }];
-    return [];
+    const marker = "\n… [content truncated; use subagent_status for this run]";
+    const sections: RunReportSection[] = [];
+    if (run.finalText)
+      sections.push({
+        name,
+        kind: "report",
+        text: `${sanitizeTerminalText(run.finalText)}${run.finalTextTruncated ? marker : ""}`,
+      });
+    else if (run.finalTextTruncated)
+      sections.push({
+        name,
+        kind: "report",
+        text: "Report content was omitted from this persisted card; use subagent_status for this run.",
+      });
+    if (run.error)
+      sections.push({
+        name,
+        kind: "failure",
+        text: `${sanitizeTerminalText(run.error)}${run.errorTruncated ? marker : ""}`,
+      });
+    else if (run.errorTruncated)
+      sections.push({
+        name,
+        kind: "failure",
+        text: "Failure detail was omitted from this persisted card; use subagent_status for this run.",
+      });
+    return sections;
   });
   if (candidates.length === 0) return [];
   const headingBudget = candidates.reduce((total, section) => total + section.name.length + 24, 0);
@@ -251,10 +276,55 @@ const renderStartFailures = (
       const name = sanitizeTerminalLine(failure.name ?? `start #${failure.index + 1}`);
       const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
       const summary = `${theme.fg("error", `× ${name}`)} · ${theme.fg("error", `failed to start${code}`)}`;
-      const detail = safeTextPrefix(sanitizeTerminalLine(failure.message), expanded ? 2_048 : 240);
+      const raw = sanitizeTerminalLine(failure.message);
+      const maximum = expanded ? 2_048 : 240;
+      const marker = "… [truncated]";
+      const detail =
+        raw.length <= maximum
+          ? raw
+          : `${safeTextPrefix(raw, Math.max(0, maximum - marker.length))}${marker}`;
       return `${summary}\n${theme.fg("dim", detail)}`;
     })
     .join("\n");
+
+class StartProgressComponent implements Component {
+  private readonly progress: string;
+  private readonly runs: ReadonlyArray<SubagentRunCard>;
+  private readonly failures: ReadonlyArray<SubagentStartFailure>;
+  private readonly theme: Theme;
+
+  constructor(
+    progress: string,
+    runs: ReadonlyArray<SubagentRunCard>,
+    failures: ReadonlyArray<SubagentStartFailure>,
+    theme: Theme,
+  ) {
+    this.progress = progress;
+    this.runs = runs;
+    this.failures = failures;
+    this.theme = theme;
+  }
+
+  render(width: number): string[] {
+    const safeWidth = Math.max(1, width);
+    const frame = Math.floor(synchronousNow() / 160);
+    return [
+      truncateToWidth(
+        this.theme.fg("warning", `${animatedRunStateGlyph("starting", frame)} ${this.progress}`),
+        safeWidth,
+      ),
+      ...renderResponsiveRunRows(this.runs, safeWidth, this.theme, { frame }),
+      ...renderStartFailures(this.failures, false, this.theme)
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => truncateToWidth(line, safeWidth)),
+    ];
+  }
+
+  invalidate(): void {
+    // Rendering is derived from the current clock frame.
+  }
+}
 
 export interface OutcomeBanner {
   readonly color: "warning" | "success" | "error" | "accent";
@@ -385,6 +455,28 @@ class RunOverviewComponent implements Component {
         .split("\n")
         .filter(Boolean)
         .map((line) => truncateToWidth(line, safeWidth)),
+      ...this.runs
+        .filter((run) => run.state === "completed" && !run.finalText && !run.error)
+        .map((run) =>
+          truncateToWidth(
+            this.theme.fg(
+              "dim",
+              `${sanitizeTerminalLine(run.name)} completed without a final report.`,
+            ),
+            safeWidth,
+          ),
+        ),
+      ...this.runs
+        .filter((run) => run.state === "reported" && run.closeOnReport === false)
+        .map((run) =>
+          truncateToWidth(
+            this.theme.fg(
+              "dim",
+              `${sanitizeTerminalLine(run.name)} is retained · use subagent_send for its next assignment.`,
+            ),
+            safeWidth,
+          ),
+        ),
       ...attentionRecoveryText(this.runs)
         .split("\n")
         .filter(Boolean)
@@ -500,8 +592,22 @@ export const awaitResultBanner = (details: {
   };
 };
 
+const includeContentOmission = (
+  banner: OutcomeBanner | undefined,
+  omitted: boolean | undefined,
+): OutcomeBanner | undefined => {
+  if (!omitted) return banner;
+  const warning =
+    "Some report content was omitted from the persisted card; use subagent_status for individual runs";
+  return banner
+    ? { color: "warning", text: `${banner.text} · ${warning}` }
+    : { color: "warning", text: warning };
+};
+
 export const renderSubagentCall = (name: string, target: string, theme: Theme): Component => {
-  const clippedTarget = safeTextPrefix(sanitizeTerminalLine(target), 160);
+  const safeTarget = sanitizeTerminalLine(target);
+  const clippedTarget =
+    safeTarget.length <= 160 ? safeTarget : `${safeTextPrefix(safeTarget, 146)}… [truncated]`;
   return new Text(
     `${theme.fg("toolTitle", theme.bold(name))}${clippedTarget ? ` ${theme.fg("dim", clippedTarget)}` : ""}`,
     0,
@@ -532,27 +638,41 @@ export const renderSubagentResult = (
     return renderAwaitProgressComponent(details.cards, details.awaitUntil, theme);
   }
   if (isPartial && details?.action === "start") {
-    const container = new Container();
-    const progress = result.content
+    const rawProgress = result.content
       .filter((part) => part.type === "text")
       .map((part) => part.text ?? "")
       .join(" ");
-    if (progress)
-      container.addChild(
-        new Text(theme.fg("warning", safeTextPrefix(sanitizeTerminalLine(progress), 240)), 0, 0),
-      );
-    container.addChild(
-      renderStartAwaitOverviewComponent(details.cards, theme, details.startFailures ?? []),
-    );
-    return container;
+    const progress = sanitizeTerminalLine(rawProgress || "Starting subagents…");
+    return new StartProgressComponent(progress, details.cards, details.startFailures ?? [], theme);
   }
   if (!isPartial && details) {
     const failures = details.startFailures ?? [];
-    const banner =
+    const banner = includeContentOmission(
       details.action === "await"
         ? awaitResultBanner({ ...details, runs: details.cards })
-        : undefined;
-    if (expanded) return renderExpandedStartAwaitResult(details.cards, theme, failures, banner);
+        : undefined,
+      details.contentOmitted,
+    );
+    if (expanded) {
+      const rendered = renderExpandedStartAwaitResult(details.cards, theme, failures, banner);
+      if (!details.contentOmitted) return rendered;
+      const fallback = boundToolOutput(
+        sanitizeTerminalText(
+          result.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text ?? "")
+            .join("\n"),
+        ),
+      );
+      const container = new Container();
+      container.addChild(rendered);
+      if (fallback) {
+        container.addChild(new Spacer(1));
+        container.addChild(new Text(theme.fg("accent", theme.bold("Bounded tool output")), 0, 0));
+        container.addChild(new Text(theme.fg("toolOutput", fallback), 2, 0));
+      }
+      return container;
+    }
     return renderStartAwaitOverviewComponent(details.cards, theme, failures, banner);
   }
   let text = boundToolOutput(
@@ -565,7 +685,8 @@ export const renderSubagentResult = (
   );
   if (!expanded) {
     const lines = text.split("\n");
-    if (lines.length > 12) text = `${lines.slice(0, 12).join("\n")}\n…`;
+    if (lines.length > 12)
+      text = `${lines.slice(0, 11).join("\n")}\n… [${lines.length - 11} more lines · expand to view]`;
   }
   return new Text(
     theme.fg(isPartial ? "warning" : "toolOutput", text || (isPartial ? "Working…" : "Done")),

@@ -116,7 +116,26 @@ describe("inline candidate model editor", () => {
     ).toEqual(current);
   });
 
-  it("reports an empty Pi catalog without opening an unusable page", async () => {
+  it("omits authenticated Pi models with unsafe canonical selectors", async () => {
+    const unsafeContext = {
+      modelRegistry: {
+        getAvailable: () => [{ provider: "unsafe provider", id: "model" }],
+        find: () => undefined,
+      },
+    } as unknown as ExtensionCommandContext;
+    const picker = await loadCandidateModelPicker(unsafeContext, {
+      profile: "reviewer",
+      candidateIndex: 0,
+      candidate: candidate({ host: "herdr", runtime: "pi", model: "openai/current" }),
+      listNativeModels: vi.fn(),
+    });
+    expect(picker.choices.map((choice) => choice.item.value)).not.toContain(
+      "unsafe provider/model",
+    );
+    expect(picker.warning).toContain("canonical selector is unsafe");
+  });
+
+  it("preserves an unavailable configured Pi model instead of selecting a replacement", async () => {
     const picker = await loadCandidateModelPicker(context(), {
       profile: "reviewer",
       candidateIndex: 0,
@@ -124,7 +143,9 @@ describe("inline candidate model editor", () => {
       listNativeModels: vi.fn(),
     });
 
-    expect(picker.choices).toEqual([]);
-    expect(picker.warning).toContain("No authenticated canonical Pi models");
+    expect(picker.choices).toHaveLength(1);
+    expect(picker.choices[0]?.item.label).toContain("current · unavailable");
+    expect(picker.current).toBe("openai/missing");
+    expect(picker.warning).toContain("not currently authenticated");
   });
 });

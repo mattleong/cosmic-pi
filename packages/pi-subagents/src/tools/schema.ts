@@ -113,16 +113,28 @@ export const ReplyParameters = Type.Object(
   strictObjectOptions,
 );
 
-export const LifecycleParameters = Type.Object(
-  {
-    action: StringEnum(["interrupt", "resume", "stop"] as const, {
-      description: "Lifecycle operation. The optional message is valid only for resume.",
-    }),
-    runIds: RunIdsParameters,
-    message: Type.Optional(MessageParameters),
-  },
-  strictObjectOptions,
-);
+export const LifecycleParameters = Type.Union([
+  Type.Object(
+    {
+      action: Type.Literal("resume", {
+        description: "Resume a run that advertises the resume capability.",
+      }),
+      runIds: RunIdsParameters,
+      message: Type.Optional(MessageParameters),
+    },
+    strictObjectOptions,
+  ),
+  Type.Object(
+    {
+      action: StringEnum(["interrupt", "stop"] as const, {
+        description:
+          "Interrupt requires the interrupt capability; stop is always available for active runs.",
+      }),
+      runIds: RunIdsParameters,
+    },
+    strictObjectOptions,
+  ),
+]);
 
 export const RenameParameters = Type.Object(
   {

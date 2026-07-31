@@ -50,6 +50,7 @@ const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): Pr
 });
 
 const actions = (value = inspection()): FleetManagerActions => ({
+  isAvailable: () => true,
   stop: () => Promise.resolve(),
   interrupt: () => Promise.resolve(),
   resume: () => Promise.resolve(),
@@ -156,6 +157,18 @@ describe("/subagents profile workspace", () => {
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining("Usage: /subagents [profiles]"),
       "error",
+    );
+  });
+
+  it("explains inactive fleet state before opening an empty overlay", async () => {
+    const managerActions: FleetManagerActions = { ...actions(), isAvailable: () => false };
+    const custom = vi.fn().mockResolvedValue(undefined);
+    const notify = vi.fn();
+    await register(managerActions)("", baseContext({ custom, notify }));
+    expect(custom).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      "Subagents are not active. Run /reload, then reopen /subagents.",
+      "warning",
     );
   });
 

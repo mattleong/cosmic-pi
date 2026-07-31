@@ -46,6 +46,8 @@ export interface SubagentRunCard {
   readonly endedAt?: number | undefined;
   readonly finalText?: string | undefined;
   readonly error?: string | undefined;
+  readonly finalTextTruncated?: boolean | undefined;
+  readonly errorTruncated?: boolean | undefined;
   readonly question?: Pick<PendingParentQuestion, "message"> | undefined;
 }
 
@@ -65,6 +67,7 @@ export interface SubagentStartAwaitCardDetails {
   readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
   readonly cancelled?: boolean | undefined;
+  readonly contentOmitted?: boolean | undefined;
 }
 
 export interface CompactToolActionFailure {
@@ -103,6 +106,7 @@ export interface StartAwaitDetailsInput {
   readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
   readonly cancelled?: boolean | undefined;
+  readonly contentOmitted?: boolean | undefined;
 }
 
 const clean = (value: string, maximum: number): string =>
@@ -143,12 +147,12 @@ const projectCard = (run: SubagentRunCard, budget: number): SubagentRunCard => {
     ? { message: take(run.question.message, MAX_CARD_QUESTION_CHARS) }
     : undefined;
   const selection = boundedSelection(run.selection, take);
-  const finalText = run.finalText
-    ? take(sanitizeOutputText(run.finalText, MAX_FINAL_TEXT_CHARS), MAX_FINAL_TEXT_CHARS)
+  const boundedFinalText = run.finalText
+    ? sanitizeOutputText(run.finalText, MAX_FINAL_TEXT_CHARS)
     : undefined;
-  const error = run.error
-    ? take(sanitizeOutputText(run.error, MAX_ERROR_CHARS), MAX_ERROR_CHARS)
-    : undefined;
+  const finalText = boundedFinalText ? take(boundedFinalText, MAX_FINAL_TEXT_CHARS) : undefined;
+  const boundedError = run.error ? sanitizeOutputText(run.error, MAX_ERROR_CHARS) : undefined;
+  const error = boundedError ? take(boundedError, MAX_ERROR_CHARS) : undefined;
   return {
     id,
     name,
@@ -165,6 +169,13 @@ const projectCard = (run: SubagentRunCard, budget: number): SubagentRunCard => {
     ...(run.endedAt === undefined ? {} : { endedAt: run.endedAt }),
     ...(finalText ? { finalText } : {}),
     ...(error ? { error } : {}),
+    ...(run.finalTextTruncated ||
+    (boundedFinalText !== undefined && finalText?.length !== boundedFinalText.length)
+      ? { finalTextTruncated: true }
+      : {}),
+    ...(run.errorTruncated || (boundedError !== undefined && error?.length !== boundedError.length)
+      ? { errorTruncated: true }
+      : {}),
     ...(question?.message ? { question } : {}),
   };
 };
@@ -208,6 +219,8 @@ const compactCardFallback = (card: SubagentRunCard): SubagentRunCard => ({
     skippedCandidates: [],
   },
   ...(card.endedAt === undefined ? {} : { endedAt: card.endedAt }),
+  ...(card.finalTextTruncated ? { finalTextTruncated: true } : {}),
+  ...(card.errorTruncated ? { errorTruncated: true } : {}),
   ...(card.question?.message ? { question: { message: clean(card.question.message, 160) } } : {}),
 });
 
@@ -243,13 +256,21 @@ export function makeStartAwaitCardDetails(
     ...(input.timedOut ? { timedOut: true } : {}),
     ...(input.attentionRequired ? { attentionRequired: true } : {}),
     ...(input.cancelled ? { cancelled: true } : {}),
+    ...(input.contentOmitted ? { contentOmitted: true } : {}),
   };
   // Raw string length is not a serialized bound: backslashes, controls, and lone surrogates can
   // expand several-fold under JSON.stringify. Recheck every fallback stage against the persisted
   // representation and finally drop optional card content rather than return an oversized value.
   const withoutReports: SubagentStartAwaitCardDetails = {
     ...details,
-    cards: details.cards.map(({ finalText: _finalText, error: _error, ...card }) => card),
+    cards: details.cards.map(
+      ({ finalText: omittedFinalText, error: omittedError, ...card }): SubagentRunCard => ({
+        ...card,
+        ...(omittedFinalText ? { finalTextTruncated: true } : {}),
+        ...(omittedError ? { errorTruncated: true } : {}),
+      }),
+    ),
+    ...(details.cards.some((card) => card.finalText || card.error) ? { contentOmitted: true } : {}),
   };
   const compact: SubagentStartAwaitCardDetails = {
     ...withoutReports,
@@ -266,6 +287,9 @@ export function makeStartAwaitCardDetails(
     ...(input.timedOut ? { timedOut: true } : {}),
     ...(input.attentionRequired ? { attentionRequired: true } : {}),
     ...(input.cancelled ? { cancelled: true } : {}),
+    ...(input.contentOmitted || details.cards.some((card) => card.finalText || card.error)
+      ? { contentOmitted: true }
+      : {}),
   };
   const bounded = [details, withoutReports, compact, minimal].find(
     (candidate) => serializedLength(candidate) <= MAX_TOOL_OUTPUT_CHARS,
@@ -415,6 +439,8 @@ const decodeCard = (value: unknown): SubagentRunCard | undefined => {
     ...(typeof record.error === "string"
       ? { error: sanitizeOutputText(record.error, MAX_ERROR_CHARS) }
       : {}),
+    ...(record.finalTextTruncated === true ? { finalTextTruncated: true } : {}),
+    ...(record.errorTruncated === true ? { errorTruncated: true } : {}),
     ...(questionRecord && typeof questionRecord.message === "string"
       ? { question: { message: clean(questionRecord.message, MAX_CARD_QUESTION_CHARS) } }
       : {}),
@@ -464,5 +490,6 @@ export function decodeStartAwaitCardDetails(
     ...(record.timedOut === true ? { timedOut: true } : {}),
     ...(record.attentionRequired === true ? { attentionRequired: true } : {}),
     ...(record.cancelled === true ? { cancelled: true } : {}),
+    ...(record.contentOmitted === true ? { contentOmitted: true } : {}),
   });
 }

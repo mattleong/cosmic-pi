@@ -338,9 +338,10 @@ export function declaredRouteForDraft(draft: ProfileRouteDraft): RouteDeclaratio
 }
 
 const boundedMiddle = (value: string, maximum: number): string => {
-  if (value.length <= maximum) return value;
+  const characters = [...value];
+  if (characters.length <= maximum) return value;
   const left = Math.max(1, Math.floor((maximum - 1) / 2));
-  return `${value.slice(0, left)}…${value.slice(value.length - (maximum - left - 1))}`;
+  return `${characters.slice(0, left).join("")}…${characters.slice(characters.length - (maximum - left - 1)).join("")}`;
 };
 
 /** Bounded one-line summary that still names every product field. */

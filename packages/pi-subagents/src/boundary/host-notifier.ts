@@ -104,9 +104,17 @@ const completionChunks = (
   const chunks: CompletionChunk[] = [];
   let chunkRuns: SubagentCompletionNotification[] = [];
   let sections: string[] = [];
+  const retained = runs.filter((run) => run.retained).length;
+  const closed = runs.length - retained;
   const headerFor = (chunkIndex: number): string => {
     const continuation = chunkIndex === 0 ? "" : ` (continued ${chunkIndex + 1})`;
-    return `${runs.length} background subagents completed${continuation}.`;
+    const outcomes = [
+      closed > 0 ? `${closed} completed` : undefined,
+      retained > 0 ? `${retained} reported and retained` : undefined,
+    ]
+      .filter((value): value is string => value !== undefined)
+      .join(" · ");
+    return `${runs.length} background subagents finished${continuation} · ${outcomes}.`;
   };
   const flush = () => {
     if (chunkRuns.length === 0) return;
@@ -187,7 +195,7 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
       return { deliveredActionKeys: [actionKey] };
     const content = clip(
       notification.type === "question"
-        ? `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with subagent_reply({ runId: "${notification.id}", message: "..." }).`
+        ? `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with subagent_reply({ runId: "${notification.id}", message: "..." }), then call subagent_await again.`
         : `Subagent ${notification.name} (${notification.id}) warning: ${notification.message}`,
     );
     try {

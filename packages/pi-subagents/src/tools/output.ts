@@ -1,16 +1,25 @@
 import type { SubagentRunObservation } from "../run/service.ts";
 import type { SubagentRunView } from "../run/model.ts";
+import { runStateLabel } from "../ui/run-state.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { safeTextPrefix } from "../run/state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 import { selectionSourceLabel } from "./format.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./subagent.ts";
 
+const boundedLine = (value: string, maximum: number): string => {
+  const safe = sanitizeTerminalLine(value);
+  const marker = "… [truncated]";
+  return safe.length <= maximum
+    ? safe
+    : `${safeTextPrefix(safe, Math.max(0, maximum - marker.length))}${marker}`;
+};
+
 export const formatRun = (run: SubagentRunView, detailed = false): string => {
   const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
   const host = run.host ?? "local";
   const runtime = run.runtime ?? run.backend;
-  const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${run.state} · ${run.writeIntent}${profile} · ${host}/${runtime}/${sanitizeTerminalLine(run.model)}:${run.effort}`;
+  const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${host}/${runtime}/${sanitizeTerminalLine(run.model)}:${run.effort}`;
   if (!detailed) return header;
   const field = (label: string, value: string): string =>
     `  ${label.padEnd(10)} ${sanitizeTerminalLine(value)}`;
@@ -18,7 +27,7 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     "Subagent status",
     field("Name", run.name),
     field("ID", run.id),
-    field("State", run.state),
+    field("State", runStateLabel(run.state)),
     run.profile ? field("Profile", run.profile) : undefined,
     field("Route", `${host}/${runtime}/${run.model} · ${run.effort}`),
     field(
@@ -33,7 +42,7 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
         `${candidate.candidateIndex === undefined ? "route" : `candidate ${candidate.candidateIndex + 1}`} [${candidate.code}]: ${candidate.reason}`,
       ),
     ),
-    run.selection.warning ? field("Route", run.selection.warning) : undefined,
+    run.selection.warning ? field("Route warning", run.selection.warning) : undefined,
     field("Context", run.context),
     field("Intent", run.writeIntent),
     field("Capabilities", `${run.capabilities.join(", ") || "none"}; stop/await always available`),
@@ -93,7 +102,7 @@ export const formatStartFailures = (failures: ReadonlyArray<SubagentStartFailure
         `Failed starts (${failures.length})`,
         ...failures.map((failure) => {
           const target = failure.name ? ` ${sanitizeTerminalLine(failure.name)}` : "";
-          const message = safeTextPrefix(sanitizeTerminalLine(failure.message), 2_048);
+          const message = boundedLine(failure.message, 2_048);
           const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
           return `  #${failure.index + 1}${target}${code}: ${message}`;
         }),
@@ -122,7 +131,7 @@ export const formatActionFailures = (failures: ReadonlyArray<SubagentActionFailu
         `Failed targets (${failures.length})`,
         ...failures.map((failure) => {
           const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
-          return `  ${sanitizeTerminalLine(failure.id)}${code}: ${safeTextPrefix(sanitizeTerminalLine(failure.message), 320)}`;
+          return `  ${sanitizeTerminalLine(failure.id)}${code}: ${boundedLine(failure.message, 320)}`;
         }),
       ].join("\n");
 

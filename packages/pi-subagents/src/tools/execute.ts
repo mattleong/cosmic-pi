@@ -23,6 +23,7 @@ import { isAssignmentFinishedRunState, type SubagentRunView } from "../run/model
 import { MAX_TARGET_RUNS } from "../run/limits.ts";
 import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
 import { runStateLabel } from "../ui/run-state.ts";
+import { sanitizeTerminalLine } from "../ui/sanitize.ts";
 import { makeCompactToolDetails, makeStartAwaitCardDetails } from "./details.ts";
 import { attentionRecoveryText, boundToolOutput, joinBoundedToolText } from "./format.ts";
 import {
@@ -207,7 +208,7 @@ const managementAcknowledgement = (
     case "resume":
       return `Resumed ${ids}.`;
     case "rename":
-      return `Renamed ${ids}.`;
+      return runs.map((run) => `${run.id} renamed to ${run.name}.`).join("\n");
     case "stop":
       return runs
         .map((run) => {
@@ -293,14 +294,13 @@ export const executeSubagentAction = async (
         return Effect.gen(function* () {
           const runs = observations.map((observation) => observation.run);
           const failureText = formatActionFailures(actionFailures);
-          const formatted = formatDetailedRuns(
-            runs,
-            failureText ? `${failureText}${runs.length > 0 ? "\n\n" : ""}` : "",
-          );
+          const attentionText = attentionRecoveryText(runs);
+          const prefix = [failureText, attentionText].filter(Boolean).join("\n\n");
+          const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "");
           yield* consumeCompletions(observations, formatted.fullyRenderedIds);
           return {
             runs,
-            attentionRequired: false,
+            attentionRequired: attentionText.length > 0,
             text: formatted.text,
             actionFailures,
           };
@@ -310,7 +310,7 @@ export const executeSubagentAction = async (
     switch (input.action) {
       case "start": {
         const specs = yield* startSpecs(input.agents);
-        let launchedRuns: ReadonlyArray<SubagentRunView> = [];
+        const partialOutcomes = new Map<number, SubagentStartOutcome>();
         const failureFor = (
           spec: SubagentStartSpec,
           index: number,
@@ -324,17 +324,30 @@ export const executeSubagentAction = async (
             code: subagentErrorCode(error),
           },
         });
-        const publishStarted = (started: SubagentRunView): Effect.Effect<void> => {
-          launchedRuns = [...launchedRuns, started];
+        const publishOutcome = (outcome: SubagentStartOutcome): Effect.Effect<void> => {
+          partialOutcomes.set(outcome.index, outcome);
+          const ordered = [...partialOutcomes.values()].sort(
+            (left, right) => left.index - right.index,
+          );
+          const launched = ordered.flatMap((entry) => ("run" in entry ? [entry.run] : []));
+          const failures = ordered.flatMap((entry) => ("failure" in entry ? [entry.failure] : []));
+          const pendingEntries = specs.flatMap((spec, index) =>
+            partialOutcomes.has(index)
+              ? []
+              : [
+                  `#${index + 1} ${sanitizeTerminalLine(spec.name?.trim() || `launch ${index + 1}`)}`,
+                ],
+          );
+          const pending = pendingEntries.length;
+          const summary = `Processed ${ordered.length} of ${specs.length} launches · ${launched.length} started · ${failures.length} failed${pending > 0 ? ` · ${pending} pending (${pendingEntries.join(", ")})` : ""}.`;
           return Effect.sync(() =>
             onUpdate?.({
-              content: [
-                {
-                  type: "text",
-                  text: `Started ${launchedRuns.length} of ${specs.length} background subagent${specs.length === 1 ? "" : "s"}.`,
-                },
-              ],
-              details: makeStartAwaitCardDetails({ action: "start", runs: launchedRuns }),
+              content: [{ type: "text", text: summary }],
+              details: makeStartAwaitCardDetails({
+                action: "start",
+                runs: launched,
+                ...(failures.length > 0 ? { startFailures: failures } : {}),
+              }),
             }),
           ).pipe(
             Effect.catchDefect(() => Effect.void),
@@ -347,7 +360,6 @@ export const executeSubagentAction = async (
           resolveRequest(spec).pipe(
             Effect.flatMap((request) =>
               service.startSessionOwned(request).pipe(
-                Effect.tap((started) => publishStarted(started)),
                 Effect.map(
                   (run): SubagentStartOutcome => ({
                     index,
@@ -357,6 +369,7 @@ export const executeSubagentAction = async (
               ),
             ),
             Effect.catch((error) => Effect.succeed(failureFor(spec, index, error))),
+            Effect.tap(publishOutcome),
           );
         const summarize = (
           outcomes: ReadonlyArray<SubagentStartOutcome>,
@@ -469,7 +482,7 @@ export const executeSubagentAction = async (
       case "interrupt":
       case "resume":
       case "stop": {
-        if (input.action !== "resume" && input.message !== undefined)
+        if (input.action !== "resume" && "message" in input && input.message !== undefined)
           return yield* new InvalidSubagentRequestError({
             code: "lifecycle_message_invalid",
             message: 'subagent_lifecycle message is valid only when action="resume".',

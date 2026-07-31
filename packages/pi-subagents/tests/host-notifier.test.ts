@@ -97,6 +97,7 @@ describe("subagent host notifier", () => {
     expect(sendMessage.mock.calls[0]?.[0].content).toContain(
       'subagent_reply({ runId: "agent-7", message: "..." })',
     );
+    expect(sendMessage.mock.calls[0]?.[0].content).toContain("then call subagent_await again");
     expect(sendMessage.mock.calls[0]?.[0].content).not.toContain("subagent({ action:");
     expect(sendMessage.mock.calls[0]?.[1]).toEqual({
       deliverAs: "steer",
@@ -128,9 +129,32 @@ describe("subagent host notifier", () => {
     notify({ type: "completed", runs });
 
     expect(sendMessage).toHaveBeenCalledOnce();
-    expect(sendMessage.mock.calls[0]?.[0].content).toContain("2 background subagents completed");
+    expect(sendMessage.mock.calls[0]?.[0].content).toContain(
+      "2 background subagents finished · 2 completed",
+    );
     expect(sendMessage.mock.calls[0]?.[0].content).toContain("## reader (agent-1)");
     expect(sendMessage.mock.calls[0]?.[0].content).toContain("## tester (agent-2)");
+  });
+
+  it("distinguishes retained reports in multi-run completion headers", () => {
+    const sendMessage = vi.fn();
+    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    notify({
+      type: "completed",
+      runs: [
+        { id: "agent-1", name: "reader", generation: 1, finalText: "Read." },
+        {
+          id: "agent-2",
+          name: "reviewer",
+          generation: 2,
+          finalText: "Reviewed.",
+          retained: true,
+        },
+      ],
+    });
+    expect(sendMessage.mock.calls[0]?.[0].content).toContain(
+      "2 background subagents finished · 1 completed · 1 reported and retained",
+    );
   });
 
   it("deduplicates completion receipts by exact generation even when delivery is out of order", () => {

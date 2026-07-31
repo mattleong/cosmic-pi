@@ -120,8 +120,8 @@ export const candidateFieldRows = (
     },
     {
       field: "closeOnReport",
-      label: "After report",
-      value: candidate.closeOnReport ? "close" : "retain",
+      label: "Report policy",
+      value: candidate.closeOnReport ? "close after report" : "retain for guidance",
       fixed: !retainedAllowed,
     },
   ];
@@ -145,7 +145,7 @@ export const candidateFieldChoices = (
     ];
   if (field === "effort")
     return [
-      { value: "default", label: "Profile default", description: "Use the runtime default" },
+      { value: "default", label: "Runtime default", description: "Use the runtime default" },
       ...runtimeEfforts(candidate.runtime, options.supportedEfforts).map((effort) => ({
         value: effort,
         label: effort,
@@ -166,10 +166,24 @@ export const candidateFieldChoices = (
     ];
   return candidate.host === "herdr" && candidate.writeIntent === "read-only"
     ? [
-        { value: "true", label: "Close", description: "Close after the first accepted report" },
-        { value: "false", label: "Retain", description: "Keep the read-only run for guidance" },
+        {
+          value: "true",
+          label: "Close after report",
+          description: "Close after the first accepted report",
+        },
+        {
+          value: "false",
+          label: "Retain for guidance",
+          description: "Keep the read-only run for another assignment",
+        },
       ]
-    : [{ value: "true", label: "Close", description: "Required by the current policy" }];
+    : [
+        {
+          value: "true",
+          label: "Close after report",
+          description: "Required by the current policy",
+        },
+      ];
 };
 
 /** Selects one exact field value while preserving route normalization rules. */

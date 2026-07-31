@@ -299,6 +299,49 @@ describe("structured subagent session output", () => {
     expect(rendered).toContain("Interrupted; stop this run and start a replacement");
   });
 
+  it("freezes paused duration and makes missing final reports explicit", () => {
+    const paused = sanitizeTerminalText(
+      renderSubagentSessionOutput(
+        runView({
+          state: "paused",
+          endedAt: undefined,
+          finalText: undefined,
+          lastActivityAt: 4_000,
+        }),
+        theme,
+        { now: 100_000 },
+      )
+        .render(80)
+        .join("\n"),
+    );
+    expect(paused).toContain("paused after 3s");
+    expect(paused).not.toContain("99s");
+
+    const completed = sanitizeTerminalText(
+      renderSubagentSessionOutput(runView({ finalText: undefined }), theme)
+        .render(80)
+        .join("\n"),
+    );
+    expect(completed).toContain("Completed without a final report.");
+  });
+
+  it("styles ordinary warning notices as warnings rather than errors", () => {
+    const taggedTheme = {
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const rendered = renderSubagentSessionOutput(
+      runView({
+        sessionEvents: [{ type: "notice", kind: "warning", text: "Check this", createdAt: 2_000 }],
+      }),
+      taggedTheme,
+    )
+      .render(80)
+      .join("\n");
+    expect(rendered).toContain("<warning>!</warning>");
+    expect(rendered).toContain("<warning>Check this</warning>");
+  });
+
   it("wraps every expanded row within the available viewport width", () => {
     const component = renderSubagentSessionOutput(
       runView({

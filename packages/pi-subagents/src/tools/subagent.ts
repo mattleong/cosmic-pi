@@ -249,7 +249,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_lifecycle",
     label: "Subagent Lifecycle",
     description:
-      "Interrupt, resume, or stop one or more subagents. Message is valid only for resume. Mixed-target calls report each success and failure.",
+      "Interrupt, resume, or stop one or more subagents. Interrupt and resume require the matching capability reported by subagent_list/status; stop is available for every active run. Message is accepted only for resume. Mixed-target calls report each success and failure.",
     parameters: LifecycleParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, input, signal, onUpdate, ctx),
