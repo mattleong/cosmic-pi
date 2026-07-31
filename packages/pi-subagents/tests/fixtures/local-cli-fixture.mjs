@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import readline from "node:readline";
 
@@ -28,6 +28,8 @@ if (args.includes("--print")) {
   const model = args[args.indexOf("--model") + 1] ?? "fixture-claude";
   if (process.env.HOME?.includes("hanging-catalog"))
     writeFileSync(join(process.env.HOME, "fixture.pid"), String(process.pid));
+  if (process.env.HOME?.includes("deduplicated-catalog"))
+    appendFileSync(join(process.env.HOME, "catalog-processes.log"), `${process.pid}\n`);
   const cwd = process.cwd();
   const supervisorTools = [
     "supervisor_progress",
@@ -67,33 +69,38 @@ if (args.includes("--print")) {
           process.env.HOME?.includes("hanging-catalog")
         )
           return;
-        success(
-          model === "bad-init"
-            ? {}
-            : {
-                models:
-                  frame.request_id === "pi-subagents-model-catalog"
-                    ? [
-                        {
-                          value: "default",
-                          resolvedModel: "claude-opus-fixture",
-                          displayName: process.env.HOME?.includes("unsafe-catalog")
-                            ? "\u001b[31mUnsafe"
-                            : "Default Claude",
-                          description: "Fixture default model",
-                          supportedEffortLevels: ["off", "low", "medium", "high"],
-                        },
-                        {
-                          value: "sonnet",
-                          resolvedModel: "claude-sonnet-fixture",
-                          displayName: "Claude Sonnet",
-                          description: "Fixture\nefficient\tmodel",
-                          supportedEffortLevels: ["low", "high"],
-                        },
-                      ]
-                    : [{ value: model, resolvedModel: model }],
-              },
-        );
+        const initialized = () =>
+          success(
+            model === "bad-init"
+              ? {}
+              : {
+                  models:
+                    frame.request_id === "pi-subagents-model-catalog"
+                      ? [
+                          {
+                            value: "default",
+                            resolvedModel: "claude-opus-fixture",
+                            displayName: process.env.HOME?.includes("unsafe-catalog")
+                              ? "\u001b[31mUnsafe"
+                              : "Default Claude",
+                            description: "Fixture default model",
+                            supportedEffortLevels: ["off", "low", "medium", "high"],
+                          },
+                          {
+                            value: "sonnet",
+                            resolvedModel: "claude-sonnet-fixture",
+                            displayName: "Claude Sonnet",
+                            description: "Fixture\nefficient\tmodel",
+                            supportedEffortLevels: ["low", "high"],
+                          },
+                        ]
+                      : [{ value: model, resolvedModel: model }],
+                },
+          );
+        const catalogDelay = process.env.HOME?.includes("deduplicated-catalog") ? 150 : 0;
+        if (frame.request_id === "pi-subagents-model-catalog" && catalogDelay > 0)
+          setTimeout(initialized, catalogDelay);
+        else initialized();
         return;
       }
       if (frame.request?.subtype === "mcp_status") {

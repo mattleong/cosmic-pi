@@ -491,29 +491,74 @@ const discoverCatalog = async (
   return result;
 };
 
+interface InFlightCatalogRequest {
+  readonly controller: AbortController;
+  readonly promise: Promise<unknown>;
+  waiters: number;
+  settled: boolean;
+}
+
 export const makeNativeModelCatalog = (
   options: NativeModelCatalogLayerOptions = {},
 ): NativeModelCatalogShape => {
   const cache = new Map<string, ReadonlyArray<NativeRuntimeModel>>();
+  const inFlight = new Map<string, InFlightCatalogRequest>();
+
+  const acquireRequest = (
+    cacheKey: string,
+    runtime: LocalCliRuntime,
+    cwd: string,
+  ): InFlightCatalogRequest => {
+    const existing = inFlight.get(cacheKey);
+    if (existing) {
+      existing.waiters += 1;
+      return existing;
+    }
+    const controller = new AbortController();
+    const executable = options.executables?.[runtime] ?? runtime;
+    const sourceEnvironment = options.environment ?? process.env;
+    const request: InFlightCatalogRequest = {
+      controller,
+      promise: discoverCatalog(
+        runtime,
+        executable,
+        cwd,
+        sourceEnvironment,
+        options.timeoutMillis ?? CATALOG_TIMEOUT_MILLIS,
+        controller.signal,
+        options,
+      ),
+      waiters: 1,
+      settled: false,
+    };
+    inFlight.set(cacheKey, request);
+    void request.promise.then(
+      () => {
+        request.settled = true;
+      },
+      () => {
+        request.settled = true;
+      },
+    );
+    return request;
+  };
+
+  const releaseRequest = (cacheKey: string, request: InFlightCatalogRequest): void => {
+    request.waiters -= 1;
+    if (request.waiters > 0) return;
+    if (inFlight.get(cacheKey) === request) inFlight.delete(cacheKey);
+    if (!request.settled) request.controller.abort();
+  };
+
   return {
     list: (runtime, cwd) =>
       Effect.suspend(() => {
         const cacheKey = `${runtime}\u0000${cwd}`;
         const cached = cache.get(cacheKey);
         if (cached) return Effect.succeed(cached);
-        const executable = options.executables?.[runtime] ?? runtime;
-        const sourceEnvironment = options.environment ?? process.env;
+        const request = acquireRequest(cacheKey, runtime, cwd);
         return Effect.tryPromise({
-          try: (signal) =>
-            discoverCatalog(
-              runtime,
-              executable,
-              cwd,
-              sourceEnvironment,
-              options.timeoutMillis ?? CATALOG_TIMEOUT_MILLIS,
-              signal,
-              options,
-            ),
+          try: () => request.promise,
           catch: (error) =>
             error instanceof NativeModelCatalogError
               ? error
@@ -535,6 +580,7 @@ export const makeNativeModelCatalog = (
             ),
           ),
           Effect.tap((models) => Effect.sync(() => void cache.set(cacheKey, models))),
+          Effect.ensuring(Effect.sync(() => releaseRequest(cacheKey, request))),
         );
       }),
   };

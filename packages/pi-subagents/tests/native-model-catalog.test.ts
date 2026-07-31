@@ -112,6 +112,34 @@ describe("native model catalog boundary", () => {
     expect(models[1]).toMatchObject({ supportedEfforts: ["minimal"] });
   });
 
+  it("deduplicates concurrent catalog requests without letting one canceled waiter abort peers", async () => {
+    const home = await mkdtemp(join(tmpdir(), "deduplicated-catalog-"));
+    const countPath = join(home, "catalog-processes.log");
+    try {
+      const shared = makeNativeModelCatalog({
+        executables: { claude: fixture, codex: fixture },
+        environment: { HOME: home, PATH: process.env.PATH },
+      });
+      const first = Effect.runFork(shared.list("claude", process.cwd()));
+      const second = Effect.runFork(shared.list("claude", process.cwd()));
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        try {
+          if ((await readFile(countPath, "utf8")).trim()) break;
+        } catch {
+          await delay(10);
+        }
+      }
+      await Effect.runPromise(Fiber.interrupt(first));
+      const models = await Effect.runPromise(Fiber.join(second));
+      expect(models.map((model) => model.selector)).toEqual(["default", "sonnet"]);
+      await Effect.runPromise(shared.list("claude", process.cwd()));
+      const processIds = (await readFile(countPath, "utf8")).trim().split("\n");
+      expect(processIds).toHaveLength(1);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("cancels and cleans up an in-flight catalog process", async () => {
     const home = await mkdtemp(join(tmpdir(), "hanging-catalog-"));
     try {
