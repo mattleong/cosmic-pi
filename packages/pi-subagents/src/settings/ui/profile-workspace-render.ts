@@ -87,15 +87,30 @@ const commonNotices = (state: ProfileWorkspaceRenderState, theme: Theme): Readon
   return lines;
 };
 
-const profilesPage = (state: ProfileWorkspaceRenderState, theme: Theme): ReadonlyArray<string> => {
+const windowStart = (length: number, selected: number, visibleCount: number): number =>
+  Math.max(
+    0,
+    Math.min(Math.max(0, length - visibleCount), selected - Math.floor(visibleCount / 2)),
+  );
+
+const profilesPage = (
+  state: ProfileWorkspaceRenderState,
+  theme: Theme,
+  availableHeight: number,
+): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
+  const notices = commonNotices(state, theme);
+  const visibleCount = Math.max(1, availableHeight - 9 - notices.length);
+  const start = windowStart(PROFILE_IDS.length, state.profileIndex, visibleCount);
+  const visibleProfiles = PROFILE_IDS.slice(start, start + visibleCount);
   return [
     theme.fg("accent", theme.bold("Profiles")),
     "Choose a profile to inspect its effective route or edit its declaration.",
     scopeLine(state, theme),
     "",
-    ...commonNotices(state, theme),
-    ...PROFILE_IDS.map((entry, index) => {
+    ...notices,
+    ...visibleProfiles.map((entry, offset) => {
+      const index = start + offset;
       const marker = index === state.profileIndex ? ">" : " ";
       const defaultMarker = entry === state.inspection.config.defaultProfile ? "★" : " ";
       return `${marker}${defaultMarker} ${entry.padEnd(11)} ${effectiveProfileSummary(state.inspection, entry)}`;
@@ -118,13 +133,7 @@ const routePage = (
   const candidates = state.draft.candidates;
   const reserved = 17 + commonNotices(state, theme).length;
   const visibleCount = Math.max(1, availableHeight - reserved);
-  const start = Math.max(
-    0,
-    Math.min(
-      Math.max(0, candidates.length - visibleCount),
-      state.candidateIndex - Math.floor(visibleCount / 2),
-    ),
-  );
+  const start = windowStart(candidates.length, state.candidateIndex, visibleCount);
   const visible = candidates.slice(start, start + visibleCount);
   const rows =
     visible.length === 0
@@ -168,11 +177,20 @@ const routePage = (
   ];
 };
 
-const candidatePage = (state: ProfileWorkspaceRenderState, theme: Theme): ReadonlyArray<string> => {
+const candidatePage = (
+  state: ProfileWorkspaceRenderState,
+  theme: Theme,
+  availableHeight: number,
+): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
   const candidate = state.draft.candidates[state.candidateIndex];
+  const notices = commonNotices(state, theme);
+  const fields = candidate ? candidateFieldRows(candidate) : [];
+  const visibleCount = Math.max(1, availableHeight - 9 - notices.length);
+  const start = windowStart(fields.length, state.fieldIndex, visibleCount);
   const rows = candidate
-    ? candidateFieldRows(candidate).map((row, index) => {
+    ? fields.slice(start, start + visibleCount).map((row, offset) => {
+        const index = start + offset;
         const marker = index === state.fieldIndex ? ">" : " ";
         const action = row.fixed ? "fixed by policy" : "Enter to choose";
         return `${marker} ${row.label.padEnd(14)} ${row.value.padEnd(18)} ${action}`;
@@ -183,7 +201,7 @@ const candidatePage = (state: ProfileWorkspaceRenderState, theme: Theme): Readon
     PROFILE_DEFINITIONS[profile].description,
     scopeLine(state, theme),
     "",
-    ...commonNotices(state, theme),
+    ...notices,
     theme.fg("muted", "Candidate fields"),
     ...rows,
     "",
@@ -265,10 +283,10 @@ export const renderProfileWorkspace = (
   const bodyHeight = Math.max(0, height - 2);
   const rows =
     state.pane === "profiles"
-      ? profilesPage(state, theme)
+      ? profilesPage(state, theme, bodyHeight)
       : state.pane === "candidates"
         ? routePage(state, theme, bodyHeight)
-        : candidatePage(state, theme);
+        : candidatePage(state, theme, bodyHeight);
   const body = rows
     .slice(0, bodyHeight)
     .map(

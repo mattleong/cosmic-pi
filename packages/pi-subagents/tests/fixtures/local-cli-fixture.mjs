@@ -13,6 +13,13 @@ if (args[0] === "--version") {
   process.exit(0);
 }
 if (args[0] === "login" && args[1] === "status") {
+  if (
+    process.env.HOME?.includes("pi-subagents-custom-codex-home-") &&
+    (!process.env.CODEX_HOME || process.env.CODEX_HOME.includes("source-codex-home"))
+  ) {
+    process.stderr.write("Private copied Codex auth home was not used\n");
+    process.exit(1);
+  }
   if (process.env.FIXTURE_UNAUTH === "1") {
     process.stderr.write("Not logged in\n");
     process.exit(1);
@@ -69,6 +76,20 @@ if (args.includes("--print")) {
           process.env.HOME?.includes("hanging-catalog")
         )
           return;
+        if (
+          frame.request_id === "pi-subagents-model-catalog" &&
+          process.env.HOME?.includes("rejected-claude-catalog")
+        ) {
+          write({
+            type: "control_response",
+            response: {
+              subtype: "error",
+              request_id: frame.request_id,
+              error: "Fixture catalog rejected",
+            },
+          });
+          return;
+        }
         const initialized = () =>
           success(
             model === "bad-init"
@@ -225,6 +246,10 @@ if (args.includes("--print")) {
         });
         break;
       case "model/list":
+        if (process.env.HOME?.includes("rejected-catalog")) {
+          write({ id: frame.id, error: { code: -32_000, message: "Fixture catalog rejected" } });
+          break;
+        }
         write({
           id: frame.id,
           result: {
@@ -313,6 +338,14 @@ if (args.includes("--print")) {
           },
         });
         if (model === "exit-no-report") process.exit(0);
+        if (model === "interrupted-without-request")
+          write({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-fixture",
+              turn: { id: turn, status: "interrupted", items: [] },
+            },
+          });
         if (model === "completed-with-report" || model === "completed-without-report")
           write({
             method: "turn/completed",

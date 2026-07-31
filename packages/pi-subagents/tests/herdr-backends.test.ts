@@ -154,6 +154,18 @@ const fixture = Effect.gen(function* () {
             epochs.push(epoch);
           }),
         hasAcceptedReport: (epoch) => Effect.sync(() => acceptedEpochs.has(epoch)),
+        acceptedReportForEpoch: (epoch) =>
+          Effect.sync(() =>
+            acceptedEpochs.has(epoch)
+              ? {
+                  runId: request.runId,
+                  assignmentEpoch: epoch,
+                  sequence: 1,
+                  deliveryId: `herdr-${epoch}`,
+                  text: "Accepted Herdr fixture report.",
+                }
+              : undefined,
+          ),
         reply: (id, message) => Effect.sync(() => void replies.push([id, message])),
         cancelPending: () => {},
         close: Effect.void,

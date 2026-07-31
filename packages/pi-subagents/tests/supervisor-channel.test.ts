@@ -374,6 +374,12 @@ describe("private supervisor channel", () => {
     // Report acceptance is causally visible before the adapter drains either queued event, even
     // when progress/backpressure is ahead of the report.
     expect(await Effect.runPromise(handle.hasAcceptedReport(1))).toBe(true);
+    expect(await Effect.runPromise(handle.acceptedReportForEpoch(1))).toMatchObject({
+      runId: handle.runId,
+      assignmentEpoch: 1,
+      deliveryId: "delivery-main",
+      text: "Bounded final report.",
+    });
     expect(await Effect.runPromise(handle.hasAcceptedReport(2)).catch(() => false)).toBe(false);
     const concurrentEvents = [await takeEvent(handle), await takeEvent(handle)];
     expect(concurrentEvents).toEqual(
@@ -433,8 +439,18 @@ describe("private supervisor channel", () => {
       kind: "question",
       assignmentEpoch: 2,
     });
-    await Effect.runPromise(handle.setAssignmentEpoch(3));
+    rpc.send({
+      jsonrpc: "2.0",
+      method: "notifications/cancelled",
+      params: { requestId: "question-cancelled" },
+    });
     expect(await cancelledQuestion).toMatchObject({ error: { code: -32800 } });
+    expect(await takeEvent(handle)).toMatchObject({
+      type: "supervisor_question_cancelled",
+      assignmentEpoch: 2,
+      requestId: cancellationEvent.type === "supervisor_contact" ? cancellationEvent.requestId : "",
+    });
+    await Effect.runPromise(handle.setAssignmentEpoch(3));
     if (cancellationEvent.type !== "supervisor_contact") throw new Error("expected question");
     await wait(20);
     await expect(

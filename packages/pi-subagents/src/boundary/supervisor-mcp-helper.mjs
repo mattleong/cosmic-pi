@@ -468,7 +468,11 @@ const detachChannelReader = attachLineReader(
           return;
         }
         const pending = pendingChannel.get(value.id);
-        if (!pending || pending.type !== "question") {
+        // A parent reply may cross a JSON-RPC cancellation that already removed the local
+        // question. Ignore that exact stale reply rather than destroying the authenticated
+        // channel needed by later supervisor tools.
+        if (!pending) return;
+        if (pending.type !== "question") {
           socket.destroy();
           return;
         }

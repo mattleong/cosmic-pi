@@ -238,12 +238,14 @@ describe("/subagents profile workspace", () => {
     const notify = vi.fn();
     const custom = vi.fn(async (factory) =>
       exerciseWorkspace(factory, async (component) => {
+        component.handleInput?.("\r");
         component.handleInput?.("d");
         component.handleInput?.("d");
         await vi.waitFor(() => expect(managerActions.patchProfile).toHaveBeenCalledTimes(1));
         await vi.waitFor(() =>
           expect(component.render(120).join("\n")).toContain("reload required"),
         );
+        component.handleInput?.("\u001b");
         component.handleInput?.("\u001b");
       }),
     );
@@ -268,6 +270,7 @@ describe("/subagents profile workspace", () => {
     const notify = vi.fn();
     const custom = vi.fn(async (factory) =>
       exerciseWorkspace(factory, async (component, done) => {
+        component.handleInput?.("\r");
         component.handleInput?.("d");
         component.handleInput?.("d");
         await vi.waitFor(() =>
@@ -319,6 +322,7 @@ describe("/subagents profile workspace", () => {
     const ctx = baseContext({
       custom: vi.fn(async (factory) =>
         exerciseWorkspace(factory, async (component) => {
+          component.handleInput?.("\r");
           component.handleInput?.("d");
           component.handleInput?.("d");
           await vi.waitFor(() =>

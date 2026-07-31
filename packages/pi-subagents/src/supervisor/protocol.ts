@@ -169,7 +169,7 @@ export const decodeSupervisorClientMessage = (
 
 export type SupervisorEvent = Extract<
   BackendEvent,
-  { readonly type: "supervisor_contact" | "report" }
+  { readonly type: "supervisor_contact" | "supervisor_question_cancelled" | "report" }
 >;
 
 export const validSupervisorMessage = (value: string): boolean =>

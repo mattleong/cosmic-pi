@@ -277,6 +277,20 @@ describe("profile candidate normalization and validation", () => {
   it("uses exact runtime efforts and resets an effort unsupported by a known Pi model", () => {
     expect(runtimeEfforts("claude")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(runtimeEfforts("codex")).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+    expect(runtimeEfforts("claude", ["minimal", "low", "high"])).toEqual(["low", "high"]);
+    expect(
+      candidateValidationError(
+        candidate("claude-opus-5", { runtime: "claude", effort: "minimal" }),
+      ),
+    ).toContain("does not support effort minimal");
+    expect(
+      decodeSubagentConfig({
+        version: 4,
+        profiles: {
+          reviewer: candidate("claude-opus-5", { runtime: "claude", effort: "minimal" }),
+        },
+      }).invalidProfileRoutes,
+    ).toContain("reviewer");
     const update = updateCandidateModel(candidate("openai/old", { effort: "xhigh" }), "zai/plain", [
       "off",
     ]);

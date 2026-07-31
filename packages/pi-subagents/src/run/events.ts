@@ -230,6 +230,16 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         );
       case "supervisor_contact":
         return handleContact(record, event);
+      case "supervisor_question_cancelled":
+        return mutateView(record, event.assignmentEpoch, (current) => {
+          if (
+            current.state !== "waiting_for_parent" ||
+            current.question?.requestId !== event.requestId
+          )
+            return undefined;
+          record.replyPendingRequestId = undefined;
+          return { ...current, state: "running", question: undefined };
+        }).pipe(Effect.asVoid);
       case "warning":
         return Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;

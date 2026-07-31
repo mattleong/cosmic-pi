@@ -7,6 +7,7 @@ import {
   type ProfileCandidate,
   type ProfileId,
 } from "../profiles/model.ts";
+import { subagentRuntimeSupportsEffort } from "../run/model.ts";
 import {
   isSafeNativeModelSelector,
   MAX_NATIVE_MODEL_SELECTOR_CHARS,
@@ -147,6 +148,11 @@ const decodeCandidate = (value: unknown): ProfileCandidate | undefined => {
   const model = candidate.model;
   const closeOnReport = candidate.closeOnReport ?? true;
   if (!isNativeProfileModelSelector(candidate.runtime, model)) return undefined;
+  if (
+    candidate.effort !== "default" &&
+    !subagentRuntimeSupportsEffort(candidate.runtime, candidate.effort)
+  )
+    return undefined;
   if (model === "parent" && (candidate.host !== "local" || candidate.runtime !== "pi"))
     return undefined;
   if (candidate.context === "fork" && (candidate.host !== "local" || candidate.runtime !== "pi"))

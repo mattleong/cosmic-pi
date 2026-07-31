@@ -175,6 +175,31 @@ describe("profile settings workspace", () => {
     expect(details).toContain("After report");
   });
 
+  it("keeps selected profiles and candidate fields visible in short terminals", () => {
+    const { component } = makeComponent(inspection(), { getHeight: () => 12 });
+    for (let index = 0; index < 6; index += 1) component.handleInput(input.down);
+    expect(component.render(100).join("\n")).toContain("delegate");
+    component.handleInput(input.enter);
+    component.handleInput(input.enter);
+    for (let index = 0; index < 6; index += 1) component.handleInput(input.down);
+    expect(component.render(100).join("\n")).toContain("After report");
+  });
+
+  it("keeps route-only actions out of the profiles pane and blocks empty-route Tab navigation", () => {
+    const value = inspection(
+      { version: 4 },
+      { version: 4, defaultProfile: "delegate", profiles: { delegate: "disabled" } },
+    );
+    const { component } = makeComponent(value);
+    component.handleInput("d");
+    expect(component.render(120).join("\n")).not.toContain("Confirm · Disable");
+    component.handleInput(input.enter);
+    component.handleInput(input.tab);
+    const rendered = component.render(120).join("\n");
+    expect(rendered).toContain("delegate route");
+    expect(rendered).toContain("Add a candidate before opening candidate details.");
+  });
+
   it("searches profiles and opens the selected route page", () => {
     const { component } = makeComponent(inspection({ version: 4, defaultProfile: "delegate" }));
     component.handleInput("/");
@@ -251,6 +276,29 @@ describe("profile settings workspace", () => {
       runtime: "claude",
       model: "sonnet",
     });
+  });
+
+  it("explains that canceling the required model picker also cancels a runtime change", async () => {
+    const loadModelPicker = vi.fn().mockResolvedValue({
+      ...modelPicker("claude-opus-5", "claude"),
+      defaultSelector: "anthropic/claude-opus-5",
+    });
+    const { component, saveDraft } = makeComponent(
+      inspection({ version: 4, defaultProfile: "delegate" }),
+      { loadModelPicker },
+    );
+    component.handleInput(input.enter);
+    component.handleInput(input.enter);
+    component.handleInput(input.down);
+    component.handleInput(input.enter);
+    component.handleInput(input.down);
+    component.handleInput(input.enter);
+    await vi.waitFor(() => expect(component.render(120).join("\n")).toContain("Choose model"));
+    component.handleInput(input.escape);
+    expect(component.render(120).join("\n")).toContain(
+      "Runtime change canceled because no model was selected.",
+    );
+    expect(saveDraft).not.toHaveBeenCalled();
   });
 
   it("does not write when a selector confirms the current value", () => {
@@ -487,6 +535,7 @@ describe("profile settings workspace", () => {
   it("offers reload after a successful write and reports pending state on close", async () => {
     const reload = vi.fn().mockResolvedValue(false);
     const { component, close } = makeComponent(inspection(), { reload });
+    component.handleInput(input.enter);
     component.handleInput("d");
     component.handleInput("d");
     await vi.waitFor(() => expect(component.render(120).join("\n")).toContain("reload required"));
@@ -494,12 +543,14 @@ describe("profile settings workspace", () => {
     expect(reload).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(component.render(120).join("\n")).toContain("Reload canceled"));
     component.handleInput(input.escape);
+    component.handleInput(input.escape);
     expect(close).toHaveBeenCalledWith(true);
   });
 
   it("closes with no pending notice after a successful reload", async () => {
     const reload = vi.fn().mockResolvedValue(true);
     const { component, close } = makeComponent(inspection(), { reload });
+    component.handleInput(input.enter);
     component.handleInput("d");
     component.handleInput("d");
     await vi.waitFor(() => expect(component.render(120).join("\n")).toContain("reload required"));

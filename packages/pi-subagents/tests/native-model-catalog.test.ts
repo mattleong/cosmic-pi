@@ -4,7 +4,7 @@
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -98,6 +98,34 @@ describe("native model catalog boundary", () => {
     }
   });
 
+  it("uses the integrated private Codex harness with an executable test seam", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-subagents-integrated-catalog-"));
+    const agentDirectory = join(root, "agent");
+    const sourceHome = join(root, "source-codex");
+    await mkdir(agentDirectory);
+    await mkdir(sourceHome);
+    await writeFile(join(sourceHome, "auth.json"), `${JSON.stringify({ token: "fixture" })}\n`);
+    try {
+      const isolated = makeNativeModelCatalog({
+        agentDirectory,
+        executables: { claude: fixture, codex: fixture },
+        environment: {
+          HOME: root,
+          PATH: process.env.PATH,
+          CODEX_HOME: sourceHome,
+        },
+      });
+      await expect(Effect.runPromise(isolated.list("codex", process.cwd()))).resolves.toHaveLength(
+        2,
+      );
+      await expect(readFile(join(sourceHome, "auth.json"), "utf8")).resolves.toContain("fixture");
+      const catalogRoot = join(agentDirectory, "subagents", "native-model-catalog-v1");
+      await expect(readdir(catalogRoot)).resolves.toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("loads bounded Codex model/list results and reasoning efforts", async () => {
     const models = await Effect.runPromise(catalog().list("codex", process.cwd()));
     expect(models.map((model) => model.selector)).toEqual([
@@ -175,6 +203,21 @@ describe("native model catalog boundary", () => {
     await expect(Effect.runPromise(unsafe.list("claude", process.cwd()))).rejects.toMatchObject({
       code: "catalog_protocol_invalid",
     });
+  });
+
+  it("reports rejected native catalog requests distinctly from malformed protocol", async () => {
+    for (const runtime of ["claude", "codex"] as const) {
+      const rejected = makeNativeModelCatalog({
+        executables: { claude: fixture, codex: fixture },
+        environment: {
+          HOME: runtime === "claude" ? "/tmp/rejected-claude-catalog" : "/tmp/rejected-catalog",
+          PATH: process.env.PATH,
+        },
+      });
+      await expect(Effect.runPromise(rejected.list(runtime, process.cwd()))).rejects.toMatchObject({
+        code: "catalog_request_rejected",
+      });
+    }
   });
 
   it("returns a typed error when the native executable is unavailable", async () => {

@@ -683,6 +683,45 @@ describe("SubagentService", () => {
     },
   );
 
+  it.effect("clears a waiting parent question when its MCP caller cancels", () => {
+    const backend = fakeRetainedBackendLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => void projections.push(projection),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.startSessionOwned(
+        request({
+          name: "cancelled-question",
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      backend.controls[0]?.offer({
+        type: "supervisor_contact",
+        assignmentEpoch: 1,
+        requestId: "question-cancelled",
+        kind: "question",
+        message: "Should this continue?",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+      backend.controls[0]?.offer({
+        type: "supervisor_question_cancelled",
+        assignmentEpoch: 1,
+        requestId: "question-cancelled",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
+      expect(yield* service.status(run.id)).toMatchObject({
+        state: "running",
+        question: undefined,
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect(
     "keeps a report arriving during start admission queued for exact-once await delivery",
     () => {

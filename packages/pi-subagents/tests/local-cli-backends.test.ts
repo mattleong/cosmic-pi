@@ -59,6 +59,7 @@ interface SupervisorFixture {
   readonly shape: SupervisorChannelShape;
   readonly epochs: number[];
   readonly replies: Array<{ readonly requestId: string; readonly message: string }>;
+  readonly readyCalls: () => number;
   readonly acceptReport: (epoch: number) => void;
   readonly current: () => SupervisorChannelHandle;
 }
@@ -68,6 +69,7 @@ const supervisorFixture = (): SupervisorFixture => {
   const replies: Array<{ readonly requestId: string; readonly message: string }> = [];
   const acceptedReports = new Set<number>();
   let handle: SupervisorChannelHandle | undefined;
+  let readyCalls = 0;
   const shape: SupervisorChannelShape = {
     open: (request) =>
       Effect.gen(function* () {
@@ -113,9 +115,21 @@ const supervisorFixture = (): SupervisorFixture => {
             },
           },
           events,
-          awaitReady: Effect.void,
+          awaitReady: Effect.sync(() => void (readyCalls += 1)),
           setAssignmentEpoch: (epoch) => Effect.sync(() => void epochs.push(epoch)),
           hasAcceptedReport: (epoch) => Effect.succeed(acceptedReports.has(epoch)),
+          acceptedReportForEpoch: (epoch) =>
+            Effect.succeed(
+              acceptedReports.has(epoch)
+                ? {
+                    runId: request.runId,
+                    assignmentEpoch: epoch,
+                    sequence: 1,
+                    deliveryId: `accepted-${epoch}`,
+                    text: "Accepted fixture report.",
+                  }
+                : undefined,
+            ),
           reply: (requestId, message) =>
             Effect.sync(() => void replies.push({ requestId, message })),
           cancelPending: () => {},
@@ -128,6 +142,7 @@ const supervisorFixture = (): SupervisorFixture => {
     shape,
     epochs,
     replies,
+    readyCalls: () => readyCalls,
     acceptReport: (epoch) => void acceptedReports.add(epoch),
     current: () => {
       if (!handle) throw new Error("supervisor fixture not opened");
@@ -551,6 +566,7 @@ describe("local CLI Phase One backends", () => {
         ),
       );
       expect(supervisor.epochs).toEqual([9]);
+      expect(supervisor.readyCalls()).toBe(1);
     } finally {
       await fs.rm(harness.directory, { recursive: true, force: true });
     }
@@ -572,6 +588,32 @@ describe("local CLI Phase One backends", () => {
             for (let index = 0; index < 3; index += 1) yield* take(backend.events);
             yield* backend.controls.interrupt;
             expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when Codex reports an unowned interrupted turn", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalCodexBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("codex", "interrupted-without-request"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Codex task", 9);
+            for (let index = 0; index < 3; index += 1) yield* take(backend.events);
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "protocol_error",
+              message: "Codex turn was interrupted without a matching parent interrupt lifecycle.",
+            });
           }),
         ),
       );
@@ -649,6 +691,63 @@ describe("local CLI Phase One backends", () => {
       } finally {
         await fs.rm(harness.directory, { recursive: true, force: true });
       }
+    }
+  });
+
+  it("preserves an accepted supervisor report when Claude exits before queue forwarding", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    supervisor.acceptReport(9);
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalClaudeBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("claude", "exit-no-report"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Claude task", 9);
+            expect(yield* take(backend.events)).toMatchObject({ type: "run_started" });
+            expect(yield* take(backend.events)).toMatchObject({ type: "assistant_message" });
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "report",
+              assignmentEpoch: 9,
+              deliveryId: "accepted-9",
+            });
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an accepted supervisor report when Codex exits before queue forwarding", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    supervisor.acceptReport(9);
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalCodexBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("codex", "exit-no-report"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Codex task", 9);
+            for (let index = 0; index < 3; index += 1) yield* take(backend.events);
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "report",
+              assignmentEpoch: 9,
+              deliveryId: "accepted-9",
+            });
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
     }
   });
 
@@ -776,6 +875,16 @@ describe("local CLI Phase One backends", () => {
     });
     const supervisor = supervisorFixture();
     try {
+      await Effect.runPromise(
+        processes.preflight({
+          runtime: "codex",
+          context: "fresh",
+          writeIntent: "read-only",
+          closeOnReport: true,
+          model: "codex-fixture",
+          effort: "xhigh",
+        }),
+      );
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {

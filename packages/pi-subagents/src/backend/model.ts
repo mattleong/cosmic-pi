@@ -96,6 +96,11 @@ export type BackendEvent =
       readonly message: string;
     }
   | {
+      readonly type: "supervisor_question_cancelled";
+      readonly assignmentEpoch: number;
+      readonly requestId: string;
+    }
+  | {
       readonly type: "warning";
       readonly source: "runtime-extension";
       readonly message: string;

@@ -310,7 +310,14 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                 child.acknowledge(raw);
                 return Effect.void;
               }
-              return offer({ type: "run_settled", assignmentEpoch: completedEpoch }, raw);
+              return offer(
+                {
+                  type: "protocol_error",
+                  message:
+                    "Codex turn was interrupted without a matching parent interrupt lifecycle.",
+                },
+                raw,
+              );
             }
             if (event.status === "failed")
               return offer(
@@ -400,16 +407,39 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     );
   };
 
+  const preserveAcceptedReport = Effect.suspend(() =>
+    assignmentEpoch <= 0
+      ? Effect.void
+      : supervisor.acceptedReportForEpoch(assignmentEpoch).pipe(
+          Effect.flatMap((report) =>
+            report
+              ? offer({ type: "report", ...report }).pipe(
+                  Effect.timeoutOption("1 second"),
+                  Effect.asVoid,
+                )
+              : Effect.void,
+          ),
+          Effect.catch((error) =>
+            offer({
+              type: "protocol_error",
+              message: `Unable to preserve accepted Codex report during transport shutdown: ${error.message}`,
+            }),
+          ),
+        ),
+  );
+
   yield* Stream.fromQueue(child.events).pipe(
     Stream.runForEach(consumeRaw),
     Effect.catchCause(() => Effect.void),
     Effect.ensuring(
-      Effect.sync(() => {
+      Effect.sync(() =>
         cancelPending(
           processError("run", "local_codex_transport_closed", "Local Codex transport closed."),
-        );
-        Queue.endUnsafe(events);
-      }),
+        ),
+      ).pipe(
+        Effect.andThen(preserveAcceptedReport),
+        Effect.ensuring(Effect.sync(() => Queue.endUnsafe(events))),
+      ),
     ),
     Effect.forkScoped,
   );
@@ -484,6 +514,9 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
       );
     threadId = started.thread.id;
     sessionId = started.thread.sessionId ?? started.thread.id;
+    yield* supervisor.awaitReady.pipe(
+      Effect.mapError((error) => processError("initialize", error.code, error.message)),
+    );
     return {
       model: started.model,
       effort: request.effort,

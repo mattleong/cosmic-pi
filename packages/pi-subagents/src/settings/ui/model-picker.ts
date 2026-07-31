@@ -5,6 +5,7 @@ import type { Component, SelectItem } from "@earendil-works/pi-tui";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
 import type { ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../run/model.ts";
+import { isSafeNativeModelSelector } from "../../run/native-model-selector.ts";
 import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
 
 export type ProfileModelChoice =
@@ -76,16 +77,18 @@ export const createNativeModelChoices = (
   models: ReadonlyArray<NativeRuntimeModel>,
   currentSelector: string,
 ): ProfileModelPickerChoice[] =>
-  models.map((model) => ({
-    choice: { kind: "model", selector: model.selector },
-    item: {
-      value: model.selector,
-      label: `${boundedMiddle(model.label || model.selector, 72)}${model.isDefault ? " (default)" : ""}${model.selector === currentSelector ? " (current)" : ""}`,
-      description: `${boundedMiddle(model.selector, 72)}${model.description ? ` · ${boundedMiddle(model.description, 96)}` : ""} · efforts: ${model.supportedEfforts.join(", ") || "runtime default"}`,
-    },
-    searchText: `${model.selector} ${model.label} ${model.description}`,
-    supportedEfforts: model.supportedEfforts,
-  }));
+  models
+    .filter((model) => isSafeNativeModelSelector(model.selector))
+    .map((model) => ({
+      choice: { kind: "model", selector: model.selector },
+      item: {
+        value: model.selector,
+        label: `${boundedMiddle(model.label || model.selector, 72)}${model.isDefault ? " (default)" : ""}${model.selector === currentSelector ? " (current)" : ""}`,
+        description: `${boundedMiddle(model.selector, 72)}${model.description ? ` · ${boundedMiddle(model.description, 96)}` : ""} · efforts: ${model.supportedEfforts.join(", ") || "runtime default"}`,
+      },
+      searchText: `${model.selector} ${model.label} ${model.description}`,
+      supportedEfforts: model.supportedEfforts,
+    }));
 
 export interface ProfileModelPickerContext {
   readonly profile: ProfileId;

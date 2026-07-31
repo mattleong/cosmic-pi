@@ -198,6 +198,31 @@ const catalogFrames = (
         },
       ];
 
+const isClaudeCatalogErrorResponse = (value: unknown): boolean => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Readonly<Record<string, unknown>>;
+  const response = record.response;
+  return (
+    record.type === "control_response" &&
+    response !== null &&
+    typeof response === "object" &&
+    !Array.isArray(response) &&
+    (response as Readonly<Record<string, unknown>>).request_id === CATALOG_REQUEST_ID &&
+    (response as Readonly<Record<string, unknown>>).subtype === "error"
+  );
+};
+
+const isCodexCatalogErrorResponse = (value: unknown): boolean => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Readonly<Record<string, unknown>>;
+  return (
+    record.id === CATALOG_REQUEST_ID &&
+    record.error !== null &&
+    typeof record.error === "object" &&
+    !Array.isArray(record.error)
+  );
+};
+
 const isCatalogResponse = (runtime: LocalCliRuntime, value: unknown): boolean => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Readonly<Record<string, unknown>>;
@@ -447,7 +472,7 @@ const discoverCatalog = async (
   signal: AbortSignal,
   options: NativeModelCatalogLayerOptions,
 ): Promise<unknown> => {
-  if (runtime !== "codex" || !options.agentDirectory || options.executables)
+  if (runtime !== "codex" || !options.agentDirectory)
     return runCatalogProcess(
       runtime,
       executable,
@@ -568,8 +593,21 @@ export const makeNativeModelCatalog = (
                   `Unable to load the ${runtime} model catalog.`,
                 ),
         }).pipe(
-          Effect.flatMap((value) =>
-            (runtime === "claude" ? decodeClaudeModels(value) : decodeCodexModels(value)).pipe(
+          Effect.flatMap((value) => {
+            if (
+              (runtime === "codex" && isCodexCatalogErrorResponse(value)) ||
+              (runtime === "claude" && isClaudeCatalogErrorResponse(value))
+            )
+              return Effect.fail(
+                catalogError(
+                  runtime,
+                  "catalog_request_rejected",
+                  `${runtime === "claude" ? "Claude Code" : "Codex"} rejected the bounded model catalog request.`,
+                ),
+              );
+            return (
+              runtime === "claude" ? decodeClaudeModels(value) : decodeCodexModels(value)
+            ).pipe(
               Effect.mapError(() =>
                 catalogError(
                   runtime,
@@ -577,8 +615,8 @@ export const makeNativeModelCatalog = (
                   `${runtime} returned an invalid model catalog.`,
                 ),
               ),
-            ),
-          ),
+            );
+          }),
           Effect.tap((models) => Effect.sync(() => void cache.set(cacheKey, models))),
           Effect.ensuring(Effect.sync(() => releaseRequest(cacheKey, request))),
         );

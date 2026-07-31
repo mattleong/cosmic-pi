@@ -163,6 +163,10 @@ export class ProfileWorkspaceComponent implements Component {
   }
 
   private navigate(direction: -1 | 1): void {
+    if (direction === 1 && this.pane === "candidates" && this.draft().candidates.length === 0) {
+      this.setMessage("info", "Add a candidate before opening candidate details.");
+      return;
+    }
     const current = paneOrder.indexOf(this.pane);
     const next = Math.max(0, Math.min(paneOrder.length - 1, current + direction));
     this.pane = paneOrder[next] ?? "profiles";
@@ -402,7 +406,12 @@ export class ProfileWorkspaceComponent implements Component {
           },
           cancel: () => {
             this.modelPicker = undefined;
-            this.setMessage("info", "Model selection canceled.");
+            this.setMessage(
+              "info",
+              preferAdvertisedDefault
+                ? "Runtime change canceled because no model was selected."
+                : "Model selection canceled.",
+            );
             this.renderSoon();
           },
         });
@@ -578,7 +587,7 @@ export class ProfileWorkspaceComponent implements Component {
       this.performDraftAction("move-down");
     else if (data === "x" && this.pane === "candidates" && this.draft().candidates.length > 0)
       this.arm("remove");
-    else if (data === "d" && this.pane !== "fields") this.arm("disable");
+    else if (data === "d" && this.pane === "candidates") this.arm("disable");
     else if (data === "i" && this.pane !== "fields") this.arm("reset");
     else if (data === "r") this.requestReload();
     this.renderSoon();

@@ -20,7 +20,11 @@ import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors.ts";
-import type { SubagentRuntime, SubagentWriteIntent } from "../run/model.ts";
+import {
+  subagentRuntimeEfforts,
+  type SubagentRuntime,
+  type SubagentWriteIntent,
+} from "../run/model.ts";
 import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
 import { claudeWriterCwdPolicy } from "./claude-writer-policy.ts";
 import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
@@ -204,21 +208,24 @@ export const sanitizeLocalCliEnvironment = (
   source: NodeJS.ProcessEnv,
   runtime: LocalCliRuntime,
   launch?: BackendLaunchRequest,
-): NodeJS.ProcessEnv => ({
-  ...Object.fromEntries(
-    Object.entries(source).filter(([key, value]) => value !== undefined && SAFE_ENV_KEYS.has(key)),
-  ),
-  ...(runtime === "codex" && approvedCodexApiKey(source)
-    ? { OPENAI_API_KEY: approvedCodexApiKey(source) }
-    : {}),
-  ...(launch
-    ? {
-        PI_SUBAGENT_CHILD: "1",
-        PI_SUBAGENT_PARENT_SESSION: launch.parentSessionId,
-        PI_SUBAGENT_RUN_ID: launch.runId,
-      }
-    : {}),
-});
+): NodeJS.ProcessEnv => {
+  const codexApiKey = runtime === "codex" ? approvedCodexApiKey(source) : undefined;
+  return {
+    ...Object.fromEntries(
+      Object.entries(source).filter(
+        ([key, value]) => value !== undefined && SAFE_ENV_KEYS.has(key),
+      ),
+    ),
+    ...(codexApiKey ? { OPENAI_API_KEY: codexApiKey } : {}),
+    ...(launch
+      ? {
+          PI_SUBAGENT_CHILD: "1",
+          PI_SUBAGENT_PARENT_SESSION: launch.parentSessionId,
+          PI_SUBAGENT_RUN_ID: launch.runId,
+        }
+      : {}),
+  };
+};
 
 const claudeAllowedTools = (launch: BackendLaunchRequest): ReadonlyArray<string> => {
   const writerPolicy = claudeWriterCwdPolicy(launch.cwd);
@@ -421,11 +428,7 @@ const safeCodexSourceHome = async (
   }
 };
 
-const readValidatedCodexAuth = async (
-  sourceEnvironment: NodeJS.ProcessEnv,
-): Promise<string | undefined> => {
-  const sourceHome = await safeCodexSourceHome(sourceEnvironment);
-  if (!sourceHome) return undefined;
+const readValidatedCodexAuthFromHome = async (sourceHome: string): Promise<string | undefined> => {
   const path = join(sourceHome, "auth.json");
   let bytes: Buffer;
   try {
@@ -445,6 +448,13 @@ const readValidatedCodexAuth = async (
   } catch {
     return undefined;
   }
+};
+
+const readValidatedCodexAuth = async (
+  sourceEnvironment: NodeJS.ProcessEnv,
+): Promise<string | undefined> => {
+  const sourceHome = await safeCodexSourceHome(sourceEnvironment);
+  return sourceHome ? readValidatedCodexAuthFromHome(sourceHome) : undefined;
 };
 
 const harnessCleanupUnconfirmed = (cause: unknown): Error & { readonly cleanupUnconfirmed: true } =>
@@ -666,6 +676,26 @@ const runProbe = (
     timer.unref();
   });
 
+const runIsolatedCodexAuthProbe = async (
+  executable: string,
+  agentDirectory: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<ProbeResult> => {
+  const harness = await prepareCodexCatalogHarness({ agentDirectory, environment });
+  const result = await runProbe(executable, ["login", "status"], harness.env);
+  try {
+    await harness.release();
+    return result;
+  } catch {
+    return {
+      ...result,
+      code: null,
+      cleanupUnconfirmed: true,
+      stderr: "Codex readiness probe private harness cleanup could not be confirmed.",
+    };
+  }
+};
+
 const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
   options: LocalCliProcessLayerOptions,
   request: LocalCliSpawnRequest,
@@ -693,11 +723,12 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
 
   return yield* Effect.uninterruptible(
     Effect.gen(function* () {
+      const platform = options.platform ?? process.platform;
       const child = yield* Effect.try({
         try: () =>
           spawn(harness.executable, [...harness.args], {
             cwd: request.launch.cwd,
-            detached: (options.platform ?? process.platform) !== "win32",
+            detached: platform !== "win32",
             env: harness.env,
             stdio: ["pipe", "pipe", "pipe"],
             windowsHide: true,
@@ -710,7 +741,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
           type: "protocol_error",
           message: "Local CLI event backlog exceeded its byte budget.",
         });
-        void terminateProcessTree(child, "force").catch(() => undefined);
+        void terminateProcessTree(child, "force", { platform }).catch(() => undefined);
       });
       let queueOverflowed = false;
       const offer = (event: LocalCliWireEvent, bytes = 0) => {
@@ -718,7 +749,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
         if (queueOverflowed) return;
         queueOverflowed = true;
         stderr = `${stderr}\nLocal CLI event queue exceeded ${EVENT_CAPACITY} pending events.`;
-        void terminateProcessTree(child, "force").catch(() => undefined);
+        void terminateProcessTree(child, "force", { platform }).catch(() => undefined);
       };
       const detachStdout = child.stdout
         ? attachBoundedLineParser(child.stdout, {
@@ -740,7 +771,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
                 type: "protocol_error",
                 message: "Local CLI output exceeded its bounded parser budget.",
               });
-              void terminateProcessTree(child, "force").catch(() => undefined);
+              void terminateProcessTree(child, "force", { platform }).catch(() => undefined);
             },
           })
         : () => {};
@@ -821,7 +852,10 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
         ),
       );
       const pid = child.pid;
-      if (!pid) return yield* processError("spawn local CLI", "Process did not expose a pid.");
+      if (!pid) {
+        cleanup();
+        return yield* processError("spawn local CLI", "Process did not expose a pid.");
+      }
 
       const send = (value: Readonly<Record<string, unknown>>) =>
         Effect.callback<void, SubagentProcessError>((resumeWrite) => {
@@ -884,11 +918,11 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
         );
       const terminate = (mode: "graceful" | "force") =>
         Effect.tryPromise({
-          try: () => terminateProcessTree(child, mode),
+          try: () => terminateProcessTree(child, mode, { platform }),
           catch: (error) => processError("terminate local CLI", error),
         });
       const release = releaseChildProcess({
-        platform: options.platform ?? process.platform,
+        platform,
         requestAbort: Effect.void,
         terminate,
         awaitExit: Deferred.await(exited),
@@ -966,11 +1000,8 @@ export const makeLocalCliProcess = (
           `${request.runtime}_model_unsupported`,
           `${request.runtime} model selector is empty, excessive, or unsafe.`,
         );
-      const supportedEfforts =
-        request.runtime === "claude"
-          ? (["low", "medium", "high", "xhigh", "max"] as const)
-          : (["minimal", "low", "medium", "high", "xhigh", "max"] as const);
-      if (!(supportedEfforts as ReadonlyArray<string>).includes(request.effort))
+      const supportedEfforts = subagentRuntimeEfforts(request.runtime);
+      if (!supportedEfforts.includes(request.effort))
         return yield* preflightError(
           `${request.runtime}_effort_unsupported`,
           `${request.runtime} does not support required effort ${request.effort}; supported efforts: ${supportedEfforts.join(", ")}.`,
@@ -995,7 +1026,7 @@ export const makeLocalCliProcess = (
       const environment = options.environment ?? process.env;
       let codexApiKeyFallback = false;
       if (request.runtime === "codex") {
-        // readValidatedCodexAuth contains all hostile filesystem/JSON failures and cannot reject.
+        // Auth helpers contain hostile filesystem/JSON failures and cannot reject.
         const auth = yield* Effect.promise(() => readValidatedCodexAuth(environment));
         codexApiKeyFallback = !auth && approvedCodexApiKey(environment) !== undefined;
         if (!auth && !codexApiKeyFallback)
@@ -1011,14 +1042,22 @@ export const makeLocalCliProcess = (
           : codexApiKeyFallback
             ? ["--version"]
             : ["login", "status"];
+      const probeEnvironment = sanitizeLocalCliEnvironment(environment, request.runtime);
       const result = yield* Effect.tryPromise({
         try: () =>
-          runProbe(executable, args, sanitizeLocalCliEnvironment(environment, request.runtime)),
-        catch: () =>
-          preflightError(
-            `${request.runtime}_preflight_failed`,
-            `Unable to run bounded ${request.runtime} readiness preflight.`,
-          ),
+          request.runtime === "codex" && !codexApiKeyFallback
+            ? runIsolatedCodexAuthProbe(executable, options.agentDirectory, environment)
+            : runProbe(executable, args, probeEnvironment),
+        catch: (error) =>
+          isHarnessCleanupUnconfirmed(error)
+            ? preflightError(
+                `${request.runtime}_preflight_cleanup_unconfirmed`,
+                `${request.runtime} readiness probe private harness cleanup could not be confirmed; no later candidate will be attempted.`,
+              )
+            : preflightError(
+                `${request.runtime}_preflight_failed`,
+                `Unable to run bounded ${request.runtime} readiness preflight.`,
+              ),
       });
       if (result.cleanupUnconfirmed)
         return yield* preflightError(

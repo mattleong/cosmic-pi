@@ -8,7 +8,13 @@ import type {
   ProfileCandidateEffort,
   ProfileId,
 } from "../profiles/model.ts";
-import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../run/model.ts";
+import {
+  subagentRuntimeEfforts,
+  subagentRuntimeSupportsEffort,
+  type SubagentEffort,
+  type SubagentHost,
+  type SubagentRuntime,
+} from "../run/model.ts";
 import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
 
 export type ProfileRouteDraftKind = "explicit" | "disabled" | "reset" | "inherit" | "invalid";
@@ -35,21 +41,15 @@ export const NATIVE_MODEL_DEFAULTS = {
   codex: "gpt-5.6-codex",
 } as const;
 
-const RUNTIME_EFFORTS = {
-  claude: ["low", "medium", "high", "xhigh", "max"],
-  codex: ["minimal", "low", "medium", "high", "xhigh", "max"],
-} as const satisfies Readonly<
-  Record<Exclude<SubagentRuntime, "pi">, ReadonlyArray<SubagentEffort>>
->;
-
 export const runtimeEfforts = (
   runtime: SubagentRuntime,
   supportedModelEfforts?: ReadonlyArray<SubagentEffort> | undefined,
-): ReadonlyArray<SubagentEffort> =>
-  supportedModelEfforts ??
-  (runtime === "pi"
-    ? ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
-    : RUNTIME_EFFORTS[runtime]);
+): ReadonlyArray<SubagentEffort> => {
+  const supportedByRuntime = subagentRuntimeEfforts(runtime);
+  return supportedModelEfforts
+    ? supportedModelEfforts.filter((effort) => supportedByRuntime.includes(effort))
+    : supportedByRuntime;
+};
 
 const cloneCandidate = (
   candidate: DeclaredProfileCandidate | ProfileCandidate,
@@ -206,7 +206,7 @@ export const defaultRouteCandidate = (profile: ProfileId): ProfileCandidate =>
 const effortAllowedForRuntime = (
   runtime: SubagentRuntime,
   effort: ProfileCandidateEffort,
-): boolean => effort === "default" || runtimeEfforts(runtime).includes(effort);
+): boolean => effort === "default" || subagentRuntimeSupportsEffort(runtime, effort);
 
 export function candidateValidationError(candidate: ProfileCandidate): string | undefined {
   if (
@@ -296,7 +296,7 @@ export function updateCandidateModel(
   if (
     next.effort !== "default" &&
     supportedEfforts !== undefined &&
-    !supportedEfforts.includes(next.effort)
+    !runtimeEfforts(candidate.runtime, supportedEfforts).includes(next.effort)
   ) {
     next = { ...next, effort: "default" };
     notices.push(`Effort ${candidate.effort} is unavailable for ${model}; reset to default.`);

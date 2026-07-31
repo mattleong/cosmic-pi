@@ -117,6 +117,18 @@ const supervisorFixture = (
             });
           }),
         hasAcceptedReport: (epoch) => Effect.succeed(acceptedReports.has(epoch)),
+        acceptedReportForEpoch: (epoch) =>
+          Effect.succeed(
+            acceptedReports.has(epoch)
+              ? {
+                  runId: openRequest.runId,
+                  assignmentEpoch: epoch,
+                  sequence: 1,
+                  deliveryId: "service-report",
+                  text: "Service-owned accepted report.",
+                }
+              : undefined,
+          ),
         reply: () => Effect.void,
         cancelPending: () => {},
         close: Effect.sync(() => Queue.endUnsafe(events)),

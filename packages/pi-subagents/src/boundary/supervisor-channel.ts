@@ -41,6 +41,8 @@ const LOOPBACK_HOST = "127.0.0.1" as const;
 const CHANNEL_ROOT = "supervisor-channels-v1";
 const CONNECTION_CONFIG_FILE = "connection.json";
 const EVENT_CAPACITY = 64;
+// One slot remains reserved for exact pending-question cancellation.
+const CONTACT_EVENT_CAPACITY = EVENT_CAPACITY - 1;
 const MAX_CONNECTIONS = 4;
 const MAX_PENDING_WRITES = 32;
 const MAX_TRACKED_ASSIGNMENTS = 256;
@@ -103,6 +105,10 @@ export interface SupervisorChannelHandle {
    * the adapter draining the event queue and is safe to query at native turn completion.
    */
   readonly hasAcceptedReport: (epoch: number) => Effect.Effect<boolean, SupervisorChannelError>;
+  /** Return exact accepted report evidence so adapters can preserve it across transport shutdown. */
+  readonly acceptedReportForEpoch: (
+    epoch: number,
+  ) => Effect.Effect<BackendReport | undefined, SupervisorChannelError>;
   /** Settle only the exact pending question owned by this channel and current assignment. */
   readonly reply: (
     requestId: string,
@@ -140,6 +146,7 @@ interface AcceptedReport {
   readonly epoch: number;
   readonly sequence: number;
   readonly text: string;
+  readonly report: BackendReport;
 }
 
 interface PendingEpochAcknowledgement {
@@ -482,13 +489,15 @@ const offerContact = (
     });
     return;
   }
-  const offered = Queue.offerUnsafe(state.events, {
-    type: "supervisor_contact",
-    assignmentEpoch: message.assignmentEpoch,
-    requestId: message.id,
-    kind: message.type,
-    message: message.message,
-  });
+  const offered =
+    Queue.sizeUnsafe(state.events) < CONTACT_EVENT_CAPACITY &&
+    Queue.offerUnsafe(state.events, {
+      type: "supervisor_contact",
+      assignmentEpoch: message.assignmentEpoch,
+      requestId: message.id,
+      kind: message.type,
+      message: message.message,
+    });
   sendAuthenticated(
     state,
     peer,
@@ -543,13 +552,15 @@ const offerQuestion = (
     acknowledgement,
     replyStarted: false,
   };
-  const offered = Queue.offerUnsafe(state.events, {
-    type: "supervisor_contact",
-    assignmentEpoch: message.assignmentEpoch,
-    requestId: message.id,
-    kind: "question",
-    message: message.message,
-  });
+  const offered =
+    Queue.sizeUnsafe(state.events) < CONTACT_EVENT_CAPACITY &&
+    Queue.offerUnsafe(state.events, {
+      type: "supervisor_contact",
+      assignmentEpoch: message.assignmentEpoch,
+      requestId: message.id,
+      kind: "question",
+      message: message.message,
+    });
   if (!offered) {
     state.pendingQuestion = undefined;
     sendAuthenticated(state, peer, {
@@ -643,6 +654,7 @@ const offerReport = (
     epoch: message.assignmentEpoch,
     sequence,
     text: message.text,
+    report,
   });
   state.nextReportSequence += 1;
   sendAuthenticated(state, peer, {
@@ -669,12 +681,18 @@ const dispatchAuthenticated = (
       pending !== undefined &&
       pending.requestId === message.targetRequestId &&
       pending.peer === peer;
-    if (cancelled) {
+    if (cancelled && pending) {
+      const cancellation: SupervisorEvent = {
+        type: "supervisor_question_cancelled",
+        assignmentEpoch: pending.epoch,
+        requestId: pending.requestId,
+      };
       failPendingQuestion(
         state,
         "question_cancelled",
         "The exact pending supervisor question was cancelled by its MCP caller.",
       );
+      Queue.offerUnsafe(state.events, cancellation);
       sendAuthenticated(state, peer, {
         type: "cancelled",
         id: message.targetRequestId,
@@ -1098,6 +1116,15 @@ export const makeSupervisorChannel = (
           ),
         );
 
+      const acceptedReportForEpoch: SupervisorChannelHandle["acceptedReportForEpoch"] = (epoch) =>
+        hasAcceptedReport(epoch).pipe(
+          Effect.map((accepted) =>
+            accepted
+              ? [...state.reports.values()].find((report) => report.epoch === epoch)?.report
+              : undefined,
+          ),
+        );
+
       const reply: SupervisorChannelHandle["reply"] = (requestId, message) =>
         Effect.gen(function* () {
           const pending = state.pendingQuestion;
@@ -1161,6 +1188,7 @@ export const makeSupervisorChannel = (
         awaitReady,
         setAssignmentEpoch,
         hasAcceptedReport,
+        acceptedReportForEpoch,
         reply,
         cancelPending,
         close,

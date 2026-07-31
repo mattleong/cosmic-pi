@@ -15,7 +15,7 @@ import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors.ts";
-import type { SubagentRuntime } from "../run/model.ts";
+import { subagentRuntimeEfforts, type SubagentRuntime } from "../run/model.ts";
 import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
 import { claudeWriterCwdPolicy } from "./claude-writer-policy.ts";
 import { claudeSettings } from "./local-cli-process.ts";
@@ -636,13 +636,8 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
             `${runtime}_model_unsupported`,
             `${runtime} model selector is empty, excessive, or unsafe.`,
           );
-        const efforts =
-          runtime === "claude"
-            ? (["low", "medium", "high", "xhigh", "max"] as const)
-            : runtime === "codex"
-              ? (["minimal", "low", "medium", "high", "xhigh", "max"] as const)
-              : (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const);
-        if (!(efforts as ReadonlyArray<string>).includes(request.effort))
+        const efforts = subagentRuntimeEfforts(runtime);
+        if (!efforts.includes(request.effort))
           return yield* readinessError(
             `${runtime}_effort_unsupported`,
             `${runtime} does not support required effort ${request.effort}.`,

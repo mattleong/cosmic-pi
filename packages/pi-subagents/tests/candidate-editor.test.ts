@@ -76,6 +76,27 @@ describe("inline candidate model editor", () => {
     ).toEqual({ candidate: candidate({ model: "opus[1m]" }), notices: [] });
   });
 
+  it("omits advertised models whose selectors cannot be safely persisted or launched", async () => {
+    const picker = await loadCandidateModelPicker(context(), {
+      profile: "reviewer",
+      candidateIndex: 0,
+      candidate: candidate(),
+      listNativeModels: vi.fn().mockResolvedValue([
+        ...claudeModels,
+        {
+          selector: "unsafe model",
+          label: "Unsafe",
+          description: "Cannot be passed as a native selector",
+          supportedEfforts: ["low"],
+          isDefault: false,
+        },
+      ] satisfies ReadonlyArray<NativeRuntimeModel>),
+    });
+
+    expect(picker.choices.map((choice) => choice.item.value)).not.toContain("unsafe model");
+    expect(picker.warning).toContain("unsafe selectors");
+  });
+
   it("falls back to searchable current/default choices when native discovery fails", async () => {
     const current = candidate();
     const picker = await loadCandidateModelPicker(context(), {

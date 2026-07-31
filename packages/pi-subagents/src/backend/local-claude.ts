@@ -324,20 +324,43 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     );
   };
 
+  const preserveAcceptedReport = Effect.suspend(() =>
+    assignmentEpoch <= 0
+      ? Effect.void
+      : supervisor.acceptedReportForEpoch(assignmentEpoch).pipe(
+          Effect.flatMap((report) =>
+            report
+              ? offer({ type: "report", ...report }).pipe(
+                  Effect.timeoutOption("1 second"),
+                  Effect.asVoid,
+                )
+              : Effect.void,
+          ),
+          Effect.catch((error) =>
+            offer({
+              type: "protocol_error",
+              message: `Unable to preserve accepted Claude report during transport shutdown: ${error.message}`,
+            }),
+          ),
+        ),
+  );
+
   yield* Stream.fromQueue(child.events).pipe(
     Stream.runForEach(consumeRaw),
     Effect.catchCause(() => Effect.void),
     Effect.ensuring(
-      Effect.sync(() => {
+      Effect.sync(() =>
         cancelPending(
           processError(
             "run",
             "local_claude_transport_closed",
             "Local Claude Code transport closed.",
           ),
-        );
-        Queue.endUnsafe(events);
-      }),
+        ),
+      ).pipe(
+        Effect.andThen(preserveAcceptedReport),
+        Effect.ensuring(Effect.sync(() => Queue.endUnsafe(events))),
+      ),
     ),
     Effect.forkScoped,
   );

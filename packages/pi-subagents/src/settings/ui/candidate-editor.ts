@@ -4,6 +4,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { LocalCliRuntime } from "../../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
 import type { ProfileCandidate, ProfileId } from "../../profiles/model.ts";
+import { isSafeNativeModelSelector } from "../../run/native-model-selector.ts";
 import {
   NATIVE_MODEL_DEFAULTS,
   runtimeEfforts,
@@ -71,7 +72,10 @@ const loadNativeModels = async (
   let models: ReadonlyArray<NativeRuntimeModel>;
   let warning: string | undefined;
   try {
-    models = await input.listNativeModels(runtime);
+    const advertised = await input.listNativeModels(runtime);
+    models = advertised.filter((model) => isSafeNativeModelSelector(model.selector));
+    if (models.length !== advertised.length)
+      warning = "Some advertised models used unsafe selectors and were omitted.";
   } catch (error) {
     warning =
       error instanceof Error
