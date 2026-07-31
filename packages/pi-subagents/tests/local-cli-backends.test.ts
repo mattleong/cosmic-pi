@@ -190,6 +190,38 @@ describe("local CLI Phase One backends", () => {
     });
   });
 
+  it("accepts Claude system status events without weakening init validation", async () => {
+    await expect(
+      Effect.runPromise(
+        decodeClaudeProtocolEvent({
+          type: "system",
+          subtype: "status",
+          status: "requesting",
+          session_id: "session",
+          uuid: "status-event",
+        }),
+      ),
+    ).resolves.toEqual({ type: "activity" });
+    await expect(
+      Effect.runPromise(
+        decodeClaudeProtocolEvent({
+          type: "system",
+          subtype: "future_lifecycle_event",
+          session_id: "session",
+        }),
+      ),
+    ).resolves.toEqual({ type: "ignored" });
+    await expect(
+      Effect.runPromise(
+        decodeClaudeProtocolEvent({
+          type: "system",
+          subtype: "init",
+          session_id: "session",
+        }),
+      ),
+    ).rejects.toBeDefined();
+  });
+
   it("decodes each current Codex warning notification shape", async () => {
     await expect(
       Effect.runPromise(decodeCodexNotification("warning", { message: "Runtime warning" })),

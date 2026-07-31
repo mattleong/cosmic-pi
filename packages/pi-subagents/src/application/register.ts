@@ -13,6 +13,7 @@ import {
 } from "pi-cosmic-core";
 import { makeHostNotifier } from "../boundary/host-notifier.ts";
 import { makeSubagentProjectionBridge } from "../boundary/host-ui.ts";
+import { NativeModelCatalog } from "../boundary/native-model-catalog.ts";
 import { SubagentConfigStore } from "../config/store.ts";
 import {
   makeSubagentLayer,
@@ -166,6 +167,14 @@ export function registerSubagentApplication(
         Effect.flatMap(SubagentConfigStore, (store) =>
           store.patchProfile(activation.cwd, activation.agentDirectory, patch),
         ),
+      );
+    },
+    listNativeModels: (runtime) => {
+      const activation = currentActivation;
+      if (!activation)
+        return Promise.reject(new Error("Subagents are not active; run /reload and try again."));
+      return run(
+        Effect.flatMap(NativeModelCatalog, (catalog) => catalog.list(runtime, activation.cwd)),
       );
     },
   });

@@ -58,7 +58,31 @@ if (args.includes("--print")) {
           },
         });
       if (frame.request?.subtype === "initialize") {
-        success(model === "bad-init" ? {} : { models: [{ value: model, resolvedModel: model }] });
+        success(
+          model === "bad-init"
+            ? {}
+            : {
+                models:
+                  frame.request_id === "pi-subagents-model-catalog"
+                    ? [
+                        {
+                          value: "default",
+                          resolvedModel: "claude-opus-fixture",
+                          displayName: "Default Claude",
+                          description: "Fixture default model",
+                          supportedEffortLevels: ["low", "medium", "high"],
+                        },
+                        {
+                          value: "sonnet",
+                          resolvedModel: "claude-sonnet-fixture",
+                          displayName: "Claude Sonnet",
+                          description: "Fixture efficient model",
+                          supportedEffortLevels: ["low", "high"],
+                        },
+                      ]
+                    : [{ value: model, resolvedModel: model }],
+              },
+        );
         return;
       }
       if (frame.request?.subtype === "mcp_status") {
@@ -179,6 +203,35 @@ if (args.includes("--print")) {
             platformFamily: "unix",
             platformOs: "fixture",
             userAgent: "codex-fixture",
+          },
+        });
+        break;
+      case "model/list":
+        write({
+          id: frame.id,
+          result: {
+            data: [
+              {
+                id: "gpt-fixture-default",
+                model: "gpt-fixture-default",
+                displayName: "GPT Fixture Default",
+                description: "Fixture Codex default model",
+                isDefault: true,
+                supportedReasoningEfforts: [
+                  { reasoningEffort: "low", description: "Low" },
+                  { reasoningEffort: "high", description: "High" },
+                ],
+              },
+              {
+                id: "gpt-fixture-fast",
+                model: "gpt-fixture-fast",
+                displayName: "GPT Fixture Fast",
+                description: "Fixture Codex fast model",
+                isDefault: false,
+                supportedReasoningEfforts: [{ reasoningEffort: "minimal", description: "Minimal" }],
+              },
+            ],
+            nextCursor: null,
           },
         });
         break;

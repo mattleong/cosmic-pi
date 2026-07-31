@@ -6,6 +6,7 @@ import { HerdrCli } from "./boundary/herdr-cli.ts";
 import { HerdrHarness } from "./boundary/herdr-harness.ts";
 import { HerdrHost } from "./boundary/herdr-host.ts";
 import { LocalCliProcess } from "./boundary/local-cli-process.ts";
+import { NativeModelCatalog } from "./boundary/native-model-catalog.ts";
 import { SupervisorChannel } from "./boundary/supervisor-channel.ts";
 import { WriterLeaseService } from "./boundary/writer-lease.ts";
 import type {
@@ -41,12 +42,13 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
     herdrHost,
   );
   const backend = subagentBackendRegistryLayer.pipe(Layer.provide(backendBoundaries));
+  const nativeModelCatalog = NativeModelCatalog.layer();
   const writerLeases = WriterLeaseService.layer({ agentDirectory: options.agentDirectory });
   const service = SubagentService.layer({ publish: options.publish, notify: options.notify }).pipe(
     Layer.provide(Layer.merge(backend, writerLeases)),
   );
   // Layer memoization shares both persistence and the backend registry with host preflight/service use.
-  return Layer.mergeAll(service, profiles, configStore, backend);
+  return Layer.mergeAll(service, profiles, configStore, backend, nativeModelCatalog);
 };
 
 export type SubagentApplicationLayer = ReturnType<typeof makeSubagentLayer>;

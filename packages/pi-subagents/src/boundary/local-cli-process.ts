@@ -199,7 +199,7 @@ const approvedCodexApiKey = (source: NodeJS.ProcessEnv): string | undefined => {
     : undefined;
 };
 
-const sanitizeEnvironment = (
+export const sanitizeLocalCliEnvironment = (
   source: NodeJS.ProcessEnv,
   runtime: LocalCliRuntime,
   launch?: BackendLaunchRequest,
@@ -477,7 +477,7 @@ const prepareHarness = async (
       throw new Error("unsafe-harness-directory");
     const executable = options.executables?.[request.runtime] ?? request.runtime;
     const sourceEnvironment = options.environment ?? process.env;
-    const env = sanitizeEnvironment(sourceEnvironment, request.runtime, request.launch);
+    const env = sanitizeLocalCliEnvironment(sourceEnvironment, request.runtime, request.launch);
 
     if (request.runtime === "claude") {
       const settingsPath = join(directory, "settings.json");
@@ -966,7 +966,8 @@ export const makeLocalCliProcess = (
             ? ["--version"]
             : ["login", "status"];
       const result = yield* Effect.tryPromise({
-        try: () => runProbe(executable, args, sanitizeEnvironment(environment, request.runtime)),
+        try: () =>
+          runProbe(executable, args, sanitizeLocalCliEnvironment(environment, request.runtime)),
         catch: () =>
           preflightError(
             `${request.runtime}_preflight_failed`,

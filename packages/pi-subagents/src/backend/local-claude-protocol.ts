@@ -68,6 +68,10 @@ const SystemInit = Schema.Struct({
   ),
   mcp_server_errors: Schema.optional(Schema.Array(Schema.Unknown)),
 });
+const SystemEvent = Schema.Struct({
+  type: Schema.Literal("system"),
+  subtype: Schema.optional(Schema.String),
+});
 const StreamEvent = Schema.Struct({
   type: Schema.Literal("stream_event"),
   event: Schema.optional(Schema.Unknown),
@@ -201,6 +205,9 @@ export const decodeClaudeProtocolEvent = (
     const discriminant = yield* Schema.decodeUnknownEffect(Discriminant)(value);
     switch (discriminant.type) {
       case "system": {
+        const system = yield* Schema.decodeUnknownEffect(SystemEvent)(value);
+        if (system.subtype === "status") return { type: "activity" };
+        if (system.subtype !== "init") return { type: "ignored" };
         const event = yield* Schema.decodeUnknownEffect(SystemInit)(value);
         return {
           type: "init",

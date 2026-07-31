@@ -1,9 +1,11 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
-import { DynamicBorder, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { fuzzyFilter, Input, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
-import type { ProfileCandidateEffort, ProfileId } from "../../profiles/model.ts";
-import type { SubagentEffort, SubagentHost } from "../../run/model.ts";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, SelectItem } from "@earendil-works/pi-tui";
+import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
+import type { ProfileId } from "../../profiles/model.ts";
+import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../run/model.ts";
+import { SearchableSelectPage } from "./searchable-select-page.ts";
 
 export type ProfileModelChoice =
   | { readonly kind: "model"; readonly selector: string }
@@ -70,130 +72,92 @@ export function createProfileModelChoices(input: {
   return result;
 }
 
-const buildList = (
-  choices: ReadonlyArray<ProfileModelPickerChoice>,
-  query: string,
-  current: string | undefined,
-  theme: ConstructorParameters<typeof SelectList>[2],
-  done: (value: string | null) => void,
-): SelectList => {
-  const filtered = fuzzyFilter([...choices], query, (choice) => choice.searchText);
-  const list = new SelectList(
-    filtered.map((choice) => choice.item),
-    12,
-    theme,
-  );
-  if (!query && current) {
-    const index = filtered.findIndex((choice) => choiceValue(choice.choice) === current);
-    if (index >= 0) list.setSelectedIndex(index);
-  }
-  list.onSelect = (item) => done(item.value);
-  list.onCancel = () => done(null);
-  return list;
-};
+export const createNativeModelChoices = (
+  models: ReadonlyArray<NativeRuntimeModel>,
+  currentSelector: string,
+): ProfileModelPickerChoice[] =>
+  models.map((model) => ({
+    choice: { kind: "model", selector: model.selector },
+    item: {
+      value: model.selector,
+      label: `${boundedMiddle(model.label || model.selector, 72)}${model.isDefault ? " (default)" : ""}${model.selector === currentSelector ? " (current)" : ""}`,
+      description: `${boundedMiddle(model.selector, 72)}${model.description ? ` · ${boundedMiddle(model.description, 96)}` : ""} · efforts: ${model.supportedEfforts.join(", ") || "runtime default"}`,
+    },
+    searchText: `${model.selector} ${model.label} ${model.description}`,
+    supportedEfforts: model.supportedEfforts,
+  }));
 
 export interface ProfileModelPickerContext {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
   readonly host: SubagentHost;
+  readonly runtime: SubagentRuntime;
 }
 
-export function selectProfileModel(
-  ctx: ExtensionCommandContext,
-  choices: ReadonlyArray<ProfileModelPickerChoice>,
-  current: string | undefined,
-  pickerContext: ProfileModelPickerContext,
-): Promise<ProfileModelChoice | undefined> {
-  return ctx.ui
-    .custom<string | null>((tui, theme, keybindings, done) => {
-      const input = new Input();
-      const top = new DynamicBorder((text: string) => theme.fg("accent", text));
-      const bottom = new DynamicBorder((text: string) => theme.fg("accent", text));
-      let query = "";
-      const listTheme = {
-        selectedPrefix: (text: string) => theme.fg("accent", text),
-        selectedText: (text: string) => theme.fg("accent", text),
-        description: (text: string) => theme.fg("muted", text),
-        scrollInfo: (text: string) => theme.fg("dim", text),
-        noMatch: (_text: string) => theme.fg("warning", "  No matching models"),
-      };
-      let list = buildList(choices, query, current, listTheme, done);
-      return {
-        get focused() {
-          return input.focused;
-        },
-        set focused(value: boolean) {
-          input.focused = value;
-        },
-        render(width: number) {
-          return [
-            ...top.render(width),
-            ...new Text(
-              theme.fg(
-                "accent",
-                theme.bold(
-                  `Profile: ${pickerContext.profile} · Candidate ${pickerContext.candidateIndex + 1} · Pi model`,
-                ),
-              ),
-              1,
-              0,
-            ).render(width),
-            ...new Text(
-              theme.fg(
-                "dim",
-                `${pickerContext.host === "local" ? "Local" : "Herdr"} Pi · authenticated canonical models${pickerContext.host === "local" ? " · parent allowed" : ""}`,
-              ),
-              1,
-              0,
-            ).render(width),
-            ...new Text(theme.fg("dim", "Search models:"), 1, 0).render(width),
-            ...input.render(width),
-            "",
-            ...list.render(width),
-            "",
-            ...new Text(
-              theme.fg(
-                "dim",
-                "Type to search · ↑↓ navigate · enter select · esc back to candidate",
-              ),
-              1,
-              0,
-            ).render(width),
-            ...bottom.render(width),
-          ];
-        },
-        invalidate() {
-          top.invalidate();
-          bottom.invalidate();
-          input.invalidate();
-          list.invalidate();
-        },
-        handleInput(data: string) {
-          if (
-            keybindings.matches(data, "tui.select.up") ||
-            keybindings.matches(data, "tui.select.down") ||
-            keybindings.matches(data, "tui.select.confirm") ||
-            keybindings.matches(data, "tui.select.cancel")
-          )
-            list.handleInput(data);
-          else {
-            input.handleInput(data);
-            const next = input.getValue();
-            if (next !== query) {
-              query = next;
-              list = buildList(choices, query, current, listTheme, done);
-            }
-          }
-          tui.requestRender();
-        },
-      };
-    })
-    .then((selected) => choices.find((choice) => choice.item.value === selected)?.choice);
+export interface ProfileModelPickerPageOptions {
+  readonly theme: Theme;
+  readonly choices: ReadonlyArray<ProfileModelPickerChoice>;
+  readonly current?: string | undefined;
+  readonly context: ProfileModelPickerContext;
+  readonly notice?: string | undefined;
+  readonly getHeight: () => number;
+  readonly requestRender: () => void;
+  readonly select: (choice: ProfileModelChoice) => void;
+  readonly cancel: () => void;
 }
 
-export const effortPickerOptions = (
-  supported: ReadonlyArray<SubagentEffort>,
-): ReadonlyArray<{ readonly label: string; readonly effort: ProfileCandidateEffort }> => [
-  { label: "Profile default", effort: "default" },
-  ...supported.map((effort) => ({ label: effort, effort })),
-];
+const runtimeLabel = (runtime: SubagentRuntime): string =>
+  runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude Code" : "Codex";
+
+/** Full-page searchable model dropdown used inside the profile workspace. */
+export class ProfileModelPickerPage implements Component {
+  private readonly page: SearchableSelectPage<ProfileModelChoice>;
+
+  constructor(options: ProfileModelPickerPageOptions) {
+    const context = options.context;
+    const host = context.host === "local" ? "Local" : "Herdr";
+    const source =
+      context.runtime === "pi"
+        ? `authenticated canonical models${context.host === "local" ? " · parent allowed" : ""}`
+        : "native advertised models";
+    this.page = new SearchableSelectPage({
+      theme: options.theme,
+      breadcrumb: "/subagents profiles › model",
+      title: `Choose model · ${context.profile} · candidate ${context.candidateIndex + 1}`,
+      subtitle: `${host} ${runtimeLabel(context.runtime)} · ${source}`,
+      choices: options.choices.map((choice) => ({
+        value: choiceValue(choice.choice),
+        item: choice.item,
+        searchText: choice.searchText,
+        payload: choice.choice,
+      })),
+      current: options.current,
+      ...(options.notice ? { notice: options.notice } : {}),
+      emptyText: "No matching models",
+      getHeight: options.getHeight,
+      requestRender: options.requestRender,
+      select: options.select,
+      cancel: options.cancel,
+    });
+  }
+
+  get focused(): boolean {
+    return this.page.focused;
+  }
+
+  set focused(value: boolean) {
+    this.page.focused = value;
+  }
+
+  handleInput(data: string): void {
+    this.page.handleInput(data);
+  }
+
+  render(width: number): string[] {
+    return this.page.render(width);
+  }
+
+  invalidate(): void {
+    this.page.invalidate();
+  }
+}

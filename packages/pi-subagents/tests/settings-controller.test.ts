@@ -1,6 +1,7 @@
 // Promise assertions are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
@@ -8,19 +9,15 @@ import { decodeSubagentConfig } from "../src/config/schema.ts";
 import type { SubagentConfigInspection } from "../src/config/store.ts";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
 import {
-  _profileSettingsTest,
   registerSubagentManagerCommand,
   type FleetManagerActions,
 } from "../src/settings/controller.ts";
-import {
-  candidateMenuSummary,
-  loadProfileRouteDraft,
-} from "../src/settings/profile-route-editor.ts";
 import { createProfileModelChoices } from "../src/settings/ui/model-picker.ts";
 
 const inspection = (
   global: Record<string, unknown> = { version: 4 },
   project?: Record<string, unknown>,
+  trusted = true,
 ): SubagentConfigInspection => {
   const decodedGlobal = decodeSubagentConfig(global, "global");
   const decodedProject = project ? decodeSubagentConfig(project, "project") : undefined;
@@ -28,7 +25,7 @@ const inspection = (
     config: resolveSubagentConfig({
       globalConfigPath: "/agent/pi-subagents.json",
       projectConfigPath: "/repo/.pi/pi-subagents.json",
-      projectTrusted: true,
+      projectTrusted: trusted,
       globalConfigExists: true,
       projectConfigExists: project !== undefined,
       global: decodedGlobal,
@@ -52,12 +49,6 @@ const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): Pr
   ...overrides,
 });
 
-const threeRoute = [
-  candidate("openai/one", { effort: "low" }),
-  candidate("claude-opus-5", { host: "herdr", runtime: "claude", effort: "medium" }),
-  candidate("gpt-5.6-codex", { runtime: "codex", effort: "xhigh", writeIntent: "writer" }),
-];
-
 const actions = (value = inspection()): FleetManagerActions => ({
   stop: () => Promise.resolve(),
   interrupt: () => Promise.resolve(),
@@ -67,6 +58,7 @@ const actions = (value = inspection()): FleetManagerActions => ({
   rename: () => Promise.resolve(),
   inspectProfiles: vi.fn().mockResolvedValue(value),
   patchProfile: vi.fn().mockResolvedValue(undefined),
+  listNativeModels: vi.fn().mockResolvedValue([]),
 });
 
 const register = (managerActions: FleetManagerActions, bridge = makeSubagentProjectionBridge()) => {
@@ -82,6 +74,11 @@ const register = (managerActions: FleetManagerActions, bridge = makeSubagentProj
   registerSubagentManagerCommand(pi, bridge, managerActions);
   return (args: string, ctx: ExtensionCommandContext) => handler?.(args, ctx) ?? Promise.resolve();
 };
+
+const theme = {
+  fg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+} as unknown as Theme;
 
 const baseContext = (ui: Record<string, unknown>, trusted = true) =>
   ({
@@ -103,10 +100,28 @@ const baseContext = (ui: Record<string, unknown>, trusted = true) =>
     reload: vi.fn().mockResolvedValue(undefined),
   }) as unknown as ExtensionCommandContext;
 
-const globalScope = "Global · /agent/pi-subagents.json";
-const projectScope = "Project · /repo/.pi/pi-subagents.json";
+const exerciseWorkspace = async (
+  factory: (
+    tui: unknown,
+    theme: Theme,
+    keybindings: unknown,
+    done: (value: boolean) => void,
+  ) => Component,
+  exercise: (component: Component, done: (value: boolean) => void) => Promise<void> | void,
+): Promise<boolean> => {
+  let result = false;
+  const done = (value: boolean) => void (result = value);
+  const component = factory(
+    { terminal: { rows: 24 }, requestRender: vi.fn() },
+    theme,
+    { matches: () => false },
+    done,
+  );
+  await exercise(component, done);
+  return result;
+};
 
-describe("/subagents profile route settings", () => {
+describe("/subagents profile workspace", () => {
   it("keeps fleet dispatch and gives actionable non-TUI/argument warnings", async () => {
     const run = register(actions());
     const notify = vi.fn();
@@ -136,136 +151,127 @@ describe("/subagents profile route settings", () => {
     );
   });
 
-  it("opens the full-screen fleet overlay in TUI mode", async () => {
-    const custom = vi.fn().mockResolvedValue(undefined);
-    await register(actions())("", baseContext({ custom }));
-    expect(custom.mock.calls[0]?.[1]).toEqual({
+  it("opens fleet and profiles as full-screen overlays", async () => {
+    const fleetCustom = vi.fn().mockResolvedValue(undefined);
+    await register(actions())("", baseContext({ custom: fleetCustom }));
+    expect(fleetCustom.mock.calls[0]?.[1]).toEqual({
+      overlay: true,
+      overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
+    });
+
+    const profileCustom = vi.fn().mockResolvedValue(false);
+    const managerActions = actions();
+    await register(managerActions)(
+      "profiles",
+      baseContext({ custom: profileCustom, notify: vi.fn() }),
+    );
+    expect(managerActions.inspectProfiles).toHaveBeenCalledWith(true);
+    expect(profileCustom.mock.calls[0]?.[1]).toEqual({
       overlay: true,
       overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
     });
   });
 
-  it("gates project scope on trust and cancel performs no write", async () => {
-    const managerActions = actions();
-    const select = vi.fn().mockResolvedValue(undefined);
-    await register(managerActions)(
-      "profiles",
-      baseContext({ select, custom: vi.fn(), notify: vi.fn() }, false),
-    );
-    expect(select.mock.calls[0]?.[0]).toContain("Project unavailable while untrusted");
-    expect(select.mock.calls[0]?.[1]).toEqual([globalScope]);
-    expect(managerActions.inspectProfiles).toHaveBeenCalledWith(false);
-    expect(managerActions.patchProfile).not.toHaveBeenCalled();
-  });
-
-  it("lists every profile and exposes ordered routes as editable rather than JSON-managed", async () => {
-    const value = inspection({ version: 4, profiles: { worker: threeRoute } });
-    const managerActions = actions(value);
-    const select = vi.fn().mockResolvedValueOnce(globalScope).mockResolvedValueOnce(undefined);
-    await register(managerActions)(
-      "profiles",
-      baseContext({ select, custom: vi.fn(), notify: vi.fn() }),
-    );
-    const labels = select.mock.calls[1]?.[1] as string[];
-    expect(labels).toHaveLength(7);
-    expect(labels.find((label) => label.startsWith("worker"))).toContain("3 candidates");
-    expect(labels.join(" ")).not.toContain("JSON-managed");
-    expect(managerActions.patchProfile).not.toHaveBeenCalled();
-  });
-
-  it("loads, edits, confirms, and writes a complete three-candidate route in order", async () => {
-    const value = inspection({ version: 4, profiles: { worker: threeRoute } });
-    const managerActions = actions(value);
-    const worker = _profileSettingsTest.profileSummary(value, "global", "worker");
-    const second = candidateMenuSummary(threeRoute[1]!, 1);
-    const select = vi
-      .fn()
-      .mockResolvedValueOnce(globalScope)
-      .mockResolvedValueOnce(worker)
-      .mockResolvedValueOnce(second)
-      .mockResolvedValueOnce("Edit candidate")
-      .mockResolvedValueOnce("Effort · medium")
-      .mockResolvedValueOnce("high")
-      .mockResolvedValueOnce("Done · apply candidate")
-      .mockResolvedValueOnce("Save route");
-    const confirm = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    const notify = vi.fn();
-    const ctx = baseContext({ select, custom: vi.fn(), confirm, notify });
-
-    await register(managerActions)("profiles", ctx);
-
-    const route = (managerActions.patchProfile as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]
-      .route as ProfileCandidate[];
-    expect(route.map((entry) => entry.model)).toEqual([
-      "openai/one",
-      "claude-opus-5",
-      "gpt-5.6-codex",
-    ]);
-    expect(route.map((entry) => entry.effort)).toEqual(["low", "high", "xhigh"]);
-    expect(confirm.mock.calls[0]?.[1]).toContain("1. host=local · runtime=pi · model=openai/one");
-    expect(confirm.mock.calls[0]?.[1]).toContain(
-      "3. host=local · runtime=codex · model=gpt-5.6-codex",
-    );
-    expect(confirm.mock.calls[0]?.[1]).toContain("Target: /agent/pi-subagents.json");
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("next /reload"), "info");
-  });
-
-  it("adds a retained Herdr Claude reader and retries unsafe native model input", async () => {
-    const value = inspection();
-    const managerActions = actions(value);
-    const worker = _profileSettingsTest.profileSummary(value, "global", "worker");
-    const select = vi
-      .fn()
-      .mockResolvedValueOnce(globalScope)
-      .mockResolvedValueOnce(worker)
-      .mockResolvedValueOnce("Disable route")
-      .mockResolvedValueOnce("Add candidate · 0/32")
-      .mockResolvedValueOnce("Host · local")
-      .mockResolvedValueOnce("Herdr")
-      .mockResolvedValueOnce("Runtime · pi")
-      .mockResolvedValueOnce("Claude Code")
-      .mockResolvedValueOnce("Model · claude-opus-5")
-      .mockResolvedValueOnce("Effort · default")
-      .mockResolvedValueOnce("xhigh")
-      .mockResolvedValueOnce("Write intent · writer")
-      .mockResolvedValueOnce("read-only")
-      .mockResolvedValueOnce("After report · close")
-      .mockResolvedValueOnce("Retain after report")
-      .mockResolvedValueOnce("Done · apply candidate")
-      .mockResolvedValueOnce("Save route");
-    const input = vi.fn().mockResolvedValueOnce("-unsafe").mockResolvedValueOnce("claude-sonnet-5");
-    const notify = vi.fn();
-    await register(managerActions)(
-      "profiles",
-      baseContext({
-        select,
-        input,
-        custom: vi.fn(),
-        confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
-        notify,
+  it("keeps model search on a new page inside the single profile workspace", async () => {
+    const initial = inspection({ version: 4, defaultProfile: "reviewer" });
+    const managerActions = actions(initial);
+    const custom = vi.fn(async (factory) =>
+      exerciseWorkspace(factory, async (component) => {
+        component.handleInput?.("\t");
+        component.handleInput?.("\t");
+        component.handleInput?.("\u001b[B");
+        component.handleInput?.("\u001b[B");
+        component.handleInput?.("\r");
+        await vi.waitFor(() =>
+          expect(component.render(120).join("\n")).toContain("/subagents profiles › model"),
+        );
+        for (const character of "zai") component.handleInput?.(character);
+        expect(component.render(120).join("\n")).toContain("zai/plain");
+        component.handleInput?.("\r");
+        await vi.waitFor(() => expect(managerActions.patchProfile).toHaveBeenCalledTimes(1));
       }),
     );
 
-    expect(input.mock.calls[0]?.[0]).toContain("current: claude-opus-5");
-    expect(input.mock.calls[0]?.[1]).toContain("Example/default: claude-opus-5");
-    expect(notify).toHaveBeenCalledWith(
-      expect.stringContaining("cannot start with '-'"),
-      "warning",
-    );
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Candidate normalized"), "warning");
+    await register(managerActions)("profiles", baseContext({ custom, notify: vi.fn() }));
+
+    expect(custom).toHaveBeenCalledTimes(1);
     expect(managerActions.patchProfile).toHaveBeenCalledWith(
       expect.objectContaining({
-        route: {
-          host: "herdr",
-          runtime: "claude",
-          model: "claude-sonnet-5",
-          effort: "xhigh",
-          context: "fresh",
-          writeIntent: "read-only",
-          closeOnReport: false,
-        },
+        profile: "reviewer",
+        route: expect.objectContaining({ model: "zai/plain" }),
       }),
     );
+  });
+
+  it("starts in effective project view when trusted and global view when untrusted", async () => {
+    for (const trusted of [true, false]) {
+      const value = inspection({ version: 4 }, undefined, trusted);
+      const managerActions = actions(value);
+      const custom = vi.fn(async (factory) =>
+        exerciseWorkspace(factory, (component, done) => {
+          const rendered = component.render(120).join("\n");
+          expect(rendered).toContain(trusted ? "[p Project]" : "[g Global]");
+          expect(rendered).toContain("Profiles");
+          done(false);
+        }),
+      );
+      await register(managerActions)("profiles", baseContext({ custom, notify: vi.fn() }, trusted));
+      expect(managerActions.inspectProfiles).toHaveBeenCalledWith(trusted);
+    }
+  });
+
+  it("writes a complete valid route immediately and refreshes optimistic-concurrency state", async () => {
+    const initial = inspection();
+    const saved = inspection({ version: 4 }, { version: 4, profiles: { delegate: "disabled" } });
+    const managerActions = actions(initial);
+    (managerActions.inspectProfiles as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(saved);
+    const notify = vi.fn();
+    const custom = vi.fn(async (factory) =>
+      exerciseWorkspace(factory, async (component) => {
+        component.handleInput?.("d");
+        component.handleInput?.("d");
+        await vi.waitFor(() => expect(managerActions.patchProfile).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() =>
+          expect(component.render(120).join("\n")).toContain("reload required"),
+        );
+        component.handleInput?.("\u001b");
+      }),
+    );
+    await register(managerActions)("profiles", baseContext({ custom, notify }));
+
+    expect(managerActions.patchProfile).toHaveBeenCalledWith({
+      scope: "project",
+      profile: "delegate",
+      route: "disabled",
+      expectedExists: false,
+      projectTrusted: true,
+    });
+    expect(managerActions.inspectProfiles).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Run /reload"), "info");
+  });
+
+  it("keeps failed immediate writes visible without claiming reload is required", async () => {
+    const managerActions = actions();
+    (managerActions.patchProfile as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("Subagents settings changed on disk; reopen the workspace."),
+    );
+    const notify = vi.fn();
+    const custom = vi.fn(async (factory) =>
+      exerciseWorkspace(factory, async (component, done) => {
+        component.handleInput?.("d");
+        component.handleInput?.("d");
+        await vi.waitFor(() =>
+          expect(component.render(120).join("\n")).toContain("changed on disk"),
+        );
+        component.handleInput?.("\u001b");
+        done(false);
+      }),
+    );
+    await register(managerActions)("profiles", baseContext({ custom, notify }));
+    expect(managerActions.inspectProfiles).toHaveBeenCalledTimes(1);
+    expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("Run /reload"), "info");
   });
 
   it("offers canonical authenticated Pi models and parent only to local Pi", () => {
@@ -291,253 +297,52 @@ describe("/subagents profile route settings", () => {
     expect(herdr.map((choice) => choice.item.value)).toEqual(["openai/reasoning", "zai/plain"]);
   });
 
-  it("stages disabled and project-inherit declarations through the route menu", async () => {
-    const disabledActions = actions();
-    const disabledValue = inspection();
-    await register(disabledActions)(
-      "profiles",
-      baseContext({
-        select: vi
-          .fn()
-          .mockResolvedValueOnce(globalScope)
-          .mockResolvedValueOnce(
-            _profileSettingsTest.profileSummary(disabledValue, "global", "worker"),
-          )
-          .mockResolvedValueOnce("Disable route")
-          .mockResolvedValueOnce("Save route"),
-        custom: vi.fn(),
-        confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
-        notify: vi.fn(),
-      }),
-    );
-    expect(disabledActions.patchProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: "global", profile: "worker", route: "disabled" }),
-    );
-
-    const projectValue = inspection(
-      { version: 4, profiles: { worker: threeRoute } },
-      { version: 4, profiles: { worker: candidate("openai/project") } },
-    );
-    const inheritActions = actions(projectValue);
-    await register(inheritActions)(
-      "profiles",
-      baseContext({
-        select: vi
-          .fn()
-          .mockResolvedValueOnce(projectScope)
-          .mockResolvedValueOnce(
-            _profileSettingsTest.profileSummary(projectValue, "project", "worker"),
-          )
-          .mockResolvedValueOnce("Inherit global (remove project route)")
-          .mockResolvedValueOnce("Save route"),
-        custom: vi.fn(),
-        confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
-        notify: vi.fn(),
-      }),
-    );
-    expect(inheritActions.patchProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: "project", profile: "worker" }),
-    );
-    expect(inheritActions.patchProfile).toHaveBeenCalledWith(
-      expect.not.objectContaining({ route: expect.anything() }),
-    );
-  });
-
-  it("writes a missing trusted-project document with expectedExists=false", async () => {
-    const value = inspection();
-    const managerActions = actions(value);
-    await register(managerActions)(
-      "profiles",
-      baseContext({
-        select: vi
-          .fn()
-          .mockResolvedValueOnce(projectScope)
-          .mockResolvedValueOnce(_profileSettingsTest.profileSummary(value, "project", "worker"))
-          .mockResolvedValueOnce("Disable route")
-          .mockResolvedValueOnce("Save route"),
-        custom: vi.fn(),
-        confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
-        notify: vi.fn(),
-      }),
-    );
-    expect(managerActions.patchProfile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scope: "project",
-        profile: "worker",
-        route: "disabled",
-        expectedExists: false,
-        projectTrusted: true,
-      }),
-    );
-    expect(managerActions.patchProfile).toHaveBeenCalledWith(
-      expect.not.objectContaining({ expectedDocument: expect.anything() }),
-    );
-  });
-
-  it("resets a global declaration to built-in without writing a replacement candidate", async () => {
-    const value = inspection({ version: 4, profiles: { worker: threeRoute } });
-    const managerActions = actions(value);
-    await register(managerActions)(
-      "profiles",
-      baseContext({
-        select: vi
-          .fn()
-          .mockResolvedValueOnce(globalScope)
-          .mockResolvedValueOnce(_profileSettingsTest.profileSummary(value, "global", "worker"))
-          .mockResolvedValueOnce("Reset global to built-in")
-          .mockResolvedValueOnce("Save route"),
-        custom: vi.fn(),
-        confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
-        notify: vi.fn(),
-      }),
-    );
-    expect(managerActions.patchProfile).toHaveBeenCalledWith(
-      expect.not.objectContaining({ route: expect.anything() }),
-    );
-  });
-
-  it("replaces an invalid fail-closed declaration from the UI", async () => {
-    const value = inspection({
-      version: 4,
-      profiles: { worker: { ...candidate("bare"), model: "bare" } },
-    });
-    const managerActions = actions(value);
-    const notify = vi.fn();
-    await register(managerActions)(
-      "profiles",
-      baseContext({
-        select: vi
-          .fn()
-          .mockResolvedValueOnce(globalScope)
-          .mockResolvedValueOnce(_profileSettingsTest.profileSummary(value, "global", "worker"))
-          .mockResolvedValueOnce("Add candidate · 0/32")
-          .mockResolvedValueOnce("Done · apply candidate")
-          .mockResolvedValueOnce("Save route"),
-        custom: vi.fn(),
-        confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
-        notify,
-      }),
-    );
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("fails closed"), "warning");
-    expect(managerActions.patchProfile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        route: {
-          host: "local",
-          runtime: "pi",
-          model: "parent",
-          effort: "default",
-          context: "fresh",
-          writeIntent: "writer",
-          closeOnReport: true,
-        },
-      }),
-    );
-  });
-
-  it("shows an actionable max-32 warning and cancel never writes", async () => {
-    const route = Array.from({ length: 32 }, (_, index) => candidate(`openai/model-${index}`));
-    const value = inspection({ version: 4, profiles: { worker: route } });
-    const managerActions = actions(value);
-    const notify = vi.fn();
-    await register(managerActions)(
-      "profiles",
-      baseContext({
-        select: vi
-          .fn()
-          .mockResolvedValueOnce(globalScope)
-          .mockResolvedValueOnce(_profileSettingsTest.profileSummary(value, "global", "worker"))
-          .mockResolvedValueOnce("Add candidate · maximum 32 reached")
-          .mockResolvedValueOnce("Cancel · discard without writing"),
-        custom: vi.fn(),
-        notify,
-      }),
-    );
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("at most 32"), "warning");
-    expect(managerActions.patchProfile).not.toHaveBeenCalled();
-  });
-
-  it("discards candidate edits and the entire route when cancel/back is chosen", async () => {
-    const value = inspection({ version: 4, profiles: { worker: threeRoute } });
-    const managerActions = actions(value);
-    const first = candidateMenuSummary(threeRoute[0]!, 0);
-    await register(managerActions)(
-      "profiles",
-      baseContext({
-        select: vi
-          .fn()
-          .mockResolvedValueOnce(globalScope)
-          .mockResolvedValueOnce(_profileSettingsTest.profileSummary(value, "global", "worker"))
-          .mockResolvedValueOnce(first)
-          .mockResolvedValueOnce("Edit candidate")
-          .mockResolvedValueOnce("Cancel · discard candidate changes")
-          .mockResolvedValueOnce("Cancel · discard without writing"),
-        custom: vi.fn(),
-        notify: vi.fn(),
-      }),
-    );
-    expect(managerActions.patchProfile).not.toHaveBeenCalled();
-  });
-
-  it("reports patch conflicts without reload", async () => {
-    const managerActions = actions();
-    (managerActions.patchProfile as ReturnType<typeof vi.fn>).mockRejectedValue(
-      new Error("Subagents settings changed on disk; reopen /subagents profiles and try again."),
-    );
-    const value = inspection();
-    const notify = vi.fn();
-    const ctx = baseContext({
-      select: vi
-        .fn()
-        .mockResolvedValueOnce(globalScope)
-        .mockResolvedValueOnce(_profileSettingsTest.profileSummary(value, "global", "worker"))
-        .mockResolvedValueOnce("Disable route")
-        .mockResolvedValueOnce("Save route"),
-      custom: vi.fn(),
-      confirm: vi.fn().mockResolvedValue(true),
-      notify,
-    });
-    await register(managerActions)("profiles", ctx);
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("changed on disk"), "error");
-    expect(ctx.reload).not.toHaveBeenCalled();
-  });
-
-  it("preserves expectedDocument concurrency and warns before active-run reload", async () => {
+  it("warns before reloading with active subagents", async () => {
     const bridge = makeSubagentProjectionBridge();
     bridge.publish({ revision: 1, runs: [{ state: "running" } as never] });
-    const value = inspection({ version: 4, defaultProfile: "worker" });
-    const managerActions = actions(value);
+    const initial = inspection();
+    const saved = inspection({ version: 4 }, { version: 4, profiles: { delegate: "disabled" } });
+    const managerActions = actions(initial);
+    (managerActions.inspectProfiles as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(saved);
     const confirm = vi.fn().mockResolvedValue(true);
     const ctx = baseContext({
-      select: vi
-        .fn()
-        .mockResolvedValueOnce(globalScope)
-        .mockResolvedValueOnce(_profileSettingsTest.profileSummary(value, "global", "worker"))
-        .mockResolvedValueOnce("Disable route")
-        .mockResolvedValueOnce("Save route"),
-      custom: vi.fn(),
+      custom: vi.fn(async (factory) =>
+        exerciseWorkspace(factory, async (component) => {
+          component.handleInput?.("d");
+          component.handleInput?.("d");
+          await vi.waitFor(() =>
+            expect(component.render(120).join("\n")).toContain("reload required"),
+          );
+          component.handleInput?.("r");
+          await vi.waitFor(() => expect(confirm).toHaveBeenCalled());
+        }),
+      ),
       confirm,
       notify: vi.fn(),
     });
     await register(managerActions, bridge)("profiles", ctx);
-    expect(managerActions.patchProfile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedExists: true,
-        expectedDocument: { version: 4, defaultProfile: "worker" },
-        projectTrusted: true,
-      }),
-    );
-    expect(confirm.mock.calls.at(-1)?.[1]).toContain("stops all session-scoped runs");
+    expect(confirm.mock.calls[0]?.[1]).toContain("stops all session-scoped runs");
     expect(ctx.reload).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps missing project routes inspectable as inherited ordered candidates", () => {
-    const value = inspection({ version: 4, profiles: { worker: threeRoute } }, { version: 4 });
-    const draft = loadProfileRouteDraft(value, "project", "worker");
-    expect(draft.kind).toBe("inherit");
-    expect(draft.candidates.map((entry) => entry.model)).toEqual([
+  it("preserves complete ordered route declarations", () => {
+    const value = inspection(
+      {
+        version: 4,
+        profiles: {
+          worker: [
+            candidate("openai/one"),
+            candidate("claude-opus-5", { host: "herdr", runtime: "claude" }),
+          ],
+        },
+      },
+      { version: 4 },
+    );
+    expect(value.config.profiles.worker.candidates.map((entry) => entry.model)).toEqual([
       "openai/one",
       "claude-opus-5",
-      "gpt-5.6-codex",
     ]);
   });
 });
