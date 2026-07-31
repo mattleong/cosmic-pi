@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS } from "./limits.ts";
+import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS } from "../run/limits.ts";
 
 const MAX_PROTOCOL_NAME_CHARS = 256;
 const MAX_PROTOCOL_ERROR_CHARS = 64 * 1024;

@@ -5,7 +5,11 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
-import type { DeclaredProfileRoute, ProfileId } from "../profiles/model.ts";
+import type {
+  DeclaredProfileCandidate,
+  DeclaredProfileRoute,
+  ProfileId,
+} from "../profiles/model.ts";
 import { resolveSubagentConfig, type ResolvedSubagentConfig } from "./options.ts";
 import {
   decodeSubagentConfig,
@@ -76,11 +80,13 @@ const storeError = (operation: string, path: string) => () =>
     message: `Unable to ${operation} Subagents configuration.`,
   });
 
-const unsupportedVersionError = (path: string) =>
+const unsupportedVersionError = (path: string, legacyVersion3 = false) =>
   new SubagentConfigStoreError({
     operation: "activate",
     path,
-    message: `Subagents configuration must declare version ${SUBAGENT_CONFIG_VERSION}.`,
+    message: legacyVersion3
+      ? "Subagents configuration version 3 is no longer supported. Migrate to version 4 candidates with host, runtime, model, effort, context, and writeIntent; remove denied/discouraged policy fields."
+      : `Subagents configuration must declare version ${SUBAGENT_CONFIG_VERSION}. Migrate every route candidate to the version 4 host/runtime contract.`,
   });
 
 const conflictError = (path: string) =>
@@ -111,13 +117,18 @@ const stableJson = (value: unknown): string => {
 
 const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {
   if (route === "disabled") return route;
-  const candidate = (value: { readonly model: string; readonly effort: string }): JsonObject => ({
+  const candidate = (value: DeclaredProfileCandidate): JsonObject => ({
+    host: value.host,
+    runtime: value.runtime,
     model: value.model,
     effort: value.effort,
+    context: value.context,
+    writeIntent: value.writeIntent,
+    ...(value.closeOnReport === undefined ? {} : { closeOnReport: value.closeOnReport }),
   });
   return Array.isArray(route)
-    ? route.map(candidate)
-    : candidate(route as { readonly model: string; readonly effort: string });
+    ? (route as ReadonlyArray<DeclaredProfileCandidate>).map(candidate)
+    : candidate(route as DeclaredProfileCandidate);
 };
 
 const applyProfilePatch = (
@@ -169,14 +180,14 @@ export const subagentConfigStoreLayer = Layer.effect(
           globalRaw !== undefined &&
           (global.unsupportedVersion || global.file.version !== SUBAGENT_CONFIG_VERSION)
         )
-          return yield* unsupportedVersionError(locations.global);
+          return yield* unsupportedVersionError(locations.global, global.legacyVersion3);
         const project =
           projectRaw === undefined ? undefined : decodeSubagentConfig(projectRaw, "project");
         if (
           projectRaw !== undefined &&
           (project?.unsupportedVersion || project?.file.version !== SUBAGENT_CONFIG_VERSION)
         )
-          return yield* unsupportedVersionError(locations.project);
+          return yield* unsupportedVersionError(locations.project, project?.legacyVersion3);
         const config = resolveSubagentConfig({
           globalConfigPath: locations.global,
           projectConfigPath: locations.project,
@@ -223,7 +234,7 @@ export const subagentConfigStoreLayer = Layer.effect(
             )
               return yield* conflictError(target);
             if (!currentIsEmpty && current.version !== SUBAGENT_CONFIG_VERSION)
-              return yield* unsupportedVersionError(target);
+              return yield* unsupportedVersionError(target, current.version === 3);
             return { value: undefined, document: applyProfilePatch(current, patch) };
           }),
         ).pipe(

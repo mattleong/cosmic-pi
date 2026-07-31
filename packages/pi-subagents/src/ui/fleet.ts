@@ -47,7 +47,8 @@ export interface FleetOptions {
 const canMessage = (run: SubagentRunView | undefined): boolean =>
   Boolean(
     run &&
-    ((run.state === "running" && hasSubagentCapability(run, "steer")) ||
+    (((run.state === "running" || run.state === "reported") &&
+      hasSubagentCapability(run, "steer")) ||
       (run.state === "waiting_for_parent" && hasSubagentCapability(run, "parent-contact"))),
   );
 const canInterrupt = (run: SubagentRunView | undefined): boolean =>
@@ -189,7 +190,8 @@ export class SubagentFleetComponent implements Component {
     ).length;
     const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
     const paused = runs.filter((run) => run.state === "paused").length;
-    const title = ` /subagents · ${runs.length} run${runs.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""} `;
+    const retained = runs.filter((run) => run.state === "reported").length;
+    const title = ` /subagents · ${runs.length} run${runs.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""}${retained ? ` · ${retained} retained` : ""} `;
     const top = `${this.outerBorder("╭")}${this.options.theme.fg("accent", title)}${this.outerBorder(
       `${"─".repeat(Math.max(0, safeWidth - visibleWidth(title) - 2))}╮`,
     )}`;
@@ -229,7 +231,9 @@ export class SubagentFleetComponent implements Component {
     const state =
       run.state === "completed"
         ? `finished ${formatRelativeAge(this.options.getNow() - (run.endedAt ?? run.lastActivityAt))}`
-        : runStateLabel(run.state);
+        : run.state === "reported"
+          ? `report ${run.reportGeneration} · retained`
+          : runStateLabel(run.state);
     const label = sanitizeTerminalLine(`${run.name} · ${state} · ${run.writeIntent}`);
     return pad(
       `${prefix} ${glyph} ${selected ? this.options.theme.fg("accent", label) : label}`,

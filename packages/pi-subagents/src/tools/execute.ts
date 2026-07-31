@@ -19,11 +19,7 @@ import {
   subagentErrorCode,
   type SubagentError,
 } from "../run/errors.ts";
-import {
-  isTerminalRunState,
-  type StartSubagentRequest,
-  type SubagentRunView,
-} from "../run/model.ts";
+import { isAssignmentFinishedRunState, type SubagentRunView } from "../run/model.ts";
 import { MAX_TARGET_RUNS } from "../run/limits.ts";
 import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
 import { runStateLabel } from "../ui/run-state.ts";
@@ -101,26 +97,20 @@ const startSpecs = (
         message: `subagent_start requires between 1 and ${MAX_TARGET_RUNS} agents.`,
       });
     for (const agent of agents) {
-      if (Object.prototype.hasOwnProperty.call(agent, "model"))
+      const legacyField = [
+        "execution",
+        "context",
+        "writeIntent",
+        "effort",
+        "backend",
+        "model",
+      ].find((field) => Object.prototype.hasOwnProperty.call(agent, field));
+      if (legacyField)
         return yield* new InvalidSubagentRequestError({
-          code: "model_not_supported",
-          message:
-            "subagent_start does not accept model. Select a profile; its configured route always determines the model.",
-        });
-      if (Object.prototype.hasOwnProperty.call(agent, "backend"))
-        return yield* new InvalidSubagentRequestError({
-          code: "backend_not_supported",
-          message:
-            "subagent_start does not accept backend. Select a profile; its configured route always determines the backend and model.",
+          code: "legacy_launch_override",
+          message: `[legacy_launch_override] subagent_start does not accept ${legacyField}. Put launch choices in the selected version 4 profile route.`,
         });
     }
-    const foregroundCount = agents.filter((agent) => agent.execution === "foreground").length;
-    if (foregroundCount > 1)
-      return yield* new InvalidSubagentRequestError({
-        code: "multiple_foreground_agents",
-        message:
-          "subagent_start accepts at most one foreground agent per call; launch additional agents in background mode to avoid blocking parent questions.",
-      });
     return agents;
   });
 
@@ -161,7 +151,7 @@ const profileDiscovery = (
         status: attempt ? "eligible" : "skipped",
         ...(attempt ? { effectiveContext: attempt.effectiveContext } : {}),
         reason: attempt
-          ? "Candidate is statically eligible before runtime readiness checks."
+          ? "Candidate adapter is statically eligible before native authentication/integration/harness readiness."
           : (omitted?.reason ?? "Candidate was not eligible."),
       };
     });
@@ -183,8 +173,8 @@ const formatProfileDiscovery = (
   defaultProfile: ProfileId,
 ): string =>
   [
-    "Static profile preflight (subagent_start always evaluates the selected profile's ordered candidates first-to-last)",
-    "Each profile context is used when context is omitted. Forked context requires a persisted parent session with a stable leaf; an explicit context remains a hard requirement.",
+    "Static v4 profile preflight (subagent_start evaluates the selected profile's ordered candidates first-to-last)",
+    "Candidates show host/runtime/model, effort, context, write intent, and closeOnReport. All six local/Herdr × Pi/Claude/Codex adapters are launchable when bounded native readiness succeeds.",
     `Configured default profile: ${defaultProfile}`,
     ...profiles.flatMap((profile) => [
       `${profile.id} · context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"} · ${profile.description}`,
@@ -330,17 +320,14 @@ export const executeSubagentAction = async (
             code: subagentErrorCode(error),
           },
         });
-        const publishStarted = (
-          request: StartSubagentRequest,
-          started: SubagentRunView,
-        ): Effect.Effect<void> => {
+        const publishStarted = (started: SubagentRunView): Effect.Effect<void> => {
           launchedRuns = [...launchedRuns, started];
           return Effect.sync(() =>
             onUpdate?.({
               content: [
                 {
                   type: "text",
-                  text: `Started ${launchedRuns.length} of ${specs.length} subagent${specs.length === 1 ? "" : "s"}${request.execution === "foreground" ? "; waiting for the foreground run" : ""}.`,
+                  text: `Started ${launchedRuns.length} of ${specs.length} background subagent${specs.length === 1 ? "" : "s"}.`,
                 },
               ],
               details: makeStartAwaitCardDetails({ action: "start", runs: launchedRuns }),
@@ -352,16 +339,15 @@ export const executeSubagentAction = async (
         };
         const resolveRequest = (spec: SubagentStartSpec) =>
           resolveProfileStart(pi, spec, ctx, runtime.environment);
-        const launchOne = (spec: SubagentStartSpec, index: number, sessionOwned = false) =>
+        const launchOne = (spec: SubagentStartSpec, index: number) =>
           resolveRequest(spec).pipe(
             Effect.flatMap((request) =>
-              (sessionOwned ? service.startSessionOwned(request) : service.start(request)).pipe(
-                Effect.tap((started) => publishStarted(request, started)),
+              service.startSessionOwned(request).pipe(
+                Effect.tap((started) => publishStarted(started)),
                 Effect.map(
                   (run): SubagentStartOutcome => ({
                     index,
                     run,
-                    foreground: request.execution === "foreground",
                   }),
                 ),
               ),
@@ -396,66 +382,10 @@ export const executeSubagentAction = async (
           );
         };
 
-        const foregroundIndex = specs.findIndex((spec) => spec.execution === "foreground");
-        if (foregroundIndex < 0) {
-          const outcomes = yield* Effect.forEach(specs, launchOne, {
-            concurrency: MAX_TARGET_RUNS,
-          });
-          return yield* summarize(outcomes);
-        }
-
-        const foregroundSpec = specs[foregroundIndex]!;
-        const resolvedForeground = yield* resolveRequest(foregroundSpec).pipe(
-          Effect.match({
-            onFailure: (error) => ({ failure: failureFor(foregroundSpec, foregroundIndex, error) }),
-            onSuccess: (request) => ({ request }),
-          }),
-        );
-        const otherSpecs = specs.flatMap((spec, index) =>
-          index === foregroundIndex ? [] : [{ spec, index }],
-        );
-        if ("failure" in resolvedForeground) {
-          const others = yield* Effect.forEach(
-            otherSpecs,
-            ({ spec, index }) => launchOne(spec, index),
-            { concurrency: MAX_TARGET_RUNS },
-          );
-          return yield* summarize([resolvedForeground.failure, ...others]);
-        }
-
-        const foregroundRequest = resolvedForeground.request;
-        const atomicForeground = service.withForegroundStartObservation(
-          foregroundRequest,
-          (started, awaitObservation) =>
-            Effect.gen(function* () {
-              yield* publishStarted(foregroundRequest, started);
-              const others = yield* Effect.forEach(
-                otherSpecs,
-                ({ spec, index }) => launchOne(spec, index, true),
-                { concurrency: MAX_TARGET_RUNS },
-              );
-              const observation = yield* awaitObservation;
-              return yield* summarize(
-                [{ index: foregroundIndex, run: started, foreground: true }, ...others],
-                observation,
-              );
-            }),
-        );
-        return yield* atomicForeground.pipe(
-          Effect.catch((error) =>
-            Effect.gen(function* () {
-              const others = yield* Effect.forEach(
-                otherSpecs,
-                ({ spec, index }) => launchOne(spec, index),
-                { concurrency: MAX_TARGET_RUNS },
-              );
-              return yield* summarize([
-                failureFor(foregroundSpec, foregroundIndex, error),
-                ...others,
-              ]);
-            }),
-          ),
-        );
+        const outcomes = yield* Effect.forEach(specs, launchOne, {
+          concurrency: MAX_TARGET_RUNS,
+        });
+        return yield* summarize(outcomes);
       }
       case "list":
         return { runs: yield* service.list };
@@ -600,7 +530,9 @@ export const executeSubagentAction = async (
   const cancelAwait = () => {
     if (input.action !== "await" || !requestedAwaitUntil) return;
     try {
-      const unfinished = latestAwaitRuns.filter((run) => !isTerminalRunState(run.state)).length;
+      const unfinished = latestAwaitRuns.filter(
+        (run) => !isAssignmentFinishedRunState(run.state),
+      ).length;
       const attention = attentionRecoveryText(latestAwaitRuns);
       const summary =
         latestAwaitRuns.length === 0

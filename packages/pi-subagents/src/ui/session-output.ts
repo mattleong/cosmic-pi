@@ -52,13 +52,14 @@ const runDuration = (run: SubagentRunView, now: number): string => {
   const end = run.endedAt ?? (active ? now : run.lastActivityAt);
   const elapsed = formatDuration(end - run.startedAt);
   if (run.state === "paused") return `paused after ${elapsed}`;
+  if (run.state === "reported") return `report ${run.reportGeneration} · retained`;
   if (run.state === "waiting_for_parent") return `waiting · ${elapsed}`;
   return active ? `running for ${elapsed}` : elapsed;
 };
 
 const stateLabel = (run: SubagentRunView, theme: Theme, now: number): string => {
   const age =
-    run.state === "completed"
+    run.state === "completed" || run.state === "reported"
       ? ` ${formatRelativeAge(now - (run.endedAt ?? run.lastActivityAt))}`
       : "";
   return theme.fg(
@@ -176,6 +177,8 @@ const emptyActivityLabel = (run: SubagentRunView): string => {
       return "Waiting for parent…";
     case "paused":
       return "Paused.";
+    case "reported":
+      return "Report delivered; retained backend is idle.";
     case "stopping":
       return "Stopping…";
     case "completed":
@@ -193,9 +196,11 @@ function addTechnicalDetails(container: Container, run: SubagentRunView, theme: 
   const process = [
     run.id,
     run.profile ? `profile ${run.profile}` : undefined,
-    run.backend,
+    `${run.host ?? "local"}/${run.runtime ?? run.backend}`,
+    `closeOnReport=${run.closeOnReport ?? true}`,
     run.execution,
     run.pid ? `pid ${run.pid}` : undefined,
+    `report generation ${run.reportGeneration}`,
   ]
     .filter((value): value is string => value !== undefined)
     .join(" · ");
@@ -224,7 +229,7 @@ function addTechnicalDetails(container: Container, run: SubagentRunView, theme: 
   if (run.selection.warning) {
     container.addChild(
       new HangingText(
-        theme.fg("warning", "policy  "),
+        theme.fg("warning", "route warning  "),
         theme.fg("warning", sanitizeTerminalLine(run.selection.warning)),
       ),
     );
@@ -316,10 +321,24 @@ export function renderSubagentSessionOutput(
     container.addChild(new Text(theme.fg("dim", emptyActivityLabel(run)), 2, 0));
   }
 
-  const assistantOutput = isActiveRunState(run.state) ? undefined : run.finalText;
+  const assistantOutput =
+    run.state === "reported" || !isActiveRunState(run.state) ? run.finalText : undefined;
   if (assistantOutput) {
     container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("accent", theme.bold("Final report")), 0, 0));
+    container.addChild(
+      new Text(
+        theme.fg(
+          "accent",
+          theme.bold(
+            run.state === "reported"
+              ? `Report generation ${run.reportGeneration} · backend retained`
+              : "Final report",
+          ),
+        ),
+        0,
+        0,
+      ),
+    );
     container.addChild(
       new Markdown(sanitizeTerminalText(assistantOutput), 2, 0, getMarkdownTheme(), {
         color: (text) => theme.fg("toolOutput", text),

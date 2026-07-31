@@ -8,7 +8,9 @@ import type { SubagentActionFailure, SubagentStartFailure } from "./subagent.ts"
 
 export const formatRun = (run: SubagentRunView, detailed = false): string => {
   const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
-  const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${run.state} · ${run.writeIntent}${profile} · ${run.backend}/${sanitizeTerminalLine(run.model)}:${run.effort}`;
+  const host = run.host ?? "local";
+  const runtime = run.runtime ?? run.backend;
+  const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${run.state} · ${run.writeIntent}${profile} · ${host}/${runtime}/${sanitizeTerminalLine(run.model)}:${run.effort}`;
   if (!detailed) return header;
   const field = (label: string, value: string): string =>
     `  ${label.padEnd(10)} ${sanitizeTerminalLine(value)}`;
@@ -18,7 +20,11 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     field("ID", run.id),
     field("State", run.state),
     run.profile ? field("Profile", run.profile) : undefined,
-    field("Model", `${run.backend}/${run.model} · ${run.effort}`),
+    field("Route", `${host}/${runtime}/${run.model} · ${run.effort}`),
+    field(
+      "Report",
+      `closeOnReport=${run.closeOnReport ?? true} · generation=${run.reportGeneration}${run.state === "reported" ? " · backend retained" : ""}`,
+    ),
     field("Selection", selectionSourceLabel(run)),
     field("Reason", run.selection.reason),
     ...run.selection.skippedCandidates.map((candidate) =>
@@ -27,8 +33,8 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
         `${candidate.candidateIndex === undefined ? "route" : `candidate ${candidate.candidateIndex + 1}`} [${candidate.code}]: ${candidate.reason}`,
       ),
     ),
-    run.selection.warning ? field("Policy", run.selection.warning) : undefined,
-    field("Mode", `${run.execution} · ${run.context}`),
+    run.selection.warning ? field("Route", run.selection.warning) : undefined,
+    field("Context", run.context),
     field("Intent", run.writeIntent),
     field("Capabilities", `${run.capabilities.join(", ") || "none"}; stop/await always available`),
     run.pid ? field("Process", `pid ${run.pid}`) : undefined,
@@ -40,8 +46,8 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     run.error ? field("Error", run.error) : undefined,
     run.finalText
       ? `\nFinal report\n${sanitizeTerminalText(run.finalText)}`
-      : run.state === "completed"
-        ? "\nFinal report\nCompleted without a final report."
+      : run.state === "completed" || run.state === "reported"
+        ? "\nFinal report\nUnavailable in this observation; it may be owned or already delivered."
         : undefined,
   ]
     .filter((line): line is string => line !== undefined)

@@ -92,6 +92,7 @@ const fixture = (
   let lastStartedPaneId: string | undefined;
   let report: HerdrReport | undefined;
   let interactiveReadyPolls = 0;
+  const promptReadiness: boolean[] = [];
   const focusCalls: string[] = [];
   const saved: PersistedHerdrProject[] = [];
   let sharedProject: PersistedHerdrProject | undefined;
@@ -238,6 +239,9 @@ const fixture = (
       Effect.sync(() => {
         const current = snapshot.agents.find((agent) => agent.name === target);
         if (!current) throw new Error("missing fake agent");
+        promptReadiness.push(current.interactiveReady === true);
+        if (current.interactiveReady !== true)
+          throw new Error("fixture prompt was called before interactive readiness");
         const agent = { ...current, agentStatus: "working" as const, stateChangeSeq: 2 };
         snapshot = {
           ...snapshot,
@@ -358,6 +362,7 @@ const fixture = (
           pane.tabId === "w1:t2" && !snapshot.agents.some((agent) => agent.paneId === pane.paneId),
       ).length,
     focusCalls: () => [...focusCalls],
+    promptReadiness: () => [...promptReadiness],
     startAttempts: () => startAttempts,
     completeReport: () => {
       report = {
@@ -537,6 +542,7 @@ describe("HerdrService", () => {
           const service = yield* HerdrService;
           const started = yield* service.start(startRequest("Review auth", "codex"));
           expect(started).toMatchObject({ kind: "codex", state: "working" });
+          expect(test.promptReadiness()).toEqual([true]);
         }).pipe(Effect.provide(test.layer)),
       );
     }),
@@ -629,10 +635,12 @@ describe("HerdrService", () => {
           for (let index = 0; index < 100; index++) yield* Effect.yieldNow;
           const observed = yield* service.status(started.id);
           expect(observed.state).toBe("awaiting_report");
-          yield* Effect.yieldNow;
-          yield* TestClock.adjust("16 seconds");
-          for (let index = 0; index < 100; index++) yield* Effect.yieldNow;
-          const failed = yield* service.status(started.id);
+          let failed = observed;
+          for (let second = 0; second < 64 && failed.state !== "failed"; second += 1) {
+            yield* TestClock.adjust("1 second");
+            for (let index = 0; index < 100; index++) yield* Effect.yieldNow;
+            failed = yield* service.status(started.id);
+          }
           expect(failed.state).toBe("failed");
           expect(failed.report).toBeUndefined();
           expect(test.managedBlankPaneCount()).toBe(0);

@@ -1,7 +1,8 @@
 import type {
-  SubagentBackend,
   SubagentContextMode,
   SubagentEffort,
+  SubagentHost,
+  SubagentRuntime,
   SubagentWriteIntent,
 } from "../run/model.ts";
 
@@ -32,15 +33,16 @@ export const PROFILE_CANDIDATE_EFFORTS = [
 ] as const;
 export type ProfileCandidateEffort = (typeof PROFILE_CANDIDATE_EFFORTS)[number];
 
-export interface ModelPolicySelector {
-  readonly backend: SubagentBackend;
-  readonly model: string;
-}
-
-/** A v3 route candidate. Selectors are canonical and effort is always declared. */
+/** A v4 route candidate. Every routing and capability choice is profile-owned. */
 export interface ProfileCandidate {
+  readonly host: SubagentHost;
+  readonly runtime: SubagentRuntime;
   readonly model: string;
   readonly effort: ProfileCandidateEffort;
+  readonly context: SubagentContextMode;
+  readonly writeIntent: SubagentWriteIntent;
+  /** Omitted configuration values normalize to true. */
+  readonly closeOnReport: boolean;
 }
 
 /** Runtime-normalized route. The configured `disabled` value is represented by zero candidates. */
@@ -48,7 +50,13 @@ export interface ProfileRoute {
   readonly candidates: ReadonlyArray<ProfileCandidate>;
 }
 
-export type DeclaredProfileRoute = ProfileCandidate | ReadonlyArray<ProfileCandidate> | "disabled";
+export type DeclaredProfileCandidate = Omit<ProfileCandidate, "closeOnReport"> & {
+  readonly closeOnReport?: boolean | undefined;
+};
+export type DeclaredProfileRoute =
+  | DeclaredProfileCandidate
+  | ReadonlyArray<DeclaredProfileCandidate>
+  | "disabled";
 export type ProfileRouteSource =
   | "project"
   | "global"
@@ -78,6 +86,9 @@ export type SubagentSelectionSource = "profile-candidate" | "profile-parent-cand
 
 export interface SubagentSelectionProvenance {
   readonly source: SubagentSelectionSource;
+  readonly host?: SubagentHost | undefined;
+  readonly runtime?: SubagentRuntime | undefined;
+  readonly closeOnReport?: boolean | undefined;
   /** Zero-based configured candidate index. */
   readonly candidateIndex?: number | undefined;
   readonly reason: string;

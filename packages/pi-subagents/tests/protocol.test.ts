@@ -10,7 +10,7 @@ import {
   decodeRpcStateData,
   decodeRpcUsageOption,
   rpcStateModelId,
-} from "../src/run/protocol.ts";
+} from "../src/backend/local-pi-protocol.ts";
 
 describe("child protocol", () => {
   it("decodes RPC, contact, and ignored events through schemas", async () => {

@@ -35,6 +35,10 @@ export interface SubagentRunCard {
   readonly name: string;
   readonly state: SubagentRunState;
   readonly profile?: SubagentRunView["profile"] | undefined;
+  readonly host?: SubagentRunView["host"] | undefined;
+  readonly runtime?: SubagentRunView["runtime"] | undefined;
+  readonly closeOnReport?: boolean | undefined;
+  readonly reportGeneration: number;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly selection: SubagentSelectionProvenance;
@@ -109,6 +113,9 @@ const boundedSelection = (
   take: (value: string, maximum: number) => string,
 ): SubagentSelectionProvenance => ({
   source: selection.source,
+  ...(selection.host ? { host: selection.host } : {}),
+  ...(selection.runtime ? { runtime: selection.runtime } : {}),
+  ...(selection.closeOnReport === undefined ? {} : { closeOnReport: selection.closeOnReport }),
   ...(selection.candidateIndex === undefined ? {} : { candidateIndex: selection.candidateIndex }),
   reason: take(selection.reason, MAX_CARD_PROVENANCE_CHARS),
   skippedCandidates: selection.skippedCandidates.slice(0, MAX_CARD_SKIPS).map((candidate) => ({
@@ -147,6 +154,10 @@ const projectCard = (run: SubagentRunCard, budget: number): SubagentRunCard => {
     name,
     state: run.state,
     ...(run.profile ? { profile: run.profile } : {}),
+    ...(run.host ? { host: run.host } : {}),
+    ...(run.runtime ? { runtime: run.runtime } : {}),
+    ...(run.closeOnReport === undefined ? {} : { closeOnReport: run.closeOnReport }),
+    reportGeneration: Math.max(0, Math.floor(run.reportGeneration)),
     model,
     effort: run.effort,
     selection,
@@ -177,10 +188,19 @@ const compactCardFallback = (card: SubagentRunCard): SubagentRunCard => ({
   name: clean(card.name, 96),
   state: card.state,
   ...(card.profile ? { profile: card.profile } : {}),
+  ...(card.host ? { host: card.host } : {}),
+  ...(card.runtime ? { runtime: card.runtime } : {}),
+  ...(card.closeOnReport === undefined ? {} : { closeOnReport: card.closeOnReport }),
+  reportGeneration: Math.max(0, Math.floor(card.reportGeneration)),
   model: clean(card.model, 96),
   effort: card.effort,
   selection: {
     source: card.selection.source,
+    ...(card.selection.host ? { host: card.selection.host } : {}),
+    ...(card.selection.runtime ? { runtime: card.selection.runtime } : {}),
+    ...(card.selection.closeOnReport === undefined
+      ? {}
+      : { closeOnReport: card.selection.closeOnReport }),
     ...(card.selection.candidateIndex === undefined
       ? {}
       : { candidateIndex: card.selection.candidateIndex }),
@@ -335,6 +355,11 @@ const decodeSelection = (value: unknown): SubagentSelectionProvenance | undefine
     source: (record.source === "profile-parent-fallback"
       ? "profile-parent-candidate"
       : record.source) as SubagentSelectionSource,
+    ...(record.host === "local" || record.host === "herdr" ? { host: record.host } : {}),
+    ...(record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex"
+      ? { runtime: record.runtime }
+      : {}),
+    ...(typeof record.closeOnReport === "boolean" ? { closeOnReport: record.closeOnReport } : {}),
     ...(candidateIndex === undefined ? {} : { candidateIndex }),
     reason: clean(record.reason, MAX_CARD_PROVENANCE_CHARS),
     skippedCandidates: decodeSkipped(record.skippedCandidates),
@@ -369,6 +394,12 @@ const decodeCard = (value: unknown): SubagentRunCard | undefined => {
     ...(typeof record.profile === "string" && isProfileId(record.profile)
       ? { profile: record.profile }
       : {}),
+    ...(record.host === "local" || record.host === "herdr" ? { host: record.host } : {}),
+    ...(record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex"
+      ? { runtime: record.runtime }
+      : {}),
+    ...(typeof record.closeOnReport === "boolean" ? { closeOnReport: record.closeOnReport } : {}),
+    reportGeneration: Math.max(0, Math.floor(finiteNumber(record.reportGeneration) ?? 0)),
     model: clean(record.model, MAX_CARD_MODEL_CHARS),
     effort: record.effort as SubagentEffort,
     selection,

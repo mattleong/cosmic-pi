@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { isTerminalRunState, type SubagentEffort } from "../run/model.ts";
+import { isAssignmentFinishedRunState, type SubagentEffort } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { safeTextPrefix } from "../run/state.ts";
 import {
@@ -32,7 +32,7 @@ const awaitProgressHeader = (
   runs: ReadonlyArray<SubagentRunCard>,
   until: SubagentAwaitUntil,
 ): string => {
-  const finished = runs.filter((run) => isTerminalRunState(run.state)).length;
+  const finished = runs.filter((run) => isAssignmentFinishedRunState(run.state)).length;
   const condition = until === "all_finished" ? "Waiting for all agents" : "Waiting for first agent";
   const unfinishedStates = [
     "starting",
@@ -73,7 +73,7 @@ const awaitHeaderColor = (
   runs: ReadonlyArray<SubagentRunCard>,
 ): "warning" | "success" | "error" => {
   if (runs.some((run) => run.state === "failed")) return "error";
-  return runs.length > 0 && runs.every((run) => isTerminalRunState(run.state))
+  return runs.length > 0 && runs.every((run) => isAssignmentFinishedRunState(run.state))
     ? "success"
     : "warning";
 };
@@ -442,7 +442,7 @@ export const awaitResultBanner = (details: {
   readonly cancelled?: boolean | undefined;
 }): OutcomeBanner | undefined => {
   const runs = details.runs ?? [];
-  const unfinished = runs.filter((run) => !isTerminalRunState(run.state));
+  const unfinished = runs.filter((run) => !isAssignmentFinishedRunState(run.state));
   const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
   const attention = waiting > 0 ? ` · parent reply required for ${waiting}` : "";
   if (details.cancelled)
@@ -465,7 +465,7 @@ export const awaitResultBanner = (details: {
     };
   if (details.awaitUntil !== "any_finished") return undefined;
   const first = runs
-    .filter((run) => isTerminalRunState(run.state))
+    .filter((run) => isAssignmentFinishedRunState(run.state))
     .sort((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity))[0];
   if (!first) return undefined;
   const name = sanitizeTerminalLine(first.name);

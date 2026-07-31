@@ -14,6 +14,7 @@ export const sortRuns = (runs: ReadonlyArray<SubagentRunView>): ReadonlyArray<Su
 export const fleetStatus = (projection: SubagentProjection): string | undefined => {
   const active = projection.runs.filter((run) => isActiveRunState(run.state)).length;
   const waiting = projection.runs.filter((run) => run.state === "waiting_for_parent").length;
+  const retained = projection.runs.filter((run) => run.state === "reported").length;
   if (active === 0) return undefined;
-  return `${active} subagent${active === 1 ? "" : "s"} active${waiting ? ` · ${waiting} awaiting ${waiting === 1 ? "reply" : "replies"}` : ""}`;
+  return `${active} subagent${active === 1 ? "" : "s"} active${waiting ? ` · ${waiting} awaiting ${waiting === 1 ? "reply" : "replies"}` : ""}${retained ? ` · ${retained} retained` : ""}`;
 };

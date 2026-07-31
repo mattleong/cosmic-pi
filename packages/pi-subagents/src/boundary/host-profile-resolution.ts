@@ -1,17 +1,16 @@
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import { SubagentBackendRegistry } from "../backend/service.ts";
 import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/coordination.ts";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
 import {
   decodeSubagentEffort,
   type StartSubagentRequest,
-  type SubagentBackend,
-  type SubagentContextMode,
   type SubagentEffort,
-  type SubagentExecution,
-  type SubagentWriteIntent,
+  type SubagentHost,
+  type SubagentRuntime,
 } from "../run/model.ts";
 import {
   PROFILE_IDS,
@@ -24,11 +23,7 @@ import { SubagentProfileService } from "../profiles/service.ts";
 export interface SubagentProfileStartSpec {
   readonly task: string;
   readonly name?: string | undefined;
-  readonly execution?: SubagentExecution | undefined;
-  readonly context?: SubagentContextMode | undefined;
   readonly profile?: string | undefined;
-  readonly writeIntent?: SubagentWriteIntent | undefined;
-  readonly effort?: SubagentEffort | undefined;
 }
 
 export interface SubagentSessionEnvironment {
@@ -44,58 +39,41 @@ const stableParentLeaf = (ctx: ExtensionContext): string | undefined => {
   return leaf.id;
 };
 
-const deniedModelError = (backend: SubagentBackend, model: string) =>
-  new InvalidSubagentRequestError({
-    code: "model_denied",
-    message: `Model ${backend}/${model} is denied by Subagents policy and cannot be started.`,
-  });
+const transferableRuntimeApiKey = (value: string | undefined): value is string =>
+  typeof value === "string" &&
+  value.length > 0 &&
+  value.length <= 8_192 &&
+  !value.includes("\0") &&
+  !value.includes("\r") &&
+  !value.includes("\n");
 
 const resolvePiModel = (
-  selector: string | undefined,
+  host: SubagentHost,
+  selector: string,
   effort: SubagentEffort,
   effortWasExplicit: boolean,
   ctx: ExtensionContext,
-  isPiModelDenied: (model: string) => boolean,
 ): Effect.Effect<
   { readonly model: string; readonly runtimeApiKey?: string | undefined },
   InvalidSubagentRequestError
 > =>
   Effect.gen(function* () {
-    const requested = selector?.trim();
-    let provider: string;
-    let id: string;
-    if (requested) {
-      const available = ctx.modelRegistry
-        .getAvailable()
-        .map((model) => ({ provider: model.provider, id: model.id }));
-      const resolution = resolvePiModelSelector(requested, available);
-      if (resolution.kind === "ambiguous")
-        return yield* new InvalidSubagentRequestError({
-          code: "pi_model_ambiguous",
-          message: `Pi model "${requested}" matches multiple authenticated providers: ${resolution.candidates.join(", ")}. Pass one canonical provider/model value.`,
-        });
-      if (resolution.kind === "unknown")
-        return yield* new InvalidSubagentRequestError({
-          code: "pi_model_unknown",
-          message: `Profile route references unknown or unauthenticated Pi model "${requested}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${resolution.nearMatches.join(", ")}.` : ""} Update the profile route and reload.`,
-        });
-      provider = resolution.provider;
-      id = resolution.id;
-    } else {
-      const inherited = ctx.model;
-      if (!inherited)
-        return yield* new InvalidSubagentRequestError({
-          code: "pi_model_missing",
-          message: "The profile route requires the parent model, but no parent model is active.",
-        });
-      provider = inherited.provider;
-      id = inherited.id;
-    }
-    const modelId = `${provider}/${id}`;
-    // Deterministic hard-deny on the resolved canonical model before any registry auth lookup or
-    // runtime API-key resolution; the start path rechecks the deny as defense in depth.
-    if (isPiModelDenied(modelId)) return yield* deniedModelError("pi", modelId);
-    const model = ctx.modelRegistry.find(provider, id);
+    const resolution = resolvePiModelSelector(
+      selector,
+      ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
+    );
+    if (resolution.kind === "ambiguous")
+      return yield* new InvalidSubagentRequestError({
+        code: "pi_model_ambiguous",
+        message: `Pi model "${selector}" matches multiple authenticated providers: ${resolution.candidates.join(", ")}. Configure one canonical provider/model value.`,
+      });
+    if (resolution.kind === "unknown")
+      return yield* new InvalidSubagentRequestError({
+        code: "pi_model_unknown",
+        message: `Profile route references unknown or unauthenticated Pi model "${selector}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${resolution.nearMatches.join(", ")}.` : ""} Update the profile route and reload.`,
+      });
+    const modelId = `${resolution.provider}/${resolution.id}`;
+    const model = ctx.modelRegistry.find(resolution.provider, resolution.id);
     if (!model || !ctx.modelRegistry.hasConfiguredAuth(model))
       return yield* new InvalidSubagentRequestError({
         code: "pi_model_unauthenticated",
@@ -107,8 +85,10 @@ const resolvePiModel = (
         code: "pi_effort_unsupported",
         message: `Pi model ${modelId} does not support required effort ${effort}; supported efforts: ${supportedEfforts.join(", ") || "none"}.`,
       });
-    if (ctx.modelRegistry.getProviderAuthStatus(model.provider).source !== "runtime")
-      return { model: `${model.provider}/${model.id}` };
+    const authSource = ctx.modelRegistry.getProviderAuthStatus(model.provider).source;
+    const requiresPrivateTransfer =
+      authSource === "runtime" || (host === "herdr" && authSource === "environment");
+    if (!requiresPrivateTransfer) return { model: modelId };
     const auth = yield* Effect.tryPromise({
       try: () => ctx.modelRegistry.getApiKeyAndHeaders(model),
       catch: () =>
@@ -117,26 +97,25 @@ const resolvePiModel = (
           message: `Unable to resolve runtime authentication for ${modelId}.`,
         }),
     });
-    if (!auth.ok || !auth.apiKey)
+    if (!auth.ok || !transferableRuntimeApiKey(auth.apiKey))
       return yield* new InvalidSubagentRequestError({
         code: "pi_auth_unavailable",
-        message: `Runtime authentication is unavailable for ${modelId}.`,
+        message: `Transferable runtime authentication is unavailable for ${modelId}.`,
       });
-    return { model: `${model.provider}/${model.id}`, runtimeApiKey: auth.apiKey };
+    return { model: modelId, runtimeApiKey: auth.apiKey };
   });
 
 interface ResolvedConcreteModel {
-  readonly backend: SubagentBackend;
+  readonly host: SubagentHost;
+  readonly runtime: SubagentRuntime;
+  readonly closeOnReport: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
   readonly runtimeApiKey?: string | undefined;
 }
 
-/**
- * Host thinking levels arrive untyped. Unknown or malformed values clamp to the shared "high"
- * inheritance default so an unrecognized level is never forwarded to a Pi child.
- */
+/** Unknown host values clamp to the existing conservative inheritance default. */
 const inheritedParentEffort = (pi: ExtensionAPI): SubagentEffort =>
   decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
 
@@ -161,38 +140,76 @@ export const hostProfileEnvironment = (
 });
 
 const resolveConcreteModel = (
-  selector: string | undefined,
-  effort: SubagentEffort,
-  effortWasExplicit: boolean,
+  attempt: ProfileCandidateAttempt,
   ctx: ExtensionContext,
-  isPiModelDenied: (model: string) => boolean,
-): Effect.Effect<ResolvedConcreteModel, InvalidSubagentRequestError> =>
-  resolvePiModel(selector, effort, effortWasExplicit, ctx, isPiModelDenied).pipe(
-    Effect.map((resolved) => ({
-      backend: "pi" as const,
+  cwd: string,
+): Effect.Effect<ResolvedConcreteModel, InvalidSubagentRequestError, SubagentBackendRegistry> =>
+  Effect.gen(function* () {
+    const registry = yield* SubagentBackendRegistry;
+    const resolved =
+      attempt.runtime === "pi"
+        ? yield* resolvePiModel(
+            attempt.host,
+            attempt.model,
+            attempt.effort,
+            attempt.effortWasExplicit,
+            ctx,
+          )
+        : { model: attempt.model };
+    yield* registry.preflight(
+      {
+        host: attempt.host,
+        runtime: attempt.runtime,
+        context: attempt.effectiveContext,
+      },
+      {
+        context: attempt.effectiveContext,
+        writeIntent: attempt.writeIntent,
+        closeOnReport: attempt.closeOnReport,
+        model: resolved.model,
+        effort: attempt.effort,
+        cwd,
+      },
+    );
+    return {
+      host: attempt.host,
+      runtime: attempt.runtime,
+      closeOnReport: attempt.closeOnReport,
       ...resolved,
-      effort,
-      effortWasExplicit,
-    })),
-  );
+      effort: attempt.effort,
+      effortWasExplicit: attempt.effortWasExplicit,
+    };
+  });
 
 const dynamicCandidateSkip = (
   attempt: ProfileCandidateAttempt,
-  effort: SubagentEffort,
   error: { readonly message: string; readonly _tag: string; readonly code?: string | undefined },
 ): SkippedProfileCandidate => ({
-  ...(attempt.candidateIndex === undefined ? {} : { candidateIndex: attempt.candidateIndex }),
-  candidate: `${attempt.backend}/${attempt.model}:${effort}`,
+  candidateIndex: attempt.candidateIndex,
+  candidate: `${attempt.host}/${attempt.runtime}/${attempt.model}:${attempt.effort}`,
   code: error.code || error._tag,
   reason: error.message,
 });
+
+const LEGACY_LAUNCH_FIELDS = [
+  "execution",
+  "context",
+  "writeIntent",
+  "effort",
+  "backend",
+  "model",
+] as const;
 
 export const resolveProfileStart = (
   pi: ExtensionAPI,
   rawInput: SubagentProfileStartSpec,
   ctx: ExtensionContext,
   environment: SubagentSessionEnvironment,
-): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError, SubagentProfileService> =>
+): Effect.Effect<
+  StartSubagentRequest,
+  InvalidSubagentRequestError,
+  SubagentProfileService | SubagentBackendRegistry
+> =>
   Effect.gen(function* () {
     const profiles = yield* SubagentProfileService;
     const task = rawInput.task.trim();
@@ -201,19 +218,15 @@ export const resolveProfileStart = (
         code: "task_required",
         message: "subagent_start requires every agent to have a task.",
       });
+    const legacyField = LEGACY_LAUNCH_FIELDS.find((field) =>
+      Object.prototype.hasOwnProperty.call(rawInput, field),
+    );
+    if (legacyField)
+      return yield* new InvalidSubagentRequestError({
+        code: "legacy_launch_override",
+        message: `[legacy_launch_override] subagent_start does not accept ${legacyField}. Put host, runtime, model, effort, context, writeIntent, and closeOnReport in the selected version 4 profile route.`,
+      });
 
-    if (Object.prototype.hasOwnProperty.call(rawInput, "model"))
-      return yield* new InvalidSubagentRequestError({
-        code: "model_not_supported",
-        message:
-          "subagent_start does not accept a model override. Select a profile; its configured route always determines the model.",
-      });
-    if (Object.prototype.hasOwnProperty.call(rawInput, "backend"))
-      return yield* new InvalidSubagentRequestError({
-        code: "backend_not_supported",
-        message:
-          "subagent_start does not accept a backend override. Select a profile; its configured route always determines the backend and model.",
-      });
     const requestedProfile = rawInput.profile?.trim();
     const selectedProfile = requestedProfile || profiles.config.defaultProfile;
     const definition = profiles.definition(selectedProfile);
@@ -222,40 +235,30 @@ export const resolveProfileStart = (
         code: "profile_unknown",
         message: `Unknown subagent profile "${selectedProfile}". Available profiles: ${PROFILE_IDS.join(", ")}.`,
       });
-    const input = {
-      ...rawInput,
-      profile: definition.id,
-      writeIntent: rawInput.writeIntent ?? definition.defaultWriteIntent,
-    };
-    const projectTrusted = environment.projectTrusted;
     const parentSessionFile = ctx.sessionManager.getSessionFile();
     const parentLeafId = stableParentLeaf(ctx);
-
-    const isPiModelDenied = (model: string): boolean =>
-      profiles.policyFor("pi", model) === "denied";
-    const profile = definition.id;
-    const plan = profiles.resolve(
-      profile,
-      hostProfileEnvironment(pi, ctx),
-      input.context,
-      input.effort,
-    );
+    const plan = profiles.resolve(definition.id, hostProfileEnvironment(pi, ctx));
     if (plan.kind === "failed")
       return yield* new InvalidSubagentRequestError({ code: plan.code, message: plan.message });
+
     const tryAttempt = (
       index: number,
       skippedCandidates: ReadonlyArray<SkippedProfileCandidate>,
     ): Effect.Effect<
       {
+        readonly attempt: ProfileCandidateAttempt;
         readonly concrete: ResolvedConcreteModel;
-        readonly effectiveContext: SubagentContextMode;
         readonly selection: SubagentSelectionProvenance;
       },
-      InvalidSubagentRequestError
+      InvalidSubagentRequestError,
+      SubagentBackendRegistry
     > => {
       const attempt = plan.attempts[index];
       if (!attempt) {
         const exhausted = [...skippedCandidates, ...plan.trailingSkippedCandidates];
+        const allUnsupported =
+          exhausted.length > 0 &&
+          exhausted.every((candidate) => candidate.code === "backend_not_implemented");
         const skipCodes = exhausted
           .map(
             (candidate) =>
@@ -264,80 +267,67 @@ export const resolveProfileStart = (
           .join(", ");
         return Effect.fail(
           new InvalidSubagentRequestError({
-            code: "profile_no_eligible_model",
-            message: `Profile ${profile} has no eligible model after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+            code: allUnsupported ? "backend_not_implemented" : "profile_no_eligible_model",
+            message: `Profile ${definition.id} has no eligible implemented backend after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
           }),
         );
       }
       const precedingSkips = [...skippedCandidates, ...(attempt.skippedBefore ?? [])];
-      const effort = input.effort ?? attempt.effort;
-      const effortWasExplicit = input.effort !== undefined || attempt.effortWasExplicit;
-      const concreteAttempt = resolveConcreteModel(
-        attempt.model,
-        effort,
-        effortWasExplicit,
-        ctx,
-        isPiModelDenied,
-      );
-      return concreteAttempt.pipe(
+      return resolveConcreteModel(attempt, ctx, environment.cwd).pipe(
         Effect.matchEffect({
           onFailure: (error) =>
-            tryAttempt(index + 1, [
-              ...precedingSkips,
-              dynamicCandidateSkip(attempt, effort, error),
-            ]),
-          onSuccess: (resolved) => {
-            const policy = profiles.policyFor(resolved.backend, resolved.model);
-            return Effect.succeed({
-              concrete: resolved,
-              effectiveContext: attempt.effectiveContext,
+            error.code?.includes("cleanup_unconfirmed") === true ||
+            error.code?.includes("outcome_uncertain") === true
+              ? Effect.fail(error)
+              : tryAttempt(index + 1, [...precedingSkips, dynamicCandidateSkip(attempt, error)]),
+          onSuccess: (concrete) =>
+            Effect.succeed({
+              attempt,
+              concrete,
               selection: {
                 source: attempt.source,
-                ...(attempt.candidateIndex === undefined
-                  ? {}
-                  : { candidateIndex: attempt.candidateIndex }),
+                host: attempt.host,
+                runtime: attempt.runtime,
+                closeOnReport: attempt.closeOnReport,
+                candidateIndex: attempt.candidateIndex,
                 reason: attempt.reason,
                 skippedCandidates: precedingSkips,
-                ...(policy === "discouraged"
-                  ? {
-                      warning: `Profile ${profile} routes through discouraged model ${resolved.backend}/${resolved.model}.`,
-                    }
-                  : {}),
               },
-            });
-          },
+            }),
         }),
       );
     };
+
     const selected = yield* tryAttempt(0, []);
-    if (selected.effectiveContext === "fork" && (!parentSessionFile || !parentLeafId))
+    if (selected.attempt.effectiveContext === "fork" && (!parentSessionFile || !parentLeafId))
       return yield* new InvalidSubagentRequestError({
         code: "fork_context_unavailable",
         message: "Forked context requires a persisted parent session with a stable leaf.",
       });
     const concrete = selected.concrete;
-    const selection = selected.selection;
-
     return {
-      ...(input.name?.trim() ? { name: input.name.trim() } : {}),
-      backend: concrete.backend,
+      ...(rawInput.name?.trim() ? { name: rawInput.name.trim() } : {}),
+      host: concrete.host,
+      runtime: concrete.runtime,
+      closeOnReport: concrete.closeOnReport,
+      backend: "pi",
       task,
       profile: definition.id,
       profileGuidance: definition.guidance,
-      selection,
+      selection: selected.selection,
       cwd: environment.cwd,
-      execution: input.execution ?? "background",
-      context: selected.effectiveContext,
-      writeIntent: input.writeIntent,
+      execution: "background",
+      context: selected.attempt.effectiveContext,
+      writeIntent: selected.attempt.writeIntent,
       model: concrete.model,
       ...(concrete.runtimeApiKey ? { runtimeApiKey: concrete.runtimeApiKey } : {}),
       effort: concrete.effort,
       effortWasExplicit: concrete.effortWasExplicit,
       activeTools: piToolsForWriteIntent(
         pi.getActiveTools().filter((name) => !ORCHESTRATION_TOOL_DENYLIST.has(name)),
-        input.writeIntent,
+        selected.attempt.writeIntent,
       ),
-      projectTrusted,
+      projectTrusted: environment.projectTrusted,
       parentSessionId: ctx.sessionManager.getSessionId(),
       ...(parentSessionFile ? { parentSessionFile } : {}),
       ...(parentLeafId ? { parentLeafId } : {}),

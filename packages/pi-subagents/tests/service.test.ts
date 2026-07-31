@@ -1,18 +1,32 @@
 // Explicit test entry-point Layer provision owns each scoped service runtime.
 // @effect-diagnostics effect/strictEffectProvide:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+import { setImmediate as scheduleImmediate } from "node:timers";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
+import { localPiBackendRegistryLayer } from "../src/backend/local-pi.ts";
+import type { BackendDriver, BackendEvent, BackendReport } from "../src/backend/model.ts";
+import { makeSubagentBackendRegistry, SubagentBackendRegistry } from "../src/backend/service.ts";
 import type { SubagentNotification } from "../src/boundary/host-notifier.ts";
+import {
+  WriterCwdCanonicalizationError,
+  WriterLeaseConflictError,
+  WriterLeaseMarkError,
+  WriterLeaseReleaseError,
+  WriterLeaseService,
+  type WriterLease,
+} from "../src/boundary/writer-lease.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
 import { makeSubagentProfileService, SubagentProfileService } from "../src/profiles/service.ts";
-import type { ParentReply, PeerNotice, RpcCommand } from "../src/run/protocol.ts";
+import type { ParentReply, PeerNotice, RpcCommand } from "../src/backend/local-pi-protocol.ts";
 import {
   ChildProcess,
   type ChildLaunchRequest,
@@ -45,6 +59,7 @@ interface FakeChildControl {
   readonly offer: (value: unknown) => void;
   readonly offerIpc: (value: unknown) => void;
   readonly exit: (exitCode?: number | null) => void;
+  readonly failExit: (message: string) => void;
 }
 
 function fakeChildLayer(
@@ -52,7 +67,9 @@ function fakeChildLayer(
   options: {
     readonly dropInitialState?: boolean;
     readonly releaseDefect?: boolean;
+    readonly omitSessionFile?: boolean;
     readonly stateThinkingLevel?: string;
+    readonly onRelease?: ((spawnIndex: number) => void) | undefined;
     readonly initialFailures?: ReadonlyArray<{
       readonly spawnIndex: number;
       readonly type: RpcCommand["type"];
@@ -75,7 +92,10 @@ function fakeChildLayer(
           const spawnIndex = nextSpawnIndex++;
           yield* beforeSpawn;
           const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
-          const exited = yield* Deferred.make<Extract<ChildWireEvent, { readonly type: "exit" }>>();
+          const exited = yield* Deferred.make<
+            Extract<ChildWireEvent, { readonly type: "exit" }>,
+            SubagentProcessError
+          >();
           const commands: RpcCommand[] = [];
           const ipc: Array<ParentReply | PeerNotice> = [];
           const terminations: Array<"graceful" | "force"> = [];
@@ -136,6 +156,13 @@ function fakeChildLayer(
             Queue.endUnsafe(events);
             Deferred.doneUnsafe(exited, Effect.succeed({ type: "exit", exitCode, stderr: "" }));
           };
+          const failExit = (message: string) => {
+            Queue.endUnsafe(events);
+            Deferred.doneUnsafe(
+              exited,
+              Effect.fail(new SubagentProcessError({ operation: "await exit from", message })),
+            );
+          };
           const handle: ChildProcessHandle = {
             pid: 10_000 + controls.length,
             events,
@@ -192,7 +219,9 @@ function fakeChildLayer(
                           command.type === "get_state"
                             ? {
                                 sessionId: "child-session",
-                                sessionFile: "/tmp/child-session.jsonl",
+                                ...(options.omitSessionFile
+                                  ? {}
+                                  : { sessionFile: "/tmp/child-session.jsonl" }),
                                 thinkingLevel: options.stateThinkingLevel ?? "high",
                                 model: {
                                   provider: "openai-codex",
@@ -246,12 +275,14 @@ function fakeChildLayer(
             offer,
             offerIpc,
             exit,
+            failExit,
           });
           return {
             handle,
             release: Effect.gen(function* () {
               if (releaseGate) yield* Deferred.await(releaseGate);
               releaseCount += 1;
+              options.onRelease?.(spawnIndex);
               Queue.endUnsafe(events);
               if (options.releaseDefect) return yield* Effect.die("fixture release defect");
             }),
@@ -278,10 +309,242 @@ const profileLayerFor = (global: unknown) =>
     ),
   );
 
-const serviceLayer = (options: SubagentServiceOptions = {}, profiles = profileLayerFor({})) =>
-  SubagentService["layer"](options).pipe(Layer.provideMerge(profiles));
+function fakeWriterLeaseLayer(
+  options: {
+    readonly platform?: NodeJS.Platform | undefined;
+    readonly canonicalize?: ((cwd: string) => string) | undefined;
+    readonly filesystemIdentity?: ((cwd: string, canonicalPath: string) => string) | undefined;
+    readonly onCanonicalize?: ((cwd: string) => void) | undefined;
+    readonly failCanonicalization?: boolean | undefined;
+    readonly onAcquireStarted?: (() => void) | undefined;
+    readonly onAcquire?: ((lease: WriterLease) => void) | undefined;
+    readonly acquireGate?: Deferred.Deferred<void, never> | undefined;
+    readonly failAcquire?: boolean | undefined;
+    readonly onMark?: ((lease: WriterLease) => void) | undefined;
+    readonly markGate?: Deferred.Deferred<void, never> | undefined;
+    readonly failMark?: boolean | undefined;
+    readonly onRelease?: ((lease: WriterLease) => void) | undefined;
+    readonly failRelease?: boolean | undefined;
+  } = {},
+) {
+  let ordinal = 0;
+  let nextIdentity = 1;
+  let remainingAcquireFailures = options.failAcquire ? 1 : 0;
+  const identityDigests = new Map<string, string>();
+  const canonicalize = options.canonicalize ?? ((cwd: string) => cwd);
+  return Layer.succeed(WriterLeaseService, {
+    platform: options.platform ?? "linux",
+    canonicalize: (cwd) => {
+      options.onCanonicalize?.(cwd);
+      if (options.failCanonicalization)
+        return Effect.fail(
+          new WriterCwdCanonicalizationError({
+            message: "Fixture writer cwd canonicalization failed.",
+          }),
+        );
+      const path = canonicalize(cwd);
+      const filesystemIdentity = options.filesystemIdentity?.(cwd, path) ?? `dev:1;ino:${path}`;
+      let digest = identityDigests.get(filesystemIdentity);
+      if (!digest) {
+        digest = (nextIdentity++).toString(16).padStart(64, "0");
+        identityDigests.set(filesystemIdentity, digest);
+      }
+      return Effect.succeed({ path, filesystemIdentity, digest });
+    },
+    acquire: ({ cwd, sessionId, runId }) => {
+      if (remainingAcquireFailures > 0) {
+        remainingAcquireFailures -= 1;
+        return Effect.fail(
+          new WriterLeaseConflictError({
+            reason: "live",
+            message: "Fixture cross-process writer conflict.",
+            ownerPid: 99,
+            ownerSessionId: "other-session",
+            ownerRunId: "other-run",
+          }),
+        );
+      }
+      const ownershipToken = (++ordinal).toString(16).padStart(64, "0");
+      const lease: WriterLease = {
+        canonicalCwd: cwd.path,
+        filesystemIdentityDigest: cwd.digest,
+        leasePath: `/private-agent/writer-leases/${cwd.digest}.lease`,
+        ownershipToken,
+        evidence: {
+          version: 2,
+          phase: "reserved",
+          ownershipToken,
+          filesystemIdentityDigest: cwd.digest,
+          parentPid: 1,
+          parentProcessStartedAtMillis: 1,
+          ownerNonce: "d".repeat(64),
+          sessionId,
+          runId,
+          acquiredAtMillis: ordinal,
+        },
+      };
+      return Effect.gen(function* () {
+        options.onAcquireStarted?.();
+        if (options.acquireGate) yield* Deferred.await(options.acquireGate);
+        options.onAcquire?.(lease);
+        return lease;
+      });
+    },
+    markSpawnStarted: (lease) =>
+      Effect.gen(function* () {
+        if (options.markGate) yield* Deferred.await(options.markGate);
+        options.onMark?.(lease);
+        if (options.failMark)
+          return yield* new WriterLeaseMarkError({
+            message: "Fixture spawn-started mark failed ambiguously.",
+          });
+        return {
+          ...lease,
+          evidence: { ...lease.evidence, phase: "spawn-started", spawnStartedAtMillis: ordinal },
+        };
+      }),
+    release: (lease) => {
+      options.onRelease?.(lease);
+      return options.failRelease
+        ? Effect.fail(
+            new WriterLeaseReleaseError({
+              message: "Fixture writer-lease release could not be confirmed.",
+            }),
+          )
+        : Effect.void;
+    },
+  });
+}
+
+const serviceLayer = (
+  options: SubagentServiceOptions = {},
+  profiles = profileLayerFor({}),
+  writerLeases: Layer.Layer<WriterLeaseService> = fakeWriterLeaseLayer(),
+) =>
+  SubagentService["layer"](options).pipe(
+    Layer.provide(Layer.merge(localPiBackendRegistryLayer, writerLeases)),
+    Layer.provideMerge(profiles),
+  );
+
+interface FakeRetainedControl {
+  readonly prompts: string[];
+  readonly assignmentEpochs: number[];
+  readonly terminations: Array<"graceful" | "force">;
+  readonly gateNextStart: (gate: Deferred.Deferred<void, never>) => void;
+  readonly failNextStart: (code?: string) => void;
+  readonly offer: (
+    event: BackendEvent | ({ readonly type: "report" } & Omit<BackendReport, "assignmentEpoch">),
+  ) => void;
+  readonly released: () => number;
+}
+
+function fakeRetainedBackendLayer(
+  options: {
+    readonly initialStartGate?: Deferred.Deferred<void, never> | undefined;
+  } = {},
+) {
+  const controls: FakeRetainedControl[] = [];
+  const driver: BackendDriver = {
+    host: "herdr",
+    runtime: "claude",
+    capabilities: ["steer", "rename-display"],
+    supportsContext: (context) => context === "fresh",
+    spawn: () =>
+      Effect.acquireRelease(
+        Effect.gen(function* () {
+          const events = yield* Queue.unbounded<BackendEvent, Cause.Done>();
+          const prompts: string[] = [];
+          const assignmentEpochs: number[] = [];
+          const terminations: Array<"graceful" | "force"> = [];
+          const startGates: Array<Deferred.Deferred<void, never>> = options.initialStartGate
+            ? [options.initialStartGate]
+            : [];
+          const startFailures: Array<string | undefined> = [];
+          let releaseCount = 0;
+          let assignmentEpoch = 0;
+          const control: FakeRetainedControl = {
+            prompts,
+            assignmentEpochs,
+            terminations,
+            gateNextStart: (gate) => void startGates.push(gate),
+            failNextStart: (code) => void startFailures.push(code),
+            offer: (event) => {
+              const normalized: BackendEvent =
+                event.type === "report" && !("assignmentEpoch" in event)
+                  ? { ...event, assignmentEpoch }
+                  : (event as BackendEvent);
+              Queue.offerUnsafe(events, normalized);
+            },
+            released: () => releaseCount,
+          };
+          controls.push(control);
+          return {
+            handle: {
+              pid: 22_001,
+              events,
+              awaitExit: Effect.never,
+              controls: {
+                initialize: Effect.succeed({
+                  model: "claude-retained",
+                  effort: "high" as const,
+                  sessionId: "retained-session",
+                }),
+                start: (message: string, nextAssignmentEpoch: number) =>
+                  Effect.gen(function* () {
+                    assignmentEpoch = nextAssignmentEpoch;
+                    assignmentEpochs.push(nextAssignmentEpoch);
+                    prompts.push(message);
+                    const gate = startGates.shift();
+                    if (gate) yield* Deferred.await(gate);
+                    if (startFailures.length > 0) {
+                      const code = startFailures.shift();
+                      return yield* new SubagentProcessError({
+                        operation: "start assignment in",
+                        ...(code ? { code } : {}),
+                        message: "Fixture retained start failure.",
+                      });
+                    }
+                  }),
+                steer: (message: string) =>
+                  Effect.sync(() => void prompts.push(`steer:${message}`)),
+                interrupt: Effect.void,
+                renameDisplay: () => Effect.void,
+                reply: () => Effect.void,
+                notifyPeers: () => Effect.void,
+              },
+              acknowledge: () => {},
+              terminate: (mode: "graceful" | "force") =>
+                Effect.sync(() => void terminations.push(mode)),
+              cancelPending: () => {},
+            },
+            release: Effect.sync(() => {
+              releaseCount += 1;
+              Queue.endUnsafe(events);
+            }),
+          };
+        }),
+        ({ release }) => release,
+      ).pipe(Effect.map(({ handle }) => handle)),
+  };
+  return {
+    controls,
+    layer: Layer.succeed(SubagentBackendRegistry, makeSubagentBackendRegistry([driver])),
+  };
+}
+
+const retainedServiceLayer = (
+  backend: ReturnType<typeof fakeRetainedBackendLayer>,
+  options: SubagentServiceOptions = {},
+) =>
+  SubagentService["layer"](options).pipe(
+    Layer.provide(Layer.merge(backend.layer, fakeWriterLeaseLayer())),
+    Layer.provideMerge(profileLayerFor({})),
+  );
 
 const request = (overrides: Partial<StartSubagentRequest> = {}): StartSubagentRequest => ({
+  host: "local",
+  runtime: "pi",
+  closeOnReport: true,
   backend: "pi",
   task: "Inspect authentication",
   cwd: "/project",
@@ -343,20 +606,17 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.effect("reauthorizes hard-denied models before reserving or spawning a run", () => {
+  it.effect("rejects an unsupported backend before reserving or spawning a run", () => {
     const fake = fakeChildLayer();
-    const layer = serviceLayer(
-      {},
-      profileLayerFor({
-        denied: [{ backend: "pi", model: "openai-codex/gpt-5.6-sol" }],
-      }),
-    ).pipe(Layer.provide(fake.layer));
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
       const service = yield* SubagentService;
-      const failure = yield* Effect.flip(service.start(request()));
+      const failure = yield* Effect.flip(
+        service.start(request({ host: "herdr", runtime: "claude" })),
+      );
       expect(failure).toMatchObject({
         _tag: "InvalidSubagentRequestError",
-        code: "model_denied",
+        code: "backend_not_implemented",
       });
       expect(fake.controls).toHaveLength(0);
       expect(yield* service.list).toEqual([]);
@@ -423,6 +683,101 @@ describe("SubagentService", () => {
     },
   );
 
+  it.effect(
+    "keeps a report arriving during start admission queued for exact-once await delivery",
+    () => {
+      const report = "Report completed while prompt admission was in flight.";
+      const initialStartGate = Deferred.makeUnsafe<void>();
+      const backend = fakeRetainedBackendLayer({ initialStartGate });
+      const projections: SubagentProjection[] = [];
+      const notifications: SubagentNotification[] = [];
+      const layer = retainedServiceLayer(backend, {
+        notify: (notification) => void notifications.push(notification),
+        publish: (projection) => void projections.push(projection),
+      });
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const starting = yield* service
+          .startSessionOwned(
+            request({
+              name: "fast-report",
+              host: "herdr",
+              runtime: "claude",
+              closeOnReport: false,
+              model: "claude-retained",
+              effortWasExplicit: false,
+            }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
+        const id = projections.at(-1)?.runs[0]?.id;
+        expect(id).toBeDefined();
+        backend.controls[0]?.offer({
+          type: "assistant_message",
+          assignmentEpoch: 1,
+          text: report,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: 0,
+          },
+        });
+        backend.controls[0]?.offer({
+          type: "report",
+          assignmentEpoch: 1,
+          runId: id!,
+          sequence: 1,
+          deliveryId: "report-during-start",
+          text: report,
+        });
+        yield* yieldUntil(() =>
+          Boolean(
+            projections
+              .at(-1)
+              ?.runs[0]?.sessionEvents.some(
+                (event) => event.type === "assistant" && event.text === report,
+              ),
+          ),
+        );
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(initialStartGate, undefined);
+
+        const started = yield* Fiber.join(starting);
+        expect(started.state).toBe("reported");
+        expect(started).not.toHaveProperty("finalText");
+        expect(started.sessionEvents).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ text: report })]),
+        );
+
+        const delivered = yield* service.withAwaitTerminalObservations(
+          [started.id],
+          "all_finished",
+          undefined,
+          (observations) =>
+            service
+              .consumeCompletions(
+                observations.flatMap((observation) =>
+                  observation.completionReceipt ? [observation.completionReceipt] : [],
+                ),
+              )
+              .pipe(Effect.as(observations)),
+        );
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]?.run.finalText).toBe(report);
+        expect(delivered[0]?.run.sessionEvents).toEqual(
+          expect.arrayContaining([expect.objectContaining({ type: "assistant", text: report })]),
+        );
+
+        yield* TestClock.adjust("1 second");
+        expect(notifications).toEqual([]);
+        expect(yield* service.status(started.id)).not.toHaveProperty("finalText");
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
   it.effect("starts a child, projects completion, and retains bounded result state", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
@@ -477,12 +832,615 @@ describe("SubagentService", () => {
 
       const completed = yield* service.status(started.id);
       expect(completed.finalText).toBe("Review complete.");
+      expect(completed.reportGeneration).toBe(1);
       expect(completed.usage.totalTokens).toBe(12);
       expect(completed.sessionEvents).toMatchObject([
         { type: "tool", toolName: "read", target: "src/auth.ts", state: "completed" },
         { type: "assistant", text: "Review complete." },
       ]);
     }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect(
+    "claims retained reports, deduplicates delivery, begins the next assignment, and notifies a cancelled await exactly once",
+    () => {
+      const backend = fakeRetainedBackendLayer();
+      const projections: SubagentProjection[] = [];
+      const notifications: SubagentNotification[] = [];
+      const layer = retainedServiceLayer(backend, {
+        publish: (projection) => projections.push(projection),
+        notify: (notification) => void notifications.push(notification),
+      });
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(
+          request({
+            host: "herdr",
+            runtime: "claude",
+            closeOnReport: false,
+            model: "claude-retained",
+            effortWasExplicit: false,
+          }),
+        );
+        expect(run).toMatchObject({ state: "running", reportGeneration: 0, pid: 22_001 });
+        expect(backend.controls[0]?.prompts).toHaveLength(1);
+
+        const firstAwait = yield* service
+          .withAwaitTerminalObservations([run.id], "all_finished", undefined, (observations) =>
+            service
+              .consumeCompletions(
+                observations.flatMap((observation) =>
+                  observation.completionReceipt ? [observation.completionReceipt] : [],
+                ),
+              )
+              .pipe(Effect.as(observations)),
+          )
+          .pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        backend.controls[0]?.offer({
+          type: "report",
+          runId: run.id,
+          sequence: 1,
+          deliveryId: "report-one",
+          evidence: "fixture-owned-pane",
+          text: "First retained report.",
+        });
+        const first = yield* Fiber.join(firstAwait);
+        expect(first[0]).toMatchObject({
+          run: {
+            state: "reported",
+            reportGeneration: 1,
+            finalText: "First retained report.",
+            pid: 22_001,
+          },
+          completionReceipt: {
+            id: run.id,
+            generation: 1,
+            claimToken: expect.any(String),
+          },
+        });
+        backend.controls[0]?.offer({
+          type: "report",
+          runId: run.id,
+          sequence: 1,
+          deliveryId: "report-one",
+          text: "Duplicate must be ignored.",
+        });
+        yield* Effect.yieldNow;
+        const redactedStatus = yield* service.status(run.id);
+        expect(redactedStatus).toMatchObject({
+          state: "reported",
+          reportGeneration: 1,
+          pid: 22_001,
+        });
+        expect(redactedStatus).not.toHaveProperty("finalText");
+        expect(projections.at(-1)?.runs[0]?.finalText).toBe("First retained report.");
+        expect(backend.controls[0]?.released()).toBe(0);
+
+        const guided = yield* service.send(run.id, "Investigate the follow-up.");
+        expect(guided).toMatchObject({ state: "running", reportGeneration: 1 });
+        expect(guided.finalText).toBeUndefined();
+        expect(backend.controls[0]?.prompts.at(-1)).toBe("Investigate the follow-up.");
+
+        const cancelledAwait = yield* service
+          .awaitTerminal([run.id], "all_finished")
+          .pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        yield* Fiber.interrupt(cancelledAwait);
+        backend.controls[0]?.offer({
+          type: "report",
+          runId: run.id,
+          sequence: 2,
+          deliveryId: "report-two",
+          text: "Second retained report.",
+        });
+        yield* yieldUntil(
+          () =>
+            projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state ===
+            "reported",
+        );
+        yield* TestClock.adjust("100 millis");
+        yield* yieldUntil(
+          () =>
+            notifications.filter((notification) => notification.type === "completed").length === 1,
+        );
+        expect(notifications).toMatchObject([
+          {
+            type: "completed",
+            runs: [
+              {
+                id: run.id,
+                generation: 2,
+                finalText: "Second retained report.",
+                retained: true,
+              },
+            ],
+          },
+        ]);
+        yield* TestClock.adjust("1 second");
+        expect(
+          notifications.filter((notification) => notification.type === "completed"),
+        ).toHaveLength(1);
+
+        const stopped = yield* service.stop(run.id);
+        expect(stopped.state).toBe("stopped");
+        expect(backend.controls[0]?.released()).toBe(1);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("rejects parallel await ownership and releases only the cancelled claim", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const updates: SubagentProjection["runs"][] = [];
+    const layer = serviceLayer({
+      notify: (notification) => void notifications.push(notification),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "exclusive-await" }));
+      const enteredRender = yield* Deferred.make<void>();
+      const first = yield* service
+        .withAwaitTerminalObservations(
+          [run.id],
+          "all_finished",
+          (runs) => updates.push(runs),
+          () => Deferred.succeed(enteredRender, undefined).pipe(Effect.andThen(Effect.never)),
+        )
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(() => updates.length > 0);
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Exclusively delivered." }],
+        },
+      });
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* Deferred.await(enteredRender);
+
+      const conflict = yield* service.awaitTerminal([run.id], "all_finished").pipe(Effect.flip);
+      expect(conflict).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "completion_claim_conflict",
+      });
+
+      yield* Fiber.interrupt(first);
+      const replacement = yield* service
+        .awaitTerminal([run.id], "all_finished")
+        .pipe(Effect.forkScoped);
+      expect(yield* Fiber.join(replacement)).toMatchObject([
+        { state: "completed", finalText: "Exclusively delivered." },
+      ]);
+      yield* TestClock.adjust("1 second");
+      expect(notifications).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("redacts a completed report from status while an await owns its receipt", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const layer = serviceLayer({
+      notify: (notification) => void notifications.push(notification),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "await-status-race" }));
+      const entered = yield* Deferred.make<void>();
+      const releaseRender = yield* Deferred.make<void>();
+      const awaiting = yield* service
+        .withAwaitTerminalObservations([run.id], "all_finished", undefined, (observations) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(releaseRender);
+            const receipt = observations[0]?.completionReceipt;
+            if (receipt) yield* service.consumeCompletions([receipt]);
+            return observations;
+          }),
+        )
+        .pipe(Effect.forkScoped);
+
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Owned report text." }],
+        },
+      });
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* Deferred.await(entered);
+
+      const competingStatus = yield* service.status(run.id);
+      expect(competingStatus).not.toHaveProperty("finalText");
+      expect(competingStatus.sessionEvents).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ text: "Owned report text." })]),
+      );
+      yield* service.consumeCompletions([
+        { id: run.id, generation: 1, claimToken: "forged-owner" },
+      ]);
+      expect(yield* service.status(run.id)).not.toHaveProperty("finalText");
+
+      yield* Deferred.succeed(releaseRender, undefined);
+      const observations = yield* Fiber.join(awaiting);
+      expect(observations[0]?.run.finalText).toBe("Owned report text.");
+      yield* TestClock.adjust("1 second");
+      expect(notifications).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("commits an initial report only after the matching start command confirms", () => {
+    const initialStartGate = Deferred.makeUnsafe<void>();
+    const backend = fakeRetainedBackendLayer({ initialStartGate });
+    const projections: SubagentProjection[] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => projections.push(projection),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const starting = yield* service
+        .start(
+          request({
+            host: "herdr",
+            runtime: "claude",
+            closeOnReport: false,
+            model: "claude-retained",
+            effortWasExplicit: false,
+          }),
+        )
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
+      const id = projections.at(-1)?.runs[0]?.id;
+      expect(id).toBeDefined();
+      backend.controls[0]?.offer({
+        type: "report",
+        assignmentEpoch: 1,
+        runId: id!,
+        sequence: 1,
+        deliveryId: "initial-in-flight",
+        text: "Fast initial report.",
+      });
+      yield* Effect.yieldNow;
+      expect(projections.at(-1)?.runs[0]?.state).not.toBe("reported");
+      yield* Deferred.succeed(initialStartGate, undefined);
+      expect(yield* Fiber.join(starting)).toMatchObject({
+        state: "reported",
+        reportGeneration: 1,
+        finalText: "Fast initial report.",
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect(
+    "buffers an in-flight retained report and does not poison its later valid retry",
+    () => {
+      const backend = fakeRetainedBackendLayer();
+      const projections: SubagentProjection[] = [];
+      const layer = retainedServiceLayer(backend, {
+        publish: (projection) => projections.push(projection),
+      });
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(
+          request({
+            host: "herdr",
+            runtime: "claude",
+            closeOnReport: false,
+            model: "claude-retained",
+            effortWasExplicit: false,
+          }),
+        );
+        backend.controls[0]?.offer({
+          type: "report",
+          runId: run.id,
+          sequence: 1,
+          deliveryId: "first-delivery",
+          text: "First assignment.",
+        });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
+        expect((yield* service.status(run.id)).finalText).toBe("First assignment.");
+
+        backend.controls[0]?.offer({
+          type: "report",
+          assignmentEpoch: 1,
+          runId: run.id,
+          sequence: 2,
+          deliveryId: "second-delivery",
+          text: "Too early.",
+        });
+        yield* yieldUntil(() =>
+          Boolean(projections.at(-1)?.runs[0]?.warning?.includes("protocol-invalid")),
+        );
+        expect(projections.at(-1)?.runs[0]).toMatchObject({
+          state: "reported",
+          reportGeneration: 1,
+          finalText: "First assignment.",
+        });
+
+        backend.controls[0]?.offer({
+          type: "report",
+          assignmentEpoch: 1,
+          runId: run.id,
+          sequence: 1,
+          deliveryId: "first-delivery",
+          text: "Exact retry with changed text is ignored.",
+        });
+        const startGate = yield* Deferred.make<void>();
+        backend.controls[0]?.gateNextStart(startGate);
+        const sending = yield* service
+          .send(run.id, "Begin the second assignment.")
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => backend.controls[0]?.prompts.length === 2);
+        backend.controls[0]?.offer({
+          type: "report",
+          assignmentEpoch: 2,
+          runId: run.id,
+          sequence: 2,
+          deliveryId: "second-delivery",
+          text: "Second assignment committed after start.",
+        });
+        yield* Effect.yieldNow;
+        expect(projections.at(-1)?.runs[0]?.state).not.toBe("reported");
+        yield* Deferred.succeed(startGate, undefined);
+        expect(yield* Fiber.join(sending)).toMatchObject({
+          state: "reported",
+          reportGeneration: 2,
+          finalText: "Second assignment committed after start.",
+        });
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("caps one retained run at 64 unresolved report generations", () => {
+    const backend = fakeRetainedBackendLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = retainedServiceLayer(backend, {
+      notify: (notification) =>
+        notification.type === "completed" ? { deliveredCompletionKeys: [] } : undefined,
+      publish: (projection) => projections.push(projection),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      for (let generation = 1; generation <= 64; generation += 1) {
+        backend.controls[0]?.offer({
+          type: "report",
+          runId: run.id,
+          sequence: generation,
+          deliveryId: `backlog-${generation}`,
+          text: `Backlog report ${generation}.`,
+        });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.reportGeneration === generation);
+        if (generation < 64) yield* service.send(run.id, `Begin assignment ${generation + 1}.`);
+      }
+      const failure = yield* service.send(run.id, "Exceed the backlog.").pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "report_delivery_backlog",
+      });
+      expect((yield* service.list)[0]?.reportGeneration).toBe(64);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("rolls back a raced retained start and never reuses its assignment epoch", () => {
+    const backend = fakeRetainedBackendLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => projections.push(projection),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      backend.controls[0]?.offer({
+        type: "report",
+        runId: run.id,
+        sequence: 1,
+        deliveryId: "rollback-report",
+        text: "Preserve this report.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
+
+      const failureGate = yield* Deferred.make<void>();
+      backend.controls[0]?.gateNextStart(failureGate);
+      backend.controls[0]?.failNextStart();
+      const failing = yield* service
+        .send(run.id, "Definite failing assignment.")
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs.at(-1) === 2);
+      backend.controls[0]?.offer({ type: "run_started", assignmentEpoch: 2 });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
+      yield* Deferred.succeed(failureGate, undefined);
+      expect(yield* Fiber.join(failing).pipe(Effect.flip)).toMatchObject({
+        _tag: "SubagentProcessError",
+      });
+      expect(yield* service.status(run.id)).toMatchObject({
+        state: "reported",
+        reportGeneration: 1,
+        finalText: "Preserve this report.",
+      });
+
+      const nextGate = yield* Deferred.make<void>();
+      backend.controls[0]?.gateNextStart(nextGate);
+      const next = yield* service.send(run.id, "Next valid assignment.").pipe(Effect.forkScoped);
+      yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs.at(-1) === 3);
+      backend.controls[0]?.offer({
+        type: "supervisor_contact",
+        assignmentEpoch: 2,
+        requestId: "old-progress",
+        kind: "progress",
+        message: "Stale progress must not apply.",
+      });
+      backend.controls[0]?.offer({
+        type: "tool_started",
+        assignmentEpoch: 2,
+        toolCallId: "old-tool",
+        toolName: "stale-tool",
+        args: {},
+      });
+      backend.controls[0]?.offer({
+        type: "warning",
+        source: "runtime-extension",
+        message: "Lifecycle warning remains handle-scoped.",
+      });
+      yield* yieldUntil(() =>
+        Boolean(projections.at(-1)?.runs[0]?.warning?.includes("Lifecycle warning")),
+      );
+      expect(projections.at(-1)?.runs[0]?.progress).toBeUndefined();
+      expect(projections.at(-1)?.runs[0]?.currentTool).toBeUndefined();
+      yield* Deferred.succeed(nextGate, undefined);
+      expect((yield* Fiber.join(next)).state).toBe("running");
+      expect(backend.controls[0]?.assignmentEpochs).toEqual([1, 2, 3]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("keeps outcome-uncertain retained work and ignores idle assignment events", () => {
+    const backend = fakeRetainedBackendLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => projections.push(projection),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      backend.controls[0]?.offer({
+        type: "report",
+        runId: run.id,
+        sequence: 1,
+        deliveryId: "idle-report",
+        text: "Idle report.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
+      const beforeIdle = projections.at(-1)?.runs[0];
+      backend.controls[0]?.offer({ type: "activity", assignmentEpoch: 1 });
+      backend.controls[0]?.offer({
+        type: "assistant_message",
+        assignmentEpoch: 1,
+        text: "Late assistant text.",
+        usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20, cost: 1 },
+      });
+      backend.controls[0]?.offer({
+        type: "tool_started",
+        assignmentEpoch: 1,
+        toolCallId: "late-tool",
+        toolName: "late",
+        args: {},
+      });
+      backend.controls[0]?.offer({
+        type: "supervisor_contact",
+        assignmentEpoch: 1,
+        requestId: "late-question",
+        kind: "question",
+        message: "Late question?",
+      });
+      backend.controls[0]?.offer({
+        type: "supervisor_contact",
+        assignmentEpoch: 1,
+        requestId: "late-progress",
+        kind: "progress",
+        message: "Late progress.",
+      });
+      backend.controls[0]?.offer({
+        type: "warning",
+        source: "runtime-extension",
+        message: "Handle warning after report.",
+      });
+      yield* yieldUntil(
+        () => projections.at(-1)?.runs[0]?.warning === "Handle warning after report.",
+      );
+      const afterIdle = projections.at(-1)?.runs[0];
+      expect(afterIdle).toMatchObject({
+        state: "reported",
+        lastActivityAt: beforeIdle?.lastActivityAt,
+        usage: beforeIdle?.usage,
+        finalText: "Idle report.",
+      });
+      expect(afterIdle?.currentTool).toBeUndefined();
+      expect(afterIdle?.progress).toBeUndefined();
+      expect(afterIdle?.question).toBeUndefined();
+
+      const uncertainGate = yield* Deferred.make<void>();
+      backend.controls[0]?.gateNextStart(uncertainGate);
+      backend.controls[0]?.failNextStart("transport_outcome_uncertain");
+      const uncertain = yield* service
+        .send(run.id, "Uncertain assignment.")
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs.at(-1) === 2);
+      backend.controls[0]?.offer({ type: "run_started", assignmentEpoch: 2 });
+      backend.controls[0]?.offer({
+        type: "report",
+        assignmentEpoch: 2,
+        runId: run.id,
+        sequence: 2,
+        deliveryId: "uncertain-report",
+        text: "Applied despite uncertain response.",
+      });
+      yield* Deferred.succeed(uncertainGate, undefined);
+      expect(yield* Fiber.join(uncertain).pipe(Effect.flip)).toMatchObject({
+        _tag: "SubagentProcessError",
+        code: "resume_outcome_uncertain",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.reportGeneration === 2);
+      expect(projections.at(-1)?.runs[0]).toMatchObject({
+        state: "reported",
+        finalText: "Applied despite uncertain response.",
+        warning: expect.stringContaining("may already have applied"),
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("closes an idle retained backend on session shutdown", () => {
+    const backend = fakeRetainedBackendLayer();
+    const layer = retainedServiceLayer(backend);
+    return Effect.gen(function* () {
+      const run = yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const started = yield* service.start(
+          request({
+            host: "herdr",
+            runtime: "claude",
+            closeOnReport: false,
+            model: "claude-retained",
+            effortWasExplicit: false,
+          }),
+        );
+        backend.controls[0]?.offer({
+          type: "report",
+          runId: started.id,
+          sequence: 1,
+          deliveryId: "shutdown-report",
+          text: "Idle now.",
+        });
+        yield* yieldUntil(() =>
+          Boolean(backend.controls[0] && backend.controls[0].released() === 0),
+        );
+        return started;
+      }).pipe(Effect.scoped, Effect.provide(layer));
+      expect(run.id).toBeDefined();
+      expect(backend.controls[0]?.released()).toBe(1);
+    });
   });
 
   it.effect("coalesces streamed token activity publications", () => {
@@ -536,6 +1494,7 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       const completed = yield* service.status(run.id);
       expect(completed.state).toBe("completed");
+      expect(completed.reportGeneration).toBe(1);
       expect(completed.pid).toBeUndefined();
       expect(completed.sessionFile).toBe("/tmp/child-session.jsonl");
 
@@ -549,6 +1508,29 @@ describe("SubagentService", () => {
         "get_state",
         "prompt",
       ]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("reports a backend-generic error when completed resume state is unavailable", () => {
+    const fake = fakeChildLayer(Effect.void, { omitSessionFile: true });
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "no-resume-token" }));
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+
+      const failure = yield* service.resume(run.id).pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "backend_resume_unavailable",
+      });
+      expect(failure.message).toContain("local/pi did not provide continuation state");
+      expect(failure.message).not.toContain("session file");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -1104,6 +2086,153 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("finalizes and releases slots when a backend awaitExit fails", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failedRun = yield* service.start(
+        request({ name: "await-exit-failure", writeIntent: "writer" }),
+      );
+      fake.controls[0]?.failExit("Fixture awaitExit failure.");
+      yield* yieldUntil(
+        () =>
+          projections
+            .at(-1)
+            ?.runs.some((run) => run.id === failedRun.id && run.state === "failed") === true,
+      );
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+      const failed = yield* service.status(failedRun.id);
+      expect(failed).toMatchObject({
+        state: "failed",
+        error: expect.stringContaining("Fixture awaitExit failure"),
+      });
+      expect(failed.pid).toBeUndefined();
+
+      const replacement = yield* service.start(
+        request({ name: "replacement-after-await-failure", writeIntent: "writer" }),
+      );
+      expect(replacement.state).toBe("running");
+      expect(fake.controls).toHaveLength(2);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect(
+    "quarantines a spawn-started writer when a failed Herdr acquisition owns uncertain cleanup",
+    () => {
+      let leaseReleases = 0;
+      const projections: SubagentProjection[] = [];
+      const driver: BackendDriver = {
+        host: "herdr",
+        runtime: "pi",
+        capabilities: ["steer"],
+        supportsContext: (context) => context === "fresh",
+        spawn: () =>
+          Effect.gen(function* () {
+            yield* Effect.addFinalizer(() =>
+              Effect.fail(
+                new SubagentProcessError({
+                  operation: "finalize Herdr launch",
+                  code: "herdr_launch_cleanup_unconfirmed",
+                  message: "Fixture applied start and failed rollback cleanup.",
+                }),
+              ).pipe(Effect.orDie),
+            );
+            return yield* new SubagentProcessError({
+              operation: "launch Herdr agent",
+              code: "herdr_start_agent_outcome_uncertain",
+              message: "Fixture Herdr start may have applied.",
+            });
+          }),
+      };
+      const registry = Layer.succeed(
+        SubagentBackendRegistry,
+        makeSubagentBackendRegistry([driver]),
+      );
+      const leases = fakeWriterLeaseLayer({
+        onRelease: () => {
+          leaseReleases += 1;
+        },
+      });
+      const layer = SubagentService["layer"]({
+        publish: (projection) => projections.push(projection),
+      }).pipe(
+        Layer.provide(Layer.merge(registry, leases)),
+        Layer.provideMerge(profileLayerFor({})),
+      );
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const failure = yield* service
+          .start(
+            request({
+              host: "herdr",
+              runtime: "pi",
+              writeIntent: "writer",
+              closeOnReport: true,
+              name: "uncertain-herdr-writer",
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(failure).toMatchObject({ code: "herdr_start_agent_outcome_uncertain" });
+        expect(leaseReleases).toBe(0);
+        expect(projections.at(-1)?.runs[0]).toMatchObject({
+          state: "failed",
+          warning: expect.stringContaining("ownership remain quarantined"),
+        });
+        const conflict = yield* service
+          .start(
+            request({
+              host: "herdr",
+              runtime: "pi",
+              name: "replacement",
+              writeIntent: "writer",
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(conflict).toMatchObject({ _tag: "SubagentWriterConflictError" });
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("quarantines a writer when awaitExit failure finalization defects", () => {
+    const fake = fakeChildLayer(Effect.void, { releaseDefect: true });
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({ name: "await-failure-defect", writeIntent: "writer" }),
+      );
+      fake.controls[0]?.failExit("Fixture awaitExit failure.");
+      yield* yieldUntil(
+        () =>
+          projections
+            .at(-1)
+            ?.runs.some(
+              (candidate) =>
+                candidate.id === run.id &&
+                candidate.state === "failed" &&
+                candidate.warning?.includes("ownership remain quarantined") === true,
+            ) === true,
+      );
+
+      const conflict = yield* service
+        .start(request({ name: "blocked-writer", writeIntent: "writer" }))
+        .pipe(Effect.flip);
+      expect(conflict).toMatchObject({
+        _tag: "SubagentWriterConflictError",
+        activeId: run.id,
+        message: expect.stringContaining("cleanup could not be confirmed"),
+      });
+      expect(fake.controls).toHaveLength(1);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("drains buffered lifecycle output before processing child exit", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
@@ -1238,7 +2367,11 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => updates.length > 0);
       fake.controls[0]?.offer({ type: "agent_settled" });
       const observations = yield* Fiber.join(waiting);
-      expect(observations[0]?.completionReceipt).toEqual({ id: run.id, generation: 1 });
+      expect(observations[0]?.completionReceipt).toEqual({
+        id: run.id,
+        generation: 1,
+        claimToken: expect.any(String),
+      });
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => notifications.length === 1);
     }).pipe(Effect.scoped, Effect.provide(layer));
@@ -1323,6 +2456,70 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect(
+    "settles writer preparation when interruption is already queued at the start boundary",
+    () => {
+      const fake = fakeChildLayer();
+      const projections: SubagentProjection[] = [];
+      let interruptAtBoundary: () => void = () => undefined;
+      const layer = serviceLayer({
+        publish: (projection) => {
+          projections.push(projection);
+          if (projection.runs[0]?.state === "starting") interruptAtBoundary();
+        },
+      }).pipe(Layer.provide(fake.layer));
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const starting = yield* service
+          .start(request({ name: "boundary-interrupted-writer", writeIntent: "writer" }))
+          .pipe(Effect.forkScoped({ startImmediately: false }));
+        interruptAtBoundary = () => starting.interruptUnsafe();
+        const interrupted = yield* Fiber.await(starting);
+        expect(Exit.isFailure(interrupted)).toBe(true);
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopped");
+        expect(fake.controls).toHaveLength(0);
+
+        const replacement = yield* service.start(
+          request({ name: "after-boundary-interrupt", writeIntent: "writer" }),
+        );
+        expect(replacement.state).toBe("running");
+        expect(fake.controls).toHaveLength(1);
+        yield* service.stop(replacement.id);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("settles in-flight writer preparation when session shutdown starts at startup", () =>
+    Effect.gen(function* () {
+      const acquireGate = yield* Deferred.make<void>();
+      const acquireStarted = yield* Deferred.make<void>();
+      const fake = fakeChildLayer();
+      let releases = 0;
+      const writerLeases = fakeWriterLeaseLayer({
+        acquireGate,
+        onAcquireStarted: () => Deferred.doneUnsafe(acquireStarted, Effect.void),
+        onRelease: () => {
+          releases += 1;
+        },
+      });
+      const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
+        Layer.provide(fake.layer),
+      );
+
+      yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        yield* service
+          .startSessionOwned(request({ name: "shutdown-start-boundary", writeIntent: "writer" }))
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Deferred.await(acquireStarted);
+        scheduleImmediate(() => Deferred.doneUnsafe(acquireGate, Effect.void));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+
+      expect(fake.controls).toHaveLength(0);
+      expect(releases).toBe(1);
+    }),
+  );
+
   it.effect("coalesces unclaimed fleet completions into one notification", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
@@ -1353,7 +2550,7 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.effect("retains 51 unacknowledged completion reports after failed delivery", () => {
+  it.effect("bounds failed-delivery history at 50 and recovers admission after consumption", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
     let deliveryAttempts = 0;
@@ -1368,7 +2565,7 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       let firstId = "";
-      for (let index = 0; index < 51; index += 1) {
+      for (let index = 0; index < 50; index += 1) {
         const run = yield* service.start(request({ name: `retained-${index + 1}` }));
         if (index === 0) firstId = run.id;
         fake.controls[index]?.offer({
@@ -1388,9 +2585,22 @@ describe("SubagentService", () => {
       }
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => deliveryAttempts === 1);
+      const capacity = yield* service
+        .start(request({ name: "capacity-rejected" }))
+        .pipe(Effect.flip);
+      expect(capacity).toMatchObject({
+        _tag: "SubagentHistoryCapacityError",
+        code: "history_outbox_capacity",
+        limit: 50,
+      });
+      expect(yield* service.list).toHaveLength(50);
+
+      expect((yield* service.status(firstId)).finalText).toBe("Report 1");
+      const recovered = yield* service.start(request({ name: "capacity-recovered" }));
+      expect(recovered.state).toBe("running");
       const retained = yield* service.list;
-      expect(retained).toHaveLength(51);
-      expect(retained.find((run) => run.id === firstId)?.finalText).toBe("Report 1");
+      expect(retained).toHaveLength(50);
+      expect(retained.some((run) => run.id === firstId)).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -1755,7 +2965,409 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.effect("rejects a second shared-cwd writer until the first writer stops", () => {
+  it.effect("keys the fast in-memory writer guard by canonical cwd aliases", () => {
+    const fake = fakeChildLayer();
+    let acquisitions = 0;
+    const writerLeases = fakeWriterLeaseLayer({
+      canonicalize: (cwd) => (cwd === "/project-alias" ? "/project" : cwd),
+      onAcquire: () => {
+        acquisitions += 1;
+      },
+    });
+    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
+      Layer.provide(fake.layer),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const first = yield* service.start(
+        request({ name: "canonical-writer", writeIntent: "writer", cwd: "/project" }),
+      );
+      const aliasConflict = yield* service
+        .start(request({ name: "alias-writer", writeIntent: "writer", cwd: "/project-alias" }))
+        .pipe(Effect.flip);
+      expect(aliasConflict).toMatchObject({
+        _tag: "SubagentWriterConflictError",
+        activeId: first.id,
+      });
+      expect(acquisitions).toBe(1);
+
+      const other = yield* service.start(
+        request({ name: "other-cwd-writer", writeIntent: "writer", cwd: "/other-project" }),
+      );
+      expect(other.state).toBe("running");
+      expect(acquisitions).toBe(2);
+      yield* service.stop(first.id);
+      yield* service.stop(other.id);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect(
+    "keys the fast writer guard by filesystem identity even when canonical paths differ",
+    () => {
+      const fake = fakeChildLayer();
+      let acquisitions = 0;
+      const writerLeases = fakeWriterLeaseLayer({
+        filesystemIdentity: (cwd) =>
+          cwd === "/project-before-rename" || cwd === "/project-after-rename"
+            ? "dev:1;ino:2"
+            : `dev:1;ino:${cwd}`,
+        onAcquire: () => {
+          acquisitions += 1;
+        },
+      });
+      const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
+        Layer.provide(fake.layer),
+      );
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const first = yield* service.start(
+          request({
+            name: "identity-writer",
+            writeIntent: "writer",
+            cwd: "/project-before-rename",
+          }),
+        );
+        const conflict = yield* service
+          .start(
+            request({
+              name: "renamed-identity-writer",
+              writeIntent: "writer",
+              cwd: "/project-after-rename",
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(conflict).toMatchObject({
+          _tag: "SubagentWriterConflictError",
+          activeId: first.id,
+        });
+        expect(acquisitions).toBe(1);
+        yield* service.stop(first.id);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("rejects Windows writers before canonicalization, lease acquisition, or spawn", () => {
+    const fake = fakeChildLayer();
+    let canonicalizations = 0;
+    let acquisitions = 0;
+    const writerLeases = fakeWriterLeaseLayer({
+      platform: "win32",
+      onCanonicalize: () => {
+        canonicalizations += 1;
+      },
+      onAcquire: () => {
+        acquisitions += 1;
+      },
+    });
+    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
+      Layer.provide(fake.layer),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failure = yield* service
+        .start(request({ name: "windows-writer", writeIntent: "writer" }))
+        .pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "UnsupportedSafeWriterOwnershipError",
+        code: "unsupported_safe_writer_ownership",
+        platform: "win32",
+      });
+      expect(canonicalizations).toBe(0);
+      expect(acquisitions).toBe(0);
+      expect(fake.controls).toHaveLength(0);
+      expect(yield* service.list).toEqual([]);
+
+      const reader = yield* service.start(
+        request({ name: "windows-reader", writeIntent: "read-only" }),
+      );
+      expect(reader.state).toBe("running");
+      expect(fake.controls).toHaveLength(1);
+      yield* service.stop(reader.id);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("does not canonicalize or acquire a lease for read-only runs", () => {
+    const fake = fakeChildLayer();
+    let canonicalizations = 0;
+    let acquisitions = 0;
+    const writerLeases = fakeWriterLeaseLayer({
+      onCanonicalize: () => {
+        canonicalizations += 1;
+      },
+      onAcquire: () => {
+        acquisitions += 1;
+      },
+    });
+    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
+      Layer.provide(fake.layer),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const reader = yield* service.start(request({ name: "reader", writeIntent: "read-only" }));
+      expect(reader.state).toBe("running");
+      expect(canonicalizations).toBe(0);
+      expect(acquisitions).toBe(0);
+      yield* service.stop(reader.id);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("fails typed writer canonicalization before reservation or backend spawn", () => {
+    const fake = fakeChildLayer();
+    const writerLeases = fakeWriterLeaseLayer({ failCanonicalization: true });
+    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
+      Layer.provide(fake.layer),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failure = yield* service
+        .start(request({ name: "bad-cwd-writer", writeIntent: "writer" }))
+        .pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "writer_cwd_canonicalization_failed",
+      });
+      expect(fake.controls).toHaveLength(0);
+      expect(yield* service.list).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect(
+    "settles a failed cross-process reservation without spawning or retaining the slot",
+    () => {
+      const fake = fakeChildLayer();
+      const writerLeases = fakeWriterLeaseLayer({ failAcquire: true });
+      const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
+        Layer.provide(fake.layer),
+      );
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const conflict = yield* service
+          .start(request({ name: "cross-process-conflict", writeIntent: "writer" }))
+          .pipe(Effect.flip);
+        expect(conflict).toMatchObject({
+          _tag: "SubagentWriterConflictError",
+          activeId: "other-run",
+        });
+        expect(fake.controls).toHaveLength(0);
+        expect(yield* service.list).toEqual([
+          expect.objectContaining({ name: "cross-process-conflict", state: "failed" }),
+        ]);
+
+        const admitted = yield* service.start(
+          request({ name: "after-cross-process-conflict", writeIntent: "writer" }),
+        );
+        expect(admitted.state).toBe("running");
+        expect(fake.controls).toHaveLength(1);
+        yield* service.stop(admitted.id);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("releases a stopped startup lease without ever spawning the backend", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const projections: SubagentProjection[] = [];
+      const fake = fakeChildLayer();
+      let releases = 0;
+      const writerLeases = fakeWriterLeaseLayer({
+        acquireGate: gate,
+        onRelease: () => {
+          releases += 1;
+        },
+      });
+      const layer = serviceLayer(
+        { publish: (projection) => projections.push(projection) },
+        profileLayerFor({}),
+        writerLeases,
+      ).pipe(Layer.provide(fake.layer));
+      yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const starting = yield* service
+          .start(request({ name: "stopped-during-lease", writeIntent: "writer" }))
+          .pipe(Effect.exit, Effect.forkScoped);
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "starting");
+        const id = projections.at(-1)?.runs[0]?.id;
+        expect(id).toBeDefined();
+        const stopping = yield* service.stop(id!).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(gate, undefined);
+        yield* TestClock.adjust("25 millis");
+        expect((yield* Fiber.join(stopping)).state).toBe("stopped");
+        expect(Exit.isFailure(yield* Fiber.join(starting))).toBe(true);
+        expect(fake.controls).toHaveLength(0);
+        expect(releases).toBe(1);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("acquires before spawn and releases only after backend cleanup confirms", () => {
+    const order: string[] = [];
+    const fake = fakeChildLayer(
+      Effect.sync(() => void order.push("spawn")),
+      {
+        onRelease: () => void order.push("backend"),
+      },
+    );
+    const writerLeases = fakeWriterLeaseLayer({
+      onAcquire: () => void order.push("lease-acquire"),
+      onMark: () => void order.push("lease-spawn-started"),
+      onRelease: () => void order.push("lease-release"),
+    });
+    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
+      Layer.provide(fake.layer),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const writer = yield* service.start(
+        request({ name: "ordered-writer", writeIntent: "writer" }),
+      );
+      expect(order).toEqual(["lease-acquire", "lease-spawn-started", "spawn"]);
+      yield* service.stop(writer.id);
+      expect(order).toEqual([
+        "lease-acquire",
+        "lease-spawn-started",
+        "spawn",
+        "backend",
+        "lease-release",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("does not spawn when the durable spawn-started mark fails", () => {
+    const order: string[] = [];
+    const fake = fakeChildLayer(Effect.sync(() => void order.push("spawn")));
+    const writerLeases = fakeWriterLeaseLayer({
+      failMark: true,
+      onAcquire: () => void order.push("lease-acquire"),
+      onMark: () => void order.push("lease-mark-attempt"),
+      onRelease: () => void order.push("lease-release"),
+    });
+    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
+      Layer.provide(fake.layer),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failure = yield* service
+        .start(request({ name: "mark-failure-writer", writeIntent: "writer" }))
+        .pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "SubagentProcessError",
+        code: "writer_lease_mark_failed",
+      });
+      expect(order).toEqual(["lease-acquire", "lease-mark-attempt", "lease-release"]);
+      expect(fake.controls).toHaveLength(0);
+      expect(yield* service.list).toEqual([
+        expect.objectContaining({ name: "mark-failure-writer", state: "failed" }),
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("marks a fresh lease before every backend respawn", () => {
+    const order: string[] = [];
+    const fake = fakeChildLayer(
+      Effect.sync(() => void order.push("spawn")),
+      {
+        onRelease: () => void order.push("backend-release"),
+      },
+    );
+    const writerLeases = fakeWriterLeaseLayer({
+      onAcquire: () => void order.push("lease-acquire"),
+      onMark: () => void order.push("lease-spawn-started"),
+      onRelease: () => void order.push("lease-release"),
+    });
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer(
+      { publish: (projection) => projections.push(projection) },
+      profileLayerFor({}),
+      writerLeases,
+    ).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const writer = yield* service.start(
+        request({ name: "respawn-mark-writer", writeIntent: "writer" }),
+      );
+      expect(order.slice(0, 3)).toEqual(["lease-acquire", "lease-spawn-started", "spawn"]);
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() =>
+        projections.some((projection) => projection.runs[0]?.state === "completed"),
+      );
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+      order.length = 0;
+
+      const resumed = yield* service.resume(writer.id, "Continue after respawn.");
+      expect(resumed.state).toBe("running");
+      expect(order.slice(0, 3)).toEqual(["lease-acquire", "lease-spawn-started", "spawn"]);
+      yield* service.stop(writer.id);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("quarantines the session and retains ownership when lease release fails", () => {
+    const fake = fakeChildLayer();
+    let releases = 0;
+    const writerLeases = fakeWriterLeaseLayer({
+      failRelease: true,
+      onRelease: () => {
+        releases += 1;
+      },
+    });
+    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
+      Layer.provide(fake.layer),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const writer = yield* service.start(
+        request({ name: "release-failure-writer", writeIntent: "writer" }),
+      );
+      const stopped = yield* service.stop(writer.id);
+      expect(fake.controls[0]?.released()).toBe(1);
+      expect(releases).toBe(1);
+      expect(stopped).toMatchObject({
+        state: "stopped",
+        warning: expect.stringContaining("ownership remain quarantined"),
+      });
+      const conflict = yield* service
+        .start(request({ name: "blocked-after-release-failure", writeIntent: "writer" }))
+        .pipe(Effect.flip);
+      expect(conflict).toMatchObject({
+        _tag: "SubagentWriterConflictError",
+        activeId: writer.id,
+      });
+      expect(fake.controls).toHaveLength(1);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("closes every owned writer lease after backend cleanup on session shutdown", () => {
+    const order: string[] = [];
+    const fake = fakeChildLayer(Effect.void, {
+      onRelease: (index) => void order.push(`backend-${index}`),
+    });
+    const writerLeases = fakeWriterLeaseLayer({
+      onRelease: (lease) => void order.push(`lease-${lease.evidence.runId}`),
+    });
+    const layer = serviceLayer({}, profileLayerFor({}), writerLeases).pipe(
+      Layer.provide(fake.layer),
+    );
+    return Effect.gen(function* () {
+      const ids = yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const first = yield* service.start(
+          request({ name: "shutdown-one", writeIntent: "writer", cwd: "/project-one" }),
+        );
+        const second = yield* service.start(
+          request({ name: "shutdown-two", writeIntent: "writer", cwd: "/project-two" }),
+        );
+        return [first.id, second.id] as const;
+      }).pipe(Effect.scoped, Effect.provide(layer));
+      for (const [index, id] of ids.entries()) {
+        const backendIndex = order.indexOf(`backend-${index}`);
+        const leaseIndex = order.indexOf(`lease-${id}`);
+        expect(backendIndex).toBeGreaterThanOrEqual(0);
+        expect(leaseIndex).toBeGreaterThan(backendIndex);
+      }
+    });
+  });
+
+  it.effect("releases shared-cwd writer ownership after scope cleanup succeeds", () => {
     const fake = fakeChildLayer();
     const layer = serviceLayer().pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
@@ -1772,6 +3384,8 @@ describe("SubagentService", () => {
 
       const stopped = yield* service.stop(first.id);
       expect(stopped.state).toBe("stopped");
+      expect(stopped.warning).toBeUndefined();
+      expect(fake.controls[0]?.released()).toBe(1);
       const second = yield* service.start(
         request({ name: "writer-two", writeIntent: "writer", task: "Implement tests" }),
       );
@@ -1779,7 +3393,7 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.effect("releases writer ownership even when child scope cleanup defects", () => {
+  it.effect("quarantines writer ownership when child scope cleanup defects", () => {
     const fake = fakeChildLayer(Effect.void, { releaseDefect: true });
     const layer = serviceLayer().pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
@@ -1787,14 +3401,22 @@ describe("SubagentService", () => {
       const first = yield* service.start(
         request({ name: "defective-writer", writeIntent: "writer" }),
       );
-      expect((yield* service.stop(first.id)).state).toBe("stopped");
+      const stopped = yield* service.stop(first.id);
+      expect(stopped).toMatchObject({
+        state: "stopped",
+        warning: expect.stringContaining("ownership remain quarantined"),
+      });
       expect(fake.controls[0]?.released()).toBe(1);
 
-      const second = yield* service.start(
-        request({ name: "replacement-writer", writeIntent: "writer" }),
-      );
-      expect(second.state).toBe("running");
-      expect((yield* service.stop(second.id)).state).toBe("stopped");
+      const conflict = yield* service
+        .start(request({ name: "replacement-writer", writeIntent: "writer" }))
+        .pipe(Effect.flip);
+      expect(conflict).toMatchObject({
+        _tag: "SubagentWriterConflictError",
+        activeId: first.id,
+        message: expect.stringContaining("cleanup could not be confirmed"),
+      });
+      expect(fake.controls).toHaveLength(1);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

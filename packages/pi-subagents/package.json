@@ -1,7 +1,7 @@
 {
   "name": "pi-subagents",
   "version": "0.2.0",
-  "description": "Session-scoped foreground and background subagents for pi.",
+  "description": "Session-scoped profile-routed background subagents for pi.",
   "keywords": [
     "agents",
     "background-agents",
@@ -46,6 +46,8 @@
     "format:check": "oxfmt --check .",
     "pretest": "pnpm --filter pi-cosmic-core build && pnpm --filter pi-code-previews build",
     "test": "vitest run",
+    "smoke:herdr": "vitest run tests/herdr-real-smoke.test.ts",
+    "smoke:inference-design": "vitest run tests/six-adapter-inference-smoke.test.ts",
     "prepublishOnly": "pnpm validate",
     "pack:dry": "pnpm pack --dry-run"
   },

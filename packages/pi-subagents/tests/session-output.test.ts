@@ -31,6 +31,7 @@ const runView = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => (
   execution: "background",
   context: "fresh",
   writeIntent: "read-only",
+  reportGeneration: 0,
   backend: "pi",
   capabilities: [
     "steer",
@@ -188,10 +189,12 @@ describe("structured subagent session output", () => {
     expect(rendered).toContain("src/one.ts · src/two.ts");
     expect(rendered).toContain("300ms");
     expect(rendered).toContain("Technical details");
-    expect(rendered).toContain("agent-1 · profile reviewer · pi · background · pid 42");
+    expect(rendered).toContain(
+      "agent-1 · profile reviewer · local/pi · closeOnReport=true · background · pid 42",
+    );
     expect(rendered).toContain("selection  profile-candidate candidate 2");
     expect(rendered).toContain("skipped  pi/old-model [model_discouraged]");
-    expect(rendered).toContain("policy  Explicit warning.");
+    expect(rendered).toContain("route warning  Explicit warning.");
     expect(rendered).toContain("session  /tmp/session.jsonl");
   });
 

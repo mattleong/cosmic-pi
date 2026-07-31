@@ -11,6 +11,8 @@ export const runStateGlyph = (state: SubagentRunState): string => {
       return "?";
     case "paused":
       return "Ⅱ";
+    case "reported":
+      return "✓";
     case "completed":
       return "✓";
     case "failed":
@@ -38,6 +40,8 @@ export const runStateLabel = (state: SubagentRunState): string => {
       return "waiting for you";
     case "paused":
       return "paused";
+    case "reported":
+      return "reported · retained";
     case "completed":
       return "finished";
     case "failed":
@@ -56,6 +60,7 @@ export const runStateColor = (
     case "starting":
       return "accent";
     case "running":
+    case "reported":
     case "completed":
       return "success";
     case "waiting_for_parent":

@@ -65,18 +65,31 @@ export const PROFILE_DEFINITIONS: Readonly<Record<ProfileId, ProfileDefinition>>
   },
 };
 
-/** Built-ins are deliberately model-neutral and inherit the active parent model. */
-const neutralRoute = (): ProfileRoute => ({
-  candidates: [{ model: "parent", effort: "default" }],
-});
+/** Built-ins preserve the v3 behavior through explicit local Pi parent candidates. */
+const builtinRoute = (id: ProfileId): ProfileRoute => {
+  const definition = PROFILE_DEFINITIONS[id];
+  return {
+    candidates: [
+      {
+        host: "local",
+        runtime: "pi",
+        model: "parent",
+        effort: "default",
+        context: definition.defaultContext,
+        writeIntent: definition.defaultWriteIntent,
+        closeOnReport: true,
+      },
+    ],
+  };
+};
 export const BUILTIN_PROFILE_ROUTES: Readonly<Record<ProfileId, ProfileRoute>> = {
-  scout: neutralRoute(),
-  researcher: neutralRoute(),
-  planner: neutralRoute(),
-  worker: neutralRoute(),
-  reviewer: neutralRoute(),
-  oracle: neutralRoute(),
-  delegate: neutralRoute(),
+  scout: builtinRoute("scout"),
+  researcher: builtinRoute("researcher"),
+  planner: builtinRoute("planner"),
+  worker: builtinRoute("worker"),
+  reviewer: builtinRoute("reviewer"),
+  oracle: builtinRoute("oracle"),
+  delegate: builtinRoute("delegate"),
 };
 
 export const profileDefinition = (id: ProfileId): ProfileDefinition => PROFILE_DEFINITIONS[id];

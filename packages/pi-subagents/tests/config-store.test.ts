@@ -39,33 +39,48 @@ const fixture = async () => {
   };
 };
 
-describe("SubagentConfigStore v3", () => {
-  it("loads v3 global/project routes with project inheritance and additive policy", async () => {
+describe("SubagentConfigStore v4", () => {
+  it("loads v4 global/project routes with project inheritance", async () => {
     const paths = await fixture();
     await writeFile(
       paths.globalPath,
       JSON.stringify({
-        version: 3,
-        denied: [{ backend: "pi", model: "openai/no" }],
-        profiles: { worker: { model: "pi/openai/worker", effort: "high" } },
+        version: 4,
+        profiles: {
+          worker: {
+            host: "local",
+            runtime: "pi",
+            model: "openai/worker",
+            effort: "high",
+            context: "fresh",
+            writeIntent: "writer",
+            closeOnReport: true,
+          },
+        },
       }),
     );
-    await writeFile(
-      paths.projectPath,
-      JSON.stringify({ version: 3, discouraged: [{ backend: "pi", model: "openai/review" }] }),
-    );
+    await writeFile(paths.projectPath, JSON.stringify({ version: 4, defaultProfile: "worker" }));
     const config = await withStore((store) => store.load(paths.cwd, paths.agentDirectory, true));
     expect(config.profiles.worker).toEqual({
-      candidates: [{ model: "pi/openai/worker", effort: "high" }],
+      candidates: [
+        {
+          host: "local",
+          runtime: "pi",
+          model: "openai/worker",
+          effort: "high",
+          context: "fresh",
+          writeIntent: "writer",
+          closeOnReport: true,
+        },
+      ],
     });
     expect(config.profileSources.worker).toBe("global");
-    expect(config.denied).toHaveLength(1);
-    expect(config.discouraged).toHaveLength(1);
+    expect(config.defaultProfile).toBe("worker");
   });
 
-  it("accepts only v3 documents and never reads an untrusted project", async () => {
+  it("accepts only v4 documents and never reads an untrusted project", async () => {
     const paths = await fixture();
-    for (const value of [{ version: 1 }, { version: 2 }, {}, { version: "3" }]) {
+    for (const value of [{ version: 1 }, { version: 2 }, {}, { version: "4" }]) {
       await writeFile(paths.globalPath, JSON.stringify(value));
       await expect(
         withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
@@ -74,7 +89,17 @@ describe("SubagentConfigStore v3", () => {
         path: paths.globalPath,
       });
     }
-    await writeFile(paths.globalPath, JSON.stringify({ version: 3 }));
+    await writeFile(
+      paths.globalPath,
+      JSON.stringify({ version: 3, denied: [{ backend: "pi", model: "legacy" }] }),
+    );
+    await expect(
+      withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
+    ).rejects.toMatchObject({
+      operation: "activate",
+      message: expect.stringContaining("remove denied/discouraged"),
+    });
+    await writeFile(paths.globalPath, JSON.stringify({ version: 4 }));
     await writeFile(paths.projectPath, "{ not json");
     const config = await withStore((store) => store.load(paths.cwd, paths.agentDirectory, false));
     expect(config.projectConfigExists).toBe(false);
@@ -94,15 +119,38 @@ describe("SubagentConfigStore v3", () => {
   it("atomically patches one profile while preserving unrelated fields and routes", async () => {
     const paths = await fixture();
     const initial = {
-      version: 3,
+      version: 4,
       defaultProfile: "planner",
-      denied: [{ backend: "pi", model: "openai/no" }],
       customFutureField: { retained: true },
       profiles: {
-        scout: { model: "parent", effort: "default" },
+        scout: {
+          host: "local",
+          runtime: "pi",
+          model: "parent",
+          effort: "default",
+          context: "fresh",
+          writeIntent: "read-only",
+          closeOnReport: true,
+        },
         reviewer: [
-          { model: "pi/openai/first", effort: "medium" },
-          { model: "pi/openai/second", effort: "high" },
+          {
+            host: "local",
+            runtime: "pi",
+            model: "openai/first",
+            effort: "medium",
+            context: "fresh",
+            writeIntent: "read-only",
+            closeOnReport: true,
+          },
+          {
+            host: "local",
+            runtime: "pi",
+            model: "openai/second",
+            effort: "high",
+            context: "fresh",
+            writeIntent: "read-only",
+            closeOnReport: true,
+          },
         ],
       },
     };
@@ -114,7 +162,15 @@ describe("SubagentConfigStore v3", () => {
       store.patchProfile(paths.cwd, paths.agentDirectory, {
         scope: "global",
         profile: "scout",
-        route: { model: "pi/openai/new", effort: "low" },
+        route: {
+          host: "local",
+          runtime: "pi",
+          model: "openai/new",
+          effort: "low",
+          context: "fresh",
+          writeIntent: "read-only",
+          closeOnReport: true,
+        },
         expectedExists: true,
         expectedDocument: inspection.globalDocument,
         projectTrusted: true,
@@ -122,18 +178,33 @@ describe("SubagentConfigStore v3", () => {
     );
     const saved = JSON.parse(await readFile(paths.globalPath, "utf8"));
     expect(saved.defaultProfile).toBe("planner");
-    expect(saved.denied).toEqual(initial.denied);
     expect(saved.customFutureField).toEqual({ retained: true });
     expect(saved.profiles.reviewer).toEqual(initial.profiles.reviewer);
-    expect(saved.profiles.scout).toEqual({ model: "pi/openai/new", effort: "low" });
+    expect(saved.profiles.scout).toEqual({
+      host: "local",
+      runtime: "pi",
+      model: "openai/new",
+      effort: "low",
+      context: "fresh",
+      writeIntent: "read-only",
+      closeOnReport: true,
+    });
   });
 
   it("removes inherited routes and rejects untrusted project writes", async () => {
     const paths = await fixture();
     const project = {
-      version: 3,
+      version: 4,
       profiles: {
-        worker: { model: "parent", effort: "default" },
+        worker: {
+          host: "local",
+          runtime: "pi",
+          model: "parent",
+          effort: "default",
+          context: "fresh",
+          writeIntent: "read-only",
+          closeOnReport: true,
+        },
         reviewer: "disabled",
       },
     };
@@ -190,7 +261,7 @@ describe("SubagentConfigStore v3", () => {
 
   it("does not rewrite an existing document when the patch changes nothing", async () => {
     const paths = await fixture();
-    const raw = JSON.stringify({ version: 3, defaultProfile: "planner" });
+    const raw = JSON.stringify({ version: 4, defaultProfile: "planner" });
     await writeFile(paths.globalPath, raw);
     const inspection = await withStore((store) =>
       store.inspect(paths.cwd, paths.agentDirectory, true),
@@ -209,11 +280,11 @@ describe("SubagentConfigStore v3", () => {
 
   it("detects external edits instead of clobbering them", async () => {
     const paths = await fixture();
-    await writeFile(paths.globalPath, JSON.stringify({ version: 3, defaultProfile: "worker" }));
+    await writeFile(paths.globalPath, JSON.stringify({ version: 4, defaultProfile: "worker" }));
     const inspection = await withStore((store) =>
       store.inspect(paths.cwd, paths.agentDirectory, true),
     );
-    await writeFile(paths.globalPath, JSON.stringify({ version: 3, defaultProfile: "reviewer" }));
+    await writeFile(paths.globalPath, JSON.stringify({ version: 4, defaultProfile: "reviewer" }));
     await expect(
       withStore((store) =>
         store.patchProfile(paths.cwd, paths.agentDirectory, {

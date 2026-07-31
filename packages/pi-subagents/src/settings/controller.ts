@@ -4,16 +4,14 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { isProjectTrusted } from "pi-cosmic-core";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { startHostUiTicker, type SubagentProjectionBridge } from "../boundary/host-ui.ts";
-import { modelPolicyFor } from "../config/options.ts";
+import { MAX_PROFILE_CANDIDATES } from "../config/schema.ts";
 import type {
   SubagentConfigInspection,
   SubagentConfigScope,
   SubagentProfilePatch,
 } from "../config/store.ts";
-import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
 import {
   PROFILE_IDS,
-  type DeclaredProfileRoute,
   type ProfileId,
   type ProfileRoute,
   type ProfileRouteSource,
@@ -21,11 +19,22 @@ import {
 import { isActiveRunState } from "../run/model.ts";
 import { SubagentFleetComponent } from "../ui/fleet.ts";
 import {
-  createProfileModelChoices,
-  effortPickerOptions,
-  selectProfileModel,
-  type ProfileModelChoice,
-} from "./ui/model-picker.ts";
+  addRouteCandidate,
+  candidateMenuSummary,
+  completeRouteSummary,
+  declaredRouteForDraft,
+  defaultRouteCandidate,
+  disableRouteDraft,
+  duplicateRouteCandidate,
+  inheritProjectDraft,
+  loadProfileRouteDraft,
+  moveRouteCandidate,
+  removeRouteCandidate,
+  replaceRouteCandidate,
+  resetGlobalDraft,
+  type ProfileRouteDraft,
+} from "./profile-route-editor.ts";
+import { editProfileCandidate } from "./ui/candidate-editor.ts";
 
 export interface FleetManagerActions {
   readonly stop: (id: string) => Promise<void>;
@@ -126,43 +135,6 @@ async function openFleetManager(
   );
 }
 
-const declaredAt = (
-  inspection: SubagentConfigInspection,
-  scope: SubagentConfigScope,
-  profile: ProfileId,
-): DeclaredProfileRoute | undefined =>
-  scope === "global"
-    ? inspection.global.file.profiles?.[profile]
-    : inspection.project?.file.profiles?.[profile];
-
-const scopeRouteInvalid = (
-  inspection: SubagentConfigInspection,
-  scope: SubagentConfigScope,
-  profile: ProfileId,
-): boolean =>
-  (scope === "global" ? inspection.global : inspection.project)?.invalidProfileRoutes.includes(
-    profile,
-  ) ?? false;
-
-/**
- * The selection marked "(current)" reflects only the scope being edited: a malformed
- * declared route fails closed and gets no current marker, and a project scope without
- * a local declaration is "inherit" even when the inherited route is multi-candidate.
- */
-const currentSelectorFor = (
-  inspection: SubagentConfigInspection,
-  scope: SubagentConfigScope,
-  profile: ProfileId,
-): string | undefined => {
-  if (scopeRouteInvalid(inspection, scope, profile)) return undefined;
-  const declared = declaredAt(inspection, scope, profile);
-  if (declared === undefined)
-    return scope === "project" ? "inherit" : BUILTIN_PROFILE_ROUTES[profile].candidates[0]?.model;
-  if (declared === "disabled") return "disabled";
-  const candidates = Array.isArray(declared) ? declared : [declared];
-  return candidates.length === 1 ? candidates[0]?.model : undefined;
-};
-
 const globalProfileRoute = (
   inspection: SubagentConfigInspection,
   profile: ProfileId,
@@ -170,10 +142,17 @@ const globalProfileRoute = (
   if (inspection.global.invalidProfileRoutes.includes(profile))
     return { route: { candidates: [] }, source: "global-invalid" };
   const declared = inspection.global.file.profiles?.[profile];
-  if (declared === undefined) return { route: BUILTIN_PROFILE_ROUTES[profile], source: "builtin" };
+  if (declared === undefined)
+    return {
+      route: loadProfileRouteDraft(inspection, "global", profile),
+      source: "builtin",
+    };
   return {
     route: {
-      candidates: declared === "disabled" ? [] : Array.isArray(declared) ? declared : [declared],
+      candidates:
+        declared === "disabled"
+          ? []
+          : loadProfileRouteDraft(inspection, "global", profile).candidates,
     },
     source: "global",
   };
@@ -192,24 +171,10 @@ const profileSummary = (
           source: inspection.config.profileSources[profile],
         };
   const source = routeSource.replace("-invalid", " invalid");
+  if (routeSource.endsWith("-invalid")) return `${profile} · ${source} · Fail-closed · replaceable`;
   if (route.candidates.length === 0) return `${profile} · ${source} · Disabled`;
-  if (route.candidates.length > 1)
-    return `${profile} · ${source} · Ordered route · ${route.candidates.length} candidates · JSON-managed`;
-  const candidate = route.candidates[0];
-  return `${profile} · ${source} · ${candidate?.model ?? "Disabled"} · ${candidate?.effort ?? ""}`;
-};
-
-const selectedEfforts = (
-  choices: ReturnType<typeof createProfileModelChoices>,
-  choice: ProfileModelChoice,
-) => {
-  if (choice.kind === "disabled" || choice.kind === "inherit") return [];
-  return (
-    choices.find((entry) => {
-      if (choice.kind === "parent") return entry.choice.kind === "parent";
-      return entry.choice.kind === "model" && entry.choice.selector === choice.selector;
-    })?.supportedEfforts ?? []
-  );
+  const first = route.candidates[0];
+  return `${profile} · ${source} · ${route.candidates.length} candidate${route.candidates.length === 1 ? "" : "s"} · ${first?.host}/${first?.runtime}/${boundedMiddle(first?.model ?? "", 56)} · ${first?.effort} · ${first?.context} · ${first?.writeIntent}`;
 };
 
 const chooseScope = async (
@@ -217,8 +182,8 @@ const chooseScope = async (
   inspection: SubagentConfigInspection,
   projectTrusted: boolean,
 ): Promise<SubagentConfigScope | undefined> => {
-  const global = `Global · ${inspection.config.globalConfigPath}`;
-  const project = `Project · ${inspection.config.projectConfigPath}`;
+  const global = `Global · ${boundedMiddle(inspection.config.globalConfigPath)}`;
+  const project = `Project · ${boundedMiddle(inspection.config.projectConfigPath)}`;
   const options = projectTrusted ? [global, project] : [global];
   const selected = await ctx.ui.select(
     projectTrusted
@@ -249,6 +214,66 @@ async function reloadAfterSave(
 
 type EditProfileResult = "back" | "saved";
 
+const ADD_CANDIDATE = "Add candidate";
+const DISABLE_ROUTE = "Disable route";
+const SAVE_ROUTE = "Save route";
+const CANCEL_ROUTE = "Cancel · discard without writing";
+const EDIT_CANDIDATE = "Edit candidate";
+const MOVE_UP = "Move up";
+const MOVE_DOWN = "Move down";
+const DUPLICATE = "Duplicate candidate";
+const REMOVE_CANDIDATE = "Remove candidate";
+const BACK_TO_ROUTE = "Back to route";
+
+const boundedMiddle = (value: string, maximum = 88): string => {
+  if (value.length <= maximum) return value;
+  const left = Math.max(1, Math.floor((maximum - 1) / 2));
+  return `${value.slice(0, left)}…${value.slice(value.length - (maximum - left - 1))}`;
+};
+
+const draftStatus = (draft: ProfileRouteDraft): string => {
+  if (draft.kind === "invalid") return "Invalid · fail-closed until replaced";
+  if (draft.kind === "disabled") return "Disabled";
+  if (draft.kind === "reset") return `Built-in route · ${draft.candidates.length} candidate`;
+  if (draft.kind === "inherit")
+    return `Inherit global · ${draft.candidates.length} candidate${draft.candidates.length === 1 ? "" : "s"}`;
+  return `Explicit ordered route · ${draft.candidates.length} candidate${draft.candidates.length === 1 ? "" : "s"}`;
+};
+
+async function editCandidateActions(
+  ctx: ExtensionCommandContext,
+  profile: ProfileId,
+  draft: ProfileRouteDraft,
+  index: number,
+): Promise<ProfileRouteDraft> {
+  const candidate = draft.candidates[index];
+  if (!candidate) return draft;
+  const options = [
+    EDIT_CANDIDATE,
+    ...(index > 0 ? [MOVE_UP] : []),
+    ...(index < draft.candidates.length - 1 ? [MOVE_DOWN] : []),
+    ...(draft.candidates.length < MAX_PROFILE_CANDIDATES ? [DUPLICATE] : []),
+    REMOVE_CANDIDATE,
+    BACK_TO_ROUTE,
+  ];
+  const selected = await ctx.ui.select(
+    `${profile} · ${candidateMenuSummary(candidate, index)} · esc back to route`,
+    options,
+  );
+  if (!selected || selected === BACK_TO_ROUTE) return draft;
+  if (selected === EDIT_CANDIDATE) {
+    const edited = await editProfileCandidate(ctx, { profile, candidateIndex: index, candidate });
+    return edited ? replaceRouteCandidate(draft, index, edited) : draft;
+  }
+  if (selected === MOVE_UP) return moveRouteCandidate(draft, index, "up");
+  if (selected === MOVE_DOWN) return moveRouteCandidate(draft, index, "down");
+  if (selected === DUPLICATE) return duplicateRouteCandidate(draft, index) ?? draft;
+  const removed = removeRouteCandidate(draft, index);
+  if (removed.kind === "disabled")
+    ctx.ui.notify("The last candidate was removed; the staged route is now Disabled.", "info");
+  return removed;
+}
+
 async function editProfile(
   ctx: ExtensionCommandContext,
   bridge: SubagentProjectionBridge,
@@ -257,78 +282,78 @@ async function editProfile(
   scope: SubagentConfigScope,
   profile: ProfileId,
 ): Promise<EditProfileResult> {
-  const declared = declaredAt(inspection, scope, profile);
   const scopePath =
     scope === "global" ? inspection.config.globalConfigPath : inspection.config.projectConfigPath;
-  if (Array.isArray(declared) && declared.length > 1) {
+  let draft = loadProfileRouteDraft(inspection, scope, profile);
+  if (draft.kind === "invalid")
     ctx.ui.notify(
-      `${profile}: Ordered route · ${declared.length} candidates declared in ${scopePath}. Multi-candidate routes are read-only in this UI; edit that file as JSON.`,
+      `${profile}: the declared route in ${scopePath} is invalid and fails closed. Add a valid candidate, disable it, or ${scope === "project" ? "inherit global" : "reset to built-in"}.`,
       "warning",
     );
-    return "back";
-  }
-  if (scopeRouteInvalid(inspection, scope, profile))
-    ctx.ui.notify(
-      `${profile}: the declared route in ${scopePath} is invalid and fails closed. Save a new value${scope === "project" ? " or Inherit global" : ""} to replace it.`,
-      "warning",
-    );
-  const current = currentSelectorFor(inspection, scope, profile);
-  const parentModel = ctx.model
-    ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
-    : undefined;
-  const choices = createProfileModelChoices({
-    models: ctx.modelRegistry.getAvailable(),
-    parentModel,
-    currentSelector: current,
-    projectScope: scope === "project",
-    policyFor: (backend, model) => modelPolicyFor(inspection.config, backend, model),
-  });
 
   while (true) {
-    const model = await selectProfileModel(ctx, choices, current, {
-      profile,
-      scope,
-      path: scopePath,
-    });
-    if (!model) return "back";
-    if (
-      (model.kind === "model" || model.kind === "parent") &&
-      model.policy === "discouraged" &&
-      !(await ctx.ui.confirm(
-        `Discouraged model for ${profile}`,
-        "This model is discouraged by Subagents policy. Save it as the deliberate profile route anyway?",
-      ))
-    )
+    const candidateLabels = draft.candidates.map(candidateMenuSummary);
+    const addLabel =
+      draft.candidates.length >= MAX_PROFILE_CANDIDATES
+        ? `${ADD_CANDIDATE} · maximum ${MAX_PROFILE_CANDIDATES} reached`
+        : `${ADD_CANDIDATE} · ${draft.candidates.length}/${MAX_PROFILE_CANDIDATES}`;
+    const scopeDefault =
+      scope === "global" ? "Reset global to built-in" : "Inherit global (remove project route)";
+    const options = [
+      ...candidateLabels,
+      addLabel,
+      DISABLE_ROUTE,
+      scopeDefault,
+      SAVE_ROUTE,
+      CANCEL_ROUTE,
+    ];
+    const selected = await ctx.ui.select(
+      `${profile} · ${draftStatus(draft)} · launch order shown · ${boundedMiddle(scopePath)} · esc cancel`,
+      options,
+    );
+    if (!selected || selected === CANCEL_ROUTE) return "back";
+    const candidateIndex = candidateLabels.indexOf(selected);
+    if (candidateIndex >= 0) {
+      draft = await editCandidateActions(ctx, profile, draft, candidateIndex);
       continue;
-
-    let route: DeclaredProfileRoute | undefined;
-    if (model.kind === "inherit") route = undefined;
-    else if (model.kind === "disabled") route = "disabled";
-    else {
-      const options = effortPickerOptions(selectedEfforts(choices, model));
-      const selected = await ctx.ui.select(
-        `Profile: ${profile} · Effort for ${model.kind === "parent" ? "Parent model" : model.selector} · esc back to models`,
-        options.map((option) => option.label),
-      );
-      const effort = options.find((option) => option.label === selected)?.effort;
-      if (!effort) continue;
-      route = { model: model.kind === "parent" ? "parent" : model.selector, effort };
-      if (scope === "global" && route.model === "parent" && route.effort === "default")
-        route = undefined;
     }
+    if (selected === addLabel) {
+      if (draft.candidates.length >= MAX_PROFILE_CANDIDATES) {
+        ctx.ui.notify(
+          `A profile route may contain at most ${MAX_PROFILE_CANDIDATES} candidates.`,
+          "warning",
+        );
+        continue;
+      }
+      const candidate = await editProfileCandidate(ctx, {
+        profile,
+        candidateIndex: draft.candidates.length,
+        candidate: defaultRouteCandidate(profile),
+      });
+      if (candidate) draft = addRouteCandidate(draft, candidate) ?? draft;
+      continue;
+    }
+    if (selected === DISABLE_ROUTE) {
+      draft = disableRouteDraft();
+      continue;
+    }
+    if (selected === scopeDefault) {
+      draft =
+        scope === "global" ? resetGlobalDraft(profile) : inheritProjectDraft(inspection, profile);
+      continue;
+    }
+    if (selected !== SAVE_ROUTE) continue;
 
-    const summary =
-      route === undefined
-        ? scope === "project"
-          ? "Inherit global"
-          : "Built-in parent/default"
-        : route === "disabled"
-          ? "Disabled"
-          : `${route.model} · ${route.effort}`;
+    const declaration = declaredRouteForDraft(draft);
+    if (!declaration.valid) {
+      ctx.ui.notify(declaration.error, "warning");
+      continue;
+    }
+    const summary = completeRouteSummary(draft, scope);
     if (
       !(await ctx.ui.confirm(
-        `Save ${profile}?`,
-        `${summary}\n\nScope: ${scope}\nPath: ${scopePath}`,
+        `Save ${profile} route?`,
+        `${summary}\n\nScope: ${scope}\nTarget: ${scopePath}`,
       ))
     )
       continue;
@@ -338,7 +363,7 @@ async function editProfile(
       await actions.patchProfile({
         scope,
         profile,
-        ...(route === undefined ? {} : { route }),
+        ...(declaration.route === undefined ? {} : { route: declaration.route }),
         expectedExists: expectedDocument !== undefined,
         ...(expectedDocument === undefined ? {} : { expectedDocument }),
         projectTrusted: isProjectTrusted(ctx),
@@ -388,7 +413,7 @@ async function openProfileSettings(
     while (true) {
       const labels = PROFILE_IDS.map((profile) => profileSummary(inspection, scope, profile));
       const selected = await ctx.ui.select(
-        `${scope === "global" ? "Global" : "Project"} profiles · ${path} · esc back to scope`,
+        `${scope === "global" ? "Global" : "Project"} profiles · ${boundedMiddle(path)} · esc back to scope`,
         labels,
       );
       const index = selected ? labels.indexOf(selected) : -1;
@@ -423,9 +448,4 @@ export function registerSubagentManagerCommand(
   });
 }
 
-export const _profileSettingsTest = {
-  createProfileModelChoices,
-  currentSelectorFor,
-  effortPickerOptions,
-  profileSummary,
-};
+export const _profileSettingsTest = { profileSummary };

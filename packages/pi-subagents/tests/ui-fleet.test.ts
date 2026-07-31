@@ -25,6 +25,7 @@ const projection: SubagentProjection = {
       execution: "background",
       context: "fresh",
       writeIntent: "read-only",
+      reportGeneration: 0,
       backend: "pi",
       capabilities: [
         "steer",
@@ -157,6 +158,34 @@ describe("/subagents fleet UI", () => {
   it("shows completion age in fleet rows", () => {
     const { lines } = makeComponent(80, 18, completedProjection);
     expect(lines.join("\n")).toContain("finished 18s ago");
+  });
+
+  it("renders retained reports as finished assignments with live guidance and stop controls", () => {
+    const retained: SubagentProjection = {
+      revision: 3,
+      runs: [
+        {
+          ...projection.runs[0]!,
+          state: "reported",
+          closeOnReport: false,
+          reportGeneration: 2,
+          endedAt: 2_000,
+          question: undefined,
+          finalText: "Second retained report.",
+        },
+      ],
+    };
+    const { actions, component } = makeComponent(120, 18, retained);
+    const rendered = component.render(120).join("\n");
+    expect(rendered).toContain("report 2 · retained");
+    expect(rendered).toContain("Report generation 2 · backend retained");
+    expect(rendered).toContain("Second retained report.");
+    expect(rendered).toContain("1 retained");
+    expect(component.render(120).at(-1)).toContain("m Message");
+    expect(component.render(120).at(-1)).toContain("x Stop");
+    expect(component.render(120).at(-1)).not.toContain("r Resume");
+    component.handleInput("m");
+    expect(actions.message).toHaveBeenCalledWith("agent-1", false);
   });
 
   it("uses the shared Braille spinner for running fleet rows", () => {

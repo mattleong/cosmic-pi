@@ -4,21 +4,21 @@ import {
   PROFILE_CANDIDATE_EFFORTS,
   PROFILE_IDS,
   type DeclaredProfileRoute,
-  type ModelPolicySelector,
   type ProfileCandidate,
   type ProfileId,
 } from "../profiles/model.ts";
+import {
+  isSafeNativeModelSelector,
+  MAX_NATIVE_MODEL_SELECTOR_CHARS,
+} from "../run/native-model-selector.ts";
 export const SUBAGENT_CONFIG_BASENAME = "pi-subagents.json";
-export const SUBAGENT_CONFIG_VERSION = 3;
-export const MAX_POLICY_SELECTORS = 256;
+export const SUBAGENT_CONFIG_VERSION = 4;
 export const MAX_PROFILE_CANDIDATES = 32;
-export const MAX_MODEL_SELECTOR_CHARS = 256;
+export const MAX_MODEL_SELECTOR_CHARS = MAX_NATIVE_MODEL_SELECTOR_CHARS;
 
 export interface SubagentConfigFile {
   readonly version?: number | undefined;
   readonly defaultProfile?: ProfileId | undefined;
-  readonly denied?: ReadonlyArray<ModelPolicySelector> | undefined;
-  readonly discouraged?: ReadonlyArray<ModelPolicySelector> | undefined;
   readonly profiles?: Partial<Readonly<Record<ProfileId, DeclaredProfileRoute>>> | undefined;
 }
 
@@ -28,32 +28,38 @@ export interface DecodedSubagentConfig {
   readonly diagnostics: ReadonlyArray<string>;
   readonly invalidProfileRoutes: ReadonlyArray<ProfileId>;
   readonly unsupportedVersion: boolean;
+  readonly legacyVersion3: boolean;
 }
 
 export const ProfileIdSchema = Schema.Literals(PROFILE_IDS);
-export const ProfileBackendSchema = Schema.Literal("pi");
+export const ProfileHostSchema = Schema.Literals(["local", "herdr"] as const);
+export const ProfileRuntimeSchema = Schema.Literals(["pi", "claude", "codex"] as const);
 export const ProfileEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
+export const ProfileContextSchema = Schema.Literals(["fresh", "fork"] as const);
+export const ProfileWriteIntentSchema = Schema.Literals(["read-only", "writer"] as const);
 
-const hasNoTerminalControls = Schema.makeFilter((value: string) => {
+const containsNoTerminalControls = (value: string): boolean => {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
     if (code < 32 || (code >= 127 && code <= 159)) return false;
   }
   return true;
-});
-const NonEmptyStringSchema = Schema.String.check(
+};
+const hasNoTerminalControls = Schema.makeFilter(containsNoTerminalControls);
+const NativeModelSchema = Schema.String.check(
   Schema.isNonEmpty(),
   Schema.isMaxLength(MAX_MODEL_SELECTOR_CHARS),
   Schema.isPattern(/\S/),
   hasNoTerminalControls,
 );
-export const ModelPolicySelectorSchema = Schema.Struct({
-  backend: ProfileBackendSchema,
-  model: NonEmptyStringSchema,
-});
 const CandidateShapeSchema = Schema.Struct({
-  model: NonEmptyStringSchema,
+  host: ProfileHostSchema,
+  runtime: ProfileRuntimeSchema,
+  model: NativeModelSchema,
   effort: ProfileEffortSchema,
+  context: ProfileContextSchema,
+  writeIntent: ProfileWriteIntentSchema,
+  closeOnReport: Schema.optional(Schema.Boolean),
 });
 
 const ownKeysAre = (
@@ -104,49 +110,16 @@ const decodeField = <A>(
   return decoded.value;
 };
 
-const decodePolicyItems = (
-  value: unknown,
-  path: string,
-  diagnostics: string[],
-): ReadonlyArray<ModelPolicySelector> => {
-  if (!Array.isArray(value)) {
-    if (value !== undefined) diagnostics.push(path);
-    return [];
-  }
-  if (value.length > MAX_POLICY_SELECTORS) diagnostics.push(`${path}[${MAX_POLICY_SELECTORS}+]`);
-  const result: ModelPolicySelector[] = [];
-  for (let index = 0; index < Math.min(value.length, MAX_POLICY_SELECTORS); index += 1) {
-    let item: unknown;
-    try {
-      item = value[index];
-    } catch {
-      diagnostics.push(`${path}[${index}]`);
-      continue;
-    }
-    const record = decodedRecord(item);
-    const decoded = record
-      ? Schema.decodeUnknownOption(ModelPolicySelectorSchema)(record)
-      : Option.none();
-    if (!record || !ownKeysAre(record, new Set(["backend", "model"])) || Option.isNone(decoded)) {
-      diagnostics.push(`${path}[${index}]`);
-      continue;
-    }
-    result.push({ backend: decoded.value.backend, model: decoded.value.model.trim() });
-  }
-  return result;
-};
-
-/** Syntax-only canonical selector validation. Catalog availability remains a launch-time boundary. */
-export const isCanonicalProfileModelSelector = (selector: string): boolean => {
-  const value = selector.trim();
-  if (value.length === 0 || value.length > MAX_MODEL_SELECTOR_CHARS) return false;
-  if (value === "parent") return true;
-  if (!value.startsWith("pi/")) return false;
-  const canonical = value.slice(3);
-  const slash = canonical.indexOf("/");
-  if (slash <= 0 || slash >= canonical.length - 1 || /\s/.test(canonical)) return false;
-  const provider = canonical.slice(0, slash);
-  const model = canonical.slice(slash + 1);
+/** Syntax-only native selector validation. Catalog availability remains a launch-time boundary. */
+export const isNativeProfileModelSelector = (runtime: string, selector: string): boolean => {
+  const value = selector;
+  if (!isSafeNativeModelSelector(value)) return false;
+  if (value === "parent") return runtime === "pi";
+  if (runtime !== "pi") return true;
+  const slash = value.indexOf("/");
+  if (slash <= 0 || slash >= value.length - 1 || /\s/.test(value)) return false;
+  const provider = value.slice(0, slash);
+  const model = value.slice(slash + 1);
   return (
     /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(provider) &&
     /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model) &&
@@ -154,15 +127,33 @@ export const isCanonicalProfileModelSelector = (selector: string): boolean => {
   );
 };
 
+/** Compatibility name retained for callers validating Pi-native selectors. */
+export const isCanonicalProfileModelSelector = (selector: string): boolean =>
+  isNativeProfileModelSelector("pi", selector);
+
 const decodeCandidate = (value: unknown): ProfileCandidate | undefined => {
   const record = decodedRecord(value);
-  if (!record || !ownKeysAre(record, new Set(["model", "effort"]))) return undefined;
+  if (
+    !record ||
+    !ownKeysAre(
+      record,
+      new Set(["host", "runtime", "model", "effort", "context", "writeIntent", "closeOnReport"]),
+    )
+  )
+    return undefined;
   const decoded = Schema.decodeUnknownOption(CandidateShapeSchema)(record);
   if (Option.isNone(decoded)) return undefined;
-  const model = decoded.value.model.trim();
-  return isCanonicalProfileModelSelector(model)
-    ? { model, effort: decoded.value.effort }
-    : undefined;
+  const candidate = decoded.value;
+  const model = candidate.model;
+  const closeOnReport = candidate.closeOnReport ?? true;
+  if (!isNativeProfileModelSelector(candidate.runtime, model)) return undefined;
+  if (model === "parent" && (candidate.host !== "local" || candidate.runtime !== "pi"))
+    return undefined;
+  if (candidate.context === "fork" && (candidate.host !== "local" || candidate.runtime !== "pi"))
+    return undefined;
+  if (!closeOnReport && (candidate.host !== "herdr" || candidate.writeIntent !== "read-only"))
+    return undefined;
+  return { ...candidate, model, closeOnReport };
 };
 
 const decodeRoute = (
@@ -202,18 +193,13 @@ const decodeRoute = (
   return invalid ? undefined : candidates;
 };
 
-/** Field-tolerant v3 unknown-boundary decode for one global or project document. */
+/** Field-tolerant v4 unknown-boundary decode for one global or project document. */
 export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedSubagentConfig {
   const diagnostics: string[] = [];
   const decodedRoot = decodedRecord(input);
   const rawRoot = decodedRoot ?? {};
   if (!decodedRoot) diagnostics.push(scope);
-  if (
-    !ownKeysAre(
-      rawRoot,
-      new Set(["version", "defaultProfile", "denied", "discouraged", "profiles"]),
-    )
-  )
+  if (!ownKeysAre(rawRoot, new Set(["version", "defaultProfile", "profiles"])))
     diagnostics.push(`${scope}.<unknown>`);
 
   const versionField = readField(rawRoot, "version", `${scope}.version`, diagnostics);
@@ -224,16 +210,7 @@ export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedS
     `${scope}.defaultProfile`,
     diagnostics,
   );
-  const deniedField = readField(rawRoot, "denied", `${scope}.denied`, diagnostics);
-  const discouragedField = readField(rawRoot, "discouraged", `${scope}.discouraged`, diagnostics);
   const profilesField = readField(rawRoot, "profiles", `${scope}.profiles`, diagnostics);
-  const denied = decodePolicyItems(deniedField.value, `${scope}.denied`, diagnostics);
-  const discouraged = decodePolicyItems(
-    discouragedField.value,
-    `${scope}.discouraged`,
-    diagnostics,
-  );
-
   const decodedProfiles = decodedRecord(profilesField.value);
   if (profilesField.present && !decodedProfiles) diagnostics.push(`${scope}.profiles`);
   const profileRecord = decodedProfiles ?? {};
@@ -257,12 +234,11 @@ export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedS
     file: {
       ...(version === SUBAGENT_CONFIG_VERSION ? { version } : {}),
       ...(defaultProfile ? { defaultProfile } : {}),
-      ...(denied.length > 0 ? { denied } : {}),
-      ...(discouraged.length > 0 ? { discouraged } : {}),
       ...(Object.keys(profiles).length > 0 ? { profiles } : {}),
     },
     diagnostics: [...new Set(diagnostics)],
     invalidProfileRoutes,
     unsupportedVersion,
+    legacyVersion3: version === 3,
   };
 }

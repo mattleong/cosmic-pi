@@ -5,19 +5,28 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
-import { modelPolicyFor, resolveSubagentConfig } from "../src/config/options.ts";
+import { resolveSubagentConfig } from "../src/config/options.ts";
 import {
   decodeSubagentConfig,
-  isCanonicalProfileModelSelector,
+  isNativeProfileModelSelector,
   SUBAGENT_CONFIG_VERSION,
 } from "../src/config/schema.ts";
 import { SubagentConfigStore } from "../src/config/store.ts";
 import { PROFILE_DEFINITIONS } from "../src/profiles/definitions.ts";
-import { PROFILE_IDS } from "../src/profiles/model.ts";
+import { PROFILE_IDS, type DeclaredProfileCandidate } from "../src/profiles/model.ts";
 import { resolveProfilePlan } from "../src/profiles/resolve.ts";
 import { SubagentProfileService, subagentProfileServiceLayer } from "../src/profiles/service.ts";
 
-const document = (value: Record<string, unknown> = {}) => ({ version: 3, ...value });
+const document = (value: Record<string, unknown> = {}) => ({ version: 4, ...value });
+const candidate = (value: Partial<DeclaredProfileCandidate> = {}): DeclaredProfileCandidate => ({
+  host: "local",
+  runtime: "pi",
+  model: "parent",
+  effort: "default",
+  context: "fresh",
+  writeIntent: "read-only",
+  ...value,
+});
 const resolved = (global: unknown = document(), project?: unknown, projectTrusted = true) =>
   resolveSubagentConfig({
     globalConfigPath: "/agent/pi-subagents.json",
@@ -38,27 +47,38 @@ const environment = {
   forkAvailable: true,
 };
 
-describe("subagent v3 Pi-only profile configuration and resolution", () => {
-  it("ships seven neutral parent/default profiles with role effort defaults", () => {
-    expect(SUBAGENT_CONFIG_VERSION).toBe(3);
+describe("subagent v4 profile configuration and resolution", () => {
+  it("ships seven explicit local Pi parent routes preserving profile defaults", () => {
+    expect(SUBAGENT_CONFIG_VERSION).toBe(4);
     expect(PROFILE_IDS).toHaveLength(7);
-    expect(PROFILE_DEFINITIONS.oracle.defaultContext).toBe("fork");
-    expect(PROFILE_DEFINITIONS.delegate.defaultEffort).toBeUndefined();
     const config = resolved();
     for (const id of PROFILE_IDS) {
-      expect(config.profiles[id]).toEqual({ candidates: [{ model: "parent", effort: "default" }] });
+      expect(config.profiles[id]).toEqual({
+        candidates: [
+          {
+            host: "local",
+            runtime: "pi",
+            model: "parent",
+            effort: "default",
+            context: PROFILE_DEFINITIONS[id].defaultContext,
+            writeIntent: PROFILE_DEFINITIONS[id].defaultWriteIntent,
+            closeOnReport: true,
+          },
+        ],
+      });
       expect(config.profileSources[id]).toBe("builtin");
     }
+    expect(config.defaultProfile).toBe("delegate");
   });
 
-  it("decodes one candidate, ordered non-empty candidates, and disabled", () => {
+  it("decodes disabled, one candidate, and ordered candidates with closeOnReport defaulting true", () => {
     const decoded = decodeSubagentConfig(
       document({
         profiles: {
-          scout: { model: "parent", effort: "default" },
+          scout: candidate(),
           worker: [
-            { model: "pi/openai/gpt-review", effort: "medium" },
-            { model: "parent", effort: "high" },
+            candidate({ model: "openai/gpt-review", effort: "medium", writeIntent: "writer" }),
+            candidate({ host: "herdr", runtime: "claude", model: "sonnet", closeOnReport: false }),
           ],
           reviewer: "disabled",
         },
@@ -66,45 +86,59 @@ describe("subagent v3 Pi-only profile configuration and resolution", () => {
       "global",
     );
     expect(decoded.invalidProfileRoutes).toEqual([]);
-    expect(decoded.file.profiles).toEqual({
-      scout: { model: "parent", effort: "default" },
-      worker: [
-        { model: "pi/openai/gpt-review", effort: "medium" },
-        { model: "parent", effort: "high" },
-      ],
-      reviewer: "disabled",
-    });
+    expect(decoded.file.profiles?.scout).toMatchObject({ closeOnReport: true });
+    expect(decoded.file.profiles?.worker).toEqual([
+      candidate({
+        model: "openai/gpt-review",
+        effort: "medium",
+        writeIntent: "writer",
+        closeOnReport: true,
+      }),
+      candidate({ host: "herdr", runtime: "claude", model: "sonnet", closeOnReport: false }),
+    ]);
   });
 
-  it("accepts only bounded canonical profile model selector forms", () => {
-    expect(isCanonicalProfileModelSelector("parent")).toBe(true);
-    expect(isCanonicalProfileModelSelector("pi/openai/gpt-5.6-sol")).toBe(true);
-    expect(isCanonicalProfileModelSelector("pi/fireworks/accounts/team/models/model")).toBe(true);
-    for (const selector of [
-      "openai/gpt-5",
-      "pi/gpt-5",
-      "pi/../gpt-5",
-      "pi/openai/../gpt-5",
-      "pi/openai/model\u001b",
-      `pi/openai/${"x".repeat(300)}`,
-      "claude-cli/claude-opus-5-20260115",
-      "claude-cli/not-claude",
-    ])
-      expect(isCanonicalProfileModelSelector(selector)).toBe(false);
+  it("accepts every host/runtime name syntactically and bounded native selectors", () => {
+    for (const host of ["local", "herdr"] as const)
+      for (const runtime of ["pi", "claude", "codex"] as const) {
+        const model = runtime === "pi" ? "openai/gpt-5" : `${runtime}-native-model`;
+        const decoded = decodeSubagentConfig(
+          document({ profiles: { scout: candidate({ host, runtime, model }) } }),
+        );
+        expect(decoded.invalidProfileRoutes).toEqual([]);
+      }
+    expect(isNativeProfileModelSelector("pi", "openai/gpt-5")).toBe(true);
+    expect(isNativeProfileModelSelector("claude", "claude-opus-5")).toBe(true);
+    expect(isNativeProfileModelSelector("codex", "gpt-5.4")).toBe(true);
+    expect(isNativeProfileModelSelector("pi", "parent")).toBe(true);
+    expect(isNativeProfileModelSelector("pi", "bare")).toBe(false);
+    expect(isNativeProfileModelSelector("claude", "-dangerous-option")).toBe(false);
+    expect(isNativeProfileModelSelector("codex", "-dangerous-option")).toBe(false);
+    expect(isNativeProfileModelSelector("claude", "model,other")).toBe(false);
+    expect(isNativeProfileModelSelector("codex", "model/(glob)")).toBe(false);
+    expect(isNativeProfileModelSelector("claude", " model ")).toBe(false);
+    expect(isNativeProfileModelSelector("claude", "x".repeat(257))).toBe(false);
   });
 
-  it("rejects legacy and non-canonical route selectors as whole invalid routes", () => {
+  it("fails a present route closed when its native selector violates the shared grammar", () => {
+    const decoded = decodeSubagentConfig(
+      document({ profiles: { worker: candidate({ runtime: "claude", model: "model,other" }) } }),
+      "project",
+    );
+    expect(decoded.invalidProfileRoutes).toEqual(["worker"]);
+    expect(decoded.file.profiles?.worker).toBeUndefined();
+    expect(decoded.diagnostics).toContain("project.profiles.worker");
+  });
+
+  it("rejects unknown candidate keys and forbidden cross-field combinations as whole routes", () => {
     const decoded = decodeSubagentConfig(
       document({
         profiles: {
-          scout: { source: "parent" },
-          researcher: { model: "openai/gpt-review", effort: "high" },
-          planner: { model: "pi/gpt-review", effort: "high" },
-          worker: [],
-          reviewer: [
-            { model: "pi/openai/gpt-review", effort: "high" },
-            { model: "claude-cli/not-claude", effort: "high" },
-          ],
+          scout: { ...candidate(), execution: "background" },
+          researcher: candidate({ host: "herdr", runtime: "pi", model: "parent" }),
+          planner: candidate({ runtime: "claude", model: "sonnet", context: "fork" }),
+          worker: candidate({ closeOnReport: false, writeIntent: "writer" }),
+          reviewer: candidate({ closeOnReport: false }),
         },
       }),
       "global",
@@ -116,26 +150,110 @@ describe("subagent v3 Pi-only profile configuration and resolution", () => {
       "worker",
       "reviewer",
     ]);
-    expect(decoded.file.profiles).toBeUndefined();
     expect(decoded.diagnostics).toEqual(
       expect.arrayContaining([
         "global.profiles.scout",
         "global.profiles.researcher",
         "global.profiles.planner",
         "global.profiles.worker",
-        "global.profiles.reviewer[1]",
+        "global.profiles.reviewer",
       ]),
     );
   });
 
-  it("bounds selectors and route arrays before traversal", () => {
+  it("rejects removed policy fields with strict unknown-key diagnostics", () => {
+    const decoded = decodeSubagentConfig(
+      document({ denied: [], discouraged: [], execution: "background" }),
+      "global",
+    );
+    expect(decoded.file).toEqual({ version: 4 });
+    expect(decoded.diagnostics).toContain("global.<unknown>");
+    expect(decoded.file).not.toHaveProperty("denied");
+    expect(decoded.file).not.toHaveProperty("discouraged");
+  });
+
+  it("inherits missing project routes, uses builtins for missing global routes, and fails invalid present routes closed", () => {
+    const global = document({
+      profiles: {
+        worker: [
+          candidate({ model: "openai/gpt-review", effort: "medium", writeIntent: "writer" }),
+          candidate({ writeIntent: "writer" }),
+        ],
+      },
+    });
+    const inherited = resolved(global, document({ defaultProfile: "worker" }));
+    expect(inherited.profiles.worker.candidates).toHaveLength(2);
+    expect(inherited.profileSources.worker).toBe("global");
+    expect(inherited.profileSources.scout).toBe("builtin");
+    const invalid = resolved(global, document({ profiles: { worker: null } }));
+    expect(invalid.profiles.worker).toEqual({ candidates: [] });
+    expect(invalid.profileSources.worker).toBe("project-invalid");
+    const untrusted = resolved(global, document({ profiles: { worker: "disabled" } }), false);
+    expect(untrusted.profiles.worker.candidates).toHaveLength(2);
+  });
+
+  it("plans unsupported host/runtime candidates without claiming adapter availability", () => {
+    const config = resolved(
+      document({
+        profiles: {
+          reviewer: [
+            candidate({ host: "herdr", runtime: "claude", model: "sonnet" }),
+            candidate({ runtime: "codex", model: "gpt-5.4" }),
+            candidate({ model: "openai/gpt-review", effort: "medium" }),
+          ],
+        },
+      }),
+    );
+    expect(resolveProfilePlan("reviewer", config, environment)).toMatchObject({
+      kind: "resolved",
+      attempts: [
+        { candidateIndex: 0, host: "herdr", runtime: "claude", model: "sonnet" },
+        { candidateIndex: 1, host: "local", runtime: "codex", model: "gpt-5.4" },
+        { candidateIndex: 2, host: "local", runtime: "pi", model: "openai/gpt-review" },
+      ],
+    });
+  });
+
+  it("uses default effort softly and concrete candidate effort hard", () => {
+    expect(resolveProfilePlan("scout", resolved(), environment)).toMatchObject({
+      kind: "resolved",
+      attempts: [{ effort: "low", effortWasExplicit: false }],
+    });
+    const config = resolved(
+      document({
+        profiles: {
+          worker: candidate({ model: "openai/gpt-review", effort: "high", writeIntent: "writer" }),
+        },
+      }),
+    );
+    expect(resolveProfilePlan("worker", config, environment)).toMatchObject({
+      kind: "resolved",
+      attempts: [{ effort: "high", effortWasExplicit: true, writeIntent: "writer" }],
+    });
+  });
+
+  it("requires stable fork context for local Pi and never degrades to fresh", () => {
+    expect(resolveProfilePlan("oracle", resolved(), environment)).toMatchObject({
+      kind: "resolved",
+      attempts: [{ effectiveContext: "fork" }],
+    });
+    expect(
+      resolveProfilePlan("oracle", resolved(), { ...environment, forkAvailable: false }),
+    ).toMatchObject({
+      kind: "failed",
+      code: "fork_context_unavailable",
+      skippedCandidates: [{ code: "fork_context_unavailable" }],
+    });
+  });
+
+  it("bounds route arrays before traversal", () => {
     let accesses = 0;
     const candidates: unknown[] = [];
     candidates.length = 10_000;
     Object.defineProperty(candidates, 0, {
       get: () => {
         accesses += 1;
-        return { model: "parent", effort: "default" };
+        return candidate();
       },
     });
     const decoded = decodeSubagentConfig(document({ profiles: { worker: candidates } }), "global");
@@ -144,182 +262,18 @@ describe("subagent v3 Pi-only profile configuration and resolution", () => {
     expect(decoded.diagnostics).toContain("global.profiles.worker[32+]");
   });
 
-  it("uses default effort softly and concrete configured/per-launch effort hard", () => {
-    expect(resolveProfilePlan("scout", resolved(), environment)).toMatchObject({
-      kind: "resolved",
-      attempts: [{ model: "openai/gpt-parent", effort: "low", effortWasExplicit: false }],
-    });
-    expect(resolveProfilePlan("delegate", resolved(), environment)).toMatchObject({
-      kind: "resolved",
-      attempts: [{ effort: "high", effortWasExplicit: false }],
-    });
-    const config = resolved(
-      document({ profiles: { worker: { model: "pi/openai/gpt-review", effort: "high" } } }),
-    );
-    expect(resolveProfilePlan("worker", config, environment)).toMatchObject({
-      kind: "resolved",
-      attempts: [{ effort: "high", effortWasExplicit: true }],
-    });
-    expect(resolveProfilePlan("worker", config, environment, undefined, "medium")).toMatchObject({
-      kind: "resolved",
-      attempts: [{ effort: "medium", effortWasExplicit: true }],
-    });
+  it("accepts only declared v4 and records v3 for actionable store migration", () => {
+    expect(decodeSubagentConfig({ version: 4 }, "global").unsupportedVersion).toBe(false);
+    const v3 = decodeSubagentConfig({ version: 3, denied: [] }, "global");
+    expect(v3).toMatchObject({ unsupportedVersion: true, legacyVersion3: true });
+    expect(v3.diagnostics).toEqual(expect.arrayContaining(["global.version", "global.<unknown>"]));
+    for (const version of [1, 2, "4", null, false, 4.5])
+      expect(decodeSubagentConfig({ version }, "global").unsupportedVersion).toBe(true);
   });
 
-  it("skips hard-incompatible efforts but does not reject soft defaults", () => {
-    const config = resolved(
-      document({
-        profiles: {
-          worker: [
-            { model: "pi/openai/gpt-parent", effort: "xhigh" },
-            { model: "pi/openai/gpt-review", effort: "default" },
-          ],
-        },
-      }),
-    );
-    expect(resolveProfilePlan("worker", config, environment)).toMatchObject({
-      kind: "resolved",
-      attempts: [
-        {
-          candidateIndex: 1,
-          model: "openai/gpt-review",
-          effort: "high",
-          effortWasExplicit: false,
-          skippedBefore: [{ candidateIndex: 0, code: "pi_effort_unsupported" }],
-        },
-      ],
-    });
-  });
-
-  it("normalizes disabled and invalid declarations to deterministic no-model failures", () => {
-    const disabled = resolved(document({ profiles: { reviewer: "disabled" } }));
-    expect(disabled.profiles.reviewer).toEqual({ candidates: [] });
-    expect(resolveProfilePlan("reviewer", disabled, environment)).toMatchObject({
-      kind: "failed",
-      code: "profile_no_eligible_model",
-      message: expect.stringContaining("disabled"),
-    });
-    const invalid = resolved(
-      document({ profiles: { reviewer: { model: "bare", effort: "high" } } }),
-    );
-    expect(invalid.profileSources.reviewer).toBe("global-invalid");
-    expect(invalid.profiles.reviewer).toEqual({ candidates: [] });
-    expect(resolveProfilePlan("reviewer", invalid, environment)).toMatchObject({
-      kind: "failed",
-      code: "profile_no_eligible_model",
-      message: expect.stringContaining("invalid global route"),
-    });
-    const projectInvalid = resolved(document(), document({ profiles: { reviewer: null } }));
-    expect(resolveProfilePlan("reviewer", projectInvalid, environment)).toMatchObject({
-      kind: "failed",
-      message: expect.stringContaining("/repo/.pi/pi-subagents.json"),
-    });
-  });
-
-  it("inherits an entire global route when project is absent and fails invalid project overrides closed", () => {
-    const global = document({
-      denied: [{ backend: "pi", model: "openai/legacy" }],
-      profiles: {
-        worker: [
-          { model: "pi/openai/gpt-review", effort: "medium" },
-          { model: "parent", effort: "default" },
-        ],
-      },
-    });
-    const inherited = resolved(global, document({ defaultProfile: "worker" }));
-    expect(inherited.profiles.worker.candidates).toHaveLength(2);
-    expect(inherited.profileSources.worker).toBe("global");
-    const invalid = resolved(global, document({ profiles: { worker: null } }));
-    expect(invalid.profiles.worker).toEqual({ candidates: [] });
-    expect(invalid.profileSources.worker).toBe("project-invalid");
-    const untrusted = resolved(global, document({ profiles: { worker: "disabled" } }), false);
-    expect(untrusted.profiles.worker.candidates).toHaveLength(2);
-  });
-
-  it("keeps policies additive, skips denied candidates, and retains discouraged profile routes", () => {
-    const config = resolved(
-      document({
-        denied: [{ backend: "pi", model: "openai/denied" }],
-        profiles: {
-          reviewer: [
-            { model: "pi/openai/denied", effort: "high" },
-            { model: "pi/openai/gpt-review", effort: "medium" },
-            { model: "parent", effort: "default" },
-          ],
-        },
-      }),
-      document({ discouraged: [{ backend: "pi", model: "openai/gpt-review" }] }),
-    );
-    expect(modelPolicyFor(config, "pi", "openai/denied")).toBe("denied");
-    expect(resolveProfilePlan("reviewer", config, environment)).toMatchObject({
-      kind: "resolved",
-      attempts: [
-        {
-          source: "profile-candidate",
-          candidateIndex: 1,
-          skippedBefore: [{ code: "model_denied" }],
-        },
-        {
-          source: "profile-parent-candidate",
-          candidateIndex: 2,
-        },
-      ],
-    });
-  });
-
-  it("requires fork availability for Pi oracle routes and honors explicit fresh context", () => {
-    const oracle = resolved(
-      document({ profiles: { oracle: { model: "parent", effort: "high" } } }),
-    );
-    expect(resolveProfilePlan("oracle", oracle, environment)).toMatchObject({
-      kind: "resolved",
-      preferredContext: "fork",
-      attempts: [{ backend: "pi", effectiveContext: "fork" }],
-    });
-    expect(
-      resolveProfilePlan("oracle", oracle, { ...environment, forkAvailable: false }),
-    ).toMatchObject({
-      kind: "failed",
-      code: "fork_context_unavailable",
-      skippedCandidates: [{ code: "fork_context_unavailable" }],
-    });
-    expect(resolveProfilePlan("oracle", oracle, environment, "fresh")).toMatchObject({
-      kind: "resolved",
-      preferredContext: "fresh",
-      attempts: [{ backend: "pi", effectiveContext: "fresh" }],
-    });
-  });
-
-  it("rejects legacy Claude routes as whole invalid Pi-only routes", () => {
-    const decoded = decodeSubagentConfig(
-      document({
-        profiles: {
-          reviewer: [
-            { model: "pi/openai/gpt-review", effort: "high" },
-            { model: "claude-cli/sonnet", effort: "high" },
-          ],
-        },
-      }),
-      "global",
-    );
-    expect(decoded.invalidProfileRoutes).toEqual(["reviewer"]);
-    expect(decoded.file.profiles).toBeUndefined();
-    expect(decoded.diagnostics).toContain("global.profiles.reviewer[1]");
-  });
-
-  it("accepts only declared v3 and marks older or malformed versions unsupported", () => {
-    expect(decodeSubagentConfig({ version: 3 }, "global").unsupportedVersion).toBe(false);
-    expect(decodeSubagentConfig({}, "global").unsupportedVersion).toBe(true);
-    for (const version of [1, 2, "3", null, false, 3.5]) {
-      const decoded = decodeSubagentConfig({ version }, "global");
-      expect(decoded.unsupportedVersion).toBe(true);
-      expect(decoded.diagnostics).toContain("global.version");
-    }
-  });
-
-  it("logs path-safe diagnostics from the loaded v3 configuration", async () => {
+  it("logs only path-safe diagnostics from loaded v4 configuration", async () => {
     const captured = makeCapturedLogger();
-    const config = resolved(document({ discouraged: "not-an-array" }));
+    const config = resolved(document({ denied: "secret-policy-value" }));
     const store = Layer.succeed(SubagentConfigStore, {
       paths: () =>
         Effect.succeed({
@@ -332,7 +286,7 @@ describe("subagent v3 Pi-only profile configuration and resolution", () => {
     });
     await Effect.runPromise(
       SubagentProfileService.use((service) =>
-        Effect.sync(() => expect(service.config.diagnostics).toContain("global.discouraged")),
+        Effect.sync(() => expect(service.config.diagnostics).toContain("global.<unknown>")),
       ).pipe(
         Effect.provide(
           subagentProfileServiceLayer({
@@ -343,6 +297,6 @@ describe("subagent v3 Pi-only profile configuration and resolution", () => {
         ),
       ),
     );
-    expect(JSON.stringify(captured.entries)).not.toContain("not-an-array");
+    expect(JSON.stringify(captured.entries)).not.toContain("secret-policy-value");
   });
 });

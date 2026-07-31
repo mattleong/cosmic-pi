@@ -27,10 +27,12 @@ const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES)
 
 export interface SubagentApplicationBoundaries {
   readonly loadSettings: (cwd: string, projectTrusted: boolean) => Promise<unknown>;
+  readonly getAgentDirectory?: (() => string) | undefined;
 }
 
 const LIVE_APPLICATION_BOUNDARIES: SubagentApplicationBoundaries = {
   loadSettings: loadCodePreviewSettings,
+  getAgentDirectory: getAgentDir,
 };
 
 interface CapturedActivation {
@@ -188,7 +190,7 @@ export function registerSubagentApplication(
     const projectTrusted = isProjectTrusted(ctx);
     let agentDirectory: string;
     try {
-      agentDirectory = getAgentDir();
+      agentDirectory = (boundaries.getAgentDirectory ?? getAgentDir)();
     } catch {
       return shutdown.then(() => {
         if (generation === preparationGeneration)

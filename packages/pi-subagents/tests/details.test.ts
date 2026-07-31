@@ -12,15 +12,22 @@ const run = (index = 1): SubagentRunView => ({
   task: "Secret full task that must not persist in card details.",
   selection: {
     source: "profile-candidate",
+    host: "herdr",
+    runtime: "claude",
+    closeOnReport: false,
     candidateIndex: 0,
     reason: "Selected in configured order.",
     skippedCandidates: [{ candidate: "first", code: "unavailable", reason: "Unavailable." }],
   },
   cwd: "/private/project",
-  state: "completed",
+  state: "reported",
   execution: "background",
   context: "fresh",
   writeIntent: "read-only",
+  host: "herdr",
+  runtime: "claude",
+  closeOnReport: false,
+  reportGeneration: 1,
   backend: "pi",
   capabilities: ["resume"],
   model: "provider/model",
@@ -46,6 +53,13 @@ describe("persisted subagent card details", () => {
 
     expect(details.version).toBe(1);
     expect(details.cards).toHaveLength(12);
+    expect(details.cards[0]).toMatchObject({
+      host: "herdr",
+      runtime: "claude",
+      closeOnReport: false,
+      reportGeneration: 1,
+      selection: { host: "herdr", runtime: "claude", closeOnReport: false },
+    });
     expect(serialized.length).toBeLessThanOrEqual(48_000);
     expect(serialized).not.toContain("Secret full task");
     expect(serialized).not.toContain("/private/project");
@@ -109,7 +123,7 @@ describe("persisted subagent card details", () => {
     expect(legacy).toMatchObject({
       version: 1,
       action: "start",
-      cards: [{ id: "agent-r1-1", state: "completed" }],
+      cards: [{ id: "agent-r1-1", state: "reported", reportGeneration: 1 }],
     });
     expect(() =>
       decodeStartAwaitCardDetails({

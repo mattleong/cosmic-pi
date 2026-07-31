@@ -31,6 +31,35 @@ describe("subagent host notifier", () => {
     expect(options).toEqual({ deliverAs: "steer", triggerTurn: true });
   });
 
+  it("wakes the parent once for a retained report generation", () => {
+    const sendMessage = vi.fn();
+    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    const notification = {
+      type: "completed" as const,
+      runs: [
+        {
+          id: "agent-1",
+          name: "reader",
+          generation: 2,
+          finalText: "Follow-up report.",
+          retained: true,
+        },
+      ],
+    };
+
+    expect(notify(notification)?.deliveredCompletionKeys).toEqual(["agent-1:2"]);
+    expect(notify(notification)?.deliveredCompletionKeys).toEqual([]);
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage.mock.calls[0]?.[0].content).toContain(
+      "reported generation 2 and remains available for guidance",
+    );
+    expect(sendMessage.mock.calls[0]?.[0].content).toContain("Follow-up report.");
+    expect(sendMessage.mock.calls[0]?.[1]).toEqual({
+      deliverAs: "steer",
+      triggerTurn: true,
+    });
+  });
+
   it("steers warnings without triggering a turn when requested", () => {
     const sendMessage = vi.fn();
     const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
@@ -102,6 +131,24 @@ describe("subagent host notifier", () => {
     expect(sendMessage.mock.calls[0]?.[0].content).toContain("2 background subagents completed");
     expect(sendMessage.mock.calls[0]?.[0].content).toContain("## reader (agent-1)");
     expect(sendMessage.mock.calls[0]?.[0].content).toContain("## tester (agent-2)");
+  });
+
+  it("deduplicates completion receipts by exact generation even when delivery is out of order", () => {
+    const sendMessage = vi.fn();
+    const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
+    const generationTwo = {
+      type: "completed" as const,
+      runs: [{ id: "agent-1", name: "reader", generation: 2, finalText: "Second." }],
+    };
+    const generationOne = {
+      type: "completed" as const,
+      runs: [{ id: "agent-1", name: "reader", generation: 1, finalText: "First." }],
+    };
+
+    expect(notify(generationTwo)?.deliveredCompletionKeys).toEqual(["agent-1:2"]);
+    expect(notify(generationOne)?.deliveredCompletionKeys).toEqual(["agent-1:1"]);
+    expect(notify(generationTwo)?.deliveredCompletionKeys).toEqual([]);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
   it("chunks large completion batches without losing later run IDs", () => {

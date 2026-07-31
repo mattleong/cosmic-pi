@@ -29,34 +29,10 @@ const StartSpecFields = {
       pattern: NONBLANK_PATTERN,
     }),
   ),
-  execution: Type.Optional(
-    StringEnum(["foreground", "background"] as const, {
-      description:
-        "Launch behavior; defaults to background. Foreground blocks the start call until the run finishes, pauses, or asks a parent question. Use at most one foreground agent per call.",
-    }),
-  ),
-  context: Type.Optional(
-    StringEnum(["fresh", "fork"] as const, {
-      description:
-        'Child context. An explicit value is a hard requirement. When omitted, the profile preference applies. Only oracle prefers "fork"; every other profile prefers "fresh". Fork requires a persisted Pi parent session with a stable leaf and never degrades silently to fresh.',
-    }),
-  ),
   profile: Type.Optional(
     StringEnum(PROFILE_IDS, {
       description:
         "Behavior and model-routing profile. Omit to use configured defaultProfile. The selected profile always determines the model route.",
-    }),
-  ),
-  writeIntent: Type.Optional(
-    StringEnum(["writer", "read-only"] as const, {
-      description:
-        "Explicit capability override. Omit to use the profile default. Only one shared-cwd writer may be active.",
-    }),
-  ),
-  effort: Type.Optional(
-    StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, {
-      description:
-        "Explicit thinking-effort override. Omit to use the candidate effort, then the profile default effort, then the parent effort.",
     }),
   ),
 } as const;
@@ -202,13 +178,12 @@ export const prepareSubagentStartArguments = (args: unknown): SubagentStartInput
   agents.forEach((agent, index) => {
     if (!agent || typeof agent !== "object" || Array.isArray(agent)) return;
     const fields = agent as Readonly<Record<string, unknown>>;
-    if (Object.prototype.hasOwnProperty.call(fields, "backend"))
+    const legacyField = ["execution", "context", "writeIntent", "effort", "backend", "model"].find(
+      (field) => Object.prototype.hasOwnProperty.call(fields, field),
+    );
+    if (legacyField)
       throw new Error(
-        `[legacy_backend_field] subagent_start agents[${index}]: backend is not accepted. Select a profile; its configured route determines the backend and model.`,
-      );
-    if (Object.prototype.hasOwnProperty.call(fields, "model"))
-      throw new Error(
-        `[model_not_supported] subagent_start agents[${index}]: model is not accepted. Select a profile; its configured route always determines the model.`,
+        `[legacy_launch_override] subagent_start agents[${index}]: ${legacyField} is not accepted. Put host, runtime, model, effort, context, writeIntent, and closeOnReport in the selected version 4 profile route.`,
       );
   });
   return prepared;

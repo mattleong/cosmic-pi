@@ -18,6 +18,10 @@ describe("subagent footer projection", () => {
     );
   });
 
+  it("keeps retained reported resources visible without calling their assignment unfinished", () => {
+    expect(fleetStatus(projection("reported"))).toBe("1 subagent active · 1 retained");
+  });
+
   it("hides the footer status when no subagents are active", () => {
     expect(fleetStatus(projection("completed", "failed", "stopped"))).toBeUndefined();
   });

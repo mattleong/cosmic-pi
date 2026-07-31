@@ -1,106 +1,186 @@
 # pi-subagents
 
-Session-scoped foreground and background subagents for pi.
+Session-scoped, profile-routed background subagents for Pi.
 
-## Features
+## Implemented behavior
 
-- Seven deterministic task profiles: `scout`, `researcher`, `planner`, `worker`, `reviewer`, `oracle`, and `delegate`. Profiles inject concise role guidance and route an ordered model policy without heuristic scoring.
-- Short-form automatic launch with only `task` and optional `profile`: `subagent_start` has no model field, so the configured profile route (or `defaultProfile`) is host-enforced.
-- Fresh or forked Pi child contexts resolved per route candidate. Only `oracle` prefers forked context; every other profile prefers fresh. Fork requires a persisted parent session with a stable leaf, and an explicit context remains a hard requirement.
-- Parent-model inheritance with role-specific profile effort defaults. Every launch resolves the selected profile's configured route; no agent-facing per-launch model override exists.
-- One static, preflight-only discovery surface: `subagent_models` shows the configured default profile, profile descriptions, context/write-intent/effort defaults, and each ordered candidate's eligibility and effective context. Runtime authentication and readiness are checked only at launch.
-- Deterministic configured-route resolution. Profile candidates use `parent` or `pi/<provider>/<model-id>`; unknown or unauthenticated candidates are skipped in declared order before any process spawn.
-- Pi writers inherit parent tools except recursive orchestration tools; Pi read-only children receive a conservative inspection-only allowlist.
-- Optional human-readable names and immutable run IDs allocated from an opaque per-runtime namespace, so replacing a session runtime never reuses an ID from the abandoned fleet.
-- Canonical `subagent_start` launches one to twelve profile-routed agents from one required `agents` array and structurally rejects `model`. Successful launches remain active when a peer item fails, and at most one foreground item is allowed per call.
-- Fleet-level `await` collection with live, state-color-coded per-agent progress and semantic `all_finished` or `any_finished` completion conditions. Await returns early with an exact `subagent_reply` call when a Pi child needs parent input; after replying, the parent awaits again. A finished run is completed, failed, or stopped.
-- Generation-based completion claims and short-window batching prevent fully rendered reports collected by foreground start, `await`, or `status` from being delivered again. Truncated or cancelled render claims are released, and actionable questions and warnings retry with bounded exponential backoff until delivered or superseded.
-- Full Pi management: steering, parent replies, interruption, resumption, renaming, stopping, parent contact, peer notices, and native fork context.
-- A full-screen `/subagents` fleet inspector.
-- Tool calls rendered through the configurable `pi-code-previews` shell, with expanded structured child-session output and Markdown reports.
-- One declared writer per shared working directory, retained until failed-process cleanup completes.
-- Completed child processes terminate immediately while preserving their Pi session file for later respawn.
-- Batch status, guidance, and lifecycle operations for up to twelve run IDs, with bounded aggregate results, model-visible failure codes, stale-ID reporting, duplicate-ID normalization, and per-target success/failure reporting so partial side effects are never hidden.
-- Bounded management messages and compact persisted list/status details.
-- Runtime-only parent API-key forwarding through an ephemeral Pi-child environment bootstrap.
-- Exact session ownership: session activation captures cwd, trust, context, and agent directory once; generation-based latest-wins preparation invalidates the older runtime before asynchronous settings load. Every child process stops when the parent session ends, POSIX process-group cleanup still runs after a child leader exits, and successful `/tree` navigation resets the fleet before work continues from the selected branch.
+- Seven built-in profiles: `scout`, `researcher`, `planner`, `worker`, `reviewer`, `oracle`, and `delegate`.
+- `subagent_start` accepts one required `agents` array (1–12 items). Each item contains only `task`, optional `profile`, and optional `name`.
+- Start is always background and nonblocking. Its response is admission-only even if a report races prompt confirmation; report payloads remain queued for exact-once notification or `subagent_await` delivery. Use `subagent_await` separately with `all_finished` or `any_finished`.
+- Version-4 profile routes own host, runtime, model, effort, context, write intent, and report-close behavior. Native selectors use one fail-closed `^[A-Za-z0-9][A-Za-z0-9._:/-]*$` grammar with a 256-character bound across config, settings, and all six adapter preflights.
+- Ordered candidates receive bounded readiness preflight before run, lease, supervisor, or process ownership. Unavailable executables, unauthenticated CLIs, unsupported fresh/context/effort/write-policy combinations, and missing private-harness prerequisites become typed skips, allowing fallback to a later candidate.
+- Once `SubagentService.start` begins, routing never falls through to another candidate; spawn or later outcome uncertainty is surfaced on that selected run and is never retried arbitrarily.
+- A single shared backend registry implements all six `local|herdr` × `pi|claude|codex` adapters. Herdr selection uses only Pi's inherited Herdr socket/session environment, otherwise Herdr's default.
+- Local Pi children support fresh context and native fork context, conservative read-only tools or writer tools, parent contact, guidance, interruption, resume, rename, stop, and bounded completion delivery.
+- Local Claude Code uses the current print/SDK stream protocol: official `initialize` control, a zero-inference `shouldQuery:false` native-init probe, validated native model/session/cwd, mandatory connected supervisor MCP inventory, replay-confirmed input, and a correlated interrupt lifecycle. Interruption waits for the exact control response, replayed `[Request interrupted by user]`, and `error_during_execution`/`aborted_streaming` result in either order; unrelated failures remain failures. Its actual capabilities are steer, interrupt, and parent contact.
+- Local Codex uses the generated 0.145 app-server v2 stdio JSON-RPC subset (`initialize`, `thread/start`, `turn/start`, `turn/steer`, and `turn/interrupt`) rather than terminal scraping. It uses a private `CODEX_HOME`, copies bounded validated auth from a safe custom source `CODEX_HOME` or the default source without forwarding that source path, otherwise uses the fixed API-key fallback, and enforces approval `never`, disabled web/tool-sandbox network, read-only/workspace-write sandbox policy, and fresh context only. Its actual capabilities are steer, interrupt, and parent contact.
+- The backend contract includes bounded report events correlated by run and monotonic assignment epoch, with adapter-owned sequence plus `deliveryId` retry identity. Reports are committed only in the matching issued assignment phase and are in-memory protocol data, never project files.
+- Local and Herdr Claude/Codex use a scoped, authenticated loopback `SupervisorChannel` and packaged concurrent stdio MCP helper. Herdr Pi loads one packaged private bridge extension/client exposing the same four tools through `pi-code-previews`. The channel carries bounded progress, warnings, one correlated blocking question per assignment, and idempotent report delivery without project report files.
+- `closeOnReport: false` has backend-neutral retained lifecycle semantics: a report finishes the current assignment as `reported`, increments `reportGeneration`, and keeps the read-only backend resource available for guidance and later report generations. Await owns the current/next generation with one exclusive cancellation-safe token; competing awaits fail with `completion_claim_conflict`, competing status redacts the report, and unclaimed reports are delivered once by `(runId, generation)`.
+- History is capped at 50 total records and each retained run at 64 unresolved report generations. Start rejects with `history_outbox_capacity` instead of exceeding the total bound when unresolved delivery or cleanup prevents eviction.
+- At most one writer owns the same stable local directory identity (device + inode/file ID) across same-host parent Pi processes using the shared private agent directory, independent of backend driver. Symlink/relative aliases and directory renames collide; read-only runs acquire no lease. Failed, transitional, or uncertain ownership remains fail-closed on disk and quarantined in session.
+- Every extension-owned tool is rendered through the cooperative `pi-code-previews` shell.
 
-## Profiles and policy configuration
+All six adapters are implemented without a runtime dependency on `pi-herdr`; the standalone extension and its persistent tools remain unchanged and excluded from children. Herdr runs are owned by the current parent Pi session. The parent creates one private shared Herdr workspace/tab for its cwd, records exact pane/terminal/agent/native-session evidence, closes only revalidated owned topology, and never adopts restored native sessions. `closeOnReport:false` retains only read-only panes for later assignments in the same parent session. Writers always close and use the same parent-owned canonical-cwd lease as local writers.
 
-Built-in profiles are deliberately model-neutral. With no configuration, each profile explicitly falls back to the active parent Pi model; no profile guesses a provider or model alias. Profiles set role-specific write-intent and reasoning defaults. `worker` defaults to `writer`; every other built-in defaults to `read-only`. `delegate` remains closest to the parent and inherits its effort. `subagent_start` always uses profile routing, and an omitted `profile` uses `defaultProfile`, which defaults to `delegate`.
+For Claude and Codex, supervisor MCP report delivery—not raw final CLI text—owns completion. Local candidates always close on report, and process scope closes before writer lease release. Supervisor progress, warning, exact correlated question/reply, and report identities/sequences are forwarded unchanged into the backend event queue. Claude stream input is accepted only after native replay confirmation (the CLI may apply guidance at its next safe turn boundary). Claude interruption includes `cancel_queued:true`. Codex interruption waits for both the correlated JSON-RPC success and matching `turn/completed(status=interrupted)` in either order and emits no later settlement event. Normal Claude and Codex completion both use exact-epoch causal `SupervisorChannel` acceptance evidence recorded before the MCP call is acknowledged, so an accepted report wins even while its queue event is behind progress and a missing/wrong-epoch report fails instead of hanging; Claude's epoch-zero native initialization result remains non-assignment evidence. Resume, rename, peer notice, fork, and retained local runs are not advertised.
 
-| Profile      | Intended work                                   | Default context | Default intent | Default effort |
-| ------------ | ----------------------------------------------- | --------------- | -------------- | -------------- |
-| `scout`      | Fast local codebase reconnaissance              | fresh           | read-only      | low            |
-| `researcher` | Focused external research with sources          | fresh           | read-only      | medium         |
-| `planner`    | Concrete implementation planning                | fresh           | read-only      | medium         |
-| `worker`     | Focused implementation and validation           | fresh           | writer         | high           |
-| `reviewer`   | Independent evidence-based review               | fresh           | read-only      | high           |
-| `oracle`     | Inherited-decision analysis and drift detection | fork            | read-only      | high           |
-| `delegate`   | General delegated work                          | fresh           | read-only      | inherit        |
+## Profiles
 
-A default context is used when a launch omits `context`. An explicitly supplied context is hard. Fork requires a persisted Pi parent session with a stable leaf and never degrades silently to fresh when that context is unavailable. The selected attempt's context is preserved in run metadata.
+Built-ins preserve the previous behavior with one explicit `local` + `pi` + `parent` candidate. `closeOnReport` is true. Profile defaults are:
 
-Global configuration is read from `<agent-dir>/pi-subagents.json`. A trusted project may override it at `<cwd>/<CONFIG_DIR_NAME>/pi-subagents.json` (`CONFIG_DIR_NAME` is normally `.pi`). Untrusted project configuration is never read. Use `/subagents profiles` in TUI mode to edit normal single-candidate routes; ordered routes remain JSON-managed in the scope that declares them, while project scope can still override an inherited global ordered route with a local single-candidate route, `disabled`, or inherit.
+| Profile      | Context | Write intent | Effort        |
+| ------------ | ------- | ------------ | ------------- |
+| `scout`      | fresh   | read-only    | low           |
+| `researcher` | fresh   | read-only    | medium        |
+| `planner`    | fresh   | read-only    | medium        |
+| `worker`     | fresh   | writer       | high          |
+| `reviewer`   | fresh   | read-only    | high          |
+| `oracle`     | fork    | read-only    | high          |
+| `delegate`   | fresh   | read-only    | parent effort |
+
+`defaultProfile` defaults to `delegate`.
+
+## Configuration version 4
+
+Global configuration is `<agent-dir>/pi-subagents.json`. Trusted projects may override it at `<cwd>/<CONFIG_DIR_NAME>/pi-subagents.json` (normally `.pi/pi-subagents.json`). Untrusted project configuration is not read.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "defaultProfile": "delegate",
-  "denied": [{ "backend": "pi", "model": "provider/blocked-model" }],
-  "discouraged": [{ "backend": "pi", "model": "provider/legacy-model" }],
   "profiles": {
     "reviewer": [
-      { "model": "pi/provider/fast-review-model", "effort": "high" },
-      { "model": "pi/provider/deep-review-model", "effort": "xhigh" }
+      {
+        "host": "herdr",
+        "runtime": "claude",
+        "model": "claude-opus-5",
+        "effort": "high",
+        "context": "fresh",
+        "writeIntent": "read-only",
+        "closeOnReport": false
+      },
+      {
+        "host": "local",
+        "runtime": "pi",
+        "model": "openai-codex/gpt-5.6-sol",
+        "effort": "high",
+        "context": "fresh",
+        "writeIntent": "read-only",
+        "closeOnReport": true
+      }
     ],
-    "worker": { "model": "parent", "effort": "default" },
+    "worker": {
+      "host": "local",
+      "runtime": "pi",
+      "model": "parent",
+      "effort": "default",
+      "context": "fresh",
+      "writeIntent": "writer"
+    },
     "scout": "disabled"
   }
 }
 ```
 
-A profile value is exactly one candidate object, an ordered non-empty array of candidate objects, or `"disabled"`. Every candidate requires `model` and `effort`. Model selectors are exactly `parent` or canonical `pi/<provider>/<model-id>`. Effort is one of `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. `default` uses the profile's built-in effort, then the parent effort when that profile has no built-in default; it is soft. Every concrete configured effort and every per-launch effort override is hard.
+A route is exactly `"disabled"`, one candidate, or a non-empty ordered candidate array (maximum 32). Candidate fields are:
 
-Missing global routes use `{ "model": "parent", "effort": "default" }`. Missing project routes inherit the complete global route. Any present-invalid route fails closed as disabled for that scope and profile. Candidate order is authoritative and candidates are tried only during pre-start checks; routing never falls through after service start. `"disabled"` has no candidates and deterministically returns `profile_no_eligible_model`. Project `denied` and `discouraged` entries remain additive. Denied candidates are skipped; a discouraged candidate deliberately saved in a profile route remains launchable with a visible warning.
+- `host`: `local` or `herdr`;
+- `runtime`: `pi`, `claude`, or `codex`;
+- `model`: a bounded native runtime selector; Pi uses `parent` or canonical `provider/model`;
+- `effort`: `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`;
+- `context`: `fresh` or `fork`;
+- `writeIntent`: `read-only` or `writer`;
+- optional `closeOnReport`, defaulting to true.
 
-Configuration accepts at most 256 policy selectors, 32 candidates per route, and 256 characters per model selector. Every document must declare numeric `version: 3`; v1, v2, and versionless documents are intentionally unsupported and are not migrated. Before reloading, replace legacy `claude-cli/...` candidates with `parent` or canonical `pi/...` candidates and remove `backend: "claude-cli"` policy entries. Invalid JSON or an unsupported version fails activation closed with a path-safe error. Project configuration is read and written only when the host trust callback returns literal `true`. Fix the document and run `/reload`.
+Cross-field rules are strict:
 
-Examples:
+- `fork` is valid only for `local` + `pi`;
+- `parent` is valid only for `local` + `pi`;
+- `closeOnReport: false` is valid only for Herdr-hosted read-only candidates.
+
+Unknown candidate keys invalidate the complete present route, which then fails closed. Missing project routes inherit global routes; missing global routes use built-ins. Removed policy fields (`denied` and `discouraged`) and execution/lifetime fields are not part of v4 and produce unknown-key diagnostics.
+
+Version 3 does not migrate silently. Activation fails closed with guidance to rewrite candidates and remove old policy fields; fix the file and run `/reload`.
+
+## Starting and waiting
 
 ```json
 {
   "agents": [
-    {
-      "task": "Review the authentication changes",
-      "profile": "reviewer"
-    }
+    { "task": "Review the authentication changes", "profile": "reviewer" },
+    { "task": "Implement the accepted fix", "profile": "worker", "name": "auth-worker" }
   ]
 }
 ```
 
-This form is accepted by `subagent_start` and always uses the reviewer profile's project/global route. To change its model, edit the reviewer route through `/subagents profiles` or configuration and reload; the launch tool itself never accepts `model`.
+Legacy per-launch `execution`, `context`, `writeIntent`, `effort`, `backend`, and `model` fields are rejected with `[legacy_launch_override]` guidance. No public start path can request foreground execution.
 
-## Commands
+Use `subagent_models` to inspect complete configured candidates and static eligibility; executable/auth/harness readiness is checked at launch. It does not claim unsupported backends are available. Use `subagent_await` rather than polling status; “finished” means the selected run's current assignment is `reported` or terminal, not necessarily that a retained host resource closed. A parent question returns early so the parent can call `subagent_reply` and await again. For a future retained run, `subagent_send` from `reported` begins the next assignment on the same backend resource; `resume` remains for paused or closed completed sessions where supported.
 
-- `/subagents` opens the responsive fleet inspector in interactive TUI mode.
-- `/subagents profiles` opens TUI-only Global/trusted-Project profile settings, shows both scope paths, and saves one staged single-candidate edit atomically before offering reload. Escape moves back one step (effort → model → profile → scope) instead of abandoning the whole flow; the model picker keeps the active profile, scope, and settings path visible.
+## Commands and tools
 
-Fleet controls:
+- `/subagents` opens the TUI fleet inspector.
+- `/subagents profiles` opens the full ordered version-4 route editor at global or trusted-project scope. It loads every existing candidate in launch order and can inspect, add (up to 32), edit, duplicate, move, remove, disable, reset global routes to built-ins, or remove project declarations to inherit global. Candidate editing covers all six host/runtime combinations plus native model, effort, context, write intent, and report retention; controlling-field changes visibly normalize incompatible values before save. Changes remain staged until a complete route/path confirmation, preserve optimistic document concurrency, and require `/reload` to activate.
+- Agent tools: `subagent_models`, `subagent_start`, `subagent_list`, `subagent_status`, `subagent_await`, `subagent_send`, `subagent_reply`, `subagent_lifecycle`, and `subagent_rename`.
 
-- `j` / `k` or arrow keys select a run.
-- `Ctrl-U` / `Ctrl-D` (`C-u` / `C-d` in the footer) scroll up and down through the selected run's session output while preserving live tail-follow at the bottom.
-- `Enter` toggles details in narrow layouts.
-- `t` toggles technical details such as run ID, PID, cwd, and session file.
-- `?` switches between navigation keys and contextual actions when the terminal cannot fit both.
-- The responsive footer groups navigation, selected-agent actions, and global controls with `│`; state-aware hints hide actions that do not apply to the selected run.
-- Stopping requires two `x` presses on the same selected run. Changing selection or pressing `Esc` cancels the pending confirmation.
-- `Esc` closes the inspector when no stop confirmation is pending.
+Read-only Pi remains a fixed tool-capability policy, not a filesystem sandbox or confidentiality boundary. Every local Claude launch now requires the current strict subprocess sandbox (`enabled`, `failIfUnavailable`, no unsandboxed fallback), an empty network allowlist with strict denial, and a filesystem write allowlist derived from the assigned cwd. A writer exposes Bash only through sandbox auto-allow, omits Write/NotebookEdit, and grants Edit only through a canonical-cwd-scoped current permission pattern; bare Bash/Edit/Write never appear in `allowedTools` or `permissions.allow`. Unsupported writer paths/platforms fail preflight with `claude_writer_confinement_unsupported`, and unavailable sandbox dependencies fail selected startup rather than running unsandboxed.
 
-Structured session output groups adjacent repeated tools while retaining compact target summaries, wraps long targets and paths, shows state-specific idle messages and completion age, and labels child output neutrally as **Final report** without claiming parent delivery. `subagent_list` returns a compact fleet listing, while `subagent_status` returns labeled metadata without activity history for selected runs and reports stale IDs without discarding valid peers; full activity remains in `/subagents`. The main agent should use `subagent_await`, rather than polling status, after its independent work is finished; when await returns for a parent question, it should reply and await again. Completed start and await cards collapse to name, profile/model, reasoning effort, and a humanized status; expanded cards and model-facing results show selection source, candidate index, reason, skipped candidates, and policy warning. Selection provenance records the selected profile candidate, its configured index, prior skipped candidates, and any policy warning. Partial launch failures remain compact. Await headers say “Waiting for all agents” or “Waiting for first agent,” summarize finished and active states without exposing API tokens, and shift from warning to success or error as the fleet settles. Each await row shows the same agent name, model, reasoning effort, and status fields as the start result, with the colored effort value directly beside the model. Running agents use the same fixed-width Braille spinner in await cards and the fleet UI without moving rows; cancellation and first-finished returns clearly state which agents continue running. Responsive summary rows align name, model, effort, and status on wide terminals, color effort with Pi’s thinking palette, truncate model IDs first on narrow terminals, and hide fleet run IDs unless technical mode is enabled. A `▸ final reports` affordance marks expandable output; expanding it renders bounded final reports as Markdown without exposing run IDs or the broader metadata block. The await call updates one live tool card and returns selected final reports together; Escape cancels only the wait and leaves children running while preserving exact pending questions and reply recovery instructions. Reports returned in full by `subagent_await` or `subagent_status` are acknowledged and are not injected again. Reports clipped by the aggregate tool-output budget remain eligible for automatic delivery and can also be fetched individually. Unclaimed completions are batched briefly, split into bounded messages when necessary, and steered into an active orchestration run instead of accumulating as post-run follow-ups. Only successfully delivered generations are acknowledged; failed completion, question, and warning delivery retries use exponential backoff capped at 30 seconds while the generation remains relevant, and notifier deduplication resets with the parent session. Routine progress remains in the footer and `/subagents`; only questions and warnings enter model context.
+Claude's OS sandbox directly confines Bash and is the stronger boundary. Edit is a separate Claude file-tool permission policy, not a sandboxed subprocess; this adapter depends on the current CLI's scoped-path and symlink enforcement and does not claim a general OS boundary for file tools. Explicit WebFetch/WebSearch and model traffic are also outside the Bash network sandbox, so this is not a confidentiality/offline guarantee. Claude `--safe-mode` is not used because it removes the required stdio MCP path; empty setting sources, strict MCP, fixed tools, and validated native MCP inventory retain that helper while admin-managed policy can still apply. Codex uses its native read-only/workspace-write sandbox, while the adapter-owned supervisor MCP helper intentionally runs outside it. Allowed reads, model network access, runtime defects, and external services may still disclose data or have side effects.
 
-The main agent operates the fleet through nine focused tools: `subagent_models`, `subagent_start`, `subagent_list`, `subagent_status`, `subagent_await`, `subagent_send`, `subagent_reply`, `subagent_lifecycle`, and `subagent_rename`. `subagent_models` accepts only an optional `profile` filter and reports profile-route defaults, candidate eligibility, and effective candidate context; it is not a free-model catalog. `subagent_start` accepts one required `agents` array containing up to twelve independent profile-routed specifications. Every item requires only `task`; `profile` defaults to configured `defaultProfile`, write intent and effort use profile/candidate defaults unless deliberately overridden, and omitted context is resolved from the profile preference. An explicit context is a hard requirement. The item schema, execution validation, and host resolution each reject `model` and `backend` for stale or internal call shapes; host resolution then selects `profile ?? defaultProfile` before evaluating that profile's ordered route. A user request naming a model therefore cannot change one launch; the route must be changed in profile configuration.
+## Herdr host ownership and harnesses
 
-Pi profile candidate selectors include the provider, so duplicate model IDs are never guessed across providers. Omitted context is resolved per candidate, while an explicit per-launch context or effort can make a configured candidate ineligible; neither can introduce a model outside the selected profile route. Denied, unavailable, unauthenticated, context-incompatible, and effort-incompatible candidates are skipped before service start; deliberately configured discouraged candidates remain eligible and carry a visible warning. Once a candidate reaches `SubagentService.start`, routing never falls through to another candidate. Every launch failure includes a machine-actionable code alongside its message, and all model-visible tool results are bounded to 48,000 characters.
+Herdr candidates accept only the profile's native model/effort/context/write values. The CLI executable is fixed to `herdr`; no profile/config/session selector, executable, argv, or environment is accepted. Commands inherit only bounded `HERDR_SOCKET_PATH`/`HERDR_SESSION` selection from the parent environment (plus minimal CLI process environment), otherwise Herdr chooses its default session. Protocol 17, current marker-validated runtime integrations, canonical executables, auth, effort/model syntax, write policy, and private bridge files are checked before topology is created. A readiness failure may skip to the next candidate. Any mutation timeout, launch uncertainty, or cleanup uncertainty after ownership begins is fail-closed and never falls through.
 
-Multi-target guidance and lifecycle calls return successes and failures per run rather than hiding partial application. Failure codes are included in model-visible text, and ambiguous send, reply, interrupt, resume, or writer-start outcomes use operation-specific `*_outcome_uncertain` codes. The service does not retry or roll back an operation that may already have applied; the parent checks status before deciding whether another action is safe. The optional `subagent_lifecycle.message` field is accepted only for `action: "resume"`. Pi RPC uses a UTF-8-safe line room that bounds individual frames and aggregate queued bytes, then flushes decoder tails and final unterminated frames at EOF.
+The parent session lazily creates one non-focusing project workspace/tab and records workspace, tab, pane, terminal, name/runtime, cwd evidence, and every available native `agent_session` field (`source`, `agent`, `kind`, and `value`). One comparator revalidates that full tuple for prompt, inspect, rollback, and close; an incompletely proven provisional occupant is quarantined rather than closed. Changed/restored topology is not adopted or closed. Automatic operations restore prior tab focus when practical. Confirmed report with `closeOnReport:true`, explicit stop, session replacement/tree navigation/reload, and shutdown close exact owned topology. Retained read-only panes remain only until that same parent session ends.
+
+All native harnesses replace the pane shell with a fixed `env -i` environment before startup. The sole Herdr lifecycle integration is marker-validated and explicitly installed into generated private state:
+
+- **Claude:** fixed model/effort, empty normal setting sources, `--no-session-persistence`, disabled nonessential traffic in generated settings, strict supervisor MCP, delegation/integration denylist, current strict subprocess sandbox, and cwd-scoped writer Edit policy. Writer cwd characters that cannot be represented safely in the comma-delimited allowed-tool/scoped-Edit grammar are rejected before lease or topology ownership. This disables Claude's resumable conversation transcript/history for the delegated session and the package writes no report/history file in the project. Exact limit: the inherited authenticated Claude installation may still maintain implementation-defined account, cache, diagnostic, or provider-side records outside the project; this is not an offline or zero-retention guarantee. Read-only retention is supported; writers always close.
+- **Codex:** isolated private `CODEX_HOME`, bounded recursive `auth.json` copy or API-key fallback loaded from a 0600 private script (never secret argv/diagnostics), strict supervisor-only config, approvals `never`, read-only/workspace-write sandbox, and web/apps/plugins/multi-agent/network extras disabled. Only read-only runs may be retained.
+- **Pi:** fresh private session directory, fixed model/thinking, `PI_SUBAGENT_CHILD=1`, no discovered extensions/skills/prompts/themes/context, fixed read-only/writer built-ins, orchestration denylist, marker-validated Herdr lifecycle extension, and one packaged supervisor bridge extension. Environment-sourced model API keys are resolved before ownership and cross only through the 0600 private bootstrap consumed by that bridge; provider environment is never forwarded wholesale. Its four bridge tools use `withCodePreviewShell`, strict bounded inputs, concurrent correlated helper calls, and exact question replies.
+
+Herdr protocol 17 confirms prompt submission but exposes no safe interrupt/resume/rename operation for this ownership model. Herdr drivers therefore advertise only `steer` and `parent-contact`; stop and await remain parent service operations. A missing/mismatched agent or native idle/done without an accepted supervisor report fails the run. Pi/Claude read-only remains a capability policy rather than an OS sandbox; Codex adds its native sandbox. None is a confidentiality/offline boundary.
+
+## Installed CLI smoke tests
+
+Preflight validates bounded native model-selector syntax and a deliberately static current effort vocabulary. Claude Code's zero-inference initialize response is used to resolve aliases at selected startup, but account entitlement can still fail after selection; that failure does not fall through. Codex 0.145's generated `ReasoningEffort` schema remains an open string, so the adapter documents and permits only `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; delegation-enabling/unknown values remain excluded. Codex disables provider fallback and verifies the exact model returned by `thread/start` before issuing a turn.
+
+Harness preparation is failure-atomic after its unique private directory is created: write/sync/chmod/auth/config failures remove partial state. Unconfirmable removal returns `harness_cleanup_unconfirmed` and leaves the already-private state fail-closed for inspection rather than claiming deletion.
+
+Normal tests use fixture processes and never spend model tokens. The optional installed-CLI smoke runs executable/auth/harness, official Claude initialize/native-init/MCP inventory checks for both read-only and strict writer policy, and Codex thread initialization. Its Claude initialization input sets `shouldQuery:false`; no model inference or turn occurs:
+
+```bash
+PI_SUBAGENTS_REAL_CLI_SMOKE=1 pnpm --filter pi-subagents exec vitest run tests/local-cli-smoke.test.ts
+```
+
+The separately gated Herdr smoke creates session-owned topology and starts each native interactive runtime, waits only for private helper readiness, then immediately closes it **without submitting a prompt**. It can still trigger native startup network/auth activity and must not be run against valuable Herdr topology. Supply all three native model selectors:
+
+```bash
+PI_SUBAGENTS_REAL_HERDR_SMOKE=1 \
+PI_SUBAGENTS_HERDR_PI_MODEL=openai-codex/gpt-5.6-sol \
+PI_SUBAGENTS_HERDR_CLAUDE_MODEL=claude-opus-5 \
+PI_SUBAGENTS_HERDR_CODEX_MODEL=gpt-5.6-codex \
+pnpm --filter pi-subagents exec vitest run tests/herdr-real-smoke.test.ts
+```
+
+Paid six-adapter inference is a separate manual gate and is never part of normal CI. The design runs one self-reporting read-only task through `local|herdr × pi|claude|codex`, verifies a supervisor-owned report, then closes every run. It requires explicit cost acknowledgement and a disposable project/Herdr session:
+
+```bash
+PI_SUBAGENTS_REAL_INFERENCE_SMOKE=1 PI_SUBAGENTS_REAL_INFERENCE_ACK=paid-and-destructive \
+pnpm --filter pi-subagents exec vitest run tests/six-adapter-inference-smoke.test.ts
+```
+
+## Cross-process writer safety
+
+Writer cwd is resolved with `realpath` for launch and diagnostics, then identified by the directory's stable local filesystem device plus inode/file ID. The bounded SHA-256 identity digest keys both the in-memory guard and `<agent-dir>/subagents/writer-leases-v2/`; a directory rename therefore cannot evade ownership. Project files receive no lock, receipt, or report artifact. Windows writer starts fail with typed `unsupported_safe_writer_ownership` before canonicalization, lease acquisition, or spawn because safe descendant ownership requires a Job Object implementation. Read-only starts remain available.
+
+A newly acquired lease is `reserved`. Before every initial or respawn driver call, the service must token-check it and durably commit atomic `spawn-started` evidence. Mark failure or ambiguity means the driver is not invoked. Bounded schema-decoded evidence includes the phase, unguessable token, filesystem-identity digest, parent PID, process/session nonce and start evidence, session/run identity, version, and timestamps.
+
+Positive parent death (`ESRCH`) permits automatic reclaim **only** for stably decoded `reserved` evidence. A detached local child or Herdr PTY can outlive its parent, so `spawn-started` is never reclaimed automatically. Corrupt, transitional, permission-denied, changing, or otherwise uncertain evidence is also never overwritten. For those cases, first independently verify that every external backend descendant is dead, then recover the private lease state manually. The extension intentionally makes no automatic crash-cleanup claim for spawn-started writers.
+
+Dead-reservation takeover and normal release both atomically rename the complete lease directory to the **same** deterministic, non-empty destination derived only from the old ownership token, then token-check moved evidence. Release never performs read-then-unlink/rmdir. The shared enduring destination prevents a duplicate or delayed release or takeover from moving a replacement lease after either kind of ABA cycle. Tombstones remain under private agent state; each contains bounded evidence, retained history grows linearly with released/reclaimed ownership tokens, and automatic garbage collection is intentionally absent because delayed-operation death cannot be proven.
+
+Portable PID reuse detection is imperfect. A reused PID is treated as live/uncertain and may conservatively block a writer; process-start evidence and unguessable nonces improve diagnostics but never justify takeover. The protocol assumes same-host Pi parents share one agent directory on a local filesystem with stable device/inode identity and atomic directory create/rename behavior. Distinct agent homes, distributed hosts, and filesystems without those semantics are outside the coordination domain.
+
+Backend/process cleanup must confirm before lease release is authorized. If backend cleanup or tombstone release cannot be confirmed, session quarantine remains. Graceful session shutdown closes each backend before release. An uncatchable parent termination after `spawn-started` leaves a deliberate manual-recovery lock, even if the surviving backend later exits.

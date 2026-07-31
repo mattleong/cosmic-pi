@@ -7,6 +7,7 @@ export interface SubagentCompletionNotification {
   readonly name: string;
   readonly generation: number;
   readonly finalText?: string | undefined;
+  readonly retained?: boolean | undefined;
 }
 
 export type SubagentNotification =
@@ -44,12 +45,12 @@ export interface SubagentNotifier {
 }
 
 const MAX_NOTIFICATION_CHARS = 32 * 1024;
-const MAX_DEDUPE_RUNS = 128;
+const MAX_DEDUPE_KEYS = 1_024;
 const completionKey = (run: SubagentCompletionNotification): string =>
   `${run.id}:${run.generation}`;
 
 const remember = <A>(map: Map<string, A>, key: string, value: A): void => {
-  if (!map.has(key) && map.size >= MAX_DEDUPE_RUNS) {
+  if (!map.has(key) && map.size >= MAX_DEDUPE_KEYS) {
     const oldest = map.keys().next().value;
     if (oldest !== undefined) map.delete(oldest);
   }
@@ -69,7 +70,7 @@ interface CompletionChunk {
 }
 
 const completionSection = (run: SubagentCompletionNotification): string =>
-  `## ${run.name} (${run.id})${run.finalText ? `\n\n${run.finalText}` : "\n\nCompleted without a final report."}`;
+  `## ${run.name} (${run.id}) · report ${run.generation}${run.retained ? " · retained" : ""}${run.finalText ? `\n\n${run.finalText}` : "\n\nCompleted without a final report."}`;
 
 const boundedCompletionSection = (
   run: SubagentCompletionNotification,
@@ -86,11 +87,13 @@ const completionChunks = (
 ): ReadonlyArray<CompletionChunk> => {
   if (runs.length === 1) {
     const run = runs[0]!;
-    const prefix = `Background subagent ${run.name} (${run.id}) completed.`;
+    const prefix = run.retained
+      ? `Background subagent ${run.name} (${run.id}) reported generation ${run.generation} and remains available for guidance.`
+      : `Background subagent ${run.name} (${run.id}) completed.`;
     const maximumReportLength = Math.max(0, MAX_NOTIFICATION_CHARS - prefix.length - 2);
     const report = run.finalText
       ? boundedCompletionSection({ ...run, name: "Final report" }, maximumReportLength).replace(
-          `## Final report (${run.id})\n\n`,
+          `## Final report (${run.id}) · report ${run.generation}${run.retained ? " · retained" : ""}\n\n`,
           "",
         )
       : "Completed without a final report.";
@@ -142,13 +145,13 @@ const completionChunks = (
 };
 
 export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
-  const deliveredCompletions = new Map<string, number>();
+  const deliveredCompletions = new Map<string, true>();
   const deliveredActions = new Map<string, number>();
 
   const notify: SubagentNotifier = (notification) => {
     if (notification.type === "completed") {
       const fresh = notification.runs.filter(
-        (run) => (deliveredCompletions.get(run.id) ?? 0) < run.generation,
+        (run) => !deliveredCompletions.has(completionKey(run)),
       );
       if (fresh.length === 0) return { deliveredCompletionKeys: [] };
       const deliveredCompletionKeys: string[] = [];
@@ -166,7 +169,7 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
           );
           for (const run of chunk.runs) {
             const key = completionKey(run);
-            remember(deliveredCompletions, run.id, run.generation);
+            remember(deliveredCompletions, key, true);
             deliveredCompletionKeys.push(key);
           }
         } catch {

@@ -5,7 +5,6 @@ import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 import { isTerminalRunState, type SubagentCapability, type SubagentRunView } from "./model.ts";
 import type { RunRecord } from "./internal.ts";
-import type { ParentReply, RpcCommand, RpcResponse } from "./protocol.ts";
 import {
   InvalidSubagentRequestError,
   type SubagentError,
@@ -14,6 +13,7 @@ import {
   UnsupportedSubagentCapabilityError,
 } from "./errors.ts";
 import { validateParentMessage } from "./coordination.ts";
+import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { sanitizeName, snapshotView } from "./state.ts";
 
@@ -25,10 +25,20 @@ export interface RunControlDependencies {
     record: RunRecord,
     capability: SubagentCapability,
   ) => Effect.Effect<void, UnsupportedSubagentCapabilityError>;
-  readonly rpc: <A extends RpcCommand>(
+  readonly steerBackend: (record: RunRecord, message: string) => Effect.Effect<void, SubagentError>;
+  readonly beginAssignmentBackend: (
     record: RunRecord,
-    command: A,
-  ) => Effect.Effect<RpcResponse, SubagentError>;
+    message: string,
+    attemptToken: string,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  readonly allocateAssignmentAttemptToken: () => string;
+  readonly retainUncertainAssignment: (
+    record: RunRecord,
+    attemptToken: string,
+    warning: string,
+  ) => Effect.Effect<void>;
+  readonly interruptBackend: (record: RunRecord) => Effect.Effect<void, SubagentError>;
+  readonly renameBackend: (record: RunRecord, name: string) => Effect.Effect<void, SubagentError>;
   readonly publish: () => void;
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
   readonly deliverForeground: (record: RunRecord, view: SubagentRunView) => boolean;
@@ -47,7 +57,12 @@ export function makeRunControls(dependencies: RunControlDependencies) {
     withLock,
     requireRecord,
     requireCapability,
-    rpc,
+    steerBackend,
+    beginAssignmentBackend,
+    allocateAssignmentAttemptToken,
+    retainUncertainAssignment,
+    interruptBackend,
+    renameBackend,
     publish,
     sendPeerNotices,
     deliverForeground,
@@ -59,7 +74,8 @@ export function makeRunControls(dependencies: RunControlDependencies) {
   const send = (id: string, message: string): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.gen(function* () {
       const normalized = yield* validateParentMessage(message, "Guidance message is required.");
-      const record = yield* withLock(
+      const nextSettlement = yield* Deferred.make<SubagentRunView>();
+      const selected = yield* withLock(
         Effect.gen(function* () {
           const selected = yield* requireRecord(id);
           yield* requireCapability(selected, "steer");
@@ -73,6 +89,53 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               code: "reply_in_flight",
               message: `Subagent ${id} already has a parent reply in flight.`,
             });
+          if (selected.view.state === "reported" && selected.view.closeOnReport === false) {
+            if (selected.completionGenerations.size >= MAX_UNRESOLVED_REPORT_GENERATIONS)
+              return yield* new InvalidSubagentRequestError({
+                code: "report_delivery_backlog",
+                message: `Subagent ${id} has ${selected.completionGenerations.size} unresolved report generations; wait for parent delivery or claim the latest report before beginning another assignment.`,
+              });
+            const attemptToken = allocateAssignmentAttemptToken();
+            const previous = {
+              view: snapshotView(selected.view),
+              settlement: selected.settlement,
+              latestAssistantText: selected.latestAssistantText,
+              warningTurnTriggered: selected.warningTurnTriggered,
+              assignment: { ...selected.assignment },
+              activeTools: [...selected.activeTools.entries()] as const,
+              pauseRequested: selected.pauseRequested,
+              pauseOutcome: selected.pauseOutcome,
+              replyPendingRequestId: selected.replyPendingRequestId,
+            };
+            selected.settlement = nextSettlement;
+            selected.latestAssistantText = undefined;
+            selected.warningTurnTriggered = false;
+            selected.assignment = {
+              epoch: selected.nextAssignmentEpoch++,
+              phase: "issuing",
+              attemptToken,
+              startedObserved: false,
+              outcomeUncertain: false,
+              pendingRunSettled: false,
+            };
+            selected.view = {
+              ...selected.view,
+              state: "starting",
+              endedAt: undefined,
+              finalText: undefined,
+              progress: undefined,
+              warning: undefined,
+              error: undefined,
+              lastActivityAt: yield* Clock.currentTimeMillis,
+            };
+            publish();
+            return {
+              record: selected,
+              retained: true as const,
+              previous,
+              attemptToken,
+            };
+          }
           if (selected.view.state === "paused" || selected.view.state === "completed")
             return yield* new InvalidSubagentRequestError({
               code: "run_not_running",
@@ -88,13 +151,43 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               code: "run_not_running",
               message: `Subagent ${id} is ${selected.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
             });
-          return selected;
+          return { record: selected, retained: false as const };
         }),
       );
-      yield* rpc(record, { type: "steer", message: normalized });
+      const record = selected.record;
+      yield* selected.retained
+        ? beginAssignmentBackend(record, normalized, selected.attemptToken).pipe(
+            Effect.tapError((error) => {
+              if (
+                error._tag === "SubagentProcessError" &&
+                error.code?.endsWith("_outcome_uncertain")
+              )
+                return retainUncertainAssignment(record, selected.attemptToken, error.message);
+              return withLock(
+                Effect.sync(() => {
+                  if (record.assignment.attemptToken !== selected.attemptToken) return;
+                  record.view = selected.previous.view;
+                  record.settlement = selected.previous.settlement;
+                  record.latestAssistantText = selected.previous.latestAssistantText;
+                  record.warningTurnTriggered = selected.previous.warningTurnTriggered;
+                  record.assignment = selected.previous.assignment;
+                  record.activeTools.clear();
+                  for (const [toolCallId, toolName] of selected.previous.activeTools)
+                    record.activeTools.set(toolCallId, toolName);
+                  record.pauseRequested = selected.previous.pauseRequested;
+                  record.pauseOutcome = selected.previous.pauseOutcome;
+                  record.replyPendingRequestId = selected.previous.replyPendingRequestId;
+                  publish();
+                }),
+              );
+            }),
+          )
+        : steerBackend(record, normalized);
       const now = yield* Clock.currentTimeMillis;
       return yield* withLock(
         Effect.gen(function* () {
+          if (record.view.state === "reported" && selected.retained)
+            return snapshotView(record.view);
           if (record.view.state !== "running")
             return yield* new InvalidSubagentRequestError({
               code: "guidance_outcome_uncertain",
@@ -152,15 +245,9 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             return { record, process, question };
           }),
         );
-        const envelope: ParentReply = {
-          channel: "pi-subagents",
-          type: "parent_reply",
-          requestId: claimed.question.requestId,
-          message: normalized,
-        };
-        const commit = claimed.process.sendIpc(envelope).pipe(
+        const commit = claimed.process.controls.reply(claimed.question.requestId, normalized).pipe(
           Effect.mapError((error) =>
-            error.code === "transport_outcome_uncertain"
+            error._tag === "SubagentProcessError" && error.code === "transport_outcome_uncertain"
               ? new SubagentProcessError({
                   operation: "reply",
                   code: "reply_outcome_uncertain",
@@ -192,7 +279,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           // The owner-scoped commit outlives cancellation of the requesting tool.
           // Roll back only when the transport itself reports a definite failure.
           Effect.tapError((error) =>
-            error.code === "reply_outcome_uncertain"
+            error._tag === "SubagentProcessError" && error.code === "reply_outcome_uncertain"
               ? Effect.void
               : withLock(
                   Effect.sync(() => {
@@ -245,7 +332,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         );
         const commit = Effect.gen(function* () {
           yield* Effect.raceFirst(
-            rpc(record, { type: "abort" }).pipe(Effect.asVoid),
+            interruptBackend(record),
             Deferred.await(pauseOutcome).pipe(Effect.asVoid),
           ).pipe(
             Effect.catch((error) =>
@@ -323,7 +410,8 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           if (
             record.view.state !== "running" &&
             record.view.state !== "waiting_for_parent" &&
-            record.view.state !== "paused"
+            record.view.state !== "paused" &&
+            record.view.state !== "reported"
           ) {
             record.launch = { ...record.launch, name };
             record.view = { ...record.view, name };
@@ -337,7 +425,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         yield* sendPeerNotices(id);
         return selected.localView;
       }
-      yield* rpc(selected.record, { type: "set_session_name", name });
+      yield* renameBackend(selected.record, name);
       const view = yield* withLock(
         Effect.gen(function* () {
           if (

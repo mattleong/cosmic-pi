@@ -1,9 +1,14 @@
 // Promise assertions are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
+// @effect-diagnostics effect/nodeBuiltinImport:off
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
+
+const testAgentDirectory = () => join(tmpdir(), "pi-subagents-application-tests");
 
 const deferred = <A>() => {
   let resolve!: (value: A) => void;
@@ -49,6 +54,7 @@ describe("subagent Pi registration", () => {
       sendMessage: vi.fn(),
     } as unknown as ExtensionAPI;
     registerSubagentApplication(pi, {
+      getAgentDirectory: testAgentDirectory,
       loadSettings: (cwd, trust) => {
         loads.push([cwd, trust]);
         return loads.length === 1 ? first.promise : second.promise;
@@ -111,7 +117,10 @@ describe("subagent Pi registration", () => {
       setActiveTools: vi.fn(),
       sendMessage: vi.fn(),
     } as unknown as ExtensionAPI;
-    registerSubagentApplication(pi, { loadSettings: () => settings.promise });
+    registerSubagentApplication(pi, {
+      getAgentDirectory: testAgentDirectory,
+      loadSettings: () => settings.promise,
+    });
     const ctx = {
       cwd: process.cwd(),
       signal: undefined,
@@ -149,7 +158,10 @@ describe("subagent Pi registration", () => {
       setActiveTools,
       sendMessage: vi.fn(),
     } as unknown as ExtensionAPI;
-    registerSubagentApplication(pi, { loadSettings: () => Promise.resolve() });
+    registerSubagentApplication(pi, {
+      getAgentDirectory: testAgentDirectory,
+      loadSettings: () => Promise.resolve(),
+    });
     const ctx = {
       cwd: process.cwd(),
       signal: undefined,
@@ -196,6 +208,7 @@ describe("subagent Pi registration", () => {
       sendMessage: vi.fn(),
     } as unknown as ExtensionAPI;
     registerSubagentApplication(pi, {
+      getAgentDirectory: testAgentDirectory,
       loadSettings: () => {
         settingsLoads += 1;
         return settingsLoads === 2 ? replacementSettings.promise : Promise.resolve();

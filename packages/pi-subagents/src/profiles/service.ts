@@ -1,13 +1,8 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import {
-  modelPolicyFor,
-  type ModelPolicy,
-  type ResolvedSubagentConfig,
-} from "../config/options.ts";
+import type { ResolvedSubagentConfig } from "../config/options.ts";
 import { SubagentConfigStore } from "../config/store.ts";
-import type { SubagentBackend, SubagentContextMode, SubagentEffort } from "../run/model.ts";
 import { profileDefinition } from "./definitions.ts";
 import { isProfileId, type ProfileDefinition } from "./model.ts";
 import {
@@ -22,10 +17,7 @@ export interface SubagentProfileServiceShape {
   readonly resolve: (
     profile: string,
     environment: ProfileResolutionEnvironment,
-    contextOverride?: SubagentContextMode,
-    effortOverride?: SubagentEffort,
   ) => ProfileResolution;
-  readonly policyFor: (backend: SubagentBackend, model: string) => ModelPolicy;
 }
 
 export class SubagentProfileService extends Context.Service<
@@ -48,9 +40,7 @@ export const makeSubagentProfileService = (
 ): SubagentProfileServiceShape => ({
   config,
   definition: (profile) => (isProfileId(profile) ? profileDefinition(profile) : undefined),
-  resolve: (profile, environment, contextOverride, effortOverride) =>
-    resolveProfilePlan(profile, config, environment, contextOverride, effortOverride),
-  policyFor: (backend, model) => modelPolicyFor(config, backend, model),
+  resolve: (profile, environment) => resolveProfilePlan(profile, config, environment),
 });
 
 export const subagentProfileServiceLayer = (options: SubagentProfileLayerOptions) =>

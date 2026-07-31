@@ -1,6 +1,11 @@
-import { modelPolicyFor, type ResolvedSubagentConfig } from "../config/options.ts";
 import { resolvePiModelSelector, type PiCatalogModel } from "../run/model-catalog.ts";
-import type { SubagentBackend, SubagentContextMode, SubagentEffort } from "../run/model.ts";
+import type {
+  SubagentContextMode,
+  SubagentEffort,
+  SubagentHost,
+  SubagentRuntime,
+  SubagentWriteIntent,
+} from "../run/model.ts";
 import { profileDefinition } from "./definitions.ts";
 import {
   isProfileId,
@@ -9,6 +14,7 @@ import {
   type SkippedProfileCandidate,
   type SubagentSelectionSource,
 } from "./model.ts";
+import type { ResolvedSubagentConfig } from "../config/options.ts";
 
 export interface ParentProfileModel {
   readonly model: string;
@@ -25,9 +31,12 @@ export interface ProfileCandidateAttempt {
   readonly profile: ProfileId;
   readonly source: SubagentSelectionSource;
   readonly candidateIndex: number;
-  readonly backend: SubagentBackend;
+  readonly host: SubagentHost;
+  readonly runtime: SubagentRuntime;
   readonly model: string;
   readonly effectiveContext: SubagentContextMode;
+  readonly writeIntent: SubagentWriteIntent;
+  readonly closeOnReport: boolean;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
   readonly reason: string;
@@ -37,8 +46,6 @@ export interface ProfileCandidateAttempt {
 export interface ProfileResolutionPlan {
   readonly kind: "resolved";
   readonly profile: ProfileId;
-  /** Requested context, or the profile preference when omitted. Attempts carry effective context. */
-  readonly preferredContext: SubagentContextMode;
   readonly attempts: ReadonlyArray<ProfileCandidateAttempt>;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
   readonly trailingSkippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
@@ -55,7 +62,7 @@ export interface ProfileResolutionFailure {
 export type ProfileResolution = ProfileResolutionPlan | ProfileResolutionFailure;
 
 export const profileCandidateLabel = (candidate: ProfileCandidate): string =>
-  `${candidate.model}:${candidate.effort}`;
+  `${candidate.host}/${candidate.runtime}/${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:closeOnReport=${candidate.closeOnReport}`;
 
 const skip = (
   candidate: string,
@@ -85,24 +92,6 @@ const unsupportedPiEffort = (
   );
 };
 
-const automaticPolicySkip = (
-  config: ResolvedSubagentConfig,
-  backend: SubagentBackend,
-  model: string,
-  label: string,
-  candidateIndex: number,
-): SkippedProfileCandidate | undefined => {
-  const policy = modelPolicyFor(config, backend, model);
-  if (policy === "denied")
-    return skip(
-      label,
-      "model_denied",
-      `Model ${backend}/${model} is denied by policy.`,
-      candidateIndex,
-    );
-  return undefined;
-};
-
 interface CandidateResult {
   readonly attempt?: ProfileCandidateAttempt | undefined;
   readonly skipped?: SkippedProfileCandidate | undefined;
@@ -113,18 +102,40 @@ const softEffort = (
   parent: ParentProfileModel | undefined,
 ): SubagentEffort => profileDefault ?? parent?.effort ?? "high";
 
-interface CandidateContextResolution {
-  readonly effectiveContext?: SubagentContextMode | undefined;
-  readonly skipped?: SkippedProfileCandidate | undefined;
-}
-
-const resolveCandidateContext = (
-  preferredContext: SubagentContextMode,
-  environment: ProfileResolutionEnvironment,
-  label: string,
+const baseAttempt = (
+  profile: ProfileId,
+  candidate: ProfileCandidate,
   candidateIndex: number,
-): CandidateContextResolution => {
-  if (preferredContext === "fork" && !environment.forkAvailable)
+  effort: SubagentEffort,
+  effortWasExplicit: boolean,
+  model = candidate.model,
+): ProfileCandidateAttempt => ({
+  profile,
+  source: candidate.model === "parent" ? "profile-parent-candidate" : "profile-candidate",
+  candidateIndex,
+  host: candidate.host,
+  runtime: candidate.runtime,
+  model,
+  effectiveContext: candidate.context,
+  writeIntent: candidate.writeIntent,
+  closeOnReport: candidate.closeOnReport,
+  effort,
+  effortWasExplicit,
+  reason: `Profile ${profile} selected ${candidate.host}/${candidate.runtime} candidate ${candidateIndex + 1}.`,
+});
+
+const resolveCandidate = (
+  profile: ProfileId,
+  candidate: ProfileCandidate,
+  candidateIndex: number,
+  environment: ProfileResolutionEnvironment,
+  profileDefaultEffort: SubagentEffort | undefined,
+): CandidateResult => {
+  const label = profileCandidateLabel(candidate);
+  const hardEffort = candidate.effort === "default" ? undefined : candidate.effort;
+  const selectedEffort = hardEffort ?? softEffort(profileDefaultEffort, environment.parentModel);
+
+  if (candidate.context === "fork" && !environment.forkAvailable)
     return {
       skipped: skip(
         label,
@@ -133,31 +144,19 @@ const resolveCandidateContext = (
         candidateIndex,
       ),
     };
-  return { effectiveContext: preferredContext };
-};
 
-const resolveCandidate = (
-  profile: ProfileId,
-  candidate: ProfileCandidate,
-  candidateIndex: number,
-  preferredContext: SubagentContextMode,
-  config: ResolvedSubagentConfig,
-  environment: ProfileResolutionEnvironment,
-  profileDefaultEffort: SubagentEffort | undefined,
-  effortOverride?: SubagentEffort,
-): CandidateResult => {
-  const label = profileCandidateLabel(candidate);
-  const configuredEffort = candidate.effort === "default" ? undefined : candidate.effort;
-  const hardEffort = effortOverride ?? configuredEffort;
-  const selectedEffort = hardEffort ?? softEffort(profileDefaultEffort, environment.parentModel);
-  const contextResolution = resolveCandidateContext(
-    preferredContext,
-    environment,
-    label,
-    candidateIndex,
-  );
-  if (contextResolution.skipped) return { skipped: contextResolution.skipped };
-  const effectiveContext = contextResolution.effectiveContext ?? preferredContext;
+  // Unsupported adapters remain syntactically and statically representable. Host resolution
+  // dynamically classifies them so ordered fallback is visible in launch provenance.
+  if (candidate.host !== "local" || candidate.runtime !== "pi")
+    return {
+      attempt: baseAttempt(
+        profile,
+        candidate,
+        candidateIndex,
+        selectedEffort,
+        hardEffort !== undefined,
+      ),
+    };
 
   if (candidate.model === "parent") {
     const parent = environment.parentModel;
@@ -182,9 +181,6 @@ const resolveCandidate = (
           candidateIndex,
         ),
       };
-    const model = `${resolved.provider}/${resolved.id}`;
-    const policySkip = automaticPolicySkip(config, "pi", model, label, candidateIndex);
-    if (policySkip) return { skipped: policySkip };
     const effortSkip = unsupportedPiEffort(
       environment,
       resolved.provider,
@@ -195,24 +191,18 @@ const resolveCandidate = (
     );
     if (effortSkip) return { skipped: effortSkip };
     return {
-      attempt: {
+      attempt: baseAttempt(
         profile,
-        source: "profile-parent-candidate",
+        candidate,
         candidateIndex,
-        backend: "pi",
-        model,
-        effectiveContext,
-        effort: selectedEffort,
-        effortWasExplicit: hardEffort !== undefined,
-        reason: `Profile ${profile} selected parent candidate ${candidateIndex + 1}.`,
-      },
+        selectedEffort,
+        hardEffort !== undefined,
+        `${resolved.provider}/${resolved.id}`,
+      ),
     };
   }
 
-  const selector = candidate.model.slice("pi/".length);
-  const configuredPolicySkip = automaticPolicySkip(config, "pi", selector, label, candidateIndex);
-  if (configuredPolicySkip) return { skipped: configuredPolicySkip };
-  const resolved = resolvePiModelSelector(selector, environment.availablePiModels);
+  const resolved = resolvePiModelSelector(candidate.model, environment.availablePiModels);
   if (resolved.kind !== "resolved")
     return {
       skipped: skip(
@@ -224,9 +214,6 @@ const resolveCandidate = (
         candidateIndex,
       ),
     };
-  const model = `${resolved.provider}/${resolved.id}`;
-  const policySkip = automaticPolicySkip(config, "pi", model, label, candidateIndex);
-  if (policySkip) return { skipped: policySkip };
   const effortSkip = unsupportedPiEffort(
     environment,
     resolved.provider,
@@ -237,17 +224,14 @@ const resolveCandidate = (
   );
   if (effortSkip) return { skipped: effortSkip };
   return {
-    attempt: {
+    attempt: baseAttempt(
       profile,
-      source: "profile-candidate",
+      candidate,
       candidateIndex,
-      backend: "pi",
-      model,
-      effectiveContext,
-      effort: selectedEffort,
-      effortWasExplicit: hardEffort !== undefined,
-      reason: `Profile ${profile} selected configured candidate ${candidateIndex + 1}.`,
-    },
+      selectedEffort,
+      hardEffort !== undefined,
+      `${resolved.provider}/${resolved.id}`,
+    ),
   };
 };
 
@@ -256,8 +240,6 @@ export function resolveProfilePlan(
   requestedProfile: string,
   config: ResolvedSubagentConfig,
   environment: ProfileResolutionEnvironment,
-  contextOverride?: SubagentContextMode,
-  effortOverride?: SubagentEffort,
 ): ProfileResolution {
   if (!isProfileId(requestedProfile))
     return {
@@ -267,14 +249,13 @@ export function resolveProfilePlan(
       skippedCandidates: [],
     };
   const definition = profileDefinition(requestedProfile);
-  const preferredContext = contextOverride ?? definition.defaultContext;
   const route = config.profiles[requestedProfile];
   if (route.candidates.length === 0) {
     const source = config.profileSources[requestedProfile];
     const message =
       source === "global-invalid" || source === "project-invalid"
         ? `Profile ${requestedProfile} has an invalid ${source === "project-invalid" ? "project" : "global"} route and fails closed; repair ${source === "project-invalid" ? config.projectConfigPath : config.globalConfigPath}.`
-        : `Profile ${requestedProfile} is disabled and has no eligible model.`;
+        : `Profile ${requestedProfile} is disabled and has no eligible candidate.`;
     return {
       kind: "failed",
       code: "profile_no_eligible_model",
@@ -291,11 +272,8 @@ export function resolveProfilePlan(
       requestedProfile,
       candidate,
       candidateIndex,
-      preferredContext,
-      config,
       environment,
       definition.defaultEffort,
-      effortOverride,
     );
     if (result.attempt) {
       attempts.push({ ...result.attempt, skippedBefore: pendingSkipped });
@@ -310,7 +288,6 @@ export function resolveProfilePlan(
     return {
       kind: "resolved",
       profile: requestedProfile,
-      preferredContext,
       attempts,
       skippedCandidates,
       trailingSkippedCandidates: pendingSkipped,
@@ -324,7 +301,7 @@ export function resolveProfilePlan(
     profile: requestedProfile,
     message: forkUnavailable
       ? `Profile ${requestedProfile} requires forked context, but the parent session has no stable persisted leaf.`
-      : `Profile ${requestedProfile} has no eligible model.${skippedCandidates.length > 0 ? ` ${skippedCandidates.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+      : `Profile ${requestedProfile} has no eligible candidate.${skippedCandidates.length > 0 ? ` ${skippedCandidates.map((candidate) => candidate.reason).join(" ")}` : ""}`,
     skippedCandidates,
   };
 }

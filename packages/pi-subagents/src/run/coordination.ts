@@ -21,6 +21,13 @@ export const ORCHESTRATION_TOOL_DENYLIST: ReadonlySet<string> = new Set([
   "subagent_reply",
   "subagent_lifecycle",
   "subagent_rename",
+  "herdr_agent_start",
+  "herdr_agent_list",
+  "herdr_agent_status",
+  "herdr_agent_await",
+  "herdr_agent_read",
+  "herdr_agent_send",
+  "herdr_agent_stop",
   "workflow",
   "workflow_control",
 ]);

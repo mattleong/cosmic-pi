@@ -1,6 +1,5 @@
 import { freezeSnapshot, sanitizeDiagnosticError, stripTerminalControls } from "pi-cosmic-core";
 import type { SubagentRunView, SubagentUsage } from "./model.ts";
-import type { RpcUsage } from "./protocol.ts";
 
 export const MAX_NAME_CHARS = 80;
 export const MAX_TASK_CHARS = 128 * 1024;
@@ -68,15 +67,6 @@ export const sanitizeDiagnosticText = (value: string, limit: number): string => 
 
 export const sanitizeOutputText = (value: string, limit: number): string =>
   clipText(stripTerminalControls(value), limit);
-
-export const usageFromMessage = (usage: RpcUsage | undefined): SubagentUsage => ({
-  input: usage?.input ?? 0,
-  output: usage?.output ?? 0,
-  cacheRead: usage?.cacheRead ?? 0,
-  cacheWrite: usage?.cacheWrite ?? 0,
-  totalTokens: usage?.totalTokens ?? 0,
-  cost: usage?.cost?.total ?? 0,
-});
 
 const isValidUsage = (usage: SubagentUsage): boolean =>
   [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens].every(

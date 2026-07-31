@@ -5,6 +5,7 @@ export const SUBAGENT_RUN_STATES = [
   "running",
   "waiting_for_parent",
   "paused",
+  "reported",
   "completed",
   "failed",
   "stopping",
@@ -15,18 +16,10 @@ export type SubagentRunState = (typeof SUBAGENT_RUN_STATES)[number];
 export type SubagentExecution = "foreground" | "background";
 export type SubagentContextMode = "fresh" | "fork";
 export type SubagentWriteIntent = "writer" | "read-only";
+export type SubagentHost = "local" | "herdr";
+export type SubagentRuntime = "pi" | "claude" | "codex";
+/** Dormant local-service compatibility alias; public routing uses host + runtime. */
 export type SubagentBackend = "pi";
-
-export const SUBAGENT_BACKEND_CONTEXTS: Readonly<
-  Record<SubagentBackend, ReadonlyArray<SubagentContextMode>>
-> = {
-  pi: ["fresh", "fork"],
-};
-
-export const backendSupportsContext = (
-  backend: SubagentBackend,
-  context: SubagentContextMode,
-): boolean => SUBAGENT_BACKEND_CONTEXTS[backend].includes(context);
 
 export type SubagentCapability =
   | "steer"
@@ -114,6 +107,12 @@ export interface SubagentRunView {
   readonly execution: SubagentExecution;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
+  readonly host?: SubagentHost | undefined;
+  readonly runtime?: SubagentRuntime | undefined;
+  readonly closeOnReport?: boolean | undefined;
+  /** Current assignment/report generation. Zero means no report has been accepted yet. */
+  readonly reportGeneration: number;
+  /** Optional only for decoding/rendering persisted pre-v4 views. New runs always populate these. */
   readonly backend: SubagentBackend;
   readonly capabilities: ReadonlyArray<SubagentCapability>;
   readonly model: string;
@@ -141,6 +140,10 @@ export interface SubagentProjection {
 
 export interface StartSubagentRequest {
   readonly name?: string | undefined;
+  readonly host: SubagentHost;
+  readonly runtime: SubagentRuntime;
+  readonly closeOnReport: boolean;
+  /** Compatibility input for the currently implemented local Pi service. */
   readonly backend: SubagentBackend;
   readonly task: string;
   readonly profile?: ProfileId | undefined;
@@ -171,6 +174,7 @@ export const ACTIVE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
   "running",
   "waiting_for_parent",
   "paused",
+  "reported",
   "stopping",
 ]);
 
@@ -184,6 +188,10 @@ export const TERMINAL_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
 
 export const isTerminalRunState = (state: SubagentRunState): boolean =>
   TERMINAL_RUN_STATES.has(state);
+
+/** Finished refers to the current assignment, not necessarily to backend resource closure. */
+export const isAssignmentFinishedRunState = (state: SubagentRunState): boolean =>
+  state === "reported" || isTerminalRunState(state);
 
 export const emptyUsage = (): SubagentUsage => ({
   input: 0,

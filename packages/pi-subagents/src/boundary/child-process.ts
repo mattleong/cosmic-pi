@@ -21,6 +21,7 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
@@ -31,7 +32,7 @@ import {
 import { SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
 import { terminateProcessTree } from "./process-tree.ts";
-import type { ParentReply, PeerNotice, RpcCommand } from "../run/protocol.ts";
+import type { ParentReply, PeerNotice, RpcCommand } from "../backend/local-pi-protocol.ts";
 import type { SubagentContextMode, SubagentEffort } from "../run/model.ts";
 
 const MAX_RPC_LINE_BYTES = 4 * 1024 * 1024;
@@ -84,7 +85,10 @@ export interface ChildProcessHandle {
   readonly events: Queue.Dequeue<ChildWireEvent, Cause.Done>;
   /** Release byte-weighted transport backlog ownership after one event is processed. */
   readonly acknowledge?: ((event: ChildWireEvent) => void) | undefined;
-  readonly awaitExit: Effect.Effect<Extract<ChildWireEvent, { readonly type: "exit" }>>;
+  readonly awaitExit: Effect.Effect<
+    Extract<ChildWireEvent, { readonly type: "exit" }>,
+    SubagentProcessError
+  >;
   readonly send: (command: RpcCommand) => Effect.Effect<void, SubagentProcessError>;
   readonly sendIpc: (
     message: ParentReply | PeerNotice,
@@ -115,6 +119,14 @@ export function safeSubagentDirectorySegment(value: string): string {
   return `id-${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
 }
 
+export const childToolPolicy = (
+  activeTools: ReadonlyArray<string>,
+  writeIntent: import("../run/model.ts").SubagentWriteIntent,
+): { readonly enabled: ReadonlyArray<string>; readonly excluded: string } => ({
+  enabled: piToolsForWriteIntent(activeTools, writeIntent),
+  excluded: ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
+});
+
 export const requestCooperativeAbort = (
   send: (command: RpcCommand) => Effect.Effect<void, SubagentProcessError>,
 ): Effect.Effect<void> =>
@@ -124,6 +136,61 @@ export const requestCooperativeAbort = (
     Effect.catch(() => Effect.void),
     Effect.asVoid,
   );
+
+export interface ChildProcessReleaseOperations {
+  readonly platform: NodeJS.Platform;
+  readonly requestAbort: Effect.Effect<void>;
+  readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, SubagentProcessError>;
+  readonly awaitExit: Effect.Effect<unknown>;
+}
+
+const cleanupUnconfirmed = () =>
+  processError(
+    "confirm subagent process cleanup",
+    new Error("Process exit was not confirmed after forced termination."),
+    "cleanup_unconfirmed",
+  );
+
+export const releaseChildProcess = (
+  operations: ChildProcessReleaseOperations,
+): Effect.Effect<void, SubagentProcessError> => {
+  const waitForExit = operations.awaitExit.pipe(
+    Effect.interruptible,
+    Effect.timeoutOption("2 seconds"),
+  );
+  return operations.requestAbort.pipe(
+    Effect.andThen(Effect.sleep("100 millis")),
+    Effect.andThen(Effect.exit(operations.terminate("graceful"))),
+    Effect.flatMap((gracefulAttempt) =>
+      waitForExit.pipe(
+        Effect.flatMap((gracefulExit) => {
+          if (gracefulExit._tag === "Some") {
+            if (operations.platform === "win32")
+              return Exit.isSuccess(gracefulAttempt)
+                ? Effect.void
+                : Effect.fail(cleanupUnconfirmed());
+            return Effect.sleep("100 millis").pipe(
+              // POSIX descendants remain owned by the detached process group after
+              // the leader exits, so complete a force sweep before releasing ownership.
+              Effect.andThen(operations.terminate("force")),
+            );
+          }
+          return Effect.exit(operations.terminate("force")).pipe(
+            Effect.flatMap((forceAttempt) =>
+              waitForExit.pipe(
+                Effect.flatMap((forcedExit) =>
+                  Exit.isSuccess(forceAttempt) && forcedExit._tag === "Some"
+                    ? Effect.void
+                    : Effect.fail(cleanupUnconfirmed()),
+                ),
+              ),
+            ),
+          );
+        }),
+      ),
+    ),
+  );
+};
 
 function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
   return {
@@ -218,7 +285,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
   const ready = yield* Deferred.make<void, SubagentProcessError>();
   const exited = yield* Deferred.make<Extract<ChildWireEvent, { readonly type: "exit" }>>();
   const cliEntry = join(getPackageDir(), "dist", "cli.js");
-  const activeTools = piToolsForWriteIntent(request.activeTools, request.writeIntent);
+  const toolPolicy = childToolPolicy(request.activeTools, request.writeIntent);
   const cliArgs = [
     "--mode",
     "rpc",
@@ -227,9 +294,9 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
     "--thinking",
     request.effort,
     "--tools",
-    [...new Set([...activeTools, "contact_parent"])].join(","),
+    [...new Set([...toolPolicy.enabled, "contact_parent"])].join(","),
     "--exclude-tools",
-    ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
+    toolPolicy.excluded,
     "--append-system-prompt",
     promptPath,
     "--name",
@@ -462,35 +529,12 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
           try: () => terminateProcessTree(child, mode),
           catch: (error) => processError("terminate", error),
         });
-      const waitForExit = Deferred.await(exited).pipe(
-        Effect.interruptible,
-        Effect.timeoutOption("2 seconds"),
-      );
-      const releaseActive = requestCooperativeAbort(send).pipe(
-        Effect.andThen(Effect.sleep("100 millis")),
-        Effect.andThen(terminate("graceful").pipe(Effect.catch(() => Effect.void))),
-        Effect.andThen(waitForExit),
-        Effect.flatMap((gracefulExit) =>
-          gracefulExit._tag === "Some"
-            ? process.platform === "win32"
-              ? Effect.void
-              : Effect.sleep("100 millis").pipe(
-                  // POSIX descendants remain owned by the detached process group.
-                  Effect.andThen(terminate("force").pipe(Effect.catch(() => Effect.void))),
-                )
-            : terminate("force").pipe(
-                Effect.catch(() => Effect.void),
-                Effect.andThen(waitForExit),
-                Effect.flatMap((forcedExit) =>
-                  forcedExit._tag === "Some"
-                    ? Effect.void
-                    : Effect.logWarning(
-                        "Subagent process did not report closure after forced termination.",
-                      ),
-                ),
-              ),
-        ),
-      );
+      const releaseActive = releaseChildProcess({
+        platform: process.platform,
+        requestAbort: requestCooperativeAbort(send),
+        terminate,
+        awaitExit: Deferred.await(exited),
+      });
       const release = releaseActive.pipe(Effect.ensuring(Effect.sync(cleanup)));
 
       return {
@@ -512,8 +556,8 @@ export class ChildProcess extends Context.Service<ChildProcess, ChildProcessShap
 ) {
   static readonly layer = Layer.succeed(this, {
     spawn: (request) =>
-      Effect.acquireRelease(acquireChild(request), (handle) => handle.release).pipe(
-        Effect.map(({ release: _release, ...handle }) => handle),
-      ),
+      Effect.acquireRelease(acquireChild(request), (handle) =>
+        handle.release.pipe(Effect.orDie),
+      ).pipe(Effect.map(({ release: _release, ...handle }) => handle)),
   });
 }

@@ -4,7 +4,7 @@
 
 ## Source map
 
-- `src/extension.ts` — thin Pi registration entrypoint.
+- `src/extension.ts` — thin Pi registration entrypoint with a child-recursion guard.
 - `src/application.ts` — generation-based session activation, cooperative tool registration, command wiring, and Pi-side shutdown.
 - `src/layer.ts` — Effect composition root.
 - `src/config/schema.ts` — versioned config and private ownership-state shapes, including state-v1 Claude migration.
@@ -16,6 +16,7 @@
 - `src/boundary/report-helper.mjs` — standalone stdio MCP helper; atomically writes one bounded idempotent report.
 - `src/boundary/host-report-extension.ts` — sole bundled extension loaded into delegated Pi; exposes one cooperative-shell report tool backed by the same MCP helper.
 - `src/boundary/state-lock.ts` — same-host cross-process state/resource lock using atomic private-directory acquisition, PID liveness checks, orphan reclamation, bounded waiting, and ownership-token-checked release.
+- `src/boundary/host-environment.ts` — process-role detection that prevents registration inside a `pi-subagents` child.
 - `src/boundary/host-ui.ts` — synchronous immutable projection/footer bridge.
 - `src/herd/model.ts` — agent-kind, run, Herdr topology, and projection contracts.
 - `src/herd/errors.ts` — schema-backed expected failures.

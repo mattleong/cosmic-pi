@@ -15,9 +15,23 @@ export class SubagentCapacityError extends Schema.TaggedErrorClass<SubagentCapac
   { limit: Schema.Number, message: Schema.String },
 ) {}
 
+export class SubagentHistoryCapacityError extends Schema.TaggedErrorClass<SubagentHistoryCapacityError>()(
+  "SubagentHistoryCapacityError",
+  { limit: Schema.Number, code: Schema.String, message: Schema.String },
+) {}
+
 export class SubagentWriterConflictError extends Schema.TaggedErrorClass<SubagentWriterConflictError>()(
   "SubagentWriterConflictError",
   { activeId: Schema.String, activeName: Schema.String, message: Schema.String },
+) {}
+
+export class UnsupportedSafeWriterOwnershipError extends Schema.TaggedErrorClass<UnsupportedSafeWriterOwnershipError>()(
+  "UnsupportedSafeWriterOwnershipError",
+  {
+    code: Schema.Literal("unsupported_safe_writer_ownership"),
+    platform: Schema.String,
+    message: Schema.String,
+  },
 ) {}
 
 export class SubagentProcessError extends Schema.TaggedErrorClass<SubagentProcessError>()(
@@ -49,7 +63,9 @@ export type SubagentError =
   | InvalidSubagentRequestError
   | SubagentNotFoundError
   | SubagentCapacityError
+  | SubagentHistoryCapacityError
   | SubagentWriterConflictError
+  | UnsupportedSafeWriterOwnershipError
   | SubagentProcessError
   | SubagentProtocolError
   | SubagentRuntimeClosedError

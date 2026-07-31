@@ -4,6 +4,7 @@ import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-co
 import * as Effect from "effect/Effect";
 import { withCodePreviewShell } from "pi-code-previews";
 import type { SubagentSessionEnvironment } from "../boundary/host-profile-resolution.ts";
+import { SubagentBackendRegistry } from "../backend/service.ts";
 import { startHostUiTicker } from "../boundary/host-ui.ts";
 import type { ProfileId } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
@@ -84,7 +85,6 @@ export type SubagentStartOutcome =
   | {
       readonly index: number;
       readonly run: SubagentRunView;
-      readonly foreground: boolean;
     }
   | { readonly index: number; readonly failure: SubagentStartFailure };
 
@@ -118,7 +118,7 @@ export interface SubagentToolRuntime {
   readonly environment: SubagentSessionEnvironment;
   readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
   readonly run: <A, E>(
-    effect: Effect.Effect<A, E, SubagentService | SubagentProfileService>,
+    effect: Effect.Effect<A, E, SubagentService | SubagentProfileService | SubagentBackendRegistry>,
     signal?: AbortSignal,
   ) => Promise<A>;
 }
@@ -144,7 +144,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_models",
     label: "Subagent Models",
     description:
-      "Static preflight-only discovery of deterministic subagent profile routing and candidate effective contexts. Profile candidates retain declared first-to-last order; runtime authentication and model readiness are checked only at launch.",
+      "Static preflight of complete version 4 profile candidates in declared order, including host, runtime, model, effort, context, write intent, closeOnReport, and implementation eligibility. All local and Herdr Pi/Claude/Codex adapters are implemented; runtime authentication, native integration, and private-harness readiness are checked at launch.",
     parameters: ModelsParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "models" }, signal, onUpdate, ctx),
@@ -156,11 +156,11 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_start",
     label: "Start Subagents",
     description:
-      "Launch one to twelve session-scoped Pi subagents from one agents array using configured profile model routing. Every fresh task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. The short form needs only task and profile. The selected profile always determines the model; this tool never accepts a model selector. Omitted context uses the profile preference; fork requires a persisted parent session with a stable leaf, and an explicit context is a hard requirement. Omitted writeIntent uses the profile default. Background is the default; at most one foreground agent is allowed. Successful launches remain active when a peer launch fails.",
+      "Launch one to twelve session-scoped background subagents from one agents array using configured version 4 profile routes. Every task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. Each item accepts only task, optional profile, and optional name. The selected profile supplies host, runtime, model, effort, context, write intent, and closeOnReport. Ordered readiness failures fall through only before spawn; post-ownership uncertainty never falls through. Successful launches remain active when a peer launch fails.",
     promptSnippet: "Launch delegated subagents using a task profile",
     promptGuidelines: [
-      "Use subagent_start for delegated work that can proceed independently; make every fresh task self-contained with relevant paths, constraints, evidence, and its expected deliverable. Background is the default, and each call accepts at most one foreground agent.",
-      "Use subagent_start only for profile routing; it does not accept model. The selected profile always determines the model route. Omitted context uses the profile preference; fork requires a persisted parent session with a stable leaf, and an explicit context is a hard requirement. Omit writeIntent to use the profile capability default, and supply it only for a deliberate per-launch capability override.",
+      "Use subagent_start for delegated work that can proceed independently; make every task self-contained with relevant paths, constraints, evidence, and its expected deliverable. Start is always background and nonblocking; use subagent_await separately.",
+      "Use subagent_start only for profile routing. Each agent item accepts task, optional profile, and optional name; the version 4 route exclusively supplies host, runtime, model, effort, context, write intent, and closeOnReport.",
       "Choose a profile by task: scout for local reconnaissance, researcher for sourced external research, planner for plans, worker for implementation, reviewer for independent review, oracle for inherited-decision analysis, and delegate for general work.",
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
       "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",

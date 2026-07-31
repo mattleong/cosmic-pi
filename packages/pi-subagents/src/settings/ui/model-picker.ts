@@ -2,15 +2,12 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { DynamicBorder, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter, Input, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
-import type { ModelPolicy } from "../../config/options.ts";
 import type { ProfileCandidateEffort, ProfileId } from "../../profiles/model.ts";
-import type { SubagentEffort } from "../../run/model.ts";
+import type { SubagentEffort, SubagentHost } from "../../run/model.ts";
 
 export type ProfileModelChoice =
-  | { readonly kind: "model"; readonly selector: string; readonly policy: ModelPolicy }
-  | { readonly kind: "parent"; readonly policy: ModelPolicy }
-  | { readonly kind: "disabled" }
-  | { readonly kind: "inherit" };
+  | { readonly kind: "model"; readonly selector: string }
+  | { readonly kind: "parent" };
 
 export interface ProfileModelPickerChoice {
   readonly choice: ProfileModelChoice;
@@ -20,69 +17,56 @@ export interface ProfileModelPickerChoice {
 }
 
 const choiceValue = (choice: ProfileModelChoice): string =>
-  choice.kind === "model" ? choice.selector : choice.kind;
+  choice.kind === "model" ? choice.selector : "parent";
 
+const boundedMiddle = (value: string, maximum: number): string => {
+  if (value.length <= maximum) return value;
+  const left = Math.max(1, Math.floor((maximum - 1) / 2));
+  return `${value.slice(0, left)}…${value.slice(value.length - (maximum - left - 1))}`;
+};
+
+/** Authenticated canonical Pi models, plus local Pi's special parent selector. */
 export function createProfileModelChoices(input: {
   readonly models: readonly Model<Api>[];
   readonly parentModel?: Model<Api> | undefined;
   readonly currentSelector?: string | undefined;
-  readonly projectScope: boolean;
-  readonly policyFor: (backend: "pi", model: string) => ModelPolicy;
+  readonly allowParent: boolean;
 }): ProfileModelPickerChoice[] {
   const result: ProfileModelPickerChoice[] = [];
-  if (input.projectScope)
+  if (input.allowParent) {
+    const canonical = input.parentModel
+      ? `${input.parentModel.provider}/${input.parentModel.id}`
+      : undefined;
+    const efforts = input.parentModel
+      ? (getSupportedThinkingLevels(input.parentModel) as ReadonlyArray<SubagentEffort>)
+      : undefined;
     result.push({
-      choice: { kind: "inherit" },
+      choice: { kind: "parent" },
       item: {
-        value: "inherit",
-        label: `Inherit global${input.currentSelector === "inherit" ? " (current)" : ""}`,
+        value: "parent",
+        label: `Parent model${input.currentSelector === "parent" ? " (current)" : ""}`,
+        description: canonical
+          ? `${boundedMiddle(canonical, 72)} · ${input.parentModel?.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts?.join(", ") || "none"}`
+          : "Uses the active parent model at launch",
       },
-      searchText: "inherit global",
+      searchText: `parent ${canonical ?? "active model"} ${input.parentModel?.name ?? ""}`,
+      ...(efforts === undefined ? {} : { supportedEfforts: efforts }),
     });
-  if (input.parentModel) {
-    const canonical = `${input.parentModel.provider}/${input.parentModel.id}`;
-    const policy = input.policyFor("pi", canonical);
-    if (policy !== "denied") {
-      const efforts = getSupportedThinkingLevels(
-        input.parentModel,
-      ) as ReadonlyArray<SubagentEffort>;
-      result.push({
-        choice: { kind: "parent", policy },
-        item: {
-          value: "parent",
-          label: `Parent model${input.currentSelector === "parent" ? " (current)" : ""}`,
-          description: `${canonical} · ${input.parentModel.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts.join(", ") || "none"}${policy === "discouraged" ? " · discouraged" : ""}`,
-        },
-        searchText: `parent ${canonical} ${input.parentModel.name ?? ""}`,
-        supportedEfforts: efforts,
-      });
-    }
   }
   for (const model of input.models) {
     const canonical = `${model.provider}/${model.id}`;
-    const policy = input.policyFor("pi", canonical);
-    if (policy === "denied") continue;
-    const selector = `pi/${canonical}`;
     const efforts = getSupportedThinkingLevels(model) as ReadonlyArray<SubagentEffort>;
     result.push({
-      choice: { kind: "model", selector, policy },
+      choice: { kind: "model", selector: canonical },
       item: {
-        value: selector,
-        label: `${canonical}${input.currentSelector === selector ? " (current)" : ""}`,
-        description: `${model.name && model.name !== model.id ? `${model.name} · ` : ""}${model.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts.join(", ") || "none"}${policy === "discouraged" ? " · discouraged" : ""}`,
+        value: canonical,
+        label: `${boundedMiddle(canonical, 88)}${input.currentSelector === canonical ? " (current)" : ""}`,
+        description: `${model.name && model.name !== model.id ? `${boundedMiddle(model.name, 48)} · ` : ""}${model.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts.join(", ") || "none"}`,
       },
       searchText: `${canonical} ${model.name ?? ""}`,
       supportedEfforts: efforts,
     });
   }
-  result.push({
-    choice: { kind: "disabled" },
-    item: {
-      value: "disabled",
-      label: `Disabled${input.currentSelector === "disabled" ? " (current)" : ""}`,
-    },
-    searchText: "disabled off",
-  });
   return result;
 }
 
@@ -110,8 +94,8 @@ const buildList = (
 
 export interface ProfileModelPickerContext {
   readonly profile: ProfileId;
-  readonly scope: "global" | "project";
-  readonly path: string;
+  readonly candidateIndex: number;
+  readonly host: SubagentHost;
 }
 
 export function selectProfileModel(
@@ -145,14 +129,19 @@ export function selectProfileModel(
           return [
             ...top.render(width),
             ...new Text(
-              theme.fg("accent", theme.bold(`Profile: ${pickerContext.profile} · Select model`)),
+              theme.fg(
+                "accent",
+                theme.bold(
+                  `Profile: ${pickerContext.profile} · Candidate ${pickerContext.candidateIndex + 1} · Pi model`,
+                ),
+              ),
               1,
               0,
             ).render(width),
             ...new Text(
               theme.fg(
                 "dim",
-                `Scope: ${pickerContext.scope === "global" ? "Global" : "Project"} · ${pickerContext.path}`,
+                `${pickerContext.host === "local" ? "Local" : "Herdr"} Pi · authenticated canonical models${pickerContext.host === "local" ? " · parent allowed" : ""}`,
               ),
               1,
               0,
@@ -163,7 +152,10 @@ export function selectProfileModel(
             ...list.render(width),
             "",
             ...new Text(
-              theme.fg("dim", "Type to search · ↑↓ navigate · enter select · esc back to profiles"),
+              theme.fg(
+                "dim",
+                "Type to search · ↑↓ navigate · enter select · esc back to candidate",
+              ),
               1,
               0,
             ).render(width),

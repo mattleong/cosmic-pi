@@ -2,13 +2,13 @@ import { freezeSnapshot } from "pi-cosmic-core";
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
 import {
   PROFILE_IDS,
+  type DeclaredProfileCandidate,
   type DeclaredProfileRoute,
-  type ModelPolicySelector,
+  type ProfileCandidate,
   type ProfileId,
   type ProfileRoute,
   type ProfileRouteSource,
 } from "../profiles/model.ts";
-import type { SubagentBackend } from "../run/model.ts";
 import type { DecodedSubagentConfig } from "./schema.ts";
 
 export interface ResolvedSubagentConfig {
@@ -18,40 +18,23 @@ export interface ResolvedSubagentConfig {
   readonly globalConfigExists: boolean;
   readonly projectConfigExists: boolean;
   readonly defaultProfile: ProfileId;
-  readonly denied: ReadonlyArray<ModelPolicySelector>;
-  readonly discouraged: ReadonlyArray<ModelPolicySelector>;
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
   readonly diagnostics: ReadonlyArray<string>;
 }
 
-export type ModelPolicy = "allowed" | "discouraged" | "denied";
-
-const selectorKey = (selector: ModelPolicySelector): string =>
-  `${selector.backend}\u0000${selector.model.trim().toLowerCase()}`;
-
-const unionSelectors = (
-  ...collections: ReadonlyArray<ReadonlyArray<ModelPolicySelector> | undefined>
-): ReadonlyArray<ModelPolicySelector> => {
-  const seen = new Set<string>();
-  const result: ModelPolicySelector[] = [];
-  for (const collection of collections) {
-    for (const selector of collection ?? []) {
-      const key = selectorKey(selector);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      result.push({ backend: selector.backend, model: selector.model.trim() });
-    }
-  }
-  return result;
-};
-
-const normalizeRoute = (route: DeclaredProfileRoute): ProfileRoute => ({
-  candidates:
-    route === "disabled"
-      ? []
-      : (Array.isArray(route) ? route : [route]).map((candidate) => ({ ...candidate })),
+const normalizeCandidate = (candidate: DeclaredProfileCandidate): ProfileCandidate => ({
+  ...candidate,
+  closeOnReport: candidate.closeOnReport ?? true,
 });
+
+const normalizeRoute = (route: DeclaredProfileRoute): ProfileRoute => {
+  if (route === "disabled") return { candidates: [] };
+  const candidates = Array.isArray(route)
+    ? (route as ReadonlyArray<DeclaredProfileCandidate>)
+    : [route as DeclaredProfileCandidate];
+  return { candidates: candidates.map(normalizeCandidate) };
+};
 
 const cloneRoute = (route: ProfileRoute): ProfileRoute => ({
   candidates: route.candidates.map((candidate) => ({ ...candidate })),
@@ -67,7 +50,7 @@ export interface ResolveSubagentConfigInput {
   readonly project?: DecodedSubagentConfig | undefined;
 }
 
-/** Project routes replace global routes atomically; project policy remains additive. */
+/** Project routes replace global routes atomically; missing declarations inherit. */
 export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
   const project = input.projectTrusted ? input.project : undefined;
   const profiles = {} as Record<ProfileId, ProfileRoute>;
@@ -98,39 +81,8 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     projectConfigExists: input.projectTrusted && input.projectConfigExists,
     defaultProfile:
       project?.file.defaultProfile ?? input.global.file.defaultProfile ?? ("delegate" as const),
-    denied: unionSelectors(input.global.file.denied, project?.file.denied),
-    discouraged: unionSelectors(input.global.file.discouraged, project?.file.discouraged),
     profiles,
     profileSources,
     diagnostics: [...input.global.diagnostics, ...(project?.diagnostics ?? [])],
   });
-}
-
-const selectorMatches = (
-  selector: ModelPolicySelector,
-  backend: SubagentBackend,
-  model: string,
-): boolean => {
-  if (selector.backend !== backend) return false;
-  const policyModel = selector.model.trim().toLowerCase();
-  const selectedModel = model.trim().toLowerCase();
-  if (policyModel === selectedModel) return true;
-  if (
-    backend === "pi" &&
-    !policyModel.includes("/") &&
-    selectedModel.slice(selectedModel.lastIndexOf("/") + 1) === policyModel
-  )
-    return true;
-  return false;
-};
-
-export function modelPolicyFor(
-  config: Pick<ResolvedSubagentConfig, "denied" | "discouraged">,
-  backend: SubagentBackend,
-  model: string,
-): ModelPolicy {
-  if (config.denied.some((selector) => selectorMatches(selector, backend, model))) return "denied";
-  if (config.discouraged.some((selector) => selectorMatches(selector, backend, model)))
-    return "discouraged";
-  return "allowed";
 }
