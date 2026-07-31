@@ -25,7 +25,9 @@ export interface CandidateModelEditorInput {
   readonly candidate: ProfileCandidate;
   readonly listNativeModels: (
     runtime: LocalCliRuntime,
+    signal?: AbortSignal,
   ) => Promise<ReadonlyArray<NativeRuntimeModel>>;
+  readonly signal?: AbortSignal | undefined;
 }
 
 export interface CandidateModelPickerData {
@@ -72,7 +74,9 @@ const loadNativeModels = async (
   let models: ReadonlyArray<NativeRuntimeModel>;
   let warning: string | undefined;
   try {
-    const advertised = await input.listNativeModels(runtime);
+    const advertised = input.signal
+      ? await input.listNativeModels(runtime, input.signal)
+      : await input.listNativeModels(runtime);
     models = advertised.filter((model) => isSafeNativeModelSelector(model.selector));
     if (models.length !== advertised.length)
       warning = "Some advertised models used unsafe selectors and were omitted.";

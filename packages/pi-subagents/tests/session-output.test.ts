@@ -266,7 +266,7 @@ describe("structured subagent session output", () => {
     ["starting", "Starting…"],
     ["running", "Working…"],
     ["waiting_for_parent", "Waiting for parent…"],
-    ["paused", "Paused."],
+    ["paused", "Paused; resume when ready."],
   ] as const)("renders state-specific empty activity for %s", (state, label) => {
     const rendered = sanitizeTerminalText(
       renderSubagentSessionOutput(
@@ -279,6 +279,24 @@ describe("structured subagent session output", () => {
     );
     expect(rendered).toContain(label);
     expect(rendered).not.toContain("No child activity yet");
+  });
+
+  it("explains recovery for an interrupted backend that cannot resume", () => {
+    const rendered = sanitizeTerminalText(
+      renderSubagentSessionOutput(
+        runView({
+          state: "paused",
+          endedAt: undefined,
+          finalText: undefined,
+          capabilities: ["steer", "interrupt", "parent-contact"],
+        }),
+        theme,
+        { now: 4_000 },
+      )
+        .render(80)
+        .join("\n"),
+    );
+    expect(rendered).toContain("Interrupted; stop this run and start a replacement");
   });
 
   it("wraps every expanded row within the available viewport width", () => {

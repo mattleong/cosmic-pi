@@ -3,7 +3,12 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
-import { isTerminalRunState, type SubagentCapability, type SubagentRunView } from "./model.ts";
+import {
+  hasSubagentCapability,
+  isTerminalRunState,
+  type SubagentCapability,
+  type SubagentRunView,
+} from "./model.ts";
 import type { RunRecord } from "./internal.ts";
 import {
   InvalidSubagentRequestError,
@@ -136,11 +141,15 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               attemptToken,
             };
           }
-          if (selected.view.state === "paused" || selected.view.state === "completed")
+          if (selected.view.state === "paused" || selected.view.state === "completed") {
+            const recovery = hasSubagentCapability(selected.view, "resume")
+              ? `resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance`
+              : `this backend cannot resume it; stop it with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
             return yield* new InvalidSubagentRequestError({
               code: "run_not_running",
-              message: `Subagent ${id} is ${selected.view.state}; resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance.`,
+              message: `Subagent ${id} is ${selected.view.state}; ${recovery}.`,
             });
+          }
           if (selected.view.state === "starting")
             return yield* new InvalidSubagentRequestError({
               code: "run_starting",

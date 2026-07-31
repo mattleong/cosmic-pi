@@ -49,6 +49,9 @@ export interface ProfileWorkspaceOptions {
   readonly matchesKeybinding?:
     | ((data: string, id: SettingsSelectKeybindingId) => boolean)
     | undefined;
+  readonly keybindingLabel?:
+    | ((id: SettingsSelectKeybindingId, fallback: string) => string)
+    | undefined;
   readonly close: (reloadRequired: boolean) => void;
   readonly saveDraft: (
     scope: SubagentConfigScope,
@@ -59,6 +62,7 @@ export interface ProfileWorkspaceOptions {
     profile: ProfileId,
     candidateIndex: number,
     candidate: ProfileCandidate,
+    signal?: AbortSignal,
   ) => Promise<CandidateModelPickerData>;
   readonly supportedPiEfforts: (
     candidate: ProfileCandidate,
@@ -100,6 +104,7 @@ export class ProfileWorkspaceComponent implements Component {
   private reloadRequired = false;
   private message: WorkspaceMessage | undefined;
   private pendingAction: PendingAction | undefined;
+  private catalogLoad: AbortController | undefined;
   private modelPicker: ProfileModelPickerPage | undefined;
   private selectPage: SearchableSelectPage<string> | undefined;
   private readonly options: ProfileWorkspaceOptions;
@@ -145,11 +150,16 @@ export class ProfileWorkspaceComponent implements Component {
     this.message = { kind, text };
   }
 
+  private clearMessage(): void {
+    this.message = undefined;
+  }
+
   private selectProfile(offset: number): void {
     this.profileIndex = Math.max(0, Math.min(PROFILE_IDS.length - 1, this.profileIndex + offset));
     this.candidateIndex = 0;
     this.fieldIndex = 0;
     this.pendingAction = undefined;
+    this.clearMessage();
   }
 
   private selectCandidate(offset: number): void {
@@ -160,6 +170,13 @@ export class ProfileWorkspaceComponent implements Component {
     );
     this.fieldIndex = 0;
     this.pendingAction = undefined;
+    this.clearMessage();
+  }
+
+  private selectField(offset: number): void {
+    this.fieldIndex += offset;
+    this.pendingAction = undefined;
+    this.clearMessage();
   }
 
   private navigate(direction: -1 | 1): void {
@@ -171,6 +188,7 @@ export class ProfileWorkspaceComponent implements Component {
     const next = Math.max(0, Math.min(paneOrder.length - 1, current + direction));
     this.pane = paneOrder[next] ?? "profiles";
     this.pendingAction = undefined;
+    this.clearMessage();
   }
 
   private changeScope(scope: SubagentConfigScope): void {
@@ -182,6 +200,7 @@ export class ProfileWorkspaceComponent implements Component {
     this.candidateIndex = 0;
     this.fieldIndex = 0;
     this.pendingAction = undefined;
+    if (this.pane === "fields" && this.draft().candidates.length === 0) this.pane = "candidates";
     this.setMessage(
       "info",
       scope === "global"
@@ -315,6 +334,7 @@ export class ProfileWorkspaceComponent implements Component {
       getHeight: this.options.getHeight,
       requestRender: this.options.requestRender,
       matchesKeybinding: this.options.matchesKeybinding,
+      keybindingLabel: this.options.keybindingLabel,
       select: (update, description) => {
         this.selectPage = undefined;
         this.candidateIndex = candidateIndex;
@@ -338,15 +358,39 @@ export class ProfileWorkspaceComponent implements Component {
     this.renderSoon();
   }
 
+  private beginCatalogLoad(message: string): AbortController {
+    const controller = new AbortController();
+    this.catalogLoad = controller;
+    this.busy = true;
+    this.setMessage("info", message);
+    this.renderSoon();
+    return controller;
+  }
+
+  private finishCatalogLoad(controller: AbortController): boolean {
+    if (this.catalogLoad !== controller) return false;
+    this.catalogLoad = undefined;
+    this.busy = false;
+    return true;
+  }
+
+  private cancelCatalogLoad(): void {
+    const controller = this.catalogLoad;
+    if (!controller) return;
+    this.catalogLoad = undefined;
+    this.busy = false;
+    controller.abort();
+    this.setMessage("info", "Model catalog loading canceled.");
+    this.renderSoon();
+  }
+
   private openNativeEffortPicker(candidate: ProfileCandidate): void {
     const candidateIndex = this.candidateIndex;
-    this.busy = true;
-    this.setMessage("info", "Loading model effort choices…");
-    this.renderSoon();
+    const controller = this.beginCatalogLoad("Loading model effort choices…");
     void this.options
-      .loadModelPicker(this.profile(), candidateIndex, candidate)
+      .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
       .then((picker) => {
-        this.busy = false;
+        if (!this.finishCatalogLoad(controller)) return;
         const current = picker.choices.find(
           (choice) => choice.choice.kind === "model" && choice.choice.selector === candidate.model,
         );
@@ -354,7 +398,7 @@ export class ProfileWorkspaceComponent implements Component {
         this.showFieldPicker(candidate, "effort", current?.supportedEfforts, picker.warning);
       })
       .catch((error: unknown) => {
-        this.busy = false;
+        if (!this.finishCatalogLoad(controller)) return;
         this.setMessage(
           "error",
           error instanceof Error ? error.message : "Effort discovery failed.",
@@ -370,13 +414,11 @@ export class ProfileWorkspaceComponent implements Component {
     priorNotices: ReadonlyArray<string> = [],
   ): void {
     const candidateIndex = this.candidateIndex;
-    this.busy = true;
-    this.setMessage("info", "Loading model choices…");
-    this.renderSoon();
+    const controller = this.beginCatalogLoad("Loading model choices…");
     void this.options
-      .loadModelPicker(this.profile(), candidateIndex, candidate)
+      .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
       .then((picker) => {
-        this.busy = false;
+        if (!this.finishCatalogLoad(controller)) return;
         if (picker.choices.length === 0) {
           this.setMessage("warning", picker.warning ?? "No models are available for this runtime.");
           this.renderSoon();
@@ -392,6 +434,7 @@ export class ProfileWorkspaceComponent implements Component {
           getHeight: this.options.getHeight,
           requestRender: this.options.requestRender,
           matchesKeybinding: this.options.matchesKeybinding,
+          keybindingLabel: this.options.keybindingLabel,
           ...(picker.warning ? { notice: picker.warning } : {}),
           select: (choice) => {
             this.modelPicker = undefined;
@@ -418,7 +461,7 @@ export class ProfileWorkspaceComponent implements Component {
         this.renderSoon();
       })
       .catch((error: unknown) => {
-        this.busy = false;
+        if (!this.finishCatalogLoad(controller)) return;
         this.setMessage("error", error instanceof Error ? error.message : "Model picker failed.");
         this.renderSoon();
       });
@@ -433,6 +476,7 @@ export class ProfileWorkspaceComponent implements Component {
       getHeight: this.options.getHeight,
       requestRender: this.options.requestRender,
       matchesKeybinding: this.options.matchesKeybinding,
+      keybindingLabel: this.options.keybindingLabel,
       select: (profile) => {
         this.selectPage = undefined;
         this.profileIndex = PROFILE_IDS.indexOf(profile);
@@ -505,17 +549,25 @@ export class ProfileWorkspaceComponent implements Component {
   }
 
   private back(): void {
-    if (this.pane === "fields") this.pane = "candidates";
-    else if (this.pane === "candidates") this.pane = "profiles";
-    else this.options.close(this.reloadRequired);
+    if (this.pane === "fields") {
+      this.pane = "candidates";
+      this.clearMessage();
+    } else if (this.pane === "candidates") {
+      this.pane = "profiles";
+      this.clearMessage();
+    } else this.options.close(this.reloadRequired);
     this.pendingAction = undefined;
   }
 
   private forward(): void {
-    if (this.pane === "profiles") this.pane = "candidates";
-    else if (this.pane === "candidates") {
-      if (this.draft().candidates.length > 0) this.pane = "fields";
-      else this.setMessage("info", "Add a candidate before opening candidate details.");
+    if (this.pane === "profiles") {
+      this.pane = "candidates";
+      this.clearMessage();
+    } else if (this.pane === "candidates") {
+      if (this.draft().candidates.length > 0) {
+        this.pane = "fields";
+        this.clearMessage();
+      } else this.setMessage("info", "Add a candidate before opening candidate details.");
     } else this.openFieldPicker();
   }
 
@@ -539,7 +591,8 @@ export class ProfileWorkspaceComponent implements Component {
       if (this.pendingAction) {
         this.pendingAction = undefined;
         this.renderSoon();
-      } else if (this.busy) {
+      } else if (this.catalogLoad) this.cancelCatalogLoad();
+      else if (this.busy) {
         this.setMessage("warning", "Wait for the current settings operation to finish.");
         this.renderSoon();
       } else this.back();
@@ -564,16 +617,39 @@ export class ProfileWorkspaceComponent implements Component {
 
     if (matchesKey(data, Key.tab)) this.navigate(1);
     else if (matchesKey(data, Key.shift("tab"))) this.navigate(-1);
-    else if (this.matches(data, Key.up, "tui.select.up") || data === "k") {
+    else if (
+      this.matches(data, Key.pageUp, "tui.select.pageUp") ||
+      this.matches(data, Key.pageDown, "tui.select.pageDown")
+    ) {
+      const direction = this.matches(data, Key.pageUp, "tui.select.pageUp") ? -1 : 1;
+      const step = Math.max(1, this.options.getHeight() - 10);
+      if (this.pane === "profiles") this.selectProfile(direction * step);
+      else if (this.pane === "candidates") this.selectCandidate(direction * step);
+      else this.selectField(direction * step);
+    } else if (matchesKey(data, Key.home)) {
+      if (this.pane === "profiles") this.profileIndex = 0;
+      else if (this.pane === "candidates") this.candidateIndex = 0;
+      else this.fieldIndex = 0;
+      this.pendingAction = undefined;
+      this.clearMessage();
+    } else if (matchesKey(data, Key.end)) {
+      if (this.pane === "profiles") this.profileIndex = PROFILE_IDS.length - 1;
+      else if (this.pane === "candidates")
+        this.candidateIndex = Math.max(0, this.draft().candidates.length - 1);
+      else this.fieldIndex = PROFILE_WORKSPACE_FIELDS.length - 1;
+      this.pendingAction = undefined;
+      this.clearMessage();
+    } else if (this.matches(data, Key.up, "tui.select.up") || data === "k") {
       if (this.pane === "profiles") this.selectProfile(-1);
       else if (this.pane === "candidates") this.selectCandidate(-1);
-      else this.fieldIndex -= 1;
+      else this.selectField(-1);
     } else if (this.matches(data, Key.down, "tui.select.down") || data === "j") {
       if (this.pane === "profiles") this.selectProfile(1);
       else if (this.pane === "candidates") this.selectCandidate(1);
-      else this.fieldIndex += 1;
-    } else if (matchesKey(data, Key.left)) this.back();
-    else if (matchesKey(data, Key.right) || this.matches(data, Key.enter, "tui.select.confirm"))
+      else this.selectField(1);
+    } else if (matchesKey(data, Key.left)) {
+      if (this.pane !== "profiles") this.back();
+    } else if (matchesKey(data, Key.right) || this.matches(data, Key.enter, "tui.select.confirm"))
       this.forward();
     else if (data === "/" && this.pane === "profiles") this.openProfileSearch();
     else if (data === "g") this.changeScope("global");
@@ -608,6 +684,7 @@ export class ProfileWorkspaceComponent implements Component {
         fieldIndex: this.fieldIndex,
         draft: this.draft(),
         busy: this.busy,
+        cancellableBusy: this.catalogLoad !== undefined,
         reloadRequired: this.reloadRequired,
         message: this.message,
         pendingConfirmation: this.pendingAction
@@ -619,12 +696,22 @@ export class ProfileWorkspaceComponent implements Component {
             })
           : undefined,
       },
-      { theme: this.options.theme, width, height: this.options.getHeight() },
+      {
+        theme: this.options.theme,
+        width,
+        height: this.options.getHeight(),
+        keybindingLabel: this.options.keybindingLabel,
+      },
     );
   }
 
   invalidate(): void {
     this.modelPicker?.invalidate();
     this.selectPage?.invalidate();
+  }
+
+  dispose(): void {
+    this.catalogLoad?.abort();
+    this.catalogLoad = undefined;
   }
 }

@@ -33,8 +33,21 @@ export interface FleetManagerActions {
   readonly patchProfile: (patch: SubagentProfilePatch) => Promise<void>;
   readonly listNativeModels: (
     runtime: LocalCliRuntime,
+    signal?: AbortSignal,
   ) => Promise<ReadonlyArray<NativeRuntimeModel>>;
 }
+
+const formatKeyId = (value: string): string => {
+  const labels: Readonly<Record<string, string>> = {
+    up: "↑",
+    down: "↓",
+    enter: "Enter",
+    escape: "Esc",
+    pageUp: "PgUp",
+    pageDown: "PgDn",
+  };
+  return labels[value] ?? value.replace(/^ctrl\+/, "C-").replace(/^shift\+/, "⇧");
+};
 
 const report = (ctx: ExtensionCommandContext, operation: Promise<void>) =>
   void operation.catch((error: unknown) => {
@@ -54,16 +67,22 @@ async function openFleetManager(
   await ctx.ui.custom<void>(
     (tui, theme, keybindings, done) => {
       let unsubscribe = () => {};
-      const promptMessage = (id: string, waiting: boolean) => {
-        void ctx.ui
-          .input(waiting ? "Reply to subagent" : "Message subagent", "Enter guidance")
-          .then((message) => {
-            if (!message?.trim()) return;
-            report(
-              ctx,
-              waiting ? actions.reply(id, message.trim()) : actions.send(id, message.trim()),
-            );
-          });
+      const promptMessage = (id: string, mode: "guidance" | "reply" | "next-assignment") => {
+        const title =
+          mode === "reply"
+            ? "Reply to subagent"
+            : mode === "next-assignment"
+              ? "Start next subagent assignment"
+              : "Guide subagent";
+        const placeholder =
+          mode === "next-assignment" ? "Guidance for the next report" : "Enter guidance";
+        void ctx.ui.input(title, placeholder).then((message) => {
+          if (!message?.trim()) return;
+          report(
+            ctx,
+            mode === "reply" ? actions.reply(id, message.trim()) : actions.send(id, message.trim()),
+          );
+        });
       };
       const promptResume = (id: string) => {
         void ctx.ui.input("Resume subagent", "Optional continuation message").then((message) => {
@@ -83,6 +102,10 @@ async function openFleetManager(
         getHeight: () => tui.terminal.rows,
         getNow: synchronousNow,
         matchesKeybinding: (data, id) => keybindings.matches(data, id),
+        keybindingLabel: (id, fallback) =>
+          typeof keybindings.getKeys === "function"
+            ? keybindings.getKeys(id).map(formatKeyId).join("/") || fallback
+            : fallback,
         requestRender: () => tui.requestRender(),
         close: () => done(undefined),
         actions: {
@@ -188,9 +211,11 @@ async function openProfileSettings(
   }
 
   const availableModels = ctx.modelRegistry.getAvailable();
-  const firstPiModel = availableModels[0]
-    ? `${availableModels[0].provider}/${availableModels[0].id}`
-    : undefined;
+  const preferredPiModel = ctx.model
+    ? `${ctx.model.provider}/${ctx.model.id}`
+    : availableModels[0]
+      ? `${availableModels[0].provider}/${availableModels[0].id}`
+      : undefined;
   const saveDraft = async (
     scope: SubagentConfigScope,
     profile: ProfileId,
@@ -225,18 +250,23 @@ async function openProfileSettings(
         theme,
         inspection,
         projectTrusted,
-        ...(firstPiModel ? { piModel: firstPiModel } : {}),
+        ...(preferredPiModel ? { piModel: preferredPiModel } : {}),
         getHeight: () => tui.terminal.rows,
         requestRender: () => tui.requestRender(),
         matchesKeybinding: (data, id) => keybindings.matches(data, id),
+        keybindingLabel: (id, fallback) =>
+          typeof keybindings.getKeys === "function"
+            ? keybindings.getKeys(id).map(formatKeyId).join("/") || fallback
+            : fallback,
         close: done,
         saveDraft,
-        loadModelPicker: (profile, candidateIndex, candidate) =>
+        loadModelPicker: (profile, candidateIndex, candidate, signal) =>
           loadCandidateModelPicker(ctx, {
             profile,
             candidateIndex,
             candidate,
             listNativeModels: actions.listNativeModels,
+            ...(signal ? { signal } : {}),
           }),
         supportedPiEfforts: (candidate) => supportedPiEfforts(ctx, candidate),
         reload: () => requestProfileReload(ctx, bridge),

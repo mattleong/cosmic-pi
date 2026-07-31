@@ -169,12 +169,13 @@ export function registerSubagentApplication(
         ),
       );
     },
-    listNativeModels: (runtime) => {
+    listNativeModels: (runtime, signal) => {
       const activation = currentActivation;
       if (!activation)
         return Promise.reject(new Error("Subagents are not active; run /reload and try again."));
       return run(
         Effect.flatMap(NativeModelCatalog, (catalog) => catalog.list(runtime, activation.cwd)),
+        signal,
       );
     },
   });

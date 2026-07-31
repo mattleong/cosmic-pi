@@ -452,7 +452,8 @@ describe("subagent tool", () => {
       .get("subagent_models")
       ?.execute("call", { action: "start", profile: "scout" }, undefined, undefined, context);
     expect(models?.details).toMatchObject({ action: "models", profileIds: ["scout"] });
-    expect(models?.content[0]?.text).toContain("scout · context=fresh");
+    expect(models?.content[0]?.text).toContain("scout —");
+    expect(models?.content[0]?.text).toContain("defaults · context=fresh");
   });
 
   it("color-codes agent names by state while await is in progress", () => {
@@ -475,11 +476,11 @@ describe("subagent tool", () => {
       );
 
       expect(rendered).toContain(
-        "<error>Waiting for all agents · 2 of 4 finished · 1 running · 1 waiting for you</error>",
+        "<error>Waiting for all agents · 2 of 4 finished · 1 running · 1 waiting for reply</error>",
       );
       expect(rendered).toContain("<success>⠋ running-agent</success>");
       expect(rendered).toContain("<warning>? waiting-agent</warning>");
-      expect(rendered).toContain("<warning>waiting for you</warning>");
+      expect(rendered).toContain("<warning>waiting for reply</warning>");
       expect(rendered).toContain("<toolOutput>openai-codex/gpt-5.6-sol</toolOutput>");
       expect(rendered).toContain("<thinkingHigh>high</thinkingHigh>");
       expect(rendered).toContain("<error>× failed-agent</error>");
@@ -575,6 +576,29 @@ describe("subagent tool", () => {
     );
     expect(stop).toHaveBeenCalledOnce();
     expect(state.piSubagentsAwaitTicker).toBeUndefined();
+    expect(state.piSubagentsAwaitInvalidate).toBeUndefined();
+  });
+
+  it("renders partial batch starts as structured run cards", () => {
+    const startTool = captureSubagentTools({} as SubagentServiceShape).get("subagent_start");
+    const theme = {
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const component = startTool?.renderResult?.(
+      {
+        content: [{ type: "text", text: "Started 1 of 3 background subagents." }],
+        details: makeStartAwaitCardDetails({
+          action: "start",
+          runs: [view({ name: "scout-one" })],
+        }),
+      },
+      { expanded: false, isPartial: true },
+      theme,
+    ) as { render: (width: number) => string[] } | undefined;
+    const rendered = component?.render(100).join("\n") ?? "";
+    expect(rendered).toContain("Started 1 of 3");
+    expect(rendered).toContain("<success>● scout-one</success>");
   });
 
   it("projects legacy timeout, cancellation, and first-finished await outcomes", () => {
@@ -627,7 +651,7 @@ describe("subagent tool", () => {
         ],
         awaitUntil: "any_finished",
       }),
-    ).toEqual({ color: "accent", text: "retained-agent reported · retained first" });
+    ).toEqual({ color: "accent", text: "retained-agent reported first · backend retained" });
   });
 
   it("keeps completed start and await cards compact until expanded", () => {
@@ -747,7 +771,8 @@ describe("subagent tool", () => {
       .join("\n");
     expect(compact).toContain("<success>● good-agent</success>");
     expect(compact).toContain("<error>× broken-agent</error> · <error>failed to start</error>");
-    expect(compact).not.toContain("spawn failed");
+    expect(compact).toContain("<dim>spawn failed</dim>");
+    expect(compact).toContain("▸ failure details · expand to view");
 
     const expanded = renderExpandedStartAwaitResult([view({ name: "good-agent" })], theme, failures)
       .render(120)
@@ -2414,7 +2439,7 @@ describe("subagent tool", () => {
     const models = await tools
       .get("subagent_models")
       ?.execute("call", {}, undefined, undefined, mutable);
-    expect(models?.content[0]?.text).toContain("Configured default profile: delegate");
+    expect(models?.content[0]?.text).toContain("Default profile: delegate");
     await tools.get("subagent_start")?.execute(
       "call",
       {
@@ -2442,7 +2467,8 @@ describe("subagent tool", () => {
       .get("subagent_models")
       ?.execute("call", { profile: "oracle" }, undefined, undefined, ephemeral);
     const text = models?.content[0]?.text ?? "";
-    expect(text).toContain("oracle · context=fork · intent=read-only · effort=high");
+    expect(text).toContain("oracle —");
+    expect(text).toContain("defaults · context=fork · intent=read-only · effort=high");
     expect(text).toContain("local/pi/parent:default:fork:read-only:closeOnReport=true · skipped");
     expect(text).toContain("Forked context requires a persisted parent session");
   });
@@ -2461,7 +2487,7 @@ describe("subagent tool", () => {
       ?.execute("call", { profile: "oracle" }, undefined, undefined, ephemeral);
     const text = models?.content[0]?.text ?? "";
     expect(text).toContain(
-      "Candidates show host/runtime/model, effort, context, write intent, and closeOnReport",
+      "Each candidate lists host/runtime/model, effort, context, write intent, and closeOnReport",
     );
     expect(text).toContain("Forked context requires a persisted parent session");
   });
@@ -2515,8 +2541,7 @@ describe("subagent tool", () => {
       .get("subagent_models")
       ?.execute("call", { profile: "delegate" }, undefined, undefined, noParent);
     const text = models?.content[0]?.text ?? "";
-    expect(text).toContain(
-      "local/pi/parent:default:fresh:read-only:closeOnReport=true · skipped · No active parent model is available.",
-    );
+    expect(text).toContain("local/pi/parent:default:fresh:read-only:closeOnReport=true · skipped");
+    expect(text).toContain("No active parent model is available.");
   });
 });

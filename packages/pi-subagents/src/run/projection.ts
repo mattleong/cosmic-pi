@@ -12,9 +12,20 @@ export const sortRuns = (runs: ReadonlyArray<SubagentRunView>): ReadonlyArray<Su
   });
 
 export const fleetStatus = (projection: SubagentProjection): string | undefined => {
-  const active = projection.runs.filter((run) => isActiveRunState(run.state)).length;
+  const owned = projection.runs.filter((run) => isActiveRunState(run.state)).length;
+  const working = projection.runs.filter(
+    (run) => run.state === "starting" || run.state === "running" || run.state === "stopping",
+  ).length;
   const waiting = projection.runs.filter((run) => run.state === "waiting_for_parent").length;
+  const paused = projection.runs.filter((run) => run.state === "paused").length;
   const retained = projection.runs.filter((run) => run.state === "reported").length;
-  if (active === 0) return undefined;
-  return `${active} subagent${active === 1 ? "" : "s"} active${waiting ? ` · ${waiting} awaiting ${waiting === 1 ? "reply" : "replies"}` : ""}${retained ? ` · ${retained} retained` : ""}`;
+  if (owned === 0) return undefined;
+  return [
+    working ? `${working} working` : undefined,
+    waiting ? `${waiting} awaiting ${waiting === 1 ? "reply" : "replies"}` : undefined,
+    paused ? `${paused} paused` : undefined,
+    retained ? `${retained} retained` : undefined,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(" · ");
 };

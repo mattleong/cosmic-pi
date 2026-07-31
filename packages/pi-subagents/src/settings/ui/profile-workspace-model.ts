@@ -93,7 +93,7 @@ export const effectiveProfileSummary = (
       ? `${source} · fail-closed`
       : `${source} · disabled`;
   const count = route.candidates.length;
-  return `${source} · ${count} route${count === 1 ? "" : "s"} · ${first.host}/${first.runtime}`;
+  return `${source} · ${count} candidate${count === 1 ? "" : "s"} · ${first.host}/${first.runtime}`;
 };
 
 export const candidateFieldRows = (

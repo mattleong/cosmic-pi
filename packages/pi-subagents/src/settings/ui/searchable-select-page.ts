@@ -22,6 +22,8 @@ export interface SearchableSelectPageChoice<A> {
 export type SettingsSelectKeybindingId =
   | "tui.select.up"
   | "tui.select.down"
+  | "tui.select.pageUp"
+  | "tui.select.pageDown"
   | "tui.select.confirm"
   | "tui.select.cancel";
 
@@ -39,6 +41,9 @@ export interface SearchableSelectPageOptions<A> {
   readonly requestRender: () => void;
   readonly matchesKeybinding?:
     | ((data: string, id: SettingsSelectKeybindingId) => boolean)
+    | undefined;
+  readonly keybindingLabel?:
+    | ((id: SettingsSelectKeybindingId, fallback: string) => string)
     | undefined;
   readonly select: (value: A) => void;
   readonly cancel: () => void;
@@ -58,6 +63,7 @@ export class SearchableSelectPage<A> implements Component {
   private filtered: ReadonlyArray<SearchableSelectPageChoice<A>>;
   private list: SelectList;
   private listHeight: number;
+  private feedback: string | undefined;
 
   constructor(options: SearchableSelectPageOptions<A>) {
     this.options = options;
@@ -78,10 +84,16 @@ export class SearchableSelectPage<A> implements Component {
   }
 
   private resolveListHeight(): number {
-    return Math.max(1, this.options.getHeight() - 10);
+    const height = this.options.getHeight();
+    return Math.max(1, height < 10 ? height - 3 : height - 10);
   }
 
-  private buildList(): SelectList {
+  private selectedChoice(): SearchableSelectPageChoice<A> | undefined {
+    const selected = this.list?.getSelectedItem();
+    return selected ? this.filtered.find((entry) => entry.item === selected) : undefined;
+  }
+
+  private buildList(preferred?: SearchableSelectPageChoice<A>): SelectList {
     this.filtered = fuzzyFilter(
       [...this.options.choices],
       this.query,
@@ -100,10 +112,12 @@ export class SearchableSelectPage<A> implements Component {
           theme.fg("warning", `  ${this.options.emptyText ?? "No matching options"}`),
       },
     );
-    if (this.options.current) {
-      const index = this.filtered.findIndex((choice) => choice.value === this.options.current);
-      if (index >= 0) list.setSelectedIndex(index);
-    }
+    const preferredIndex = preferred ? this.filtered.indexOf(preferred) : -1;
+    const currentIndex = this.options.current
+      ? this.filtered.findIndex((choice) => choice.value === this.options.current)
+      : -1;
+    const selectedIndex = preferredIndex >= 0 ? preferredIndex : currentIndex;
+    if (selectedIndex >= 0) list.setSelectedIndex(selectedIndex);
     return list;
   }
 
@@ -116,26 +130,47 @@ export class SearchableSelectPage<A> implements Component {
   handleInput(data: string): void {
     if (this.matches(data, Key.escape, "tui.select.cancel")) this.options.cancel();
     else if (this.matches(data, Key.enter, "tui.select.confirm")) {
-      const selected = this.list.getSelectedItem();
-      const choice = selected ? this.filtered.find((entry) => entry.item === selected) : undefined;
+      const choice = this.selectedChoice();
       if (choice) this.options.select(choice.payload);
+      else
+        this.feedback = `${this.options.emptyText ?? "No matching options"}; change the search or go back.`;
     } else {
       const up = this.matches(data, Key.up, "tui.select.up");
       const down = this.matches(data, Key.down, "tui.select.down");
-      if (up || down) {
-        const selected = this.list.getSelectedItem();
-        const current = selected ? this.filtered.findIndex((entry) => entry.item === selected) : 0;
+      const pageUp = this.matches(data, Key.pageUp, "tui.select.pageUp");
+      const pageDown = this.matches(data, Key.pageDown, "tui.select.pageDown");
+      const home = matchesKey(data, Key.home);
+      const end = matchesKey(data, Key.end);
+      if (up || down || pageUp || pageDown || home || end) {
+        const currentChoice = this.selectedChoice();
+        const current = currentChoice ? this.filtered.indexOf(currentChoice) : 0;
         const length = this.filtered.length;
-        if (length > 0)
-          this.list.setSelectedIndex(up ? (current - 1 + length) % length : (current + 1) % length);
+        if (length > 0) {
+          const step = pageUp || pageDown ? Math.max(1, this.listHeight - 1) : 1;
+          const next = home
+            ? 0
+            : end
+              ? length - 1
+              : pageUp
+                ? Math.max(0, current - step)
+                : pageDown
+                  ? Math.min(length - 1, current + step)
+                  : up
+                    ? (current - 1 + length) % length
+                    : (current + 1) % length;
+          this.list.setSelectedIndex(next);
+        }
+        this.feedback = undefined;
         this.options.requestRender();
         return;
       }
+      const selected = this.selectedChoice();
       this.input.handleInput(data);
       const next = this.input.getValue();
       if (next !== this.query) {
         this.query = next;
-        this.list = this.buildList();
+        this.feedback = undefined;
+        this.list = this.buildList(selected);
       }
     }
     this.options.requestRender();
@@ -148,47 +183,63 @@ export class SearchableSelectPage<A> implements Component {
     if (safeWidth < 4) return Array.from({ length: height }, () => " ".repeat(safeWidth));
     const nextListHeight = this.resolveListHeight();
     if (nextListHeight !== this.listHeight) {
+      const selected = this.selectedChoice();
       this.listHeight = nextListHeight;
-      this.list = this.buildList();
+      this.list = this.buildList(selected);
     }
 
     const theme = this.options.theme;
     const inner = safeWidth - 2;
-    const body: string[] = [
-      theme.fg("accent", theme.bold(this.options.title)),
-      theme.fg("dim", this.options.subtitle),
-      ...(this.options.notice ? [theme.fg("warning", this.options.notice)] : [""]),
-      theme.fg("dim", "Search:"),
-      ...this.input.render(Math.max(1, inner)),
-      "",
-    ];
-    const dropdownWidth = Math.max(0, inner - 2);
-    const dropdownTitle = truncateToWidth(
-      ` Options · ${this.filtered.length}/${this.options.choices.length} `,
-      dropdownWidth,
-      "",
-    );
-    body.push(
-      `${theme.fg("borderMuted", "╭")}${dropdownTitle}${theme.fg(
-        "borderMuted",
-        "─".repeat(Math.max(0, inner - visibleWidth(dropdownTitle) - 2)),
-      )}${theme.fg("borderMuted", "╮")}`,
-    );
-    for (const line of this.list.render(dropdownWidth))
+    const activeNotice = this.feedback ?? this.options.notice;
+    const body: string[] = [];
+    if (height < 10) {
+      const bodyHeight = Math.max(0, height - 2);
+      if (bodyHeight >= 3) body.push(theme.fg("accent", theme.bold(this.options.title)));
+      if (bodyHeight >= 2) body.push(...this.input.render(Math.max(1, inner)).slice(0, 1));
+      const remaining = Math.max(0, bodyHeight - body.length);
+      body.push(...this.list.render(inner).slice(0, remaining));
+    } else {
       body.push(
-        `${theme.fg("borderMuted", "│")}${padToWidth(line, dropdownWidth)}${theme.fg("borderMuted", "│")}`,
+        theme.fg("accent", theme.bold(this.options.title)),
+        theme.fg("dim", this.options.subtitle),
+        ...(activeNotice ? [theme.fg("warning", activeNotice)] : [""]),
+        theme.fg("dim", "Search:"),
+        ...this.input.render(Math.max(1, inner)),
+        "",
       );
-    body.push(
-      `${theme.fg("borderMuted", "╰")}${theme.fg("borderMuted", "─".repeat(dropdownWidth))}${theme.fg("borderMuted", "╯")}`,
-    );
+      const dropdownWidth = Math.max(0, inner - 2);
+      const dropdownTitle = truncateToWidth(
+        ` Options · ${this.filtered.length}/${this.options.choices.length} `,
+        dropdownWidth,
+        "",
+      );
+      body.push(
+        `${theme.fg("borderMuted", "╭")}${dropdownTitle}${theme.fg(
+          "borderMuted",
+          "─".repeat(Math.max(0, inner - visibleWidth(dropdownTitle) - 2)),
+        )}${theme.fg("borderMuted", "╮")}`,
+      );
+      for (const line of this.list.render(dropdownWidth))
+        body.push(
+          `${theme.fg("borderMuted", "│")}${padToWidth(line, dropdownWidth)}${theme.fg("borderMuted", "│")}`,
+        );
+      body.push(
+        `${theme.fg("borderMuted", "╰")}${theme.fg("borderMuted", "─".repeat(dropdownWidth))}${theme.fg("borderMuted", "╯")}`,
+      );
+    }
 
     const title = truncateToWidth(` ${this.options.breadcrumb} `, inner, "");
     const top = `${theme.fg("borderAccent", "╭")}${title}${theme.fg(
       "borderAccent",
       `${"─".repeat(Math.max(0, inner - visibleWidth(title)))}╮`,
     )}`;
+    const key = (id: SettingsSelectKeybindingId, fallback: string): string =>
+      this.options.keybindingLabel?.(id, fallback) || fallback;
+    const navigation = this.options.keybindingLabel
+      ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
+      : "↑↓";
     const footer = truncateToWidth(
-      "Type to search · ↑↓ navigate · Enter select · Esc back",
+      `Type to search · ${navigation} navigate · ${key("tui.select.confirm", "Enter")} select · ${key("tui.select.cancel", "Esc")} back`,
       inner,
       "",
     );

@@ -17,11 +17,13 @@ import { formatRelativeAge, renderSubagentSessionOutput } from "./session-output
 import { animatedRunStateGlyph, runStateColor, runStateLabel } from "./run-state.ts";
 import { sanitizeTerminalLine } from "./sanitize.ts";
 
+export type FleetMessageMode = "guidance" | "reply" | "next-assignment";
+
 export interface FleetActions {
   readonly stop: (id: string) => void;
   readonly interrupt: (id: string) => void;
   readonly resume: (id: string) => void;
-  readonly message: (id: string, waiting: boolean) => void;
+  readonly message: (id: string, mode: FleetMessageMode) => void;
   readonly rename: (id: string) => void;
 }
 
@@ -39,6 +41,7 @@ export interface FleetOptions {
   readonly getHeight: () => number;
   readonly getNow: () => number;
   readonly matchesKeybinding?: ((data: string, id: FleetKeybindingId) => boolean) | undefined;
+  readonly keybindingLabel?: ((id: FleetKeybindingId, fallback: string) => string) | undefined;
   readonly requestRender: () => void;
   readonly close: () => void;
   readonly actions: FleetActions;
@@ -89,6 +92,7 @@ export class SubagentFleetComponent implements Component {
   private detailScroll = 0;
   private detailMaxScroll = 0;
   private detailLineCount = 0;
+  private detailPageSize = 1;
   private showTechnicalDetails = false;
   private alternateHelp = false;
   private pendingStop: string | undefined;
@@ -143,10 +147,15 @@ export class SubagentFleetComponent implements Component {
       this.options.close();
       return;
     }
-    if (matchesKey(data, Key.ctrl("u")) || configured("tui.select.pageUp", Key.pageUp)) {
-      this.detailScroll = Math.min(this.detailMaxScroll, this.detailScroll + 1);
-    } else if (matchesKey(data, Key.ctrl("d")) || configured("tui.select.pageDown", Key.pageDown)) {
-      this.detailScroll = Math.max(0, this.detailScroll - 1);
+    const halfPage = Math.max(1, Math.floor(this.detailPageSize / 2));
+    const pageUp = configured("tui.select.pageUp", Key.pageUp);
+    const pageDown = configured("tui.select.pageDown", Key.pageDown);
+    if (matchesKey(data, Key.ctrl("u")) || pageUp) {
+      const step = pageUp ? this.detailPageSize : halfPage;
+      this.detailScroll = Math.min(this.detailMaxScroll, this.detailScroll + step);
+    } else if (matchesKey(data, Key.ctrl("d")) || pageDown) {
+      const step = pageDown ? this.detailPageSize : halfPage;
+      this.detailScroll = Math.max(0, this.detailScroll - step);
     } else if (configured("tui.select.up", Key.up) || data === "k") {
       this.select(this.selected - 1, runs);
     } else if (configured("tui.select.down", Key.down) || data === "j") {
@@ -169,7 +178,14 @@ export class SubagentFleetComponent implements Component {
     } else if (data === "r" && selected && canResume(selected)) {
       this.options.actions.resume(selected.id);
     } else if (data === "m" && selected && canMessage(selected)) {
-      this.options.actions.message(selected.id, selected.state === "waiting_for_parent");
+      this.options.actions.message(
+        selected.id,
+        selected.state === "waiting_for_parent"
+          ? "reply"
+          : selected.state === "reported"
+            ? "next-assignment"
+            : "guidance",
+      );
     } else if (data === "n" && selected && canRename(selected)) {
       this.options.actions.rename(selected.id);
     }
@@ -191,7 +207,8 @@ export class SubagentFleetComponent implements Component {
     const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
     const paused = runs.filter((run) => run.state === "paused").length;
     const retained = runs.filter((run) => run.state === "reported").length;
-    const title = ` /subagents · ${runs.length} run${runs.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""}${retained ? ` · ${retained} retained` : ""} `;
+    const titleRaw = ` /subagents · ${runs.length} run${runs.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""}${retained ? ` · ${retained} retained` : ""} `;
+    const title = truncateToWidth(titleRaw, Math.max(0, safeWidth - 2), "");
     const top = `${this.outerBorder("╭")}${this.options.theme.fg("accent", title)}${this.outerBorder(
       `${"─".repeat(Math.max(0, safeWidth - visibleWidth(title) - 2))}╮`,
     )}`;
@@ -252,30 +269,36 @@ export class SubagentFleetComponent implements Component {
 
   private helpText(width: number, selected: SubagentRunView | undefined): string {
     const contentWidth = Math.max(0, width - 2);
+    const key = (id: FleetKeybindingId, fallback: string): string =>
+      this.options.keybindingLabel?.(id, fallback) || fallback;
+    const navigation = this.options.keybindingLabel
+      ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
+      : "↑↓";
+    const enter = key("tui.select.confirm", "Enter");
+    const escape = key("tui.select.cancel", "Esc");
     if (this.pendingStop)
       return renderResponsiveManagerFooter(contentWidth, [
         [
           `x Confirm stop ${sanitizeTerminalLine(selected?.name ?? "selected subagent")}`,
-          "Esc Cancel",
+          `${escape} Cancel`,
         ],
       ]);
+    const messageAction = !canMessage(selected)
+      ? undefined
+      : selected?.state === "waiting_for_parent"
+        ? "m Reply"
+        : selected?.state === "reported"
+          ? "m New task"
+          : "m Guide";
     const actions = [
-      canMessage(selected)
-        ? selected?.state === "waiting_for_parent"
-          ? "m Reply"
-          : "m Message"
-        : undefined,
+      messageAction,
       canInterrupt(selected) ? "i Interrupt" : undefined,
       canResume(selected) ? "r Resume" : undefined,
       canRename(selected) ? "n Rename" : undefined,
       canStop(selected) ? "x Stop" : undefined,
     ].filter((item): item is string => item !== undefined);
     const compactActions = [
-      canMessage(selected)
-        ? selected?.state === "waiting_for_parent"
-          ? "m Reply"
-          : "m Msg"
-        : undefined,
+      messageAction,
       canInterrupt(selected) ? "i Int" : undefined,
       canResume(selected) ? "r Resume" : undefined,
       canRename(selected) ? "n Name" : undefined,
@@ -283,22 +306,35 @@ export class SubagentFleetComponent implements Component {
     ].filter((item): item is string => item !== undefined);
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [
-        [compactActions.length > 0 ? compactActions.join(" · ") : "No actions", "? Keys"],
+        [
+          `${navigation} Select · ${enter} Details (narrow) · C-u/d Half-page · PgUp/PgDn Page`,
+          compactActions.length > 0 ? compactActions.join(" · ") : "No run actions",
+          `t Technical · ? Back · ${escape} Close`,
+        ],
+        [
+          `${navigation} · ${enter} Details · C-u/d Scroll`,
+          compactActions.length > 0 ? compactActions.join(" · ") : "No actions",
+          `t Technical · ? Back · ${escape}`,
+        ],
+        [
+          compactActions.length > 0 ? compactActions.join(" · ") : "No actions",
+          `? Back · ${escape}`,
+        ],
       ]);
     return renderResponsiveManagerFooter(contentWidth, [
       [
-        "↑↓ Select · C-u/d Scroll",
+        `${navigation} Select · C-u/d Scroll`,
         actions.length > 0 ? actions.join(" · ") : undefined,
-        "t Technical · ? Help · Esc Close",
+        `t Technical · ? More · ${escape} Close`,
       ],
       [
-        "↑↓ · C-u/d",
+        `${navigation} · C-u/d`,
         compactActions.length > 0 ? compactActions.join(" · ") : undefined,
-        "t Tech · ? Help · Esc",
+        `t Technical · ? More · ${escape}`,
       ],
       width >= 60
-        ? ["↑↓ Select · C-u/d", "t Details · ? Actions · Esc"]
-        : ["↑↓ · Enter", "t Tech", "? Actions · Esc"],
+        ? [`${navigation} Select · C-u/d`, `t Technical · ? More · ${escape}`]
+        : [`${navigation} · ${enter}`, "t Technical", `? More · ${escape}`],
     ]);
   }
 
@@ -313,10 +349,12 @@ export class SubagentFleetComponent implements Component {
   private detailWindow(lines: string[], height: number, width: number): string[] {
     if (height <= 0) {
       this.detailMaxScroll = 0;
+      this.detailPageSize = 1;
       return [];
     }
     const hasOverflow = lines.length > height;
     const bodyHeight = hasOverflow && height > 1 ? height - 1 : height;
+    this.detailPageSize = Math.max(1, bodyHeight);
     if (this.detailScroll > 0 && lines.length > this.detailLineCount) {
       this.detailScroll += lines.length - this.detailLineCount;
     }
@@ -329,7 +367,7 @@ export class SubagentFleetComponent implements Component {
     const end = Math.min(lines.length, start + bodyHeight);
     const position = this.options.theme.fg(
       "dim",
-      ` ${start + 1}–${end} of ${lines.length} · C-u up · C-d down `,
+      ` ${start + 1}–${end} of ${lines.length} · C-u/d half-page · PgUp/PgDn page `,
     );
     return [pad(position, width), ...visible];
   }

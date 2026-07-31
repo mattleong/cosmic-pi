@@ -88,7 +88,7 @@ export const AwaitParameters = Type.Object(
     runIds: RunIdsParameters,
     until: StringEnum(["all_finished", "any_finished"] as const, {
       description:
-        "Return when all selected runs are finished, or when any selected run is finished. Finished includes completed, failed, and stopped.",
+        "Return when all selected runs are finished, or when any selected run is finished. Finished includes reported retained assignments, completed, failed, and stopped.",
     }),
   },
   strictObjectOptions,

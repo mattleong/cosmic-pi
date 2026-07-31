@@ -191,7 +191,7 @@ describe("/subagents profile workspace", () => {
         component.handleInput?.("\u001b[B");
         component.handleInput?.("\r");
         await vi.waitFor(() =>
-          expect(component.render(120).join("\n")).toContain("/subagents profiles › model"),
+          expect(component.render(120).join("\n")).toContain("reviewer › candidate 1 › Model"),
         );
         for (const character of "zai") component.handleInput?.(character);
         expect(component.render(120).join("\n")).toContain("zai/plain");

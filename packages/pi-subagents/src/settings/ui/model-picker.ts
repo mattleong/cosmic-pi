@@ -108,6 +108,9 @@ export interface ProfileModelPickerPageOptions {
   readonly matchesKeybinding?:
     | ((data: string, id: SettingsSelectKeybindingId) => boolean)
     | undefined;
+  readonly keybindingLabel?:
+    | ((id: SettingsSelectKeybindingId, fallback: string) => string)
+    | undefined;
   readonly select: (choice: ProfileModelChoice) => void;
   readonly cancel: () => void;
 }
@@ -128,7 +131,7 @@ export class ProfileModelPickerPage implements Component {
         : "native advertised models";
     this.page = new SearchableSelectPage({
       theme: options.theme,
-      breadcrumb: "/subagents profiles › model",
+      breadcrumb: `/subagents profiles › ${context.profile} › candidate ${context.candidateIndex + 1} › Model`,
       title: `Choose model · ${context.profile} · candidate ${context.candidateIndex + 1}`,
       subtitle: `${host} ${runtimeLabel(context.runtime)} · ${source}`,
       choices: options.choices.map((choice) => ({
@@ -143,6 +146,7 @@ export class ProfileModelPickerPage implements Component {
       getHeight: options.getHeight,
       requestRender: options.requestRender,
       matchesKeybinding: options.matchesKeybinding,
+      keybindingLabel: options.keybindingLabel,
       select: options.select,
       cancel: options.cancel,
     });

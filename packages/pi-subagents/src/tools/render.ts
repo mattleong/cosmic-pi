@@ -114,6 +114,7 @@ class AwaitProgressComponent implements Component {
 
 interface SubagentToolRendererState extends Record<string, unknown> {
   piSubagentsAwaitTicker?: (() => void) | undefined;
+  piSubagentsAwaitInvalidate?: (() => void) | undefined;
 }
 
 export interface SubagentToolRenderContext {
@@ -134,13 +135,30 @@ export const syncAwaitProgressTicker = (
     details.cancelled !== true &&
     details.cards.some((run) => run.state === "starting" || run.state === "running");
   if (shouldAnimate) {
-    if (!context.state.piSubagentsAwaitTicker)
-      context.state.piSubagentsAwaitTicker = startTicker(160, context.invalidate);
+    context.state.piSubagentsAwaitInvalidate = context.invalidate;
+    if (!context.state.piSubagentsAwaitTicker) {
+      const weakState = new WeakRef(context.state);
+      let stopTimer = () => {};
+      const cleanup = () => {
+        try {
+          stopTimer();
+        } catch {
+          // Renderer teardown is best effort while the host tool row is settling.
+        }
+      };
+      stopTimer = startTicker(160, () => {
+        const active = weakState.deref();
+        if (active) active.piSubagentsAwaitInvalidate?.();
+        else cleanup();
+      });
+      context.state.piSubagentsAwaitTicker = cleanup;
+    }
     return;
   }
   const stop = context.state.piSubagentsAwaitTicker;
   if (!stop) return;
   context.state.piSubagentsAwaitTicker = undefined;
+  context.state.piSubagentsAwaitInvalidate = undefined;
   try {
     stop();
   } catch {
@@ -231,9 +249,10 @@ const renderStartFailures = (
   failures
     .map((failure) => {
       const name = sanitizeTerminalLine(failure.name ?? `start #${failure.index + 1}`);
-      const summary = `${theme.fg("error", `× ${name}`)} · ${theme.fg("error", "failed to start")}`;
-      if (!expanded) return summary;
-      return `${summary}\n${theme.fg("dim", safeTextPrefix(sanitizeTerminalLine(failure.message), 2_048))}`;
+      const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
+      const summary = `${theme.fg("error", `× ${name}`)} · ${theme.fg("error", `failed to start${code}`)}`;
+      const detail = safeTextPrefix(sanitizeTerminalLine(failure.message), expanded ? 2_048 : 240);
+      return `${summary}\n${theme.fg("dim", detail)}`;
     })
     .join("\n");
 
@@ -377,7 +396,9 @@ class RunOverviewComponent implements Component {
               safeWidth,
             ),
           ]
-        : []),
+        : this.failures.length > 0 && !this.expanded
+          ? [this.theme.fg("dim", "▸ failure details · expand to view")]
+          : []),
     ];
   }
 
@@ -469,10 +490,13 @@ export const awaitResultBanner = (details: {
     .sort((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity))[0];
   if (!first) return undefined;
   const name = sanitizeTerminalLine(first.name);
-  const outcome = runStateLabel(first.state);
+  const outcome =
+    first.state === "reported"
+      ? "reported first · backend retained"
+      : `${runStateLabel(first.state)} first`;
   return {
     color: first.state === "failed" ? "error" : "accent",
-    text: `${name} ${outcome} first${unfinished.length > 0 ? ` · ${unfinished.length} unfinished` : ""}${attention}`,
+    text: `${name} ${outcome}${unfinished.length > 0 ? ` · ${unfinished.length} unfinished` : ""}${attention}`,
   };
 };
 
@@ -506,6 +530,21 @@ export const renderSubagentResult = (
         awaitResultBanner({ ...details, runs: details.cards }),
       );
     return renderAwaitProgressComponent(details.cards, details.awaitUntil, theme);
+  }
+  if (isPartial && details?.action === "start") {
+    const container = new Container();
+    const progress = result.content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text ?? "")
+      .join(" ");
+    if (progress)
+      container.addChild(
+        new Text(theme.fg("warning", safeTextPrefix(sanitizeTerminalLine(progress), 240)), 0, 0),
+      );
+    container.addChild(
+      renderStartAwaitOverviewComponent(details.cards, theme, details.startFailures ?? []),
+    );
+    return container;
   }
   if (!isPartial && details) {
     const failures = details.startFailures ?? [];

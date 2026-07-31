@@ -20,6 +20,9 @@ interface SharedSelectorOptions {
   readonly matchesKeybinding?:
     | ((data: string, id: SettingsSelectKeybindingId) => boolean)
     | undefined;
+  readonly keybindingLabel?:
+    | ((id: SettingsSelectKeybindingId, fallback: string) => string)
+    | undefined;
 }
 
 export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
@@ -73,6 +76,7 @@ export const makeCandidateFieldSelector = (
     getHeight: options.getHeight,
     requestRender: options.requestRender,
     matchesKeybinding: options.matchesKeybinding,
+    keybindingLabel: options.keybindingLabel,
     select: (value) =>
       options.select(
         selectCandidateField(options.candidate, options.field, value, changeOptions),
@@ -115,6 +119,7 @@ export const makeProfileSearchSelector = (
     getHeight: options.getHeight,
     requestRender: options.requestRender,
     matchesKeybinding: options.matchesKeybinding,
+    keybindingLabel: options.keybindingLabel,
     select: (value) => {
       const profile = PROFILE_IDS.find((entry) => entry === value);
       if (profile) options.select(profile);

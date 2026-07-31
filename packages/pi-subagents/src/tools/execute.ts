@@ -173,17 +173,21 @@ const formatProfileDiscovery = (
   defaultProfile: ProfileId,
 ): string =>
   [
-    "Static v4 profile preflight (subagent_start evaluates the selected profile's ordered candidates first-to-last)",
-    "Candidates show host/runtime/model, effort, context, write intent, and closeOnReport. All six local/Herdr × Pi/Claude/Codex adapters are launchable when bounded native readiness succeeds.",
-    `Configured default profile: ${defaultProfile}`,
+    "Profile routes · static preflight",
+    `Default profile: ${defaultProfile}`,
+    "Each candidate lists host/runtime/model, effort, context, write intent, and closeOnReport.",
+    "Launch-time executable, authentication, integration, and private-harness checks are not included here.",
+    "",
     ...profiles.flatMap((profile) => [
-      `${profile.id} · context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"} · ${profile.description}`,
+      `${profile.id} — ${profile.description}`,
+      `  defaults · context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"}`,
       ...(profile.candidates.length > 0
         ? profile.candidates.map(
             (candidate) =>
-              `  ${candidate.order}. ${candidate.candidate} · ${candidate.status}${candidate.effectiveContext ? ` · context=${candidate.effectiveContext}` : ""} · ${candidate.reason}`,
+              `  ${candidate.order}. ${candidate.candidate} · ${candidate.status}${candidate.effectiveContext ? ` · context=${candidate.effectiveContext}` : ""}\n     ${candidate.reason}`,
           )
         : ["  disabled · no candidates"]),
+      "",
     ]),
   ].join("\n");
 

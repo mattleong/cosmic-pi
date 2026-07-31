@@ -9,17 +9,18 @@ const projection = (...states: ReadonlyArray<SubagentRunState>): SubagentProject
 
 describe("subagent footer projection", () => {
   it("uses natural singular and plural status text", () => {
-    expect(fleetStatus(projection("running"))).toBe("1 subagent active");
+    expect(fleetStatus(projection("running"))).toBe("1 working");
     expect(fleetStatus(projection("running", "starting", "waiting_for_parent"))).toBe(
-      "3 subagents active · 1 awaiting reply",
+      "2 working · 1 awaiting reply",
     );
     expect(fleetStatus(projection("waiting_for_parent", "waiting_for_parent"))).toBe(
-      "2 subagents active · 2 awaiting replies",
+      "2 awaiting replies",
     );
   });
 
   it("keeps retained reported resources visible without calling their assignment unfinished", () => {
-    expect(fleetStatus(projection("reported"))).toBe("1 subagent active · 1 retained");
+    expect(fleetStatus(projection("reported"))).toBe("1 retained");
+    expect(fleetStatus(projection("paused", "reported"))).toBe("1 paused · 1 retained");
   });
 
   it("hides the footer status when no subagents are active", () => {

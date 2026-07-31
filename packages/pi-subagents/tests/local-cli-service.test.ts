@@ -201,12 +201,20 @@ describe("SubagentService local CLI interrupt integration", () => {
             const paused = yield* service.interrupt(run.id);
             yield* Effect.sleep("25 millis");
             const current = yield* service.status(run.id);
-            return { paused, current };
+            const guidanceFailure = yield* service.send(run.id, "Continue").pipe(
+              Effect.match({
+                onFailure: (error) => error.message,
+                onSuccess: () => "",
+              }),
+            );
+            return { paused, current, guidanceFailure };
           }),
         );
         expect(result.paused.state).toBe("paused");
         expect(result.current.state).toBe("paused");
         expect(result.current.reportGeneration).toBe(0);
+        expect(result.guidanceFailure).toContain("cannot resume it; stop it");
+        expect(result.guidanceFailure).toContain("start a replacement");
       });
 
   it("settles Claude success only through an accepted causal supervisor report", async () => {

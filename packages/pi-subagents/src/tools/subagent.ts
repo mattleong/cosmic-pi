@@ -173,7 +173,9 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     renderCall: (args, theme) =>
       renderSubagentCall(
         "subagent_start",
-        args.agents.map((agent) => agent.name ?? agent.task).join(", "),
+        args.agents
+          .map((agent, index) => agent.name ?? `#${index + 1} ${agent.task.slice(0, 40)}`)
+          .join(", "),
         theme,
       ),
     renderResult: sharedRenderResult,
@@ -207,7 +209,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_await",
     label: "Await Subagents",
     description:
-      "Wait for selected background subagents to finish with live progress. Returns early if a Pi subagent needs a parent reply, then call it again after subagent_reply.",
+      "Wait for selected background subagents to finish with live progress. Returns early if a subagent needs a parent reply, then call it again after subagent_reply. A retained run in reported state counts as finished for its current assignment.",
     promptSnippet: "Wait for background subagents and collect their final reports",
     promptGuidelines: [
       "Do not poll subagent_status. After independent work, call subagent_await to collect results; if it returns for a parent question, use subagent_reply and then call subagent_await again. Use subagent_status only for troubleshooting or a user-requested snapshot.",
@@ -224,7 +226,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_send",
     label: "Send Subagent Guidance",
     description:
-      "Send the same guidance message to one or more running subagents. Mixed-target calls report each success and failure.",
+      "Send the same guidance message to one or more running subagents. For a reported retained run, this begins its next assignment and report generation. Mixed-target calls report each success and failure.",
     parameters: SendParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "send" }, signal, onUpdate, ctx),

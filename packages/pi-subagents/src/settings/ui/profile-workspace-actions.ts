@@ -53,7 +53,7 @@ export const applyProfileWorkspaceDraftAction = (input: {
     return draft
       ? {
           draft,
-          description: "candidate duplicated",
+          description: "candidate cloned",
           candidateIndex: Math.min(input.candidateIndex + 1, draft.candidates.length - 1),
         }
       : { error: `A route may contain at most ${MAX_PROFILE_CANDIDATES} candidates.` };

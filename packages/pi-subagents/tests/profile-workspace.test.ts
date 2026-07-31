@@ -59,6 +59,7 @@ const input = {
   enter: "\r",
   escape: "\u001b",
   down: "\u001b[B",
+  left: "\u001b[D",
   right: "\u001b[C",
 } as const;
 
@@ -138,6 +139,93 @@ describe("profile settings workspace", () => {
       expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
       expect(lines.join("\n")).toContain(width > 12 ? "/subagents" : "/subagent");
     }
+  });
+
+  it("uses neutral ready status, candidate terminology, and safe root navigation", () => {
+    const { component, close } = makeComponent();
+    const rendered = component.render(120).join("\n");
+    expect(rendered).toContain("· ready");
+    expect(rendered).toContain("1 candidate");
+    expect(rendered).not.toContain("1 route");
+    component.handleInput(input.left);
+    expect(close).not.toHaveBeenCalled();
+    component.handleInput(input.escape);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows overflow position and keeps long model rows aligned", () => {
+    const candidates = Array.from({ length: 8 }, (_, index) =>
+      candidate(`provider/a-very-long-model-selector-${index}-with-suffix`),
+    );
+    const value = inspection(
+      { version: 4 },
+      { version: 4, defaultProfile: "reviewer", profiles: { reviewer: candidates } },
+    );
+    const { component } = makeComponent(value, { getHeight: () => 12 });
+    expect(component.render(70).join("\n")).toContain("↑ more");
+    component.handleInput(input.enter);
+    expect(component.render(70).join("\n")).toContain("1–1 of 8 · ↓ more");
+    component.handleInput(input.enter);
+    component.handleInput(input.down);
+    component.handleInput(input.down);
+    const fields = component.render(60).join("\n");
+    expect(fields).toContain("…");
+    expect(fields).toContain("Enter to choose");
+  });
+
+  it("returns to the route when a deep scope switch has no candidate", () => {
+    const value = inspection(
+      { version: 4, profiles: { reviewer: "disabled" } },
+      {
+        version: 4,
+        defaultProfile: "reviewer",
+        profiles: { reviewer: candidate("openai/project") },
+      },
+    );
+    const { component } = makeComponent(value);
+    component.handleInput(input.enter);
+    component.handleInput(input.enter);
+    component.handleInput("g");
+    const rendered = component.render(100).join("\n");
+    expect(rendered).toContain("reviewer route");
+    expect(rendered).toContain("No candidates · route is disabled");
+  });
+
+  it("cancels an in-flight native model catalog load with Escape", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const loadModelPicker = vi.fn(
+      (_profile, _candidateIndex, _candidate, signal?: AbortSignal) =>
+        new Promise<CandidateModelPickerData>((_resolve, reject) => {
+          capturedSignal = signal;
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
+    );
+    const { component } = makeComponent(undefined, { loadModelPicker });
+    component.handleInput(input.enter);
+    component.handleInput(input.enter);
+    component.handleInput(input.down);
+    component.handleInput(input.down);
+    component.handleInput(input.enter);
+    expect(component.render(100).join("\n")).toContain("Loading model catalog");
+    component.handleInput(input.escape);
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(component.render(100).join("\n")).toContain("Model catalog loading canceled");
+  });
+
+  it("renders configured selection keys in workspace help", () => {
+    const { component } = makeComponent(undefined, {
+      keybindingLabel: (id, fallback) =>
+        (
+          ({
+            "tui.select.up": "P",
+            "tui.select.down": "N",
+            "tui.select.confirm": "Y",
+            "tui.select.cancel": "Q",
+          }) as Readonly<Record<string, string>>
+        )[id] ?? fallback,
+    });
+    expect(component.render(120).at(-1)).toContain("P/N Select · Y Route");
+    expect(component.render(120).at(-1)).toContain("Q Close");
   });
 
   it("navigates Profiles → Route → Candidate with scope and effective context", () => {
@@ -309,6 +397,8 @@ describe("profile settings workspace", () => {
     component.handleInput(input.enter);
     expect(saveDraft).not.toHaveBeenCalled();
     expect(component.render(120).join("\n")).toContain("No profile change was needed");
+    component.handleInput(input.down);
+    expect(component.render(120).join("\n")).not.toContain("No profile change was needed");
   });
 
   it("narrows native effort choices to the selected model catalog", async () => {
@@ -363,7 +453,7 @@ describe("profile settings workspace", () => {
     component.handleInput(input.down);
     component.handleInput(input.enter);
     await vi.waitFor(() =>
-      expect(component.render(130).join("\n")).toContain("/subagents profiles › model"),
+      expect(component.render(130).join("\n")).toContain("reviewer › candidate 1 › Model"),
     );
 
     for (const width of [130, 52, 12, 3]) {
@@ -387,6 +477,7 @@ describe("profile settings workspace", () => {
       "reviewer",
       0,
       expect.objectContaining({ model: "parent" }),
+      expect.any(AbortSignal),
     );
     expect(saveDraft).toHaveBeenCalledWith(
       "project",
@@ -406,7 +497,7 @@ describe("profile settings workspace", () => {
     component.handleInput(input.down);
     component.handleInput(input.enter);
     await vi.waitFor(() =>
-      expect(component.render(100).join("\n")).toContain("/subagents profiles › model"),
+      expect(component.render(100).join("\n")).toContain("reviewer › candidate 1 › Model"),
     );
     component.handleInput(input.escape);
     expect(component.render(100).join("\n")).toContain("Candidate fields");
@@ -524,6 +615,8 @@ describe("profile settings workspace", () => {
     rejectSave(new Error("write conflict"));
     await vi.waitFor(() => expect(component.render(130).join("\n")).toContain("write conflict"));
     expect(component.render(130).join("\n")).toContain("Reopen /subagents profiles");
+    expect(component.render(52).join("\n")).toContain("editing again");
+    expect(component.render(52).join("\n")).toContain("× write conflict");
     expect(component.render(130).join("\n")).not.toContain("reload required");
     component.handleInput(input.enter);
     component.handleInput(input.down);

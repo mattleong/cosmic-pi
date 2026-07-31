@@ -151,7 +151,7 @@ describe("/subagents fleet UI", () => {
     const footer = makeComponent(120, 18).lines.at(-1) ?? "";
     expect(footer).toContain("↑↓ Select · C-u/d Scroll");
     expect(footer).toContain("m Reply · i Interrupt");
-    expect(footer).toContain("t Technical · ? Help · Esc Close");
+    expect(footer).toContain("t Technical · ? More · Esc Close");
     expect(footer).not.toContain("r Resume");
   });
 
@@ -181,11 +181,11 @@ describe("/subagents fleet UI", () => {
     expect(rendered).toContain("Report generation 2 · backend retained");
     expect(rendered).toContain("Second retained report.");
     expect(rendered).toContain("1 retained");
-    expect(component.render(120).at(-1)).toContain("m Message");
+    expect(component.render(120).at(-1)).toContain("m New task");
     expect(component.render(120).at(-1)).toContain("x Stop");
     expect(component.render(120).at(-1)).not.toContain("r Resume");
     component.handleInput("m");
-    expect(actions.message).toHaveBeenCalledWith("agent-1", false);
+    expect(actions.message).toHaveBeenCalledWith("agent-1", "next-assignment");
   });
 
   it("uses the shared Braille spinner for running fleet rows", () => {
@@ -256,16 +256,18 @@ describe("/subagents fleet UI", () => {
     component.handleInput("\r");
     const bottom = component.render(42).join("\n");
     expect(bottom).toContain("of");
-    expect(bottom).toContain("C-u up · C-d down");
+    expect(bottom).toContain("half-page");
     expect(bottom).toContain("Final report");
 
-    for (let index = 0; index < 40; index += 1) component.handleInput("\u0015");
+    component.handleInput("\u001b[5~");
     const top = component.render(42).join("\n");
     expect(top).toContain("Task");
     expect(top).not.toBe(bottom);
 
-    component.handleInput("\u0004");
-    expect(component.render(42).join("\n")).not.toBe(top);
+    component.handleInput("\u001b[6~");
+    expect(component.render(42).join("\n")).toBe(bottom);
+    component.handleInput("\u0015");
+    expect(component.render(42).join("\n")).not.toBe(bottom);
   });
 
   it("hides fleet run IDs until technical mode is enabled", () => {
@@ -281,7 +283,7 @@ describe("/subagents fleet UI", () => {
     expect(component.render(42).join("\n")).not.toContain("Technical details");
     component.handleInput("t");
     expect(component.render(42).join("\n")).toContain("Technical details");
-    expect(component.render(42).at(-1)).toContain("? Actions");
+    expect(component.render(42).at(-1)).toContain("? More");
     component.handleInput("?");
     expect(component.render(42).at(-1)).toContain("m Reply");
   });
@@ -366,10 +368,21 @@ describe("/subagents fleet UI", () => {
     expect(actions.stop).not.toHaveBeenCalled();
   });
 
+  it("labels running guidance separately from retained next assignments", () => {
+    const runningProjection: SubagentProjection = {
+      revision: 7,
+      runs: [{ ...projection.runs[0]!, state: "running", question: undefined }],
+    };
+    const { actions, component } = makeComponent(100, 18, runningProjection);
+    expect(component.render(100).at(-1)).toContain("m Guide");
+    component.handleInput("m");
+    expect(actions.message).toHaveBeenCalledWith("agent-1", "guidance");
+  });
+
   it("routes message, interrupt, rename, and confirmed stop controls", () => {
     const { actions, component } = makeComponent(80, 18);
     component.handleInput("m");
-    expect(actions.message).toHaveBeenCalledWith("agent-1", true);
+    expect(actions.message).toHaveBeenCalledWith("agent-1", "reply");
     component.handleInput("i");
     expect(actions.interrupt).toHaveBeenCalledWith("agent-1");
     component.handleInput("n");

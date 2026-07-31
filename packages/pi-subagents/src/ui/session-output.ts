@@ -9,7 +9,12 @@ import {
   wrapTextWithAnsi,
   type Component,
 } from "@earendil-works/pi-tui";
-import { isActiveRunState, type SubagentRunView, type SubagentSessionEvent } from "../run/model.ts";
+import {
+  hasSubagentCapability,
+  isActiveRunState,
+  type SubagentRunView,
+  type SubagentSessionEvent,
+} from "../run/model.ts";
 import { runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "./sanitize.ts";
 
@@ -52,7 +57,7 @@ const runDuration = (run: SubagentRunView, now: number): string => {
   const end = run.endedAt ?? (active ? now : run.lastActivityAt);
   const elapsed = formatDuration(end - run.startedAt);
   if (run.state === "paused") return `paused after ${elapsed}`;
-  if (run.state === "reported") return `report ${run.reportGeneration} · retained`;
+  if (run.state === "reported") return `idle after report ${run.reportGeneration}`;
   if (run.state === "waiting_for_parent") return `waiting · ${elapsed}`;
   return active ? `running for ${elapsed}` : elapsed;
 };
@@ -176,7 +181,9 @@ const emptyActivityLabel = (run: SubagentRunView): string => {
     case "waiting_for_parent":
       return "Waiting for parent…";
     case "paused":
-      return "Paused.";
+      return hasSubagentCapability(run, "resume")
+        ? "Paused; resume when ready."
+        : "Interrupted; stop this run and start a replacement when needed.";
     case "reported":
       return "Report delivered; retained backend is idle.";
     case "stopping":

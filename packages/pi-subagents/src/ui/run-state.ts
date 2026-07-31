@@ -37,7 +37,7 @@ export const runStateLabel = (state: SubagentRunState): string => {
     case "running":
       return "running";
     case "waiting_for_parent":
-      return "waiting for you";
+      return "waiting for reply";
     case "paused":
       return "paused";
     case "reported":
