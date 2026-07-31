@@ -10,7 +10,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import type { SubagentEffort } from "../run/model.ts";
-import { sanitizeLocalCliEnvironment, type LocalCliRuntime } from "./local-cli-process.ts";
+import {
+  codexArgv,
+  prepareCodexCatalogHarness,
+  sanitizeLocalCliEnvironment,
+  type LocalCliRuntime,
+} from "./local-cli-process.ts";
 import { terminateProcessTree } from "./process-tree.ts";
 
 const MAX_OUTPUT_BYTES = 512 * 1024;
@@ -20,9 +25,33 @@ const MAX_DESCRIPTION_CHARS = 4_096;
 const CATALOG_TIMEOUT_MILLIS = 10_000;
 const CATALOG_REQUEST_ID = "pi-subagents-model-catalog";
 
-const Selector = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_SELECTOR_CHARS));
-const Label = Schema.String.check(Schema.isMaxLength(MAX_LABEL_CHARS));
-const Description = Schema.String.check(Schema.isMaxLength(MAX_DESCRIPTION_CHARS));
+const containsNoTerminalControls = (value: string): boolean => {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 32 || (code >= 127 && code <= 159)) return false;
+  }
+  return true;
+};
+const containsOnlySafeDescriptionControls = (value: string): boolean => {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || (code >= 127 && code <= 159))
+      return false;
+  }
+  return true;
+};
+const hasNoTerminalControls = Schema.makeFilter(containsNoTerminalControls);
+const hasOnlySafeDescriptionControls = Schema.makeFilter(containsOnlySafeDescriptionControls);
+const Selector = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_SELECTOR_CHARS),
+  hasNoTerminalControls,
+);
+const Label = Schema.String.check(Schema.isMaxLength(MAX_LABEL_CHARS), hasNoTerminalControls);
+const Description = Schema.String.check(
+  Schema.isMaxLength(MAX_DESCRIPTION_CHARS),
+  hasOnlySafeDescriptionControls,
+);
 const Effort = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32));
 
 const ClaudeCatalogResponse = Schema.Struct({
@@ -91,6 +120,8 @@ export interface NativeModelCatalogShape {
 }
 
 export interface NativeModelCatalogLayerOptions {
+  /** Production private-state root used to isolate Codex configuration. */
+  readonly agentDirectory?: string | undefined;
   /** Package-test seam only. Production always uses fixed executable names. */
   readonly executables?: { readonly claude: string; readonly codex: string } | undefined;
   /** Package-test seam only. */
@@ -103,7 +134,6 @@ const catalogError = (runtime: LocalCliRuntime, code: string, message: string) =
   new NativeModelCatalogError({ runtime, code, message });
 
 const supportedEffortSet: ReadonlySet<string> = new Set([
-  "off",
   "minimal",
   "low",
   "medium",
@@ -114,6 +144,9 @@ const supportedEffortSet: ReadonlySet<string> = new Set([
 
 const normalizeEfforts = (values: ReadonlyArray<string>): ReadonlyArray<SubagentEffort> =>
   values.filter((value): value is SubagentEffort => supportedEffortSet.has(value));
+
+const normalizeDescription = (value: string): string =>
+  value.replaceAll("\r", " ").replaceAll("\n", " ").replaceAll("\t", " ").trim();
 
 const claudeArgs = (): ReadonlyArray<string> => [
   "--print",
@@ -187,6 +220,7 @@ const runCatalogProcess = (
   cwd: string,
   env: NodeJS.ProcessEnv,
   timeoutMillis: number,
+  signal?: AbortSignal | undefined,
 ): Promise<unknown> =>
   new Promise((resolve, reject) => {
     let child: NodeChildProcess;
@@ -194,11 +228,17 @@ const runCatalogProcess = (
     let outputBytes = 0;
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
+    const onAbort = (): void =>
+      release(
+        undefined,
+        catalogError(runtime, "catalog_canceled", `${runtime} model catalog was canceled.`),
+      );
 
     const release = (value: unknown, error?: NativeModelCatalogError): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       void terminateProcessTree(child, "force").then(
         () => (error ? reject(error) : resolve(value)),
         () =>
@@ -212,6 +252,10 @@ const runCatalogProcess = (
       );
     };
 
+    if (signal?.aborted) {
+      reject(catalogError(runtime, "catalog_canceled", `${runtime} model catalog was canceled.`));
+      return;
+    }
     try {
       child = spawn(executable, [...args], {
         cwd,
@@ -231,6 +275,7 @@ const runCatalogProcess = (
       return;
     }
 
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.once("spawn", () => {
       const stdin = child.stdin;
       if (!stdin) {
@@ -363,11 +408,12 @@ const decodeClaudeModels = (value: unknown) =>
         (model): NativeRuntimeModel => ({
           selector: model.value,
           label: model.displayName ?? model.value,
-          description:
+          description: normalizeDescription(
             model.description ??
-            (model.resolvedModel === model.value
-              ? model.value
-              : `Resolves to ${model.resolvedModel}`),
+              (model.resolvedModel === model.value
+                ? model.value
+                : `Resolves to ${model.resolvedModel}`),
+          ),
           supportedEfforts: normalizeEfforts(model.supportedEffortLevels ?? []),
           isDefault: model.value === "default",
         }),
@@ -382,7 +428,7 @@ const decodeCodexModels = (value: unknown) =>
         (model): NativeRuntimeModel => ({
           selector: model.model,
           label: model.displayName,
-          description: model.description,
+          description: normalizeDescription(model.description),
           supportedEfforts: normalizeEfforts(
             model.supportedReasoningEfforts.map((effort) => effort.reasoningEffort),
           ),
@@ -392,30 +438,81 @@ const decodeCodexModels = (value: unknown) =>
     ),
   );
 
+const discoverCatalog = async (
+  runtime: LocalCliRuntime,
+  executable: string,
+  cwd: string,
+  sourceEnvironment: NodeJS.ProcessEnv,
+  timeoutMillis: number,
+  signal: AbortSignal,
+  options: NativeModelCatalogLayerOptions,
+): Promise<unknown> => {
+  if (runtime !== "codex" || !options.agentDirectory || options.executables)
+    return runCatalogProcess(
+      runtime,
+      executable,
+      runtime === "claude" ? claudeArgs() : codexArgv(),
+      catalogFrames(runtime),
+      cwd,
+      sanitizeLocalCliEnvironment(sourceEnvironment, runtime),
+      timeoutMillis,
+      signal,
+    );
+  const harness = await prepareCodexCatalogHarness({
+    agentDirectory: options.agentDirectory,
+    environment: sourceEnvironment,
+  });
+  let result: unknown;
+  let failure: unknown;
+  try {
+    result = await runCatalogProcess(
+      runtime,
+      executable,
+      harness.args,
+      catalogFrames(runtime),
+      cwd,
+      harness.env,
+      timeoutMillis,
+      signal,
+    );
+  } catch (error) {
+    failure = error;
+  }
+  try {
+    await harness.release();
+  } catch {
+    throw catalogError(
+      runtime,
+      "catalog_cleanup_unconfirmed",
+      "Codex model catalog private harness cleanup could not be confirmed.",
+    );
+  }
+  if (failure !== undefined) throw failure;
+  return result;
+};
+
 export const makeNativeModelCatalog = (
   options: NativeModelCatalogLayerOptions = {},
 ): NativeModelCatalogShape => {
-  const cache = new Map<LocalCliRuntime, ReadonlyArray<NativeRuntimeModel>>();
+  const cache = new Map<string, ReadonlyArray<NativeRuntimeModel>>();
   return {
     list: (runtime, cwd) =>
       Effect.suspend(() => {
-        const cached = cache.get(runtime);
+        const cacheKey = `${runtime}\u0000${cwd}`;
+        const cached = cache.get(cacheKey);
         if (cached) return Effect.succeed(cached);
         const executable = options.executables?.[runtime] ?? runtime;
-        const environment = sanitizeLocalCliEnvironment(
-          options.environment ?? process.env,
-          runtime,
-        );
+        const sourceEnvironment = options.environment ?? process.env;
         return Effect.tryPromise({
-          try: () =>
-            runCatalogProcess(
+          try: (signal) =>
+            discoverCatalog(
               runtime,
               executable,
-              runtime === "claude" ? claudeArgs() : ["app-server", "--stdio"],
-              catalogFrames(runtime),
               cwd,
-              environment,
+              sourceEnvironment,
               options.timeoutMillis ?? CATALOG_TIMEOUT_MILLIS,
+              signal,
+              options,
             ),
           catch: (error) =>
             error instanceof NativeModelCatalogError
@@ -437,7 +534,7 @@ export const makeNativeModelCatalog = (
               ),
             ),
           ),
-          Effect.tap((models) => Effect.sync(() => void cache.set(runtime, models))),
+          Effect.tap((models) => Effect.sync(() => void cache.set(cacheKey, models))),
         );
       }),
   };

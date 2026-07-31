@@ -209,6 +209,50 @@ describe("profile settings workspace", () => {
     expect(component.render(130).join("\n")).toContain("Saving delegate");
   });
 
+  it("requires an advertised model choice before persisting a native runtime change", async () => {
+    const loadModelPicker = vi.fn().mockResolvedValue({
+      current: "claude-opus-5",
+      defaultSelector: "sonnet",
+      context: {
+        profile: "delegate",
+        candidateIndex: 0,
+        host: "local",
+        runtime: "claude",
+      },
+      choices: [
+        {
+          choice: { kind: "model", selector: "claude-opus-5" },
+          item: { value: "claude-opus-5", label: "Claude Opus" },
+          searchText: "claude opus",
+          supportedEfforts: ["high"],
+        },
+        {
+          choice: { kind: "model", selector: "sonnet" },
+          item: { value: "sonnet", label: "Claude Sonnet (default)" },
+          searchText: "claude sonnet",
+          supportedEfforts: ["low", "high"],
+        },
+      ],
+    } satisfies CandidateModelPickerData);
+    const { component, saveDraft } = makeComponent(
+      inspection({ version: 4, defaultProfile: "delegate" }),
+      { loadModelPicker },
+    );
+    component.handleInput(input.enter);
+    component.handleInput(input.enter);
+    component.handleInput(input.down);
+    component.handleInput(input.enter);
+    component.handleInput(input.down);
+    component.handleInput(input.enter);
+    await vi.waitFor(() => expect(component.render(120).join("\n")).toContain("Choose model"));
+    expect(saveDraft).not.toHaveBeenCalled();
+    component.handleInput(input.enter);
+    expect(saveDraft.mock.calls[0]?.[2].candidates[0]).toMatchObject({
+      runtime: "claude",
+      model: "sonnet",
+    });
+  });
+
   it("does not write when a selector confirms the current value", () => {
     const { component, saveDraft } = makeComponent();
     component.handleInput(input.enter);
@@ -217,6 +261,48 @@ describe("profile settings workspace", () => {
     component.handleInput(input.enter);
     expect(saveDraft).not.toHaveBeenCalled();
     expect(component.render(120).join("\n")).toContain("No profile change was needed");
+  });
+
+  it("narrows native effort choices to the selected model catalog", async () => {
+    const value = inspection(
+      { version: 4 },
+      {
+        version: 4,
+        defaultProfile: "reviewer",
+        profiles: {
+          reviewer: candidate("claude-opus-5", { runtime: "claude", effort: "high" }),
+        },
+      },
+    );
+    const loadModelPicker = vi.fn().mockResolvedValue({
+      current: "claude-opus-5",
+      context: {
+        profile: "reviewer",
+        candidateIndex: 0,
+        host: "local",
+        runtime: "claude",
+      },
+      choices: [
+        {
+          choice: { kind: "model", selector: "claude-opus-5" },
+          item: { value: "claude-opus-5", label: "Claude Opus" },
+          searchText: "claude opus",
+          supportedEfforts: ["low"],
+        },
+      ],
+    } satisfies CandidateModelPickerData);
+    const { component, saveDraft } = makeComponent(value, { loadModelPicker });
+    component.handleInput(input.enter);
+    component.handleInput(input.enter);
+    for (let index = 0; index < 3; index += 1) component.handleInput(input.down);
+    component.handleInput(input.enter);
+    await vi.waitFor(() => expect(component.render(120).join("\n")).toContain("Choose effort"));
+    const effortPage = component.render(120).join("\n");
+    expect(effortPage).toContain("Options · 2/2");
+    expect(effortPage).toContain("Use low reasoning effort");
+    expect(effortPage).not.toContain("Use high reasoning effort");
+    component.handleInput(input.enter);
+    expect(saveDraft.mock.calls[0]?.[2].candidates[0]).toMatchObject({ effort: "default" });
   });
 
   it("enters a full-page searchable model dropdown and persists its selection", async () => {
@@ -389,7 +475,13 @@ describe("profile settings workspace", () => {
     expect(saveDraft).toHaveBeenCalledTimes(1);
     rejectSave(new Error("write conflict"));
     await vi.waitFor(() => expect(component.render(130).join("\n")).toContain("write conflict"));
+    expect(component.render(130).join("\n")).toContain("Reopen /subagents profiles");
     expect(component.render(130).join("\n")).not.toContain("reload required");
+    component.handleInput(input.enter);
+    component.handleInput(input.down);
+    component.handleInput(input.enter);
+    expect(saveDraft).toHaveBeenCalledTimes(1);
+    expect(component.render(130).join("\n")).toContain("could not be safely refreshed");
   });
 
   it("offers reload after a successful write and reports pending state on close", async () => {
@@ -403,6 +495,16 @@ describe("profile settings workspace", () => {
     await vi.waitFor(() => expect(component.render(120).join("\n")).toContain("Reload canceled"));
     component.handleInput(input.escape);
     expect(close).toHaveBeenCalledWith(true);
+  });
+
+  it("closes with no pending notice after a successful reload", async () => {
+    const reload = vi.fn().mockResolvedValue(true);
+    const { component, close } = makeComponent(inspection(), { reload });
+    component.handleInput("d");
+    component.handleInput("d");
+    await vi.waitFor(() => expect(component.render(120).join("\n")).toContain("reload required"));
+    component.handleInput("r");
+    await vi.waitFor(() => expect(close).toHaveBeenCalledWith(false));
   });
 
   it("does not persist inline fields disabled by the current policy", () => {

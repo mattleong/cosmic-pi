@@ -42,7 +42,9 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
     herdrHost,
   );
   const backend = subagentBackendRegistryLayer.pipe(Layer.provide(backendBoundaries));
-  const nativeModelCatalog = NativeModelCatalog.layer();
+  const nativeModelCatalog = NativeModelCatalog.layer({
+    agentDirectory: options.agentDirectory,
+  });
   const writerLeases = WriterLeaseService.layer({ agentDirectory: options.agentDirectory });
   const service = SubagentService.layer({ publish: options.publish, notify: options.notify }).pipe(
     Layer.provide(Layer.merge(backend, writerLeases)),

@@ -124,6 +124,34 @@ describe("child protocol", () => {
     expect(decodeRpcUsageOption({ cost: { total: Number.NaN } })).toBeUndefined();
   });
 
+  it("rejects empty protocol identifiers, names, and parent messages", async () => {
+    for (const value of [
+      {
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "",
+        kind: "question",
+        message: "Question",
+      },
+      {
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "question-1",
+        kind: "question",
+        message: "",
+      },
+    ])
+      await expect(Effect.runPromise(decodeContactParentEnvelope(value))).rejects.toBeDefined();
+
+    for (const value of [
+      { type: "response", id: "", command: "get_state", success: true },
+      { type: "response", id: "rpc-1", command: "", success: true },
+      { type: "tool_execution_start", toolCallId: "", toolName: "read", args: {} },
+      { type: "tool_execution_start", toolCallId: "tool-1", toolName: "", args: {} },
+    ])
+      await expect(Effect.runPromise(decodeRpcEnvelope(value))).rejects.toBeDefined();
+  });
+
   it("rejects malformed or oversized known events", async () => {
     await expect(
       Effect.runPromise(decodeRpcEnvelope({ type: "tool_execution_start" })),

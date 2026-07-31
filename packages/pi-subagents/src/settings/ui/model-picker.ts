@@ -5,7 +5,7 @@ import type { Component, SelectItem } from "@earendil-works/pi-tui";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
 import type { ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../run/model.ts";
-import { SearchableSelectPage } from "./searchable-select-page.ts";
+import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
 
 export type ProfileModelChoice =
   | { readonly kind: "model"; readonly selector: string }
@@ -102,6 +102,9 @@ export interface ProfileModelPickerPageOptions {
   readonly notice?: string | undefined;
   readonly getHeight: () => number;
   readonly requestRender: () => void;
+  readonly matchesKeybinding?:
+    | ((data: string, id: SettingsSelectKeybindingId) => boolean)
+    | undefined;
   readonly select: (choice: ProfileModelChoice) => void;
   readonly cancel: () => void;
 }
@@ -136,6 +139,7 @@ export class ProfileModelPickerPage implements Component {
       emptyText: "No matching models",
       getHeight: options.getHeight,
       requestRender: options.requestRender,
+      matchesKeybinding: options.matchesKeybinding,
       select: options.select,
       cancel: options.cancel,
     });

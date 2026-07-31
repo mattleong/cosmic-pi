@@ -11,12 +11,15 @@ import {
   selectCandidateField,
   type ProfileWorkspaceField,
 } from "./profile-workspace-model.ts";
-import { SearchableSelectPage } from "./searchable-select-page.ts";
+import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
 
 interface SharedSelectorOptions {
   readonly theme: Theme;
   readonly getHeight: () => number;
   readonly requestRender: () => void;
+  readonly matchesKeybinding?:
+    | ((data: string, id: SettingsSelectKeybindingId) => boolean)
+    | undefined;
 }
 
 export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
@@ -26,8 +29,9 @@ export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly field: Exclude<ProfileWorkspaceField, "model">;
   readonly fieldIndex: number;
   readonly piModel?: string | undefined;
-  readonly supportedPiEfforts?: ReadonlyArray<SubagentEffort> | undefined;
-  readonly select: (update: CandidateUpdate, description: string) => void;
+  readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
+  readonly notice?: string | undefined;
+  readonly select: (update: CandidateUpdate, description: string, value: string) => void;
   readonly cancel: (label: string) => void;
 }
 
@@ -44,13 +48,14 @@ export const makeCandidateFieldSelector = (
   const current = currentFieldValue(options.candidate, options.field);
   const changeOptions = {
     piModel: options.piModel,
-    supportedPiEfforts: options.supportedPiEfforts,
+    supportedEfforts: options.supportedEfforts,
   };
   return new SearchableSelectPage<string>({
     theme: options.theme,
     breadcrumb: `/subagents profiles › ${options.profile} › candidate ${options.candidateIndex + 1} › ${label}`,
     title: `Choose ${label.toLowerCase()}`,
     subtitle: `${options.profile} · candidate ${options.candidateIndex + 1} · current: ${row?.value ?? current}`,
+    ...(options.notice ? { notice: options.notice } : {}),
     choices: candidateFieldChoices(options.candidate, options.field, changeOptions).map(
       (choice) => ({
         value: choice.value,
@@ -67,10 +72,12 @@ export const makeCandidateFieldSelector = (
     emptyText: "No matching values",
     getHeight: options.getHeight,
     requestRender: options.requestRender,
+    matchesKeybinding: options.matchesKeybinding,
     select: (value) =>
       options.select(
         selectCandidateField(options.candidate, options.field, value, changeOptions),
         `${label} updated`,
+        value,
       ),
     cancel: () => options.cancel(label),
   });
@@ -107,6 +114,7 @@ export const makeProfileSearchSelector = (
     emptyText: "No matching profiles",
     getHeight: options.getHeight,
     requestRender: options.requestRender,
+    matchesKeybinding: options.matchesKeybinding,
     select: (value) => {
       const profile = PROFILE_IDS.find((entry) => entry === value);
       if (profile) options.select(profile);

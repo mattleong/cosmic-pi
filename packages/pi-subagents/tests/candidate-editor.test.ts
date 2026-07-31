@@ -35,6 +35,13 @@ const claudeModels: ReadonlyArray<NativeRuntimeModel> = [
     supportedEfforts: ["low", "medium", "high", "xhigh"],
     isDefault: false,
   },
+  {
+    selector: "opus[1m]",
+    label: "Opus 1M",
+    description: "Long-context Claude model",
+    supportedEfforts: ["high", "xhigh"],
+    isDefault: false,
+  },
 ];
 
 const context = () =>
@@ -58,11 +65,15 @@ describe("inline candidate model editor", () => {
     expect(picker.choices.map((choice) => choice.item.value)).toEqual([
       "default",
       "sonnet",
+      "opus[1m]",
       "claude-opus-5",
     ]);
     expect(
       updateCandidateFromModelChoice(current, picker, { kind: "model", selector: "sonnet" }),
     ).toEqual({ candidate: candidate({ model: "sonnet" }), notices: [] });
+    expect(
+      updateCandidateFromModelChoice(current, picker, { kind: "model", selector: "opus[1m]" }),
+    ).toEqual({ candidate: candidate({ model: "opus[1m]" }), notices: [] });
   });
 
   it("falls back to searchable current/default choices when native discovery fails", async () => {

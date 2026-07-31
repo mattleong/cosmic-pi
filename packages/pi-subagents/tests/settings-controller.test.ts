@@ -1,7 +1,7 @@
 // Promise assertions are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
 import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import { Key, matchesKey, type Component } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
@@ -114,7 +114,15 @@ const exerciseWorkspace = async (
   const component = factory(
     { terminal: { rows: 24 }, requestRender: vi.fn() },
     theme,
-    { matches: () => false },
+    {
+      matches: (data: string, id: string) => {
+        if (id === "tui.select.up") return matchesKey(data, Key.up);
+        if (id === "tui.select.down") return matchesKey(data, Key.down);
+        if (id === "tui.select.confirm") return matchesKey(data, Key.enter);
+        if (id === "tui.select.cancel") return matchesKey(data, Key.escape);
+        return false;
+      },
+    },
     done,
   );
   await exercise(component, done);
@@ -307,6 +315,7 @@ describe("/subagents profile workspace", () => {
       .mockResolvedValueOnce(initial)
       .mockResolvedValueOnce(saved);
     const confirm = vi.fn().mockResolvedValue(true);
+    const notify = vi.fn();
     const ctx = baseContext({
       custom: vi.fn(async (factory) =>
         exerciseWorkspace(factory, async (component) => {
@@ -320,11 +329,12 @@ describe("/subagents profile workspace", () => {
         }),
       ),
       confirm,
-      notify: vi.fn(),
+      notify,
     });
     await register(managerActions, bridge)("profiles", ctx);
     expect(confirm.mock.calls[0]?.[1]).toContain("stops all session-scoped runs");
     expect(ctx.reload).toHaveBeenCalledTimes(1);
+    expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("Run /reload"), "info");
   });
 
   it("preserves complete ordered route declarations", () => {

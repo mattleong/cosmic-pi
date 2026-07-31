@@ -42,7 +42,7 @@ export interface ProfileWorkspaceFieldRow {
 
 export interface CandidateFieldChangeOptions {
   readonly piModel?: string | undefined;
-  readonly supportedPiEfforts?: ReadonlyArray<SubagentEffort> | undefined;
+  readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
 }
 
 export interface CandidateFieldChoice {
@@ -146,7 +146,7 @@ export const candidateFieldChoices = (
   if (field === "effort")
     return [
       { value: "default", label: "Profile default", description: "Use the runtime default" },
-      ...runtimeEfforts(candidate.runtime, options.supportedPiEfforts).map((effort) => ({
+      ...runtimeEfforts(candidate.runtime, options.supportedEfforts).map((effort) => ({
         value: effort,
         label: effort,
         description: `Use ${effort} reasoning effort`,
@@ -188,9 +188,7 @@ export function selectCandidateField(
   if (
     field === "effort" &&
     (value === "default" ||
-      runtimeEfforts(candidate.runtime, options.supportedPiEfforts).includes(
-        value as SubagentEffort,
-      ))
+      runtimeEfforts(candidate.runtime, options.supportedEfforts).includes(value as SubagentEffort))
   )
     return {
       candidate: { ...candidate, effort: value as ProfileCandidateEffort },

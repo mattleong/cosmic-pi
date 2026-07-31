@@ -6,10 +6,19 @@ const MAX_PROTOCOL_NAME_CHARS = 256;
 const MAX_PROTOCOL_ERROR_CHARS = 64 * 1024;
 const MAX_MESSAGE_DELTA_CHARS = 1024 * 1024;
 
-const ProtocolIdSchema = Schema.String.check(Schema.isMaxLength(MAX_PROTOCOL_ID_CHARS));
-const ProtocolNameSchema = Schema.String.check(Schema.isMaxLength(MAX_PROTOCOL_NAME_CHARS));
+const ProtocolIdSchema = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_PROTOCOL_ID_CHARS),
+);
+const ProtocolNameSchema = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_PROTOCOL_NAME_CHARS),
+);
 const ProtocolErrorSchema = Schema.String.check(Schema.isMaxLength(MAX_PROTOCOL_ERROR_CHARS));
-const ParentMessageSchema = Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS));
+const ParentMessageSchema = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS),
+);
 
 const RpcResponseSchema = Schema.Struct({
   type: Schema.Literal("response"),
@@ -137,7 +146,7 @@ const RpcStateModelSchema = Schema.Struct({
   provider: ProtocolNameSchema,
   id: ProtocolNameSchema,
 });
-const RpcStateModelIdSchema = Schema.String.check(Schema.isMaxLength(512));
+const RpcStateModelIdSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512));
 const RpcStateSessionIdSchema = Schema.String.check(
   Schema.isNonEmpty(),
   Schema.isMaxLength(MAX_PROTOCOL_ID_CHARS),

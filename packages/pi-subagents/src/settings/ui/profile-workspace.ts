@@ -1,7 +1,7 @@
 // Profile settings are a Promise-shaped Pi host UI boundary.
 // @effect-diagnostics effect/asyncFunction:off
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, type Component } from "@earendil-works/pi-tui";
+import { Key, matchesKey, type Component, type KeyId } from "@earendil-works/pi-tui";
 import type { SubagentConfigInspection, SubagentConfigScope } from "../../config/store.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../run/model.ts";
@@ -20,6 +20,7 @@ import { ProfileModelPickerPage } from "./model-picker.ts";
 import {
   PROFILE_WORKSPACE_FIELDS,
   candidateFieldRows,
+  type ProfileWorkspaceField,
   type ProfileWorkspacePane,
 } from "./profile-workspace-model.ts";
 import {
@@ -32,7 +33,7 @@ import {
   makeCandidateFieldSelector,
   makeProfileSearchSelector,
 } from "./profile-workspace-selectors.ts";
-import { SearchableSelectPage } from "./searchable-select-page.ts";
+import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
 
 export type ProfileWorkspaceSaveResult =
   | { readonly inspection: SubagentConfigInspection }
@@ -45,6 +46,9 @@ export interface ProfileWorkspaceOptions {
   readonly piModel?: string | undefined;
   readonly getHeight: () => number;
   readonly requestRender: () => void;
+  readonly matchesKeybinding?:
+    | ((data: string, id: SettingsSelectKeybindingId) => boolean)
+    | undefined;
   readonly close: (reloadRequired: boolean) => void;
   readonly saveDraft: (
     scope: SubagentConfigScope,
@@ -191,7 +195,7 @@ export class ProfileWorkspaceComponent implements Component {
     if (this.refreshBlocked) {
       this.setMessage(
         "error",
-        "Settings were saved but could not be refreshed. Reload or reopen this workspace before editing again.",
+        "Profile state could not be safely refreshed. Reopen /subagents profiles before editing again.",
       );
       this.renderSoon();
       return;
@@ -235,10 +239,9 @@ export class ProfileWorkspaceComponent implements Component {
         this.optimisticProfile = undefined;
         this.optimisticScope = undefined;
         this.busy = false;
-        this.setMessage(
-          "error",
-          error instanceof Error ? error.message : "Could not save profile settings.",
-        );
+        this.refreshBlocked = true;
+        const message = error instanceof Error ? error.message : "Could not save profile settings.";
+        this.setMessage("error", `${message} Reopen /subagents profiles before editing again.`);
         this.renderSoon();
       });
   }
@@ -277,6 +280,23 @@ export class ProfileWorkspaceComponent implements Component {
       this.openModelPicker(candidate);
       return;
     }
+    if (field === "effort" && candidate.runtime !== "pi") {
+      this.openNativeEffortPicker(candidate);
+      return;
+    }
+    this.showFieldPicker(
+      candidate,
+      field,
+      candidate.runtime === "pi" ? this.options.supportedPiEfforts(candidate) : undefined,
+    );
+  }
+
+  private showFieldPicker(
+    candidate: ProfileCandidate,
+    field: Exclude<ProfileWorkspaceField, "model">,
+    supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined,
+    notice?: string | undefined,
+  ): void {
     const candidateIndex = this.candidateIndex;
     this.selectPage = makeCandidateFieldSelector({
       theme: this.options.theme,
@@ -286,12 +306,23 @@ export class ProfileWorkspaceComponent implements Component {
       field,
       fieldIndex: this.fieldIndex,
       piModel: this.options.piModel,
-      supportedPiEfforts: this.options.supportedPiEfforts(candidate),
+      supportedEfforts,
+      ...(notice ? { notice } : {}),
       getHeight: this.options.getHeight,
       requestRender: this.options.requestRender,
+      matchesKeybinding: this.options.matchesKeybinding,
       select: (update, description) => {
         this.selectPage = undefined;
         this.candidateIndex = candidateIndex;
+        if (
+          field === "runtime" &&
+          update.candidate &&
+          update.candidate.runtime !== candidate.runtime &&
+          update.candidate.runtime !== "pi"
+        ) {
+          this.openModelPicker(update.candidate, true, "Runtime and model updated", update.notices);
+          return;
+        }
         this.applyCandidateUpdate(update, description);
       },
       cancel: (label) => {
@@ -303,7 +334,37 @@ export class ProfileWorkspaceComponent implements Component {
     this.renderSoon();
   }
 
-  private openModelPicker(candidate: ProfileCandidate): void {
+  private openNativeEffortPicker(candidate: ProfileCandidate): void {
+    const candidateIndex = this.candidateIndex;
+    this.busy = true;
+    this.setMessage("info", "Loading model effort choices…");
+    this.renderSoon();
+    void this.options
+      .loadModelPicker(this.profile(), candidateIndex, candidate)
+      .then((picker) => {
+        this.busy = false;
+        const current = picker.choices.find(
+          (choice) => choice.choice.kind === "model" && choice.choice.selector === candidate.model,
+        );
+        this.candidateIndex = candidateIndex;
+        this.showFieldPicker(candidate, "effort", current?.supportedEfforts, picker.warning);
+      })
+      .catch((error: unknown) => {
+        this.busy = false;
+        this.setMessage(
+          "error",
+          error instanceof Error ? error.message : "Effort discovery failed.",
+        );
+        this.renderSoon();
+      });
+  }
+
+  private openModelPicker(
+    candidate: ProfileCandidate,
+    preferAdvertisedDefault = false,
+    description = "Model updated",
+    priorNotices: ReadonlyArray<string> = [],
+  ): void {
     const candidateIndex = this.candidateIndex;
     this.busy = true;
     this.setMessage("info", "Loading model choices…");
@@ -320,17 +381,23 @@ export class ProfileWorkspaceComponent implements Component {
         this.modelPicker = new ProfileModelPickerPage({
           theme: this.options.theme,
           choices: picker.choices,
-          current: picker.current,
+          current: preferAdvertisedDefault
+            ? (picker.defaultSelector ?? picker.current)
+            : picker.current,
           context: picker.context,
           getHeight: this.options.getHeight,
           requestRender: this.options.requestRender,
+          matchesKeybinding: this.options.matchesKeybinding,
           ...(picker.warning ? { notice: picker.warning } : {}),
           select: (choice) => {
             this.modelPicker = undefined;
             this.candidateIndex = candidateIndex;
+            const update = updateCandidateFromModelChoice(candidate, picker, choice);
             this.applyCandidateUpdate(
-              updateCandidateFromModelChoice(candidate, picker, choice),
-              "Model updated",
+              update.candidate
+                ? { ...update, notices: [...priorNotices, ...update.notices] }
+                : update,
+              description,
             );
           },
           cancel: () => {
@@ -356,6 +423,7 @@ export class ProfileWorkspaceComponent implements Component {
       ...(initialQuery ? { initialQuery } : {}),
       getHeight: this.options.getHeight,
       requestRender: this.options.requestRender,
+      matchesKeybinding: this.options.matchesKeybinding,
       select: (profile) => {
         this.selectPage = undefined;
         this.profileIndex = PROFILE_IDS.indexOf(profile);
@@ -412,7 +480,12 @@ export class ProfileWorkspaceComponent implements Component {
       .reload()
       .then((reloaded) => {
         this.busy = false;
-        if (!reloaded) this.setMessage("info", "Reload canceled; saved changes remain pending.");
+        if (reloaded) {
+          this.reloadRequired = false;
+          this.options.close(false);
+          return;
+        }
+        this.setMessage("info", "Reload canceled; saved changes remain pending.");
         this.renderSoon();
       })
       .catch((error: unknown) => {
@@ -437,6 +510,12 @@ export class ProfileWorkspaceComponent implements Component {
     } else this.openFieldPicker();
   }
 
+  private matches(data: string, key: KeyId, id: SettingsSelectKeybindingId): boolean {
+    return this.options.matchesKeybinding
+      ? this.options.matchesKeybinding(data, id)
+      : matchesKey(data, key);
+  }
+
   handleInput(data: string): void {
     if (this.modelPicker) {
       this.modelPicker.handleInput(data);
@@ -447,7 +526,7 @@ export class ProfileWorkspaceComponent implements Component {
       return;
     }
 
-    if (matchesKey(data, Key.escape)) {
+    if (this.matches(data, Key.escape, "tui.select.cancel")) {
       if (this.pendingAction) {
         this.pendingAction = undefined;
         this.renderSoon();
@@ -476,16 +555,17 @@ export class ProfileWorkspaceComponent implements Component {
 
     if (matchesKey(data, Key.tab)) this.navigate(1);
     else if (matchesKey(data, Key.shift("tab"))) this.navigate(-1);
-    else if (matchesKey(data, Key.up) || data === "k") {
+    else if (this.matches(data, Key.up, "tui.select.up") || data === "k") {
       if (this.pane === "profiles") this.selectProfile(-1);
       else if (this.pane === "candidates") this.selectCandidate(-1);
       else this.fieldIndex -= 1;
-    } else if (matchesKey(data, Key.down) || data === "j") {
+    } else if (this.matches(data, Key.down, "tui.select.down") || data === "j") {
       if (this.pane === "profiles") this.selectProfile(1);
       else if (this.pane === "candidates") this.selectCandidate(1);
       else this.fieldIndex += 1;
     } else if (matchesKey(data, Key.left)) this.back();
-    else if (matchesKey(data, Key.right) || matchesKey(data, Key.enter)) this.forward();
+    else if (matchesKey(data, Key.right) || this.matches(data, Key.enter, "tui.select.confirm"))
+      this.forward();
     else if (data === "/" && this.pane === "profiles") this.openProfileSearch();
     else if (data === "g") this.changeScope("global");
     else if (data === "p") this.changeScope("project");

@@ -162,7 +162,14 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
             return offer({ type: "activity", assignmentEpoch }, raw);
           case "user": {
             const pending = pendingUserReplay;
-            if (pending && pending.text === event.text) {
+            if (
+              pending &&
+              event.isReplay &&
+              pending.text === event.text &&
+              (event.sessionId === undefined ||
+                nativeSessionId === undefined ||
+                event.sessionId === nativeSessionId)
+            ) {
               pendingUserReplay = undefined;
               Deferred.doneUnsafe(pending.acknowledgement, Effect.void);
               return pending.emitRunStarted
@@ -340,6 +347,12 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     Effect.forkScoped,
   );
 
+  const failUncertainDelivery = <A>(error: SubagentError): Effect.Effect<A, SubagentError> =>
+    child.terminate("force").pipe(
+      Effect.catch(() => Effect.void),
+      Effect.andThen(Effect.fail(error)),
+    );
+
   const sendUser = (
     text: string,
     epoch: number,
@@ -378,16 +391,21 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                 )
               : error,
           ),
+          Effect.catch((error) =>
+            error instanceof SubagentProcessError && error.code?.endsWith("_outcome_uncertain")
+              ? failUncertainDelivery(error)
+              : Effect.fail(error),
+          ),
           Effect.andThen(Deferred.await(acquired.pending.acknowledgement)),
           Effect.timeoutOption(CONTROL_TIMEOUT),
           Effect.flatMap((outcome) =>
             Option.isSome(outcome)
               ? Effect.void
-              : Effect.fail(
+              : failUncertainDelivery(
                   processError(
                     operation,
                     `${operation}_outcome_uncertain`,
-                    "Claude stream input was sent but native replay confirmation did not arrive; it will not be retried automatically.",
+                    "Claude stream input was sent but native replay confirmation did not arrive; the backend was closed to prevent ambiguous retry correlation.",
                   ),
                 ),
           ),

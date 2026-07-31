@@ -130,6 +130,7 @@ export type ClaudeProtocolEvent =
       readonly type: "user";
       readonly text: string;
       readonly toolResults: ReadonlyArray<{ readonly id: string; readonly isError: boolean }>;
+      readonly sessionId?: string | undefined;
       readonly isSynthetic: boolean;
       readonly isReplay: boolean;
     }
@@ -234,6 +235,7 @@ export const decodeClaudeProtocolEvent = (
           type: "user",
           text: textFromContent(event.message.content),
           toolResults,
+          ...(event.session_id ? { sessionId: event.session_id } : {}),
           isSynthetic: event.isSynthetic === true,
           isReplay: event.isReplay === true,
         };

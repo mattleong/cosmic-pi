@@ -185,6 +185,7 @@ describe("local CLI Phase One backends", () => {
       type: "user",
       text: "",
       toolResults: [{ id: "tool-1", isError: false }],
+      sessionId: "session",
       isSynthetic: false,
       isReplay: false,
     });

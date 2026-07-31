@@ -29,6 +29,7 @@ import { releaseChildProcess } from "./child-process.ts";
 import { terminateProcessTree } from "./process-tree.ts";
 
 const HARNESS_ROOT = "local-cli-v1";
+const CATALOG_HARNESS_ROOT = "native-model-catalog-v1";
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 128 * 1024;
@@ -298,37 +299,39 @@ export const claudeArgv = (
 
 export const codexArgv = (): ReadonlyArray<string> => ["app-server", "--stdio", "--strict-config"];
 
+const codexBaseConfig = (): ReadonlyArray<string> => [
+  'approval_policy = "never"',
+  'web_search = "disabled"',
+  "[analytics]",
+  "enabled = false",
+  "[shell_environment_policy]",
+  'inherit = "core"',
+  'exclude = ["OPENAI_API_KEY", "CODEX_HOME", "PI_SUBAGENT_CHILD", "PI_SUBAGENT_PARENT_SESSION", "PI_SUBAGENT_RUN_ID"]',
+  "[features]",
+  "apps = false",
+  "auth_elicitation = false",
+  "browser_use = false",
+  "computer_use = false",
+  "fast_mode = false",
+  "goals = false",
+  "guardian_approval = false",
+  "hooks = false",
+  "image_generation = false",
+  "in_app_browser = false",
+  "memories = false",
+  "multi_agent = false",
+  "plugins = false",
+  "remote_plugin = false",
+  "skill_search = false",
+  "standalone_web_search = false",
+  "tool_suggest = false",
+  "workspace_dependencies = false",
+];
+
 const codexConfig = (supervisor: SupervisorConnectionMetadata): string =>
-  [
-    'approval_policy = "never"',
-    'web_search = "disabled"',
-    "[analytics]",
-    "enabled = false",
-    "[shell_environment_policy]",
-    'inherit = "core"',
-    'exclude = ["OPENAI_API_KEY", "CODEX_HOME", "PI_SUBAGENT_CHILD", "PI_SUBAGENT_PARENT_SESSION", "PI_SUBAGENT_RUN_ID"]',
-    "[features]",
-    "apps = false",
-    "auth_elicitation = false",
-    "browser_use = false",
-    "computer_use = false",
-    "fast_mode = false",
-    "goals = false",
-    "guardian_approval = false",
-    "hooks = false",
-    "image_generation = false",
-    "in_app_browser = false",
-    "memories = false",
-    "multi_agent = false",
-    "plugins = false",
-    "remote_plugin = false",
-    "skill_search = false",
-    "standalone_web_search = false",
-    "tool_suggest = false",
-    "workspace_dependencies = false",
-    supervisor.codexMcp.tomlFragment,
-    "",
-  ].join("\n");
+  [...codexBaseConfig(), supervisor.codexMcp.tomlFragment, ""].join("\n");
+
+const codexCatalogConfig = (): string => [...codexBaseConfig(), ""].join("\n");
 
 const safeAgentDirectory = async (agentDirectory: string): Promise<string> => {
   if (
@@ -526,6 +529,49 @@ const removeHarness = async (directory: string): Promise<void> => {
   const stat = await fs.lstat(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-harness-cleanup");
   await fs.rm(directory, { recursive: true, force: false });
+};
+
+export interface CodexCatalogHarness {
+  readonly args: ReadonlyArray<string>;
+  readonly env: NodeJS.ProcessEnv;
+  readonly release: () => Promise<void>;
+}
+
+/** Isolates model discovery from user Codex config while copying only bounded authentication. */
+export const prepareCodexCatalogHarness = async (options: {
+  readonly agentDirectory: string;
+  readonly environment: NodeJS.ProcessEnv;
+}): Promise<CodexCatalogHarness> => {
+  const agentDirectory = await safeAgentDirectory(options.agentDirectory);
+  const packageRoot = join(agentDirectory, "subagents");
+  const root = join(packageRoot, CATALOG_HARNESS_ROOT);
+  await ensurePrivateDirectory(packageRoot);
+  await ensurePrivateDirectory(root);
+  const directory = join(root, `codex-${randomBytes(12).toString("hex")}`);
+  await fs.mkdir(directory, { mode: 0o700 });
+  try {
+    const codexHome = join(directory, "codex-home");
+    await fs.mkdir(codexHome, { mode: 0o700 });
+    await writeExclusive(join(codexHome, "config.toml"), codexCatalogConfig());
+    const auth = await readValidatedCodexAuth(options.environment);
+    if (auth) await writeExclusive(join(codexHome, "auth.json"), auth);
+    else if (!approvedCodexApiKey(options.environment)) throw new Error("codex-auth-unavailable");
+    return {
+      args: codexArgv(),
+      env: {
+        ...sanitizeLocalCliEnvironment(options.environment, "codex"),
+        CODEX_HOME: codexHome,
+      },
+      release: () => removeHarness(directory),
+    };
+  } catch (error) {
+    try {
+      await removeHarness(directory);
+    } catch {
+      throw harnessCleanupUnconfirmed(error);
+    }
+    throw error;
+  }
 };
 
 interface ProbeResult {

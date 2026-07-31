@@ -30,6 +30,7 @@ export interface CandidateModelEditorInput {
 export interface CandidateModelPickerData {
   readonly choices: ReadonlyArray<ProfileModelPickerChoice>;
   readonly current: string;
+  readonly defaultSelector?: string | undefined;
   readonly context: ProfileModelPickerContext;
   readonly warning?: string | undefined;
 }
@@ -84,6 +85,10 @@ const loadNativeModels = async (
   return {
     choices: createNativeModelChoices([...catalog.values()], input.candidate.model),
     current: input.candidate.model,
+    defaultSelector:
+      models.find((model) => model.isDefault)?.selector ??
+      models[0]?.selector ??
+      input.candidate.model,
     context: pickerContext(input),
     ...(warning ? { warning } : {}),
   };

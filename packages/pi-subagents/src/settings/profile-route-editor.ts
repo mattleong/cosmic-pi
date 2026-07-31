@@ -44,11 +44,12 @@ const RUNTIME_EFFORTS = {
 
 export const runtimeEfforts = (
   runtime: SubagentRuntime,
-  supportedPiEfforts?: ReadonlyArray<SubagentEffort> | undefined,
+  supportedModelEfforts?: ReadonlyArray<SubagentEffort> | undefined,
 ): ReadonlyArray<SubagentEffort> =>
-  runtime === "pi"
-    ? (supportedPiEfforts ?? ["off", "minimal", "low", "medium", "high", "xhigh", "max"])
-    : RUNTIME_EFFORTS[runtime];
+  supportedModelEfforts ??
+  (runtime === "pi"
+    ? ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+    : RUNTIME_EFFORTS[runtime]);
 
 const cloneCandidate = (
   candidate: DeclaredProfileCandidate | ProfileCandidate,

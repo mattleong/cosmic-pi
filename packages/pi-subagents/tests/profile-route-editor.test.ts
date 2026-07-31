@@ -286,6 +286,9 @@ describe("profile candidate normalization and validation", () => {
 
   it("rejects unsafe native selectors with the same bounded config rules", () => {
     expect(isNativeProfileModelSelector("claude", "claude-opus-5")).toBe(true);
+    expect(isNativeProfileModelSelector("claude", "opus[1m]")).toBe(true);
+    expect(isNativeProfileModelSelector("claude", "claude-fable-5[200k]")).toBe(true);
+    expect(isNativeProfileModelSelector("claude", "model[abc]")).toBe(false);
     expect(isNativeProfileModelSelector("codex", "gpt-5.6-codex")).toBe(true);
     expect(isNativeProfileModelSelector("codex", "-danger")).toBe(false);
     expect(isNativeProfileModelSelector("claude", "bad\u001bmodel")).toBe(false);

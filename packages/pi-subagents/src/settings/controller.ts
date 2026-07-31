@@ -220,7 +220,7 @@ async function openProfileSettings(
   };
 
   const reloadRequired = await ctx.ui.custom<boolean>(
-    (tui, theme, _keybindings, done) =>
+    (tui, theme, keybindings, done) =>
       new ProfileWorkspaceComponent({
         theme,
         inspection,
@@ -228,6 +228,7 @@ async function openProfileSettings(
         ...(firstPiModel ? { piModel: firstPiModel } : {}),
         getHeight: () => tui.terminal.rows,
         requestRender: () => tui.requestRender(),
+        matchesKeybinding: (data, id) => keybindings.matches(data, id),
         close: done,
         saveDraft,
         loadModelPicker: (profile, candidateIndex, candidate) =>

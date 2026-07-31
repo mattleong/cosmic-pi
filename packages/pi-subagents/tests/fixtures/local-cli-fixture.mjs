@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import readline from "node:readline";
 
 const args = process.argv.slice(2);
@@ -24,6 +26,8 @@ const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infini
 
 if (args.includes("--print")) {
   const model = args[args.indexOf("--model") + 1] ?? "fixture-claude";
+  if (process.env.HOME?.includes("hanging-catalog"))
+    writeFileSync(join(process.env.HOME, "fixture.pid"), String(process.pid));
   const cwd = process.cwd();
   const supervisorTools = [
     "supervisor_progress",
@@ -58,6 +62,11 @@ if (args.includes("--print")) {
           },
         });
       if (frame.request?.subtype === "initialize") {
+        if (
+          frame.request_id === "pi-subagents-model-catalog" &&
+          process.env.HOME?.includes("hanging-catalog")
+        )
+          return;
         success(
           model === "bad-init"
             ? {}
@@ -68,15 +77,17 @@ if (args.includes("--print")) {
                         {
                           value: "default",
                           resolvedModel: "claude-opus-fixture",
-                          displayName: "Default Claude",
+                          displayName: process.env.HOME?.includes("unsafe-catalog")
+                            ? "\u001b[31mUnsafe"
+                            : "Default Claude",
                           description: "Fixture default model",
-                          supportedEffortLevels: ["low", "medium", "high"],
+                          supportedEffortLevels: ["off", "low", "medium", "high"],
                         },
                         {
                           value: "sonnet",
                           resolvedModel: "claude-sonnet-fixture",
                           displayName: "Claude Sonnet",
-                          description: "Fixture efficient model",
+                          description: "Fixture\nefficient\tmodel",
                           supportedEffortLevels: ["low", "high"],
                         },
                       ]

@@ -5,6 +5,7 @@ import {
   Key,
   matchesKey,
   type Component,
+  type KeyId,
   type SelectItem,
   SelectList,
   truncateToWidth,
@@ -18,6 +19,12 @@ export interface SearchableSelectPageChoice<A> {
   readonly payload: A;
 }
 
+export type SettingsSelectKeybindingId =
+  | "tui.select.up"
+  | "tui.select.down"
+  | "tui.select.confirm"
+  | "tui.select.cancel";
+
 export interface SearchableSelectPageOptions<A> {
   readonly theme: Theme;
   readonly breadcrumb: string;
@@ -30,6 +37,9 @@ export interface SearchableSelectPageOptions<A> {
   readonly initialQuery?: string | undefined;
   readonly getHeight: () => number;
   readonly requestRender: () => void;
+  readonly matchesKeybinding?:
+    | ((data: string, id: SettingsSelectKeybindingId) => boolean)
+    | undefined;
   readonly select: (value: A) => void;
   readonly cancel: () => void;
 }
@@ -90,24 +100,37 @@ export class SearchableSelectPage<A> implements Component {
           theme.fg("warning", `  ${this.options.emptyText ?? "No matching options"}`),
       },
     );
-    if (!this.query && this.options.current) {
+    if (this.options.current) {
       const index = this.filtered.findIndex((choice) => choice.value === this.options.current);
       if (index >= 0) list.setSelectedIndex(index);
     }
     return list;
   }
 
+  private matches(data: string, key: KeyId, id: SettingsSelectKeybindingId): boolean {
+    return this.options.matchesKeybinding
+      ? this.options.matchesKeybinding(data, id)
+      : matchesKey(data, key);
+  }
+
   handleInput(data: string): void {
-    if (matchesKey(data, Key.escape)) this.options.cancel();
-    else if (matchesKey(data, Key.enter)) {
+    if (this.matches(data, Key.escape, "tui.select.cancel")) this.options.cancel();
+    else if (this.matches(data, Key.enter, "tui.select.confirm")) {
       const selected = this.list.getSelectedItem();
-      const choice = selected
-        ? this.options.choices.find((entry) => entry.value === selected.value)
-        : undefined;
+      const choice = selected ? this.filtered.find((entry) => entry.item === selected) : undefined;
       if (choice) this.options.select(choice.payload);
-    } else if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
-      this.list.handleInput(data);
     } else {
+      const up = this.matches(data, Key.up, "tui.select.up");
+      const down = this.matches(data, Key.down, "tui.select.down");
+      if (up || down) {
+        const selected = this.list.getSelectedItem();
+        const current = selected ? this.filtered.findIndex((entry) => entry.item === selected) : 0;
+        const length = this.filtered.length;
+        if (length > 0)
+          this.list.setSelectedIndex(up ? (current - 1 + length) % length : (current + 1) % length);
+        this.options.requestRender();
+        return;
+      }
       this.input.handleInput(data);
       const next = this.input.getValue();
       if (next !== this.query) {
