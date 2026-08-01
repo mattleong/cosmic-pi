@@ -45,6 +45,7 @@ const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): Pr
   effort: "high",
   context: "fresh",
   writeIntent: "read-only",
+  fastMode: false,
   closeOnReport: true,
   ...overrides,
 });

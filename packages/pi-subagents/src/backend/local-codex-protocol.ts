@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
 
 const MAX_ID_CHARS = 256;
 const MAX_METHOD_CHARS = 128;
@@ -87,6 +88,7 @@ const InitializeResult = Schema.Struct({
 const ThreadStartResult = Schema.Struct({
   model: Id,
   cwd: Schema.String,
+  serviceTier: Schema.Union([Schema.String, Schema.Null]),
   thread: Schema.Struct({ id: Id, sessionId: Schema.optional(Id) }),
 });
 const TurnStartResult = Schema.Struct({
@@ -298,6 +300,7 @@ export const threadStartRequest = (
     readonly model: string;
     readonly systemPrompt: string;
     readonly writeIntent: "read-only" | "writer";
+    readonly fastMode: boolean;
   },
 ): CodexRequest => ({
   id,
@@ -312,6 +315,7 @@ export const threadStartRequest = (
     ephemeral: true,
     experimentalRawEvents: false,
     model: request.model,
+    ...(request.fastMode ? { serviceTier: SUBAGENT_FAST_SERVICE_TIER } : {}),
     multiAgentMode: "explicitRequestOnly",
     sandbox: request.writeIntent === "writer" ? "workspace-write" : "read-only",
   },
@@ -326,6 +330,7 @@ export const turnStartRequest = (
   model: string,
   effort: string,
   writeIntent: "read-only" | "writer",
+  fastMode: boolean,
 ): CodexRequest => ({
   id,
   method: "turn/start",
@@ -337,6 +342,7 @@ export const turnStartRequest = (
     effort,
     environments: [],
     model,
+    ...(fastMode ? { serviceTier: SUBAGENT_FAST_SERVICE_TIER } : {}),
     multiAgentMode: "explicitRequestOnly",
     sandboxPolicy:
       writeIntent === "writer"

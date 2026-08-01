@@ -4,6 +4,11 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { LocalCliRuntime } from "../../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
 import type { ProfileCandidate, ProfileId } from "../../profiles/model.ts";
+import {
+  SUBAGENT_FAST_SERVICE_TIER,
+  supportsSubagentFastMode,
+  supportsSubagentFastModel,
+} from "../../run/fast-mode.ts";
 import { isSafeNativeModelSelector } from "../../run/native-model-selector.ts";
 import {
   NATIVE_MODEL_DEFAULTS,
@@ -57,6 +62,10 @@ const nativeFallbackModels = (
     label: selector,
     description: index === 0 ? "Current configured selector" : `Default ${runtime} model selector`,
     supportedEfforts: runtimeEfforts(runtime),
+    supportedServiceTiers:
+      runtime === "codex" && supportsSubagentFastModel("openai-codex", selector)
+        ? [SUBAGENT_FAST_SERVICE_TIER]
+        : [],
     isDefault: selector === NATIVE_MODEL_DEFAULTS[runtime],
   }));
 
@@ -138,6 +147,7 @@ export async function loadCandidateModelPicker(
           description: "Keep the configured value or choose an authenticated replacement",
         },
         searchText: `${candidate.model} current unavailable configured`,
+        fastModeAvailable: supportsSubagentFastMode("pi", candidate.model),
       };
   const choices = unavailableCurrent
     ? [unavailableCurrent, ...advertisedChoices]
@@ -169,5 +179,15 @@ export function updateCandidateFromModelChoice(
   choice: ProfileModelChoice,
 ): CandidateUpdate {
   const model = choice.kind === "parent" ? "parent" : choice.selector;
-  return updateCandidateModel(candidate, model, selectedModelEfforts(picker.choices, choice));
+  const selected = picker.choices.find((entry) =>
+    choice.kind === "parent"
+      ? entry.choice.kind === "parent"
+      : entry.choice.kind === "model" && entry.choice.selector === choice.selector,
+  );
+  return updateCandidateModel(
+    candidate,
+    model,
+    selectedModelEfforts(picker.choices, choice),
+    selected?.fastModeAvailable,
+  );
 }

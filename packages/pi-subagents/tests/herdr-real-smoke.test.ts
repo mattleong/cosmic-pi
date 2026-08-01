@@ -51,6 +51,7 @@ describe.skipIf(!enabled)("installed Herdr no-inference smoke", () => {
             cwd: process.cwd(),
             context: "fresh",
             writeIntent: "read-only",
+            fastMode: false,
             model,
             effort: "xhigh",
             activeTools: [],

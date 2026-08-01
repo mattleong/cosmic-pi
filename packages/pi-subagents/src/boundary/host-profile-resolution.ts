@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/coordination.ts";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
+import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
 import {
   decodeSubagentEffort,
@@ -109,6 +110,7 @@ interface ResolvedConcreteModel {
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
   readonly closeOnReport: boolean;
+  readonly fastMode: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
@@ -156,6 +158,11 @@ const resolveConcreteModel = (
             ctx,
           )
         : { model: attempt.model };
+    if (attempt.fastMode && !supportsSubagentFastMode(attempt.runtime, resolved.model))
+      return yield* new InvalidSubagentRequestError({
+        code: "fast_mode_unsupported",
+        message: `Fast mode is unavailable for ${attempt.runtime}/${resolved.model}.`,
+      });
     yield* registry.preflight(
       {
         host: attempt.host,
@@ -175,6 +182,7 @@ const resolveConcreteModel = (
       host: attempt.host,
       runtime: attempt.runtime,
       closeOnReport: attempt.closeOnReport,
+      fastMode: attempt.fastMode,
       ...resolved,
       effort: attempt.effort,
       effortWasExplicit: attempt.effortWasExplicit,
@@ -310,6 +318,7 @@ export const resolveProfileStart = (
       host: concrete.host,
       runtime: concrete.runtime,
       closeOnReport: concrete.closeOnReport,
+      fastMode: concrete.fastMode,
       backend: "pi",
       task,
       profile: definition.id,

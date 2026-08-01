@@ -288,7 +288,7 @@ export function renderSubagentSessionOutput(
   const container = new Container();
   const name = sanitizeTerminalLine(run.name);
   const subtitle = sanitizeTerminalLine(
-    `${run.writeIntent} · ${run.profile ? `${run.profile} · ` : ""}${run.context} · ${run.model}:${run.effort} · ${runDuration(run, now)}`,
+    `${run.writeIntent}${run.fastMode ? " · ⚡ fast" : ""} · ${run.profile ? `${run.profile} · ` : ""}${run.context} · ${run.model}:${run.effort} · ${runDuration(run, now)}`,
   );
   container.addChild(
     new Text(`${theme.fg("toolTitle", theme.bold(name))}  ${stateLabel(run, theme, now)}`, 0, 0),

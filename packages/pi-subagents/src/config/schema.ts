@@ -7,6 +7,7 @@ import {
   type ProfileCandidate,
   type ProfileId,
 } from "../profiles/model.ts";
+import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import { subagentRuntimeSupportsEffort } from "../run/model.ts";
 import {
   isSafeNativeModelSelector,
@@ -60,6 +61,7 @@ const CandidateShapeSchema = Schema.Struct({
   effort: ProfileEffortSchema,
   context: ProfileContextSchema,
   writeIntent: ProfileWriteIntentSchema,
+  fastMode: Schema.optional(Schema.Boolean),
   closeOnReport: Schema.optional(Schema.Boolean),
 });
 
@@ -138,7 +140,16 @@ const decodeCandidate = (value: unknown): ProfileCandidate | undefined => {
     !record ||
     !ownKeysAre(
       record,
-      new Set(["host", "runtime", "model", "effort", "context", "writeIntent", "closeOnReport"]),
+      new Set([
+        "host",
+        "runtime",
+        "model",
+        "effort",
+        "context",
+        "writeIntent",
+        "fastMode",
+        "closeOnReport",
+      ]),
     )
   )
     return undefined;
@@ -146,6 +157,7 @@ const decodeCandidate = (value: unknown): ProfileCandidate | undefined => {
   if (Option.isNone(decoded)) return undefined;
   const candidate = decoded.value;
   const model = candidate.model;
+  const fastMode = candidate.fastMode ?? false;
   const closeOnReport = candidate.closeOnReport ?? true;
   if (!isNativeProfileModelSelector(candidate.runtime, model)) return undefined;
   if (
@@ -159,7 +171,9 @@ const decodeCandidate = (value: unknown): ProfileCandidate | undefined => {
     return undefined;
   if (!closeOnReport && (candidate.host !== "herdr" || candidate.writeIntent !== "read-only"))
     return undefined;
-  return { ...candidate, model, closeOnReport };
+  if (fastMode && model !== "parent" && !supportsSubagentFastMode(candidate.runtime, model))
+    return undefined;
+  return { ...candidate, model, fastMode, closeOnReport };
 };
 
 const decodeRoute = (

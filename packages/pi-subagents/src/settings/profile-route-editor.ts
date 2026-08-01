@@ -1,6 +1,7 @@
 import { MAX_PROFILE_CANDIDATES, isNativeProfileModelSelector } from "../config/schema.ts";
 import type { SubagentConfigInspection, SubagentConfigScope } from "../config/store.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
+import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import type {
   DeclaredProfileCandidate,
   DeclaredProfileRoute,
@@ -55,6 +56,7 @@ const cloneCandidate = (
   candidate: DeclaredProfileCandidate | ProfileCandidate,
 ): ProfileCandidate => ({
   ...candidate,
+  fastMode: candidate.fastMode ?? false,
   closeOnReport: candidate.closeOnReport ?? true,
 });
 
@@ -223,6 +225,12 @@ export function candidateValidationError(candidate: ProfileCandidate): string | 
     (candidate.host !== "herdr" || candidate.writeIntent !== "read-only")
   )
     return "Retaining a reported run is valid only for Herdr read-only candidates.";
+  if (
+    candidate.fastMode &&
+    candidate.model !== "parent" &&
+    !supportsSubagentFastMode(candidate.runtime, candidate.model)
+  )
+    return `Fast mode is unavailable for ${candidate.runtime}/${candidate.model}.`;
   if (!effortAllowedForRuntime(candidate.runtime, candidate.effort))
     return `${candidate.runtime} does not support effort ${candidate.effort}.`;
   return undefined;
@@ -277,6 +285,14 @@ export function updateCandidateControls(
     next = { ...next, closeOnReport: true };
     notices.push("Only Herdr read-only runs may be retained; close-on-report reset to true.");
   }
+  if (
+    next.fastMode &&
+    next.model !== "parent" &&
+    !supportsSubagentFastMode(next.runtime, next.model)
+  ) {
+    next = { ...next, fastMode: false };
+    notices.push("Fast mode is unavailable for the selected runtime/model; reset to off.");
+  }
   if (!effortAllowedForRuntime(next.runtime, next.effort)) {
     next = { ...next, effort: "default" };
     notices.push(
@@ -290,6 +306,7 @@ export function updateCandidateModel(
   candidate: ProfileCandidate,
   model: string,
   supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined,
+  fastModeAvailable = model === "parent" || supportsSubagentFastMode(candidate.runtime, model),
 ): CandidateUpdate {
   let next = { ...candidate, model };
   const notices: string[] = [];
@@ -300,6 +317,10 @@ export function updateCandidateModel(
   ) {
     next = { ...next, effort: "default" };
     notices.push(`Effort ${candidate.effort} is unavailable for ${model}; reset to default.`);
+  }
+  if (next.fastMode && !fastModeAvailable) {
+    next = { ...next, fastMode: false };
+    notices.push(`Fast mode is unavailable for ${model}; reset to off.`);
   }
   const error = candidateValidationError(next);
   return error ? { notices, error } : { candidate: next, notices };
@@ -346,7 +367,7 @@ const boundedMiddle = (value: string, maximum: number): string => {
 
 /** Bounded one-line summary that still names every product field. */
 export const candidateMenuSummary = (candidate: ProfileCandidate, index: number): string =>
-  `${String(index + 1).padStart(2, "0")} · ${candidate.host}/${candidate.runtime} · ${boundedMiddle(candidate.model, 56)} · ${candidate.effort} · ${candidate.context} · ${candidate.writeIntent} · ${candidate.closeOnReport ? "close" : "retain"}`;
+  `${String(index + 1).padStart(2, "0")} · ${candidate.host}/${candidate.runtime} · ${boundedMiddle(candidate.model, 56)} · ${candidate.effort} · ${candidate.context} · ${candidate.writeIntent} · ${candidate.fastMode ? "fast" : "standard"} · ${candidate.closeOnReport ? "close" : "retain"}`;
 
 export const completeRouteSummary = (
   draft: ProfileRouteDraft,
@@ -363,7 +384,7 @@ export const completeRouteSummary = (
   const candidates = draft.candidates
     .map(
       (candidate, index) =>
-        `${index + 1}. host=${candidate.host} · runtime=${candidate.runtime} · model=${candidate.model} · effort=${candidate.effort} · context=${candidate.context} · writeIntent=${candidate.writeIntent} · closeOnReport=${candidate.closeOnReport}`,
+        `${index + 1}. host=${candidate.host} · runtime=${candidate.runtime} · model=${candidate.model} · effort=${candidate.effort} · context=${candidate.context} · writeIntent=${candidate.writeIntent} · fastMode=${candidate.fastMode} · closeOnReport=${candidate.closeOnReport}`,
     )
     .join("\n");
   return candidates

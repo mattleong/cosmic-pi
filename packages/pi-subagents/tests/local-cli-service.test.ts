@@ -43,6 +43,7 @@ const request = (runtime: LocalRuntime, model: string): StartSubagentRequest => 
   execution: "background",
   context: "fresh",
   writeIntent: "read-only",
+  fastMode: false,
   model,
   effort: "xhigh",
   effortWasExplicit: true,

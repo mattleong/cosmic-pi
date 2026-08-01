@@ -30,6 +30,7 @@ const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): Pr
   effort: "high",
   context: "fresh",
   writeIntent: "read-only",
+  fastMode: false,
   closeOnReport: true,
   ...overrides,
 });
@@ -222,7 +223,7 @@ describe("profile candidate normalization and validation", () => {
     expect(local.notices.join(" ")).toContain("close-on-report reset");
 
     const claude = updateCandidateControls(
-      candidate("parent", { context: "fork", effort: "minimal" }),
+      candidate("parent", { context: "fork", effort: "minimal", fastMode: true }),
       { runtime: "claude" },
       { piModel: "openai-codex/gpt-5.6-sol" },
     );
@@ -231,8 +232,10 @@ describe("profile candidate normalization and validation", () => {
       model: "claude-opus-5",
       context: "fresh",
       effort: "default",
+      fastMode: false,
     });
-    expect(claude.notices).toHaveLength(3);
+    expect(claude.notices).toHaveLength(4);
+    expect(claude.notices.join(" ")).toContain("Fast mode");
 
     const writer = updateCandidateControls(
       candidate("claude-opus-5", {
@@ -274,7 +277,7 @@ describe("profile candidate normalization and validation", () => {
     ).toContain("Fork");
   });
 
-  it("uses exact runtime efforts and resets an effort unsupported by a known Pi model", () => {
+  it("uses exact runtime capabilities and resets effort or fast mode when a model cannot use them", () => {
     expect(runtimeEfforts("claude")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(runtimeEfforts("codex")).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
     expect(runtimeEfforts("claude", ["minimal", "low", "high"])).toEqual(["low", "high"]);
@@ -291,11 +294,19 @@ describe("profile candidate normalization and validation", () => {
         },
       }).invalidProfileRoutes,
     ).toContain("reviewer");
-    const update = updateCandidateModel(candidate("openai/old", { effort: "xhigh" }), "zai/plain", [
-      "off",
-    ]);
-    expect(update.candidate).toMatchObject({ model: "zai/plain", effort: "default" });
-    expect(update.notices[0]).toContain("reset to default");
+    const update = updateCandidateModel(
+      candidate("openai-codex/gpt-5.6-sol", { effort: "xhigh", fastMode: true }),
+      "zai/plain",
+      ["off"],
+      false,
+    );
+    expect(update.candidate).toMatchObject({
+      model: "zai/plain",
+      effort: "default",
+      fastMode: false,
+    });
+    expect(update.notices.join(" ")).toContain("reset to default");
+    expect(update.notices.join(" ")).toContain("Fast mode is unavailable");
   });
 
   it("rejects unsafe native selectors with the same bounded config rules", () => {
@@ -328,6 +339,7 @@ describe("profile candidate normalization and validation", () => {
       effort: "default",
       context: "fork",
       writeIntent: "read-only",
+      fastMode: false,
       closeOnReport: true,
     });
   });

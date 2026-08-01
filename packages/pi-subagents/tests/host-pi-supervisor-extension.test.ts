@@ -28,6 +28,24 @@ afterEach(() => {
 });
 
 describe("Herdr-hosted Pi bridge extension", () => {
+  it("injects the priority service tier for eligible fast-mode Pi requests", () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const pi = {
+      registerFlag: vi.fn(),
+      getFlag: vi.fn((name: string) => name === "pi-subagents-fast-mode"),
+      on: vi.fn((name: string, handler: (...args: unknown[]) => unknown) =>
+        handlers.set(name, handler),
+      ),
+    } as unknown as ExtensionAPI;
+    registerBridge(pi);
+    expect(
+      handlers.get("before_provider_request")?.(
+        { payload: { input: "task" } },
+        { model: { provider: "openai-codex", id: "gpt-5.6-sol" } },
+      ),
+    ).toEqual({ input: "task", service_tier: "priority" });
+  });
+
   it("deletes ephemeral provider credentials before a config-validation return", async () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const pi = {

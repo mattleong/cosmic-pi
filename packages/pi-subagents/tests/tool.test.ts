@@ -91,6 +91,7 @@ const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   execution: "background",
   context: "fresh",
   writeIntent: "read-only",
+  fastMode: false,
   reportGeneration: 0,
   backend: "pi",
   capabilities: [
@@ -438,7 +439,7 @@ describe("subagent tool", () => {
       ).toThrow("[legacy_launch_override]");
     expect(tools.get("subagent_start")?.description).toContain("background subagents");
     expect(tools.get("subagent_start")?.description).toContain(
-      "selected profile supplies host, runtime, model, effort, context, write intent, and closeOnReport",
+      "selected profile supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport",
     );
     expect(tools.get("subagent_status")?.description).toContain("capabilities");
     expect(tools.get("subagent_send")?.description).toContain("running subagents");
@@ -1982,6 +1983,7 @@ describe("subagent tool", () => {
       state: "completed",
       endedAt: 2,
       profile: "reviewer",
+      fastMode: true,
       selection: {
         source: "profile-candidate",
         candidateIndex: 1,
@@ -2038,6 +2040,7 @@ describe("subagent tool", () => {
     expect(text).toContain("ID         agent-1");
     expect(text).toContain("Profile    reviewer");
     expect(text).toContain("Route      local/pi/openai-codex/gpt-5.6-sol · high");
+    expect(text).toContain("OpenAI fast on · priority");
     expect(text).toContain("Retention  close after report · assignment 1");
     expect(text).toContain("Selection  profile-candidate candidate 2");
     expect(text).toContain("Reason     Profile reviewer selected configured candidate 2.");
@@ -2738,7 +2741,9 @@ describe("subagent tool", () => {
     expect(text).toContain(
       "source=builtin · defaults: context=fork · intent=read-only · effort=high",
     );
-    expect(text).toContain("local/pi/parent:default:fork:read-only:closeOnReport=true · skipped");
+    expect(text).toContain(
+      "local/pi/parent:default:fork:read-only:fastMode=false:closeOnReport=true · skipped",
+    );
     expect(text).toContain("Forked context requires a persisted parent session");
   });
 
@@ -2789,9 +2794,11 @@ describe("subagent tool", () => {
       ?.execute("call", { profile: "delegate" }, undefined, undefined, context);
     const text = models?.content[0]?.text ?? "";
     expect(text).toContain(
-      "1. local/pi/parent:default:fresh:read-only:closeOnReport=true · eligible",
+      "1. local/pi/parent:default:fresh:read-only:fastMode=false:closeOnReport=true · eligible",
     );
-    expect(text).toContain("2. local/pi/parent:high:fresh:read-only:closeOnReport=true · eligible");
+    expect(text).toContain(
+      "2. local/pi/parent:high:fresh:read-only:fastMode=false:closeOnReport=true · eligible",
+    );
     expect(
       text.match(
         /Candidate adapter is statically eligible before native authentication\/integration\/harness readiness\./g,
@@ -2810,7 +2817,9 @@ describe("subagent tool", () => {
       .get("subagent_models")
       ?.execute("call", { profile: "delegate" }, undefined, undefined, noParent);
     const text = models?.content[0]?.text ?? "";
-    expect(text).toContain("local/pi/parent:default:fresh:read-only:closeOnReport=true · skipped");
+    expect(text).toContain(
+      "local/pi/parent:default:fresh:read-only:fastMode=false:closeOnReport=true · skipped",
+    );
     expect(text).toContain("No active parent model is available.");
   });
 });

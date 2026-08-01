@@ -12,6 +12,7 @@ import type {
   SubagentProfilePatch,
 } from "../config/store.ts";
 import type { ProfileCandidate, ProfileId } from "../profiles/model.ts";
+import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import { isActiveRunState, type SubagentEffort } from "../run/model.ts";
 import { SubagentFleetComponent } from "../ui/fleet.ts";
 import { declaredRouteForDraft, type ProfileRouteDraft } from "./profile-route-editor.ts";
@@ -146,6 +147,14 @@ const supportedPiEfforts = (
   )?.supportedEfforts;
 };
 
+const fastModeAvailable = (ctx: ExtensionCommandContext, candidate: ProfileCandidate): boolean => {
+  if (candidate.runtime === "pi" && candidate.model === "parent")
+    return ctx.model
+      ? supportsSubagentFastMode("pi", `${ctx.model.provider}/${ctx.model.id}`)
+      : false;
+  return supportsSubagentFastMode(candidate.runtime, candidate.model);
+};
+
 async function requestProfileReload(
   ctx: ExtensionCommandContext,
   bridge: SubagentProjectionBridge,
@@ -247,6 +256,7 @@ async function openProfileSettings(
             ...(signal ? { signal } : {}),
           }),
         supportedPiEfforts: (candidate) => supportedPiEfforts(ctx, candidate),
+        fastModeAvailable: (candidate) => fastModeAvailable(ctx, candidate),
         reload: () => requestProfileReload(ctx, bridge),
       }),
     { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } },

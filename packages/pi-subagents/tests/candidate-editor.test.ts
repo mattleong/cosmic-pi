@@ -16,6 +16,7 @@ const candidate = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate 
   effort: "xhigh",
   context: "fresh",
   writeIntent: "read-only",
+  fastMode: false,
   closeOnReport: true,
   ...overrides,
 });
@@ -26,6 +27,7 @@ const claudeModels: ReadonlyArray<NativeRuntimeModel> = [
     label: "Default",
     description: "Default Claude model",
     supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+    supportedServiceTiers: [],
     isDefault: true,
   },
   {
@@ -33,6 +35,7 @@ const claudeModels: ReadonlyArray<NativeRuntimeModel> = [
     label: "Sonnet",
     description: "Efficient Claude model",
     supportedEfforts: ["low", "medium", "high", "xhigh"],
+    supportedServiceTiers: [],
     isDefault: false,
   },
   {
@@ -40,6 +43,7 @@ const claudeModels: ReadonlyArray<NativeRuntimeModel> = [
     label: "Opus 1M",
     description: "Long-context Claude model",
     supportedEfforts: ["high", "xhigh"],
+    supportedServiceTiers: [],
     isDefault: false,
   },
 ];
@@ -76,6 +80,49 @@ describe("inline candidate model editor", () => {
     ).toEqual({ candidate: candidate({ model: "opus[1m]" }), notices: [] });
   });
 
+  it("uses Codex-advertised priority tiers to preserve or reset fast mode", async () => {
+    const current = candidate({
+      runtime: "codex",
+      model: "gpt-priority",
+      fastMode: true,
+    });
+    const picker = await loadCandidateModelPicker(context(), {
+      profile: "worker",
+      candidateIndex: 0,
+      candidate: current,
+      listNativeModels: vi.fn().mockResolvedValue([
+        {
+          selector: "gpt-priority",
+          label: "GPT Priority",
+          description: "Priority capable",
+          supportedEfforts: ["high"],
+          supportedServiceTiers: ["priority"],
+          isDefault: true,
+        },
+        {
+          selector: "gpt-standard",
+          label: "GPT Standard",
+          description: "Standard only",
+          supportedEfforts: ["high"],
+          supportedServiceTiers: [],
+          isDefault: false,
+        },
+      ] satisfies ReadonlyArray<NativeRuntimeModel>),
+    });
+
+    expect(
+      picker.choices
+        .filter((choice) => ["gpt-priority", "gpt-standard"].includes(choice.item.value))
+        .map((choice) => choice.fastModeAvailable),
+    ).toEqual([true, false]);
+    const updated = updateCandidateFromModelChoice(current, picker, {
+      kind: "model",
+      selector: "gpt-standard",
+    });
+    expect(updated.candidate).toMatchObject({ model: "gpt-standard", fastMode: false });
+    expect(updated.notices.join(" ")).toContain("Fast mode is unavailable");
+  });
+
   it("omits advertised models whose selectors cannot be safely persisted or launched", async () => {
     const picker = await loadCandidateModelPicker(context(), {
       profile: "reviewer",
@@ -88,6 +135,7 @@ describe("inline candidate model editor", () => {
           label: "Unsafe",
           description: "Cannot be passed as a native selector",
           supportedEfforts: ["low"],
+          supportedServiceTiers: [],
           isDefault: false,
         },
       ] satisfies ReadonlyArray<NativeRuntimeModel>),

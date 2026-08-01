@@ -53,6 +53,7 @@
   },
   "dependencies": {
     "effect": "catalog:",
+    "pi-better-openai": "workspace:*",
     "pi-code-previews": "workspace:*",
     "pi-cosmic-core": "workspace:*",
     "pi-cosmic-ui": "workspace:*",

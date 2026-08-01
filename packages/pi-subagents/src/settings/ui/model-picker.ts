@@ -4,6 +4,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, SelectItem } from "@earendil-works/pi-tui";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
 import type { ProfileId } from "../../profiles/model.ts";
+import { SUBAGENT_FAST_SERVICE_TIER, supportsSubagentFastMode } from "../../run/fast-mode.ts";
 import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../run/model.ts";
 import { isSafeNativeModelSelector } from "../../run/native-model-selector.ts";
 import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
@@ -17,6 +18,7 @@ export interface ProfileModelPickerChoice {
   readonly item: SelectItem;
   readonly searchText: string;
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
+  readonly fastModeAvailable: boolean;
 }
 
 const choiceValue = (choice: ProfileModelChoice): string =>
@@ -55,6 +57,9 @@ export function createProfileModelChoices(input: {
       },
       searchText: `parent ${canonical ?? "active model"} ${input.parentModel?.name ?? ""}`,
       ...(efforts === undefined ? {} : { supportedEfforts: efforts }),
+      fastModeAvailable: input.parentModel
+        ? supportsSubagentFastMode("pi", `${input.parentModel.provider}/${input.parentModel.id}`)
+        : false,
     });
   }
   for (const model of input.models) {
@@ -66,10 +71,11 @@ export function createProfileModelChoices(input: {
       item: {
         value: canonical,
         label: `${boundedMiddle(canonical, 88)}${input.currentSelector === canonical ? " (current)" : ""}`,
-        description: `${model.name && model.name !== model.id ? `${boundedMiddle(model.name, 48)} · ` : ""}${model.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts.join(", ") || "none"}`,
+        description: `${model.name && model.name !== model.id ? `${boundedMiddle(model.name, 48)} · ` : ""}${model.reasoning ? "reasoning" : "no reasoning"} · efforts: ${efforts.join(", ") || "none"}${supportsSubagentFastMode("pi", canonical) ? " · fast mode available" : ""}`,
       },
       searchText: `${canonical} ${model.name ?? ""}`,
       supportedEfforts: efforts,
+      fastModeAvailable: supportsSubagentFastMode("pi", canonical),
     });
   }
   return result;
@@ -86,10 +92,11 @@ export const createNativeModelChoices = (
       item: {
         value: model.selector,
         label: `${boundedMiddle(model.label || model.selector, 72)}${model.isDefault ? " (default)" : ""}${model.selector === currentSelector ? " (current)" : ""}`,
-        description: `${boundedMiddle(model.selector, 72)}${model.description ? ` · ${boundedMiddle(model.description, 96)}` : ""} · efforts: ${model.supportedEfforts.join(", ") || "runtime default"}`,
+        description: `${boundedMiddle(model.selector, 72)}${model.description ? ` · ${boundedMiddle(model.description, 96)}` : ""} · efforts: ${model.supportedEfforts.join(", ") || "runtime default"}${model.supportedServiceTiers.includes(SUBAGENT_FAST_SERVICE_TIER) ? " · fast mode available" : ""}`,
       },
       searchText: `${model.selector} ${model.label} ${model.description}`,
       supportedEfforts: model.supportedEfforts,
+      fastModeAvailable: model.supportedServiceTiers.includes(SUBAGENT_FAST_SERVICE_TIER),
     }));
 
 export interface ProfileModelPickerContext {

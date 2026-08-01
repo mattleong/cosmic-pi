@@ -463,6 +463,7 @@ export const makeLocalPiBackendDriver = (childProcesses: ChildProcessShape): Bac
         cwd: request.cwd,
         context: request.context,
         writeIntent: request.writeIntent,
+        fastMode: request.fastMode,
         model: request.model,
         effort: request.effort,
         ...(request.runtimeApiKey ? { runtimeApiKey: request.runtimeApiKey } : {}),

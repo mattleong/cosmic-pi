@@ -5,6 +5,7 @@ import type {
   ProfileId,
   ProfileRouteSource,
 } from "../../profiles/model.ts";
+import { supportsSubagentFastMode } from "../../run/fast-mode.ts";
 import type { SubagentEffort } from "../../run/model.ts";
 import {
   runtimeEfforts,
@@ -21,6 +22,7 @@ export type ProfileWorkspaceField =
   | "effort"
   | "context"
   | "writeIntent"
+  | "fastMode"
   | "closeOnReport";
 
 export const PROFILE_WORKSPACE_FIELDS: ReadonlyArray<ProfileWorkspaceField> = [
@@ -30,6 +32,7 @@ export const PROFILE_WORKSPACE_FIELDS: ReadonlyArray<ProfileWorkspaceField> = [
   "effort",
   "context",
   "writeIntent",
+  "fastMode",
   "closeOnReport",
 ];
 
@@ -43,6 +46,7 @@ export interface ProfileWorkspaceFieldRow {
 export interface CandidateFieldChangeOptions {
   readonly piModel?: string | undefined;
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
+  readonly fastModeAvailable?: boolean | undefined;
 }
 
 export interface CandidateFieldChoice {
@@ -119,6 +123,12 @@ export const candidateFieldRows = (
       fixed: false,
     },
     {
+      field: "fastMode",
+      label: "OpenAI fast mode",
+      value: candidate.fastMode ? "on · priority" : "off",
+      fixed: candidate.runtime === "claude",
+    },
+    {
       field: "closeOnReport",
       label: "Report policy",
       value: candidate.closeOnReport ? "close after report" : "retain for guidance",
@@ -164,6 +174,24 @@ export const candidateFieldChoices = (
       { value: "read-only", label: "Read-only", description: "Inspect without modifying files" },
       { value: "writer", label: "Writer", description: "May modify files under writer policy" },
     ];
+  if (field === "fastMode") {
+    const available =
+      options.fastModeAvailable ??
+      (candidate.model !== "parent" &&
+        supportsSubagentFastMode(candidate.runtime, candidate.model));
+    return [
+      { value: "false", label: "Off", description: "Use the model's standard service tier" },
+      ...(available
+        ? [
+            {
+              value: "true",
+              label: "On · Fast",
+              description: "Request OpenAI priority service for this candidate",
+            },
+          ]
+        : []),
+    ];
+  }
   return candidate.host === "herdr" && candidate.writeIntent === "read-only"
     ? [
         {
@@ -212,6 +240,8 @@ export function selectCandidateField(
     return { candidate: { ...candidate, context: value }, notices: [] };
   if (field === "writeIntent" && (value === "read-only" || value === "writer"))
     return updateCandidateControls(candidate, { writeIntent: value }, { piModel: options.piModel });
+  if (field === "fastMode" && (value === "true" || value === "false"))
+    return { candidate: { ...candidate, fastMode: value === "true" }, notices: [] };
   if (field === "closeOnReport" && (value === "true" || value === "false"))
     return { candidate: { ...candidate, closeOnReport: value === "true" }, notices: [] };
   return { error: `Invalid ${field} selection.`, notices: [] };

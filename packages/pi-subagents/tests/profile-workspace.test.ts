@@ -50,6 +50,7 @@ const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): Pr
   effort: "high",
   context: "fresh",
   writeIntent: "read-only",
+  fastMode: false,
   closeOnReport: true,
   ...overrides,
 });
@@ -89,12 +90,14 @@ const modelPicker = (
       },
       searchText: "claude opus powerful",
       supportedEfforts: ["low", "medium", "high", "xhigh"],
+      fastModeAvailable: false,
     },
     {
       choice: { kind: "model", selector: "anthropic/sonnet" },
       item: { value: "anthropic/sonnet", label: "Claude Sonnet", description: "Efficient" },
       searchText: "claude sonnet efficient",
       supportedEfforts: ["low", "medium", "high", "xhigh"],
+      fastModeAvailable: false,
     },
   ],
 });
@@ -119,6 +122,7 @@ const makeComponent = (
     saveDraft,
     loadModelPicker,
     supportedPiEfforts: () => ["low", "medium", "high", "xhigh"],
+    fastModeAvailable: () => false,
     reload,
     ...overrides,
   });
@@ -353,7 +357,7 @@ describe("profile settings workspace", () => {
     expect(component.render(100).join("\n")).toContain("delegate");
     component.handleInput(input.enter);
     component.handleInput(input.enter);
-    for (let index = 0; index < 6; index += 1) component.handleInput(input.down);
+    for (let index = 0; index < 7; index += 1) component.handleInput(input.down);
     expect(component.render(100).join("\n")).toContain("Report policy");
   });
 
@@ -422,12 +426,14 @@ describe("profile settings workspace", () => {
           item: { value: "claude-opus-5", label: "Claude Opus" },
           searchText: "claude opus",
           supportedEfforts: ["high"],
+          fastModeAvailable: false,
         },
         {
           choice: { kind: "model", selector: "sonnet" },
           item: { value: "sonnet", label: "Claude Sonnet (default)" },
           searchText: "claude sonnet",
           supportedEfforts: ["low", "high"],
+          fastModeAvailable: false,
         },
       ],
     } satisfies CandidateModelPickerData);
@@ -510,6 +516,7 @@ describe("profile settings workspace", () => {
           item: { value: "claude-opus-5", label: "Claude Opus" },
           searchText: "claude opus",
           supportedEfforts: ["low"],
+          fastModeAvailable: false,
         },
       ],
     } satisfies CandidateModelPickerData);
@@ -735,11 +742,35 @@ describe("profile settings workspace", () => {
     await vi.waitFor(() => expect(close).toHaveBeenCalledWith(false));
   });
 
+  it("persists OpenAI fast mode immediately for an eligible candidate", async () => {
+    const { component, saveDraft } = makeComponent(inspection(), {
+      fastModeAvailable: () => true,
+    });
+    component.handleInput(input.enter);
+    component.handleInput(input.enter);
+    for (let index = 0; index < 6; index += 1) component.handleInput(input.down);
+    component.handleInput(input.enter);
+    await vi.waitFor(() =>
+      expect(component.render(130).join("\n")).not.toContain("Loading model catalog"),
+    );
+    component.handleInput(input.down);
+    component.handleInput(input.enter);
+    await vi.waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+    expect(saveDraft).toHaveBeenCalledWith(
+      "project",
+      "delegate",
+      expect.objectContaining({
+        kind: "explicit",
+        candidates: [expect.objectContaining({ fastMode: true })],
+      }),
+    );
+  });
+
   it("does not persist inline fields disabled by the current policy", () => {
     const { component, saveDraft } = makeComponent(inspection());
     component.handleInput(input.tab);
     component.handleInput(input.tab);
-    for (let index = 0; index < 6; index += 1) component.handleInput(input.down);
+    for (let index = 0; index < 7; index += 1) component.handleInput(input.down);
     component.handleInput(input.enter);
     expect(saveDraft).not.toHaveBeenCalled();
     expect(component.render(130).join("\n")).toContain("fixed by the current");

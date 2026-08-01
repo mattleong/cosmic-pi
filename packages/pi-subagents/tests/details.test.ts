@@ -24,6 +24,7 @@ const run = (index = 1): SubagentRunView => ({
   execution: "background",
   context: "fresh",
   writeIntent: "read-only",
+  fastMode: false,
   host: "herdr",
   runtime: "claude",
   closeOnReport: false,

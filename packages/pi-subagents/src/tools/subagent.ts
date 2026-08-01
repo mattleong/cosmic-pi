@@ -152,7 +152,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_start",
     label: "Start Subagents",
     description:
-      "Launch one to twelve session-scoped background subagents from one agents array using configured version 4 profile routes. Every task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. Each item accepts only task, optional profile, and optional name. The selected profile supplies host, runtime, model, effort, context, write intent, and closeOnReport. Ordered readiness failures fall through only before spawn; post-ownership uncertainty never falls through. Successful launches remain active when a peer launch fails.",
+      "Launch one to twelve session-scoped background subagents from one agents array using configured version 4 profile routes. Every task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. Each item accepts only task, optional profile, and optional name. The selected profile supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport. Ordered readiness failures fall through only before spawn; post-ownership uncertainty never falls through. Successful launches remain active when a peer launch fails.",
     promptSnippet: "Launch delegated subagents using a task profile",
     promptGuidelines: [
       "Use subagent_start for delegated work that can proceed independently; make every task self-contained with relevant paths, constraints, evidence, and its expected deliverable. Start is always background and nonblocking; use subagent_await separately.",

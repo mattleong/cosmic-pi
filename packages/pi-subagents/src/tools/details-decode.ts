@@ -194,6 +194,7 @@ const decodeCard = (value: unknown): SubagentRunCard | undefined => {
     reportGeneration: Math.max(0, Math.floor(finiteNumber(record.reportGeneration) ?? 0)),
     model: clean(record.model, MAX_CARD_MODEL_CHARS),
     effort: record.effort as SubagentEffort,
+    ...(typeof record.fastMode === "boolean" ? { fastMode: record.fastMode } : {}),
     ...(record.context === "fresh" || record.context === "fork" ? { context: record.context } : {}),
     ...(record.writeIntent === "read-only" || record.writeIntent === "writer"
       ? { writeIntent: record.writeIntent }

@@ -47,6 +47,7 @@ const launch = (
   cwd: process.cwd(),
   context: "fresh",
   writeIntent: "read-only",
+  fastMode: false,
   model,
   effort: "xhigh",
   activeTools: [],
@@ -327,6 +328,7 @@ describe("local CLI Phase One backends", () => {
         model: "gpt-5.6-sol",
         systemPrompt: "fixed",
         writeIntent: "read-only",
+        fastMode: false,
       }).params,
     ).toMatchObject({
       approvalPolicy: "never",
@@ -335,12 +337,25 @@ describe("local CLI Phase One backends", () => {
       environments: [],
     });
     expect(
-      turnStartRequest("2", "thread", "task", "gpt-5.6-sol", "xhigh", "writer").params,
+      turnStartRequest("2", "thread", "task", "gpt-5.6-sol", "xhigh", "writer", false).params,
     ).toMatchObject({
       approvalPolicy: "never",
       effort: "xhigh",
       sandboxPolicy: { type: "workspaceWrite", networkAccess: false },
     });
+    expect(
+      threadStartRequest("3", {
+        cwd: "/project",
+        model: "gpt-5.6-sol",
+        systemPrompt: "fixed",
+        writeIntent: "read-only",
+        fastMode: true,
+      }).params.serviceTier,
+    ).toBe("priority");
+    expect(
+      turnStartRequest("4", "thread", "task", "gpt-5.6-sol", "high", "read-only", true).params
+        .serviceTier,
+    ).toBe("priority");
   });
 
   it("runs Claude stream JSON with confirmed guidance/interrupt and supervisor correlation", async () => {
@@ -500,6 +515,31 @@ describe("local CLI Phase One backends", () => {
     }
   });
 
+  it("fails fast mode when Codex does not confirm the priority service tier", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    try {
+      await expect(
+        Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const backend = yield* makeLocalCodexBackendDriver(
+                harness.processes,
+                supervisor.shape,
+              ).spawn({ ...launch("codex", "service-tier-mismatch"), fastMode: true });
+              return yield* backend.controls.initialize;
+            }),
+          ),
+        ),
+      ).rejects.toMatchObject({
+        _tag: "SubagentProtocolError",
+        message: expect.stringContaining("instead of required priority fast mode"),
+      });
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  });
+
   it("runs the Codex app-server v2 subset with confirmed start/steer/interrupt and usage", async () => {
     const harness = await makeTempHarness();
     const supervisor = supervisorFixture();
@@ -516,7 +556,7 @@ describe("local CLI Phase One backends", () => {
                 model: "codex-fixture",
                 effort: "xhigh",
               });
-            const backend = yield* driver.spawn(launch("codex"));
+            const backend = yield* driver.spawn({ ...launch("codex"), fastMode: true });
             expect(yield* backend.controls.initialize).toMatchObject({
               model: "codex-fixture",
               effort: "xhigh",

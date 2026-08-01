@@ -25,6 +25,7 @@ const candidate = (value: Partial<DeclaredProfileCandidate> = {}): DeclaredProfi
   effort: "default",
   context: "fresh",
   writeIntent: "read-only",
+  fastMode: false,
   ...value,
 });
 const resolved = (global: unknown = document(), project?: unknown, projectTrusted = true) =>
@@ -62,6 +63,7 @@ describe("subagent v4 profile configuration and resolution", () => {
             effort: "default",
             context: PROFILE_DEFINITIONS[id].defaultContext,
             writeIntent: PROFILE_DEFINITIONS[id].defaultWriteIntent,
+            fastMode: false,
             closeOnReport: true,
           },
         ],
@@ -96,6 +98,36 @@ describe("subagent v4 profile configuration and resolution", () => {
       }),
       candidate({ host: "herdr", runtime: "claude", model: "sonnet", closeOnReport: false }),
     ]);
+  });
+
+  it("defaults fast mode off and accepts only eligible persisted fast routes", () => {
+    const supportedPi = decodeSubagentConfig(
+      document({
+        profiles: {
+          delegate: candidate({ model: "openai-codex/gpt-5.6-sol", fastMode: true }),
+        },
+      }),
+    );
+    expect(supportedPi.file.profiles?.delegate).toMatchObject({ fastMode: true });
+
+    const futureCodex = decodeSubagentConfig(
+      document({
+        profiles: {
+          delegate: candidate({ runtime: "codex", model: "future-codex", fastMode: true }),
+        },
+      }),
+    );
+    expect(futureCodex.file.profiles?.delegate).toMatchObject({ fastMode: true });
+
+    const unsupportedClaude = decodeSubagentConfig(
+      document({
+        profiles: {
+          delegate: candidate({ runtime: "claude", model: "sonnet", fastMode: true }),
+        },
+      }),
+    );
+    expect(unsupportedClaude.file.profiles?.delegate).toBeUndefined();
+    expect(unsupportedClaude.invalidProfileRoutes).toEqual(["delegate"]);
   });
 
   it("accepts every host/runtime name syntactically and bounded native selectors", () => {

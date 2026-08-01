@@ -21,6 +21,7 @@ import {
   UnsupportedSubagentCapabilityError,
   type SubagentError,
 } from "../run/errors.ts";
+import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
 import type { SubagentUsage } from "../run/model.ts";
 import {
   decodeCodexEnvelope,
@@ -500,6 +501,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         model: request.model,
         systemPrompt: request.systemPrompt,
         writeIntent: request.writeIntent,
+        fastMode: request.fastMode,
       }),
     ).pipe(
       Effect.flatMap((value) =>
@@ -511,6 +513,10 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     if (started.model !== request.model)
       return yield* protocolError(
         `Codex selected model ${started.model} instead of required model ${request.model}.`,
+      );
+    if (request.fastMode && started.serviceTier !== SUBAGENT_FAST_SERVICE_TIER)
+      return yield* protocolError(
+        `Codex selected service tier ${started.serviceTier ?? "default"} instead of required ${SUBAGENT_FAST_SERVICE_TIER} fast mode.`,
       );
     threadId = started.thread.id;
     sessionId = started.thread.sessionId ?? started.thread.id;
@@ -574,6 +580,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                   request.model,
                   request.effort,
                   request.writeIntent,
+                  request.fastMode,
                 ),
               ).pipe(
                 Effect.flatMap((value) =>

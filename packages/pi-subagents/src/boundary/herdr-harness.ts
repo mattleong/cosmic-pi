@@ -15,6 +15,7 @@ import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors.ts";
+import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
 import { subagentRuntimeEfforts, type SubagentRuntime } from "../run/model.ts";
 import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
 import { claudeWriterCwdPolicy } from "./claude-writer-policy.ts";
@@ -400,6 +401,7 @@ const piArgv = (
     request.model,
     "--thinking",
     request.effort,
+    ...(request.fastMode ? ["--pi-subagents-fast-mode"] : []),
     "--session-dir",
     sessionDirectory,
     "--no-approve",
@@ -432,6 +434,7 @@ const codexConfig = (
     `developer_instructions = ${tomlString(request.systemPrompt)}`,
     'approval_policy = "never"',
     `sandbox_mode = ${tomlString(request.writeIntent === "writer" ? "workspace-write" : "read-only")}`,
+    ...(request.fastMode ? [`service_tier = ${tomlString(SUBAGENT_FAST_SERVICE_TIER)}`] : []),
     'web_search = "disabled"',
     "allow_login_shell = false",
     "check_for_update_on_startup = false",

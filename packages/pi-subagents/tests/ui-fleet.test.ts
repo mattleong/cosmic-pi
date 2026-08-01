@@ -27,6 +27,7 @@ const projection: SubagentProjection = {
       execution: "background",
       context: "fresh",
       writeIntent: "read-only",
+      fastMode: false,
       reportGeneration: 0,
       backend: "pi",
       capabilities: [

@@ -74,6 +74,7 @@ export interface ProfileWorkspaceOptions {
   readonly supportedPiEfforts: (
     candidate: ProfileCandidate,
   ) => ReadonlyArray<SubagentEffort> | undefined;
+  readonly fastModeAvailable: (candidate: ProfileCandidate) => boolean;
   readonly reload: () => Promise<boolean>;
 }
 
@@ -94,6 +95,7 @@ const sameCandidate = (left: ProfileCandidate, right: ProfileCandidate): boolean
   left.effort === right.effort &&
   left.context === right.context &&
   left.writeIntent === right.writeIntent &&
+  left.fastMode === right.fastMode &&
   left.closeOnReport === right.closeOnReport;
 
 export class ProfileWorkspaceComponent implements Component {
@@ -327,6 +329,10 @@ export class ProfileWorkspaceComponent implements Component {
       this.openNativeEffortPicker(candidate);
       return;
     }
+    if (field === "fastMode") {
+      this.openFastModePicker(candidate);
+      return;
+    }
     this.showFieldPicker(
       candidate,
       field,
@@ -338,6 +344,7 @@ export class ProfileWorkspaceComponent implements Component {
     candidate: ProfileCandidate,
     field: Exclude<ProfileWorkspaceField, "model">,
     supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined,
+    fastModeAvailable?: boolean | undefined,
     notice?: string | undefined,
   ): void {
     const candidateIndex = this.candidateIndex;
@@ -350,6 +357,7 @@ export class ProfileWorkspaceComponent implements Component {
       fieldIndex: this.fieldIndex,
       piModel: this.options.piModel,
       supportedEfforts,
+      fastModeAvailable,
       ...(notice ? { notice } : {}),
       getHeight: this.options.getHeight,
       requestRender: this.options.requestRender,
@@ -404,6 +412,37 @@ export class ProfileWorkspaceComponent implements Component {
     this.renderSoon();
   }
 
+  private openFastModePicker(candidate: ProfileCandidate): void {
+    const candidateIndex = this.candidateIndex;
+    const controller = this.beginCatalogLoad("Checking fast-mode availability…");
+    void this.options
+      .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
+      .then((picker) => {
+        if (!this.finishCatalogLoad(controller)) return;
+        const current = picker.choices.find((choice) =>
+          candidate.model === "parent"
+            ? choice.choice.kind === "parent"
+            : choice.choice.kind === "model" && choice.choice.selector === candidate.model,
+        );
+        this.candidateIndex = candidateIndex;
+        this.showFieldPicker(
+          candidate,
+          "fastMode",
+          undefined,
+          current?.fastModeAvailable ?? this.options.fastModeAvailable(candidate),
+          picker.warning,
+        );
+      })
+      .catch((error: unknown) => {
+        if (!this.finishCatalogLoad(controller)) return;
+        this.setMessage(
+          "error",
+          error instanceof Error ? error.message : "Fast-mode discovery failed.",
+        );
+        this.renderSoon();
+      });
+  }
+
   private openNativeEffortPicker(candidate: ProfileCandidate): void {
     const candidateIndex = this.candidateIndex;
     const controller = this.beginCatalogLoad("Loading model effort choices…");
@@ -415,7 +454,13 @@ export class ProfileWorkspaceComponent implements Component {
           (choice) => choice.choice.kind === "model" && choice.choice.selector === candidate.model,
         );
         this.candidateIndex = candidateIndex;
-        this.showFieldPicker(candidate, "effort", current?.supportedEfforts, picker.warning);
+        this.showFieldPicker(
+          candidate,
+          "effort",
+          current?.supportedEfforts,
+          undefined,
+          picker.warning,
+        );
       })
       .catch((error: unknown) => {
         if (!this.finishCatalogLoad(controller)) return;

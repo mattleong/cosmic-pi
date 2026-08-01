@@ -25,6 +25,7 @@ export interface ResolvedSubagentConfig {
 
 const normalizeCandidate = (candidate: DeclaredProfileCandidate): ProfileCandidate => ({
   ...candidate,
+  fastMode: candidate.fastMode ?? false,
   closeOnReport: candidate.closeOnReport ?? true,
 });
 

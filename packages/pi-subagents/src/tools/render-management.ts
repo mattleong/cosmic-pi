@@ -32,12 +32,13 @@ export const failureRecovery = (code: string | undefined, message: string): stri
 };
 
 const friendlyCandidateRoute = (value: string): string => {
-  const match = /^(.*):([^:]+):(fresh|fork):(read-only|writer):closeOnReport=(true|false)$/.exec(
-    value,
-  );
+  const match =
+    /^(.*):([^:]+):(fresh|fork):(read-only|writer):fastMode=(true|false):closeOnReport=(true|false)$/.exec(
+      value,
+    );
   if (!match) return value;
-  const [, route, effort, context, intent, close] = match;
-  return `${route} · ${effort} · ${context} · ${intent} · ${close === "true" ? "close after report" : "retain after report"}`;
+  const [, route, effort, context, intent, fast, close] = match;
+  return `${route} · ${effort} · ${context} · ${intent} · ${fast === "true" ? "fast" : "standard"} · ${close === "true" ? "close after report" : "retain after report"}`;
 };
 
 const profileSource = (source: SubagentProfileRouteCard["source"]): string => {

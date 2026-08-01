@@ -2,6 +2,7 @@
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/asyncFunction:off
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import { loadCodePreviewSettings, withCodePreviewShell } from "pi-code-previews";
 import { Type } from "typebox";
 import {
@@ -58,8 +59,27 @@ export default function registerPiSubagentSupervisorBridge(pi: ExtensionAPI): vo
     description: "Private pi-subagents supervisor channel configuration",
     type: "string",
   });
+  pi.registerFlag("pi-subagents-fast-mode", {
+    description: "Private OpenAI fast-mode request for this subagent",
+    type: "boolean",
+    default: false,
+  });
+  const fastMode = pi.getFlag("pi-subagents-fast-mode") === true;
   let client: PiSupervisorBridgeClient | undefined;
   let started = false;
+
+  pi.on("before_provider_request", (event, ctx) => {
+    if (
+      !fastMode ||
+      !ctx.model ||
+      !supportsFastModel(ctx.model.provider, ctx.model.id) ||
+      !event.payload ||
+      typeof event.payload !== "object" ||
+      Array.isArray(event.payload)
+    )
+      return undefined;
+    return { ...event.payload, service_tier: FAST_SERVICE_TIER };
+  });
 
   pi.on("session_start", async (_event, ctx) => {
     if (started) return;

@@ -21,6 +21,7 @@ const launch = {
   cwd: "/project",
   context: "fork" as const,
   writeIntent: "writer" as const,
+  fastMode: false,
   model: "openai-codex/gpt-5.6-sol",
   effort: "high" as const,
   activeTools: ["read", "bash"],

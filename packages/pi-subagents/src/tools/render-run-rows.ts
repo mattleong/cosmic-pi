@@ -99,7 +99,11 @@ export const renderResponsiveRunRows = (
     return `${glyph} ${sanitizeTerminalLine(run.name)} · ${sanitizeTerminalLine(id)}`;
   });
   const efforts = runs.map((run) => sanitizeTerminalLine(run.effort));
-  const intents = runs.map((run) => sanitizeTerminalLine(run.writeIntent ?? "intent unknown"));
+  const intents = runs.map((run) =>
+    sanitizeTerminalLine(
+      `${run.writeIntent ?? "intent unknown"}${run.fastMode ? " · ⚡ fast" : ""}`,
+    ),
+  );
   const states = runs.map((run) =>
     sanitizeTerminalLine(
       options.status?.(run) ??

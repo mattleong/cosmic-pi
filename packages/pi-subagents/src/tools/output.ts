@@ -59,6 +59,7 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     run.selection.warning ? field("Route warning", run.selection.warning) : undefined,
     field("Context", run.context),
     field("Intent", run.writeIntent),
+    field("OpenAI fast", run.fastMode ? "on · priority" : "off"),
     field("Capabilities", `${run.capabilities.join(", ") || "none"}; stop/await always available`),
     run.pid ? field("Process", `pid ${run.pid}`) : undefined,
     elapsed ? field("Elapsed", elapsed) : undefined,

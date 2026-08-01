@@ -24,6 +24,7 @@ const launch = (
   cwd: "/project",
   context: "fresh",
   writeIntent: "read-only",
+  fastMode: false,
   model: runtime === "pi" ? "openai-codex/gpt-5.6-sol" : `${runtime}-model`,
   effort: "xhigh",
   activeTools: [],

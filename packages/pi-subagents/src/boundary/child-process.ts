@@ -57,6 +57,7 @@ export interface ChildLaunchRequest {
   readonly cwd: string;
   readonly context: SubagentContextMode;
   readonly writeIntent: import("../run/model.ts").SubagentWriteIntent;
+  readonly fastMode: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly runtimeApiKey?: string | undefined;
@@ -293,6 +294,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
     request.model,
     "--thinking",
     request.effort,
+    ...(request.fastMode ? ["--pi-subagents-fast-mode"] : []),
     "--tools",
     [...new Set([...toolPolicy.enabled, "contact_parent"])].join(","),
     "--exclude-tools",

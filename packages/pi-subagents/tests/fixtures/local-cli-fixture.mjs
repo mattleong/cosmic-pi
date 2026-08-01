@@ -272,6 +272,9 @@ if (args.includes("--print")) {
                 description: "Fixture Codex fast model",
                 isDefault: false,
                 supportedReasoningEfforts: [{ reasoningEffort: "minimal", description: "Minimal" }],
+                serviceTiers: [
+                  { id: "priority", name: "Fast", description: "Fixture priority tier" },
+                ],
               },
             ],
             nextCursor: null,
@@ -288,6 +291,8 @@ if (args.includes("--print")) {
             cwd: frame.params.cwd,
             model,
             modelProvider: "openai",
+            serviceTier:
+              model === "service-tier-mismatch" ? "flex" : (frame.params.serviceTier ?? null),
             sandbox: { type: frame.params.sandbox === "read-only" ? "readOnly" : "workspaceWrite" },
             thread: { id: "thread-fixture", sessionId: "session-fixture" },
           },

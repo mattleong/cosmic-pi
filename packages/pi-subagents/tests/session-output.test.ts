@@ -31,6 +31,7 @@ const runView = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => (
   execution: "background",
   context: "fresh",
   writeIntent: "read-only",
+  fastMode: false,
   reportGeneration: 0,
   backend: "pi",
   capabilities: [

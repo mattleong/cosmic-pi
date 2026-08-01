@@ -42,6 +42,7 @@ export interface BackendLaunchRequest {
   readonly cwd: string;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
+  readonly fastMode: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly runtimeApiKey?: string | undefined;

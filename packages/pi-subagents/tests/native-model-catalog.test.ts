@@ -51,6 +51,7 @@ describe("native model catalog boundary", () => {
         label: "Default Claude",
         description: "Fixture default model",
         supportedEfforts: ["low", "medium", "high"],
+        supportedServiceTiers: [],
         isDefault: true,
       },
       {
@@ -58,6 +59,7 @@ describe("native model catalog boundary", () => {
         label: "Claude Sonnet",
         description: "Fixture efficient model",
         supportedEfforts: ["low", "high"],
+        supportedServiceTiers: [],
         isDefault: false,
       },
     ]);
@@ -137,7 +139,10 @@ describe("native model catalog boundary", () => {
       supportedEfforts: ["low", "high"],
       isDefault: true,
     });
-    expect(models[1]).toMatchObject({ supportedEfforts: ["minimal"] });
+    expect(models[1]).toMatchObject({
+      supportedEfforts: ["minimal"],
+      supportedServiceTiers: ["priority"],
+    });
   });
 
   it("deduplicates concurrent catalog requests without letting one canceled waiter abort peers", async () => {

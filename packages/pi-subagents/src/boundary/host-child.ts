@@ -4,6 +4,7 @@
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/asyncFunction:off
 import { StringEnum } from "@earendil-works/pi-ai";
+import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -69,6 +70,12 @@ function sendIpc(message: object): Promise<void> {
 
 export default function subagentChildBridge(pi: ExtensionAPI): void {
   if (process.env.PI_SUBAGENT_CHILD !== "1") return;
+  pi.registerFlag("pi-subagents-fast-mode", {
+    description: "Private OpenAI fast-mode request for this subagent",
+    type: "boolean",
+    default: false,
+  });
+  const fastMode = pi.getFlag("pi-subagents-fast-mode") === true;
   const runtimeApiKey = process.env.PI_SUBAGENT_RUNTIME_API_KEY;
   const runtimeApiProvider = process.env.PI_SUBAGENT_RUNTIME_API_PROVIDER;
   delete process.env.PI_SUBAGENT_RUNTIME_API_KEY;
@@ -111,6 +118,19 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
       waiter.reject(new Error("The parent subagent supervisor disconnected."));
     pending.clear();
   };
+
+  pi.on("before_provider_request", (event, ctx) => {
+    if (
+      !fastMode ||
+      !ctx.model ||
+      !supportsFastModel(ctx.model.provider, ctx.model.id) ||
+      !event.payload ||
+      typeof event.payload !== "object" ||
+      Array.isArray(event.payload)
+    )
+      return undefined;
+    return { ...event.payload, service_tier: FAST_SERVICE_TIER };
+  });
 
   pi.on("session_start", () => {
     if (listening) return;

@@ -41,6 +41,8 @@ export interface ProfileCandidate {
   readonly effort: ProfileCandidateEffort;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
+  /** Requests OpenAI priority service for supported Pi/Codex models. Defaults to false. */
+  readonly fastMode: boolean;
   /** Omitted configuration values normalize to true. */
   readonly closeOnReport: boolean;
 }
@@ -50,7 +52,8 @@ export interface ProfileRoute {
   readonly candidates: ReadonlyArray<ProfileCandidate>;
 }
 
-export type DeclaredProfileCandidate = Omit<ProfileCandidate, "closeOnReport"> & {
+export type DeclaredProfileCandidate = Omit<ProfileCandidate, "closeOnReport" | "fastMode"> & {
+  readonly fastMode?: boolean | undefined;
   readonly closeOnReport?: boolean | undefined;
 };
 export type DeclaredProfileRoute =

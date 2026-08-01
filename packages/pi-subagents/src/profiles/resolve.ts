@@ -1,3 +1,4 @@
+import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import { resolvePiModelSelector, type PiCatalogModel } from "../run/model-catalog.ts";
 import type {
   SubagentContextMode,
@@ -36,6 +37,7 @@ export interface ProfileCandidateAttempt {
   readonly model: string;
   readonly effectiveContext: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
+  readonly fastMode: boolean;
   readonly closeOnReport: boolean;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
@@ -62,7 +64,7 @@ export interface ProfileResolutionFailure {
 export type ProfileResolution = ProfileResolutionPlan | ProfileResolutionFailure;
 
 export const profileCandidateLabel = (candidate: ProfileCandidate): string =>
-  `${candidate.host}/${candidate.runtime}/${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:closeOnReport=${candidate.closeOnReport}`;
+  `${candidate.host}/${candidate.runtime}/${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:fastMode=${candidate.fastMode}:closeOnReport=${candidate.closeOnReport}`;
 
 const skip = (
   candidate: string,
@@ -118,6 +120,7 @@ const baseAttempt = (
   model,
   effectiveContext: candidate.context,
   writeIntent: candidate.writeIntent,
+  fastMode: candidate.fastMode,
   closeOnReport: candidate.closeOnReport,
   effort,
   effortWasExplicit,
@@ -190,6 +193,16 @@ const resolveCandidate = (
       candidateIndex,
     );
     if (effortSkip) return { skipped: effortSkip };
+    const resolvedModel = `${resolved.provider}/${resolved.id}`;
+    if (candidate.fastMode && !supportsSubagentFastMode("pi", resolvedModel))
+      return {
+        skipped: skip(
+          label,
+          "fast_mode_unsupported",
+          `Pi model ${resolvedModel} does not support fast mode.`,
+          candidateIndex,
+        ),
+      };
     return {
       attempt: baseAttempt(
         profile,
@@ -197,7 +210,7 @@ const resolveCandidate = (
         candidateIndex,
         selectedEffort,
         hardEffort !== undefined,
-        `${resolved.provider}/${resolved.id}`,
+        resolvedModel,
       ),
     };
   }
@@ -223,6 +236,16 @@ const resolveCandidate = (
     candidateIndex,
   );
   if (effortSkip) return { skipped: effortSkip };
+  const resolvedModel = `${resolved.provider}/${resolved.id}`;
+  if (candidate.fastMode && !supportsSubagentFastMode("pi", resolvedModel))
+    return {
+      skipped: skip(
+        label,
+        "fast_mode_unsupported",
+        `Pi model ${resolvedModel} does not support fast mode.`,
+        candidateIndex,
+      ),
+    };
   return {
     attempt: baseAttempt(
       profile,
@@ -230,7 +253,7 @@ const resolveCandidate = (
       candidateIndex,
       selectedEffort,
       hardEffort !== undefined,
-      `${resolved.provider}/${resolved.id}`,
+      resolvedModel,
     ),
   };
 };

@@ -487,7 +487,9 @@ export class SubagentFleetComponent implements Component {
     );
     const shortId = run.id.length <= 14 ? run.id : `…${run.id.slice(-13)}`;
     const identity = duplicateName ? `[${shortId}] ${run.name}` : run.name;
-    const label = sanitizeTerminalLine(`${identity} · ${state} · ${run.writeIntent}`);
+    const label = sanitizeTerminalLine(
+      `${identity} · ${state} · ${run.writeIntent}${run.fastMode ? " · ⚡ fast" : ""}`,
+    );
     return pad(
       `${prefix} ${glyph} ${selected ? this.options.theme.fg("accent", label) : label}`,
       width,

@@ -56,6 +56,7 @@ it.runIf(process.env.PI_SUBAGENTS_REAL_CLI_SMOKE === "1")(
         cwd: process.cwd(),
         context: "fresh",
         writeIntent: "read-only",
+        fastMode: false,
         model,
         effort: "xhigh",
         activeTools: [],

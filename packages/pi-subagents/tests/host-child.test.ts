@@ -5,6 +5,39 @@ import { describe, expect, it, vi } from "vitest";
 import subagentChildBridge from "../src/boundary/host-child.ts";
 
 describe("subagent child host bridge", () => {
+  it("injects the priority service tier only for fast-capable OpenAI models", () => {
+    const previousChild = process.env.PI_SUBAGENT_CHILD;
+    process.env.PI_SUBAGENT_CHILD = "1";
+    try {
+      const handlers = new Map<string, (...args: unknown[]) => unknown>();
+      const pi = {
+        registerFlag: vi.fn(),
+        getFlag: vi.fn(() => true),
+        registerTool: vi.fn(),
+        on: vi.fn((name: string, handler: (...args: unknown[]) => unknown) =>
+          handlers.set(name, handler),
+        ),
+      } as unknown as ExtensionAPI;
+      subagentChildBridge(pi);
+      const beforeRequest = handlers.get("before_provider_request");
+      expect(
+        beforeRequest?.(
+          { payload: { input: "task" } },
+          { model: { provider: "openai-codex", id: "gpt-5.6-sol" } },
+        ),
+      ).toEqual({ input: "task", service_tier: "priority" });
+      expect(
+        beforeRequest?.(
+          { payload: { input: "task" } },
+          { model: { provider: "anthropic", id: "claude-opus-4-6" } },
+        ),
+      ).toBeUndefined();
+    } finally {
+      if (previousChild === undefined) delete process.env.PI_SUBAGENT_CHILD;
+      else process.env.PI_SUBAGENT_CHILD = previousChild;
+    }
+  });
+
   it("installs runtime-only parent authentication without process arguments", () => {
     const previousChild = process.env.PI_SUBAGENT_CHILD;
     const previousKey = process.env.PI_SUBAGENT_RUNTIME_API_KEY;
@@ -16,6 +49,8 @@ describe("subagent child host bridge", () => {
       const registerProvider = vi.fn();
       const pi = {
         registerProvider,
+        registerFlag: vi.fn(),
+        getFlag: vi.fn(() => false),
         registerTool: vi.fn(),
         on: vi.fn(),
       } as unknown as ExtensionAPI;
@@ -63,6 +98,8 @@ describe("subagent child host bridge", () => {
         },
       });
       const pi = {
+        registerFlag: vi.fn(),
+        getFlag: vi.fn(() => false),
         registerTool: vi.fn((tool: typeof registered) => {
           registered = tool;
         }),
@@ -109,6 +146,8 @@ describe("subagent child host bridge", () => {
           }
         | undefined;
       const pi = {
+        registerFlag: vi.fn(),
+        getFlag: vi.fn(() => false),
         registerTool: vi.fn(
           (tool: {
             readonly name: string;

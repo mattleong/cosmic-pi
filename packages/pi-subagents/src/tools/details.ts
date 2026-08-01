@@ -43,6 +43,7 @@ export interface SubagentRunCard {
   readonly reportGeneration: number;
   readonly model: string;
   readonly effort: SubagentEffort;
+  readonly fastMode?: boolean | undefined;
   readonly context?: SubagentContextMode | undefined;
   readonly writeIntent?: SubagentWriteIntent | undefined;
   readonly capabilities?: ReadonlyArray<SubagentCapability> | undefined;
@@ -210,6 +211,7 @@ const projectCard = (run: SubagentRunCard, budget: number): SubagentRunCard => {
     reportGeneration: Math.max(0, Math.floor(run.reportGeneration)),
     model,
     effort: run.effort,
+    ...(run.fastMode === undefined ? {} : { fastMode: run.fastMode }),
     ...(run.context ? { context: run.context } : {}),
     ...(run.writeIntent ? { writeIntent: run.writeIntent } : {}),
     ...(run.capabilities ? { capabilities: [...run.capabilities] } : {}),
@@ -273,6 +275,7 @@ const compactCardFallback = (card: SubagentRunCard): SubagentRunCard => ({
   reportGeneration: Math.max(0, Math.floor(card.reportGeneration)),
   model: clean(card.model, 96),
   effort: card.effort,
+  ...(card.fastMode === undefined ? {} : { fastMode: card.fastMode }),
   ...(card.context ? { context: card.context } : {}),
   ...(card.writeIntent ? { writeIntent: card.writeIntent } : {}),
   ...(card.startedAt === undefined ? {} : { startedAt: card.startedAt }),

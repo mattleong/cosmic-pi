@@ -551,6 +551,7 @@ const request = (overrides: Partial<StartSubagentRequest> = {}): StartSubagentRe
   execution: "background",
   context: "fresh",
   writeIntent: "read-only",
+  fastMode: false,
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
   effortWasExplicit: true,

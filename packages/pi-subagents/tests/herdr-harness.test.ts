@@ -97,6 +97,7 @@ const launch = (
   cwd: process.cwd(),
   context: "fresh",
   writeIntent,
+  fastMode: false,
   model: runtime === "pi" ? "openai-codex/gpt-5.6-sol" : `${runtime}-model`,
   effort: "xhigh",
   runtimeApiKey: runtime === "pi" ? "pi-runtime-secret" : undefined,
@@ -180,6 +181,35 @@ describe("Herdr native harness security", () => {
             "claude-integration.sh",
           );
           prepared.authorizeCleanup();
+        }),
+      ),
+    );
+  });
+
+  it("propagates fast mode to Herdr Pi and Codex without exposing a credential", async () => {
+    const test = await setup();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const pi = yield* test.harness.prepare(
+            "pi",
+            { ...launch("pi"), fastMode: true },
+            test.supervisor,
+          );
+          expect(pi.argv).toContain("--pi-subagents-fast-mode");
+
+          const codex = yield* test.harness.prepare(
+            "codex",
+            { ...launch("codex"), fastMode: true },
+            test.supervisor,
+          );
+          const config = yield* Effect.promise(() =>
+            fs.readFile(join(codex.directory, "codex-home", "config.toml"), "utf8"),
+          );
+          expect(config).toContain('service_tier = "priority"');
+          expect(codex.argv.join(" ")).not.toContain("must-never-appear-in-argv");
+          pi.authorizeCleanup();
+          codex.authorizeCleanup();
         }),
       ),
     );

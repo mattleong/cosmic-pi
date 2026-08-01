@@ -70,6 +70,7 @@ describe("SubagentConfigStore v4", () => {
           effort: "high",
           context: "fresh",
           writeIntent: "writer",
+          fastMode: false,
           closeOnReport: true,
         },
       ],

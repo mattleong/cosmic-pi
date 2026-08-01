@@ -53,6 +53,11 @@ const Description = Schema.String.check(
   hasOnlySafeDescriptionControls,
 );
 const Effort = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32));
+const ServiceTier = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(64),
+  hasNoTerminalControls,
+);
 
 const ClaudeCatalogResponse = Schema.Struct({
   type: Schema.Literal("control_response"),
@@ -89,6 +94,15 @@ const CodexCatalogResponse = Schema.Struct({
             description: Schema.optional(Description),
           }),
         ),
+        serviceTiers: Schema.optional(
+          Schema.Array(
+            Schema.Struct({
+              id: ServiceTier,
+              name: Label,
+              description: Description,
+            }),
+          ),
+        ),
       }),
     ),
     nextCursor: Schema.optional(Schema.Union([Schema.String, Schema.Null])),
@@ -100,6 +114,7 @@ export interface NativeRuntimeModel {
   readonly label: string;
   readonly description: string;
   readonly supportedEfforts: ReadonlyArray<SubagentEffort>;
+  readonly supportedServiceTiers: ReadonlyArray<string>;
   readonly isDefault: boolean;
 }
 
@@ -440,6 +455,7 @@ const decodeClaudeModels = (value: unknown) =>
                 : `Resolves to ${model.resolvedModel}`),
           ),
           supportedEfforts: normalizeEfforts(model.supportedEffortLevels ?? []),
+          supportedServiceTiers: [],
           isDefault: model.value === "default",
         }),
       ),
@@ -457,6 +473,7 @@ const decodeCodexModels = (value: unknown) =>
           supportedEfforts: normalizeEfforts(
             model.supportedReasoningEfforts.map((effort) => effort.reasoningEffort),
           ),
+          supportedServiceTiers: [...new Set((model.serviceTiers ?? []).map((tier) => tier.id))],
           isDefault: model.isDefault,
         }),
       ),

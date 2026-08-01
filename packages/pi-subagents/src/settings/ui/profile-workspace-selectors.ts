@@ -33,6 +33,7 @@ export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly fieldIndex: number;
   readonly piModel?: string | undefined;
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
+  readonly fastModeAvailable?: boolean | undefined;
   readonly notice?: string | undefined;
   readonly select: (update: CandidateUpdate, description: string, value: string) => void;
   readonly cancel: (label: string) => void;
@@ -41,7 +42,8 @@ export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
 const currentFieldValue = (
   candidate: ProfileCandidate,
   field: Exclude<ProfileWorkspaceField, "model">,
-): string => (field === "closeOnReport" ? String(candidate.closeOnReport) : candidate[field]);
+): string =>
+  field === "closeOnReport" || field === "fastMode" ? String(candidate[field]) : candidate[field];
 
 export const makeCandidateFieldSelector = (
   options: CandidateFieldSelectorOptions,
@@ -52,6 +54,7 @@ export const makeCandidateFieldSelector = (
   const changeOptions = {
     piModel: options.piModel,
     supportedEfforts: options.supportedEfforts,
+    fastModeAvailable: options.fastModeAvailable,
   };
   return new SearchableSelectPage<string>({
     theme: options.theme,

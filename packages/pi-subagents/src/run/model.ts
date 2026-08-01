@@ -122,6 +122,7 @@ export interface SubagentRunView {
   readonly execution: SubagentExecution;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
+  readonly fastMode: boolean;
   readonly host?: SubagentHost | undefined;
   readonly runtime?: SubagentRuntime | undefined;
   readonly closeOnReport?: boolean | undefined;
@@ -168,6 +169,7 @@ export interface StartSubagentRequest {
   readonly execution: SubagentExecution;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
+  readonly fastMode: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
