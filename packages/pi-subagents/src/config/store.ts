@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
+import { LEGACY_PROFILE_ID } from "../profiles/model.ts";
 import type {
   DeclaredProfileCandidate,
   DeclaredProfileRoute,
@@ -143,9 +144,14 @@ const applyProfilePatch = (
       ? (current.profiles as JsonObject)
       : {};
   const profiles: JsonObject = { ...currentProfiles };
+  if (patch.profile === "generalist") delete profiles[LEGACY_PROFILE_ID];
   if (patch.route === undefined) delete profiles[patch.profile];
   else profiles[patch.profile] = routeJson(patch.route);
-  const next: JsonObject = { ...current, version: SUBAGENT_CONFIG_VERSION };
+  const next: JsonObject = {
+    ...current,
+    version: SUBAGENT_CONFIG_VERSION,
+    ...(current.defaultProfile === LEGACY_PROFILE_ID ? { defaultProfile: "generalist" } : {}),
+  };
   if (Object.keys(profiles).length === 0) delete next.profiles;
   else next.profiles = profiles;
   return next;

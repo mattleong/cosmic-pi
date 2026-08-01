@@ -198,6 +198,50 @@ describe("SubagentConfigStore v4", () => {
     expect(refreshed.config.profiles.scout.candidates[0]?.fastMode).toBe(true);
   });
 
+  it("rewrites the legacy delegate route key as canonical generalist on edit", async () => {
+    const paths = await fixture();
+    const legacy = {
+      version: 4,
+      defaultProfile: "delegate",
+      profiles: {
+        delegate: {
+          host: "local",
+          runtime: "pi",
+          model: "parent",
+          effort: "default",
+          context: "fresh",
+          writeIntent: "read-only",
+        },
+      },
+    };
+    await writeFile(paths.globalPath, JSON.stringify(legacy));
+    const inspection = await withStore((store) =>
+      store.inspect(paths.cwd, paths.agentDirectory, true),
+    );
+    expect(inspection.config.defaultProfile).toBe("generalist");
+    await withStore((store) =>
+      store.patchProfile(paths.cwd, paths.agentDirectory, {
+        scope: "global",
+        profile: "generalist",
+        route: {
+          host: "local",
+          runtime: "pi",
+          model: "openai/new-generalist",
+          effort: "high",
+          context: "fresh",
+          writeIntent: "read-only",
+        },
+        expectedExists: true,
+        expectedDocument: inspection.globalDocument,
+        projectTrusted: true,
+      }),
+    );
+    const saved = JSON.parse(await readFile(paths.globalPath, "utf8"));
+    expect(saved.defaultProfile).toBe("generalist");
+    expect(saved.profiles.delegate).toBeUndefined();
+    expect(saved.profiles.generalist).toMatchObject({ model: "openai/new-generalist" });
+  });
+
   it("removes inherited routes and rejects untrusted project writes", async () => {
     const paths = await fixture();
     const project = {

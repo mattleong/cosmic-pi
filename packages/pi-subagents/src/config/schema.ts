@@ -1,8 +1,11 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
+  LEGACY_PROFILE_ID,
+  normalizeProfileId,
   PROFILE_CANDIDATE_EFFORTS,
   PROFILE_IDS,
+  PROFILE_INPUT_IDS,
   type DeclaredProfileRoute,
   type ProfileCandidate,
   type ProfileId,
@@ -33,7 +36,7 @@ export interface DecodedSubagentConfig {
   readonly legacyVersion3: boolean;
 }
 
-export const ProfileIdSchema = Schema.Literals(PROFILE_IDS);
+export const ProfileIdSchema = Schema.Literals(PROFILE_INPUT_IDS);
 export const ProfileHostSchema = Schema.Literals(["local", "herdr"] as const);
 export const ProfileRuntimeSchema = Schema.Literals(["pi", "claude", "codex"] as const);
 export const ProfileEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
@@ -223,13 +226,16 @@ export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedS
     diagnostics.push(`${scope}.<unknown>`);
 
   const versionField = readField(rawRoot, "version", `${scope}.version`, diagnostics);
-  const defaultProfile = decodeField(
+  const decodedDefaultProfile = decodeField(
     rawRoot,
     "defaultProfile",
     ProfileIdSchema,
     `${scope}.defaultProfile`,
     diagnostics,
   );
+  const defaultProfile = decodedDefaultProfile
+    ? normalizeProfileId(decodedDefaultProfile)
+    : undefined;
   const profilesField = readField(rawRoot, "profiles", `${scope}.profiles`, diagnostics);
   const decodedProfiles = decodedRecord(profilesField.value);
   if (profilesField.present && !decodedProfiles) diagnostics.push(`${scope}.profiles`);
@@ -237,13 +243,24 @@ export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedS
   const profiles: Partial<Record<ProfileId, DeclaredProfileRoute>> = {};
   const invalidProfileRoutes: ProfileId[] = [];
   for (const id of PROFILE_IDS) {
-    const field = readField(profileRecord, id, `${scope}.profiles.${id}`, diagnostics);
-    if (!field.present) continue;
-    const route = decodeRoute(field.value, `${scope}.profiles.${id}`, diagnostics);
+    const canonicalPath = `${scope}.profiles.${id}`;
+    const canonicalField = readField(profileRecord, id, canonicalPath, diagnostics);
+    const legacyPath = `${scope}.profiles.${LEGACY_PROFILE_ID}`;
+    const legacyField =
+      id === "generalist"
+        ? readField(profileRecord, LEGACY_PROFILE_ID, legacyPath, diagnostics)
+        : undefined;
+    const field = canonicalField.present ? canonicalField : legacyField;
+    if (!field?.present) continue;
+    const route = decodeRoute(
+      field.value,
+      canonicalField.present ? canonicalPath : legacyPath,
+      diagnostics,
+    );
     if (route === undefined) invalidProfileRoutes.push(id);
     else profiles[id] = route;
   }
-  if (!ownKeysAre(profileRecord, new Set<string>(PROFILE_IDS)))
+  if (!ownKeysAre(profileRecord, new Set<string>(PROFILE_INPUT_IDS)))
     diagnostics.push(`${scope}.profiles.<unknown>`);
 
   const version = versionField.value;

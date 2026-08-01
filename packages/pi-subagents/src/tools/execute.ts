@@ -11,7 +11,7 @@ import {
   hostProfileEnvironment,
   resolveProfileStart,
 } from "../boundary/host-profile-resolution.ts";
-import { PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
+import { normalizeProfileId, PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
 import { profileCandidateLabel } from "../profiles/resolve.ts";
 import { SubagentProfileService, type SubagentProfileServiceShape } from "../profiles/service.ts";
 import {
@@ -116,7 +116,10 @@ const startSpecs = (
           message: `[legacy_launch_override] subagent_start does not accept ${legacyField}. Put launch choices in the selected version 4 profile route.`,
         });
     }
-    return agents;
+    return agents.map((agent) => {
+      const profile = agent.profile ? normalizeProfileId(agent.profile) : undefined;
+      return profile ? { ...agent, profile } : agent;
+    });
   });
 
 const requiredMessage = (
@@ -138,7 +141,8 @@ const profileDiscovery = (
   ctx: ExtensionContext,
   profiles: SubagentProfileServiceShape,
 ): ReadonlyArray<SubagentProfileView> => {
-  const ids = input.profile ? [input.profile] : PROFILE_IDS;
+  const requestedProfile = input.profile ? normalizeProfileId(input.profile) : undefined;
+  const ids = input.profile ? (requestedProfile ? [requestedProfile] : []) : PROFILE_IDS;
   const environment = hostProfileEnvironment(pi, ctx);
   return ids.flatMap((id) => {
     const definition = profiles.definition(id);
@@ -186,7 +190,7 @@ const formatProfileDiscovery = (
     "Static eligibility only · executable, authentication, integration, and private-harness checks run at launch.",
     "",
     ...profiles.flatMap((profile) => [
-      `${profile.id}${profile.isDefault ? " ★ default" : ""} — ${profile.description}`,
+      `${profile.id}${profile.isDefault ? " ★ launch default" : ""} — ${profile.description}`,
       `  source=${profile.source} · defaults: context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"}`,
       ...(profile.candidates.length > 0
         ? profile.candidates.map(
@@ -321,10 +325,11 @@ export const executeSubagentAction = async (
         const startEntriesFor = (outcomes: ReadonlyMap<number, SubagentStartOutcome>) =>
           specs.map((spec, index) => {
             const outcome = outcomes.get(index);
+            const profile = spec.profile ? normalizeProfileId(spec.profile) : undefined;
             return {
               index,
               name: sanitizeTerminalLine(spec.name?.trim() || `launch ${index + 1}`),
-              ...(spec.profile ? { profile: spec.profile } : {}),
+              ...(profile ? { profile } : {}),
               status: outcome ? ("run" in outcome ? "started" : "failed") : "pending",
               ...(outcome && "run" in outcome ? { runId: outcome.run.id } : {}),
             } as const;

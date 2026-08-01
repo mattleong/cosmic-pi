@@ -4,7 +4,7 @@ Session-scoped, profile-routed background subagents for Pi.
 
 ## Implemented behavior
 
-- Seven built-in profiles: `scout`, `researcher`, `planner`, `worker`, `reviewer`, `oracle`, and `delegate`.
+- Seven built-in profiles: `scout`, `researcher`, `planner`, `worker`, `reviewer`, `oracle`, and `generalist`.
 - `subagent_start` accepts one required `agents` array (1–12 items). Each item contains only `task`, optional `profile`, and optional `name`.
 - Start is always background and nonblocking. Its response is admission-only even if a report races prompt confirmation; report payloads remain queued for exact-once notification or `subagent_await` delivery. Use `subagent_await` separately with `all_finished` or `any_finished`.
 - Version-4 profile routes own host, runtime, model, effort, context, write intent, OpenAI fast mode, and report-close behavior. Native selectors use one fail-closed 256-character grammar across config, settings, and all six adapter preflights: a leading alphanumeric followed by alphanumerics or `._:/-`, plus Claude's optional exact long-context suffix such as `[1m]`.
@@ -37,9 +37,9 @@ Built-ins preserve the previous behavior with one explicit `local` + `pi` + `par
 | `worker`     | fresh   | writer       | high          |
 | `reviewer`   | fresh   | read-only    | high          |
 | `oracle`     | fork    | read-only    | high          |
-| `delegate`   | fresh   | read-only    | parent effort |
+| `generalist` | fresh   | read-only    | parent effort |
 
-`defaultProfile` defaults to `delegate`.
+`defaultProfile` defaults to `generalist`. Existing version 4 `delegate` values and route keys are accepted as a temporary compatibility alias and normalize to `generalist`.
 
 ## Configuration version 4
 
@@ -48,7 +48,7 @@ Global configuration is `<agent-dir>/pi-subagents.json`. Trusted projects may ov
 ```json
 {
   "version": 4,
-  "defaultProfile": "delegate",
+  "defaultProfile": "generalist",
   "profiles": {
     "reviewer": [
       {
@@ -89,7 +89,7 @@ A route is exactly `"disabled"`, one candidate, or a non-empty ordered candidate
 - `host`: `local` or `herdr`;
 - `runtime`: `pi`, `claude`, or `codex`;
 - `model`: a bounded native runtime selector; Pi uses `parent` or canonical `provider/model`;
-- `effort`: `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; `default` means the profile's soft default (shown as `default → <effective>` in settings), while `delegate` inherits the current parent effort and falls back to `high`;
+- `effort`: `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; `default` means the profile's soft default (shown as `<effective> (default)` in settings), while `generalist` inherits the current parent effort and falls back to `high`;
 - `context`: `fresh` or `fork`;
 - `writeIntent`: `read-only` or `writer`;
 - optional `fastMode`, defaulting to false; when true, eligible Pi or Codex candidates request OpenAI's `priority` service tier;

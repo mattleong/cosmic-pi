@@ -32,7 +32,7 @@ export const failureRecovery = (code: string | undefined, message: string): stri
   return "Review the failure detail and resolve it before retrying.";
 };
 
-const friendlyCandidateRoute = (value: string): string => {
+const friendlyCandidateRoute = (value: string, fastModeApplied: boolean): string => {
   const match =
     /^(.*):([^:]+):(fresh|fork):(read-only|writer):fastMode=(true|false):closeOnReport=(true|false)$/.exec(
       value,
@@ -41,8 +41,14 @@ const friendlyCandidateRoute = (value: string): string => {
   const [, route, effort, context, intent, fast, close] = match;
   const parts = /^(local|herdr)\/(pi|claude|codex)\/(.+)$/.exec(route ?? "");
   const model = parts
-    ? formatToolRoute(parts[1] ?? "", parts[2] ?? "", parts[3] ?? "", effort ?? "", fast === "true")
-    : formatToolModel(route ?? "", effort ?? "", fast === "true");
+    ? formatToolRoute(
+        parts[1] ?? "",
+        parts[2] ?? "",
+        parts[3] ?? "",
+        effort ?? "",
+        fast === "true" && fastModeApplied,
+      )
+    : formatToolModel(route ?? "", effort ?? "", fast === "true" && fastModeApplied);
   return `${model} · ${context} · ${intent} · ${close === "true" ? "close after report" : "retain after report"}`;
 };
 
@@ -88,8 +94,9 @@ class ProfileRoutesComponent implements Component {
       ).length;
       const invalid = profile.source.endsWith("-invalid");
       const color = invalid || eligible === 0 ? "warning" : "success";
-      const first = profile.candidates[0]
-        ? friendlyCandidateRoute(profile.candidates[0].candidate)
+      const firstCandidate = profile.candidates[0];
+      const first = firstCandidate
+        ? friendlyCandidateRoute(firstCandidate.candidate, firstCandidate.status === "eligible")
         : undefined;
       lines.push(
         this.theme.fg(
@@ -109,7 +116,7 @@ class ProfileRoutesComponent implements Component {
         lines.push(
           this.theme.fg(
             candidate.status === "eligible" ? "success" : "warning",
-            `  ${candidate.status === "eligible" ? "✓" : "–"} ${candidate.order}. ${friendlyCandidateRoute(candidate.candidate)}${candidate.effectiveContext ? ` · effective context=${candidate.effectiveContext}` : ""}`,
+            `  ${candidate.status === "eligible" ? "✓" : "–"} ${candidate.order}. ${friendlyCandidateRoute(candidate.candidate, candidate.status === "eligible")}${candidate.effectiveContext ? ` · effective context=${candidate.effectiveContext}` : ""}`,
           ),
         );
         lines.push(this.theme.fg("dim", `     ${candidate.reason}`));

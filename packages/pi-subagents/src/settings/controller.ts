@@ -207,8 +207,9 @@ async function openProfileSettings(
       // Host callback failures use the same conservative fallback as launch resolution.
     }
   }
-  const preferredPiModel = ctx.model
-    ? `${ctx.model.provider}/${ctx.model.id}`
+  const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+  const preferredPiModel = parentModel
+    ? parentModel
     : availableModels[0]
       ? `${availableModels[0].provider}/${availableModels[0].id}`
       : undefined;
@@ -248,6 +249,7 @@ async function openProfileSettings(
         projectTrusted,
         parentEffort,
         ...(preferredPiModel ? { piModel: preferredPiModel } : {}),
+        ...(parentModel ? { parentModel } : {}),
         getHeight: () => tui.terminal.rows,
         requestRender: () => tui.requestRender(),
         matchesKeybinding: (data, id) => keybindings.matches(data, id),

@@ -9,6 +9,7 @@ import type { SubagentEffort } from "../../run/model.ts";
 import type { ProfileRouteDraft } from "../profile-route-editor.ts";
 import {
   candidateEffortLabel,
+  candidateFastModeApplied,
   candidateFieldRows,
   draftKindLabel,
   effectiveProfileSummary,
@@ -27,6 +28,7 @@ export interface ProfileWorkspaceRenderState {
   readonly scope: SubagentConfigScope;
   readonly projectTrusted: boolean;
   readonly parentEffort: SubagentEffort;
+  readonly parentModel?: string | undefined;
   readonly pane: ProfileWorkspacePane;
   readonly profileIndex: number;
   readonly candidateIndex: number;
@@ -96,7 +98,7 @@ const commonNotices = (
       ...wrapped(
         theme.fg(
           "warning",
-          `! Project override active for ${selectedProfile(state)}; global edits are saved but do not change its effective route until the project override is reset.`,
+          `! Project override active for ${selectedProfile(state)}; global edits are saved but remain shadowed. Press p to edit or reset the project override.`,
         ),
         width,
       ),
@@ -170,14 +172,20 @@ const candidateSummary = (
   index: number,
   maximum: number,
   parentEffort: SubagentEffort,
+  parentModel?: string | undefined,
 ): string => {
   const prefix = `${String(index + 1).padStart(2, "0")} · ${candidate.host}/${candidate.runtime} · `;
   const lifecycle = candidate.closeOnReport ? "close" : "retain";
   const effort = candidateEffortLabel(profile, candidate, parentEffort);
-  const suffix = ` · ${effort} · ${candidate.context} · ${candidate.writeIntent} · ${lifecycle}`;
-  const modelWidth = Math.max(4, maximum - visibleWidth(prefix) - visibleWidth(suffix));
+  const fast = candidateFastModeApplied(candidate, parentModel) ? " ⚡" : "";
+  const modelSuffix = `:${effort}${fast}`;
+  const suffix = ` · ${candidate.context} · ${candidate.writeIntent} · ${lifecycle}`;
+  const modelWidth = Math.max(
+    4,
+    maximum - visibleWidth(prefix) - visibleWidth(modelSuffix) - visibleWidth(suffix),
+  );
   return truncateToWidth(
-    `${prefix}${boundedMiddle(candidate.model, modelWidth)}${suffix}`,
+    `${prefix}${boundedMiddle(candidate.model, modelWidth)}${modelSuffix}${suffix}`,
     maximum,
   );
 };
@@ -197,6 +205,7 @@ const sameCandidates = (
       candidate.effort === other.effort &&
       candidate.context === other.context &&
       candidate.writeIntent === other.writeIntent &&
+      candidate.fastMode === other.fastMode &&
       candidate.closeOnReport === other.closeOnReport
     );
   });
@@ -236,7 +245,7 @@ const profilesPage = (
       "accent",
       theme.bold(`Profiles${windowLabel(start, visibleProfiles.length, PROFILE_IDS.length)}`),
     ),
-    "Choose a profile to inspect its effective route or edit its declaration. ★ marks the default.",
+    "Choose a profile to inspect its effective route or edit its declaration. ★ marks the launch default.",
     scopeLine(state, theme),
     "",
     ...notices,
@@ -244,7 +253,7 @@ const profilesPage = (
       const index = start + offset;
       const marker = index === state.profileIndex ? ">" : " ";
       const defaultMarker = entry === state.inspection.config.defaultProfile ? "★" : " ";
-      return `${marker}${defaultMarker} ${entry.padEnd(11)} ${effectiveProfileSummary(state.inspection, entry)}`;
+      return `${marker}${defaultMarker} ${entry.padEnd(11)} ${effectiveProfileSummary(state.inspection, entry, state.parentEffort, state.parentModel)}`;
     }),
     "",
     theme.fg("muted", "Actions"),
@@ -285,14 +294,14 @@ const routePage = (
         ]
       : visible.map((candidate, offset) => {
           const index = start + offset;
-          return `${index === state.candidateIndex ? ">" : " "} ${candidateSummary(profile, candidate, index, Math.max(1, width - 2), state.parentEffort)}`;
+          return `${index === state.candidateIndex ? ">" : " "} ${candidateSummary(profile, candidate, index, Math.max(1, width - 2), state.parentEffort, state.parentModel)}`;
         });
   const actions = routeActions(state);
   return [
     theme.fg("accent", theme.bold(`${profile} route`)),
     PROFILE_DEFINITIONS[profile].description,
     scopeLine(state, theme),
-    `Effective  ${effectiveProfileSummary(state.inspection, profile)}`,
+    `Effective  ${effectiveProfileSummary(state.inspection, profile, state.parentEffort, state.parentModel)}`,
     `Editing    ${state.scope} · ${draftKindLabel(state.draft, state.scope)}`,
     ...(hasPreview
       ? [
@@ -331,7 +340,9 @@ const candidatePage = (
   const profile = selectedProfile(state);
   const candidate = state.draft.candidates[state.candidateIndex];
   const notices = commonNotices(state, theme, width, cancelKey);
-  const fields = candidate ? candidateFieldRows(candidate, profile, state.parentEffort) : [];
+  const fields = candidate
+    ? candidateFieldRows(candidate, profile, state.parentEffort, state.parentModel)
+    : [];
   const visibleCount = Math.max(1, availableHeight - 9 - notices.length);
   const start = windowStart(fields.length, state.fieldIndex, visibleCount);
   const rows = candidate
@@ -426,7 +437,7 @@ const helpText = (
       [
         `${navigation} · ${pages} · ${enter}`,
         actionLabels.join(" · ") || "No changes",
-        `${escape} · Tab/⇧Tab`,
+        `${escape} · Tab/⇧Tab${state.reloadRequired ? " · r Reload" : ""}`,
       ],
     ]);
   }
@@ -450,7 +461,9 @@ const compactWorkspacePage = (
   const profile = selectedProfile(state);
   const candidate = state.draft.candidates[state.candidateIndex];
   const field = candidate
-    ? candidateFieldRows(candidate, profile, state.parentEffort)[state.fieldIndex]
+    ? candidateFieldRows(candidate, profile, state.parentEffort, state.parentModel)[
+        state.fieldIndex
+      ]
     : undefined;
   const heading =
     state.pane === "profiles"
@@ -460,7 +473,7 @@ const compactWorkspacePage = (
         : `${profile} · candidate ${state.candidateIndex + 1}`;
   const selected =
     state.pane === "profiles"
-      ? `${profile === state.inspection.config.defaultProfile ? "★ " : ""}${profile} · ${effectiveProfileSummary(state.inspection, profile)}`
+      ? `${profile === state.inspection.config.defaultProfile ? "★ " : ""}${profile} · ${effectiveProfileSummary(state.inspection, profile, state.parentEffort, state.parentModel)}`
       : state.pane === "candidates"
         ? candidate
           ? candidateSummary(
@@ -469,6 +482,7 @@ const compactWorkspacePage = (
               state.candidateIndex,
               Math.max(1, width),
               state.parentEffort,
+              state.parentModel,
             )
           : state.draft.kind === "invalid"
             ? "Invalid declaration · route fails closed"
@@ -505,11 +519,11 @@ const compactWorkspacePage = (
             ? "success"
             : "muted";
     const shadow = projectOverrideActive(state)
-      ? " · Project override active; global edit is shadowed"
+      ? " · Project override active; press p to edit/reset"
       : "";
     status.push(theme.fg(color, `${state.message.text}${shadow}`));
   } else if (projectOverrideActive(state)) {
-    status.push(theme.fg("warning", "Project override active · global edit is shadowed"));
+    status.push(theme.fg("warning", "Project override active · press p to edit/reset"));
   }
   if (height <= 1) return [theme.fg("accent", selected)];
   if (height === 2) return [theme.fg("accent", selected), theme.fg("dim", actions)];
@@ -548,7 +562,7 @@ export const renderProfileWorkspace = (
   const status = state.busy
     ? theme.fg("warning", state.cancellableBusy ? "◌ loading catalog" : "◌ saving/reloading")
     : state.reloadRequired
-      ? theme.fg("warning", "reload required")
+      ? theme.fg("warning", "● saved changes pending reload · r Reload")
       : theme.fg("muted", "ready");
   const titleRaw = ` ${breadcrumb(state)} · ${status} `;
   const title = truncateToWidth(titleRaw, inner, "");

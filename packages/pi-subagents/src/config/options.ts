@@ -81,7 +81,7 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     globalConfigExists: input.globalConfigExists,
     projectConfigExists: input.projectTrusted && input.projectConfigExists,
     defaultProfile:
-      project?.file.defaultProfile ?? input.global.file.defaultProfile ?? ("delegate" as const),
+      project?.file.defaultProfile ?? input.global.file.defaultProfile ?? ("generalist" as const),
     profiles,
     profileSources,
     diagnostics: [...input.global.diagnostics, ...(project?.diagnostics ?? [])],

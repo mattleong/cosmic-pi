@@ -157,7 +157,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     promptGuidelines: [
       "Use subagent_start for delegated work that can proceed independently; make every task self-contained with relevant paths, constraints, evidence, and its expected deliverable. Start is always background and nonblocking; use subagent_await separately.",
       "Use subagent_start only for profile routing. Each agent item accepts task, optional profile, and optional name; the version 4 route exclusively supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport.",
-      "Choose a profile by task: scout for local reconnaissance, researcher for sourced external research, planner for plans, worker for implementation, reviewer for independent review, oracle for inherited-decision analysis, and delegate for general work.",
+      "Choose a profile by task: scout for local reconnaissance, researcher for sourced external research, planner for plans, worker for implementation, reviewer for independent review, oracle for inherited-decision analysis, and generalist for general work.",
       "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
       "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",
       "Use subagent_models only to inspect configured profile routing; never substitute a model or bypass a profile whose route has no eligible candidate.",

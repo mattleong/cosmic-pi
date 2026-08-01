@@ -51,6 +51,7 @@ export interface ProfileWorkspaceOptions {
   readonly inspection: SubagentConfigInspection;
   readonly projectTrusted: boolean;
   readonly piModel?: string | undefined;
+  readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
   readonly getHeight: () => number;
   readonly requestRender: () => void;
@@ -88,6 +89,8 @@ type WorkspaceMessage = {
 const paneOrder: ReadonlyArray<ProfileWorkspacePane> = ["profiles", "candidates", "fields"];
 const confirmationKey = (action: PendingAction): string =>
   action === "remove" ? "x" : action === "disable" ? "d" : "i";
+const saveScopeLabel = (scope: SubagentConfigScope): string =>
+  scope === "global" ? "globally" : "to project";
 
 const sameCandidate = (left: ProfileCandidate, right: ProfileCandidate): boolean =>
   left.host === right.host &&
@@ -260,7 +263,7 @@ export class ProfileWorkspaceComponent implements Component {
     this.candidateIndex = preferredCandidateIndex;
     this.busy = true;
     this.pendingAction = undefined;
-    this.setMessage("info", `Saving ${profile}: ${description}`);
+    this.setMessage("info", `Saving ${saveScopeLabel(scope)} · ${profile} · ${description}`);
     this.renderSoon();
     void this.options
       .saveDraft(scope, profile, next)
@@ -276,7 +279,10 @@ export class ProfileWorkspaceComponent implements Component {
           this.optimisticDraft = undefined;
           this.optimisticProfile = undefined;
           this.optimisticScope = undefined;
-          this.setMessage("success", `Saved ${profile}: ${description}`);
+          this.setMessage(
+            "success",
+            `Saved ${saveScopeLabel(scope)} · ${profile} · ${description}`,
+          );
         }
         this.renderSoon();
       })
@@ -316,9 +322,12 @@ export class ProfileWorkspaceComponent implements Component {
     const candidate = this.draft().candidates[this.candidateIndex];
     const field = PROFILE_WORKSPACE_FIELDS[this.fieldIndex];
     if (!candidate || !field || this.busy) return;
-    const row = candidateFieldRows(candidate, this.profile(), this.options.parentEffort)[
-      this.fieldIndex
-    ];
+    const row = candidateFieldRows(
+      candidate,
+      this.profile(),
+      this.options.parentEffort,
+      this.options.parentModel,
+    )[this.fieldIndex];
     if (row?.fixed) {
       this.setMessage("info", `${row.label} is fixed by the current host/runtime policy.`);
       this.renderSoon();
@@ -359,6 +368,7 @@ export class ProfileWorkspaceComponent implements Component {
       field,
       fieldIndex: this.fieldIndex,
       piModel: this.options.piModel,
+      parentModel: this.options.parentModel,
       parentEffort: this.options.parentEffort,
       supportedEfforts,
       fastModeAvailable,
@@ -541,6 +551,8 @@ export class ProfileWorkspaceComponent implements Component {
       theme: this.options.theme,
       inspection: this.inspection,
       current: this.profile(),
+      parentEffort: this.options.parentEffort,
+      parentModel: this.options.parentModel,
       ...(initialQuery ? { initialQuery } : {}),
       getHeight: this.options.getHeight,
       requestRender: this.options.requestRender,
@@ -775,6 +787,7 @@ export class ProfileWorkspaceComponent implements Component {
         scope: this.scope,
         projectTrusted: this.options.projectTrusted,
         parentEffort: this.options.parentEffort,
+        parentModel: this.options.parentModel,
         pane: this.pane,
         profileIndex: this.profileIndex,
         candidateIndex: this.candidateIndex,

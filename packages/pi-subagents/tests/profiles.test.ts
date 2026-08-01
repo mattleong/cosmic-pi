@@ -70,7 +70,48 @@ describe("subagent v4 profile configuration and resolution", () => {
       });
       expect(config.profileSources[id]).toBe("builtin");
     }
-    expect(config.defaultProfile).toBe("delegate");
+    expect(config.defaultProfile).toBe("generalist");
+  });
+
+  it("normalizes the legacy delegate profile alias to generalist", () => {
+    const legacyCandidate = candidate({ model: "openai/gpt-parent" });
+    const decoded = decodeSubagentConfig(
+      document({
+        defaultProfile: "delegate",
+        profiles: { delegate: legacyCandidate },
+      }),
+      "global",
+    );
+    expect(decoded.file.defaultProfile).toBe("generalist");
+    expect(decoded.file.profiles?.generalist).toEqual({
+      ...legacyCandidate,
+      closeOnReport: true,
+    });
+    expect(decoded.diagnostics).not.toContain("global.profiles.<unknown>");
+
+    const config = resolved(
+      document({
+        defaultProfile: "delegate",
+        profiles: { delegate: legacyCandidate },
+      }),
+    );
+    expect(config.defaultProfile).toBe("generalist");
+    expect(resolveProfilePlan("delegate", config, environment)).toMatchObject({
+      kind: "resolved",
+      profile: "generalist",
+    });
+  });
+
+  it("prefers the canonical generalist route when both alias keys exist", () => {
+    const decoded = decodeSubagentConfig(
+      document({
+        profiles: {
+          delegate: candidate({ model: "openai/legacy" }),
+          generalist: candidate({ model: "openai/canonical" }),
+        },
+      }),
+    );
+    expect(decoded.file.profiles?.generalist).toMatchObject({ model: "openai/canonical" });
   });
 
   it("decodes disabled, one candidate, and ordered candidates with closeOnReport defaulting true", () => {
@@ -104,30 +145,30 @@ describe("subagent v4 profile configuration and resolution", () => {
     const supportedPi = decodeSubagentConfig(
       document({
         profiles: {
-          delegate: candidate({ model: "openai-codex/gpt-5.6-sol", fastMode: true }),
+          generalist: candidate({ model: "openai-codex/gpt-5.6-sol", fastMode: true }),
         },
       }),
     );
-    expect(supportedPi.file.profiles?.delegate).toMatchObject({ fastMode: true });
+    expect(supportedPi.file.profiles?.generalist).toMatchObject({ fastMode: true });
 
     const futureCodex = decodeSubagentConfig(
       document({
         profiles: {
-          delegate: candidate({ runtime: "codex", model: "future-codex", fastMode: true }),
+          generalist: candidate({ runtime: "codex", model: "future-codex", fastMode: true }),
         },
       }),
     );
-    expect(futureCodex.file.profiles?.delegate).toMatchObject({ fastMode: true });
+    expect(futureCodex.file.profiles?.generalist).toMatchObject({ fastMode: true });
 
     const unsupportedClaude = decodeSubagentConfig(
       document({
         profiles: {
-          delegate: candidate({ runtime: "claude", model: "sonnet", fastMode: true }),
+          generalist: candidate({ runtime: "claude", model: "sonnet", fastMode: true }),
         },
       }),
     );
-    expect(unsupportedClaude.file.profiles?.delegate).toBeUndefined();
-    expect(unsupportedClaude.invalidProfileRoutes).toEqual(["delegate"]);
+    expect(unsupportedClaude.file.profiles?.generalist).toBeUndefined();
+    expect(unsupportedClaude.invalidProfileRoutes).toEqual(["generalist"]);
   });
 
   it("accepts every host/runtime name syntactically and bounded native selectors", () => {

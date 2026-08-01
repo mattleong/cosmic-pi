@@ -32,6 +32,7 @@ export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly field: Exclude<ProfileWorkspaceField, "model">;
   readonly fieldIndex: number;
   readonly piModel?: string | undefined;
+  readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
   readonly fastModeAvailable?: boolean | undefined;
@@ -49,9 +50,12 @@ const currentFieldValue = (
 export const makeCandidateFieldSelector = (
   options: CandidateFieldSelectorOptions,
 ): SearchableSelectPage<string> => {
-  const row = candidateFieldRows(options.candidate, options.profile, options.parentEffort)[
-    options.fieldIndex
-  ];
+  const row = candidateFieldRows(
+    options.candidate,
+    options.profile,
+    options.parentEffort,
+    options.parentModel,
+  )[options.fieldIndex];
   const label = row?.label ?? options.field;
   const current = currentFieldValue(options.candidate, options.field);
   const changeOptions = {
@@ -98,6 +102,8 @@ export const makeCandidateFieldSelector = (
 export interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
   readonly inspection: SubagentConfigInspection;
   readonly current: ProfileId;
+  readonly parentEffort: SubagentEffort;
+  readonly parentModel?: string | undefined;
   readonly initialQuery?: string | undefined;
   readonly select: (profile: ProfileId) => void;
   readonly cancel: () => void;
@@ -115,10 +121,15 @@ export const makeProfileSearchSelector = (
       value: profile,
       item: {
         value: profile,
-        label: `${profile}${profile === options.inspection.config.defaultProfile ? " ★ default" : ""}`,
-        description: effectiveProfileSummary(options.inspection, profile),
+        label: `${profile}${profile === options.inspection.config.defaultProfile ? " ★ launch default" : ""}`,
+        description: effectiveProfileSummary(
+          options.inspection,
+          profile,
+          options.parentEffort,
+          options.parentModel,
+        ),
       },
-      searchText: `${profile} ${PROFILE_DEFINITIONS[profile].description} ${effectiveProfileSummary(options.inspection, profile)}`,
+      searchText: `${profile} ${PROFILE_DEFINITIONS[profile].description} ${effectiveProfileSummary(options.inspection, profile, options.parentEffort, options.parentModel)}`,
       payload: profile,
     })),
     current: options.current,

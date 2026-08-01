@@ -520,7 +520,7 @@ describe("subagent tool", () => {
       | { readonly render: (width: number) => ReadonlyArray<string> }
       | undefined;
     const modelText = modelCard?.render(160).join("\n") ?? "";
-    expect(modelText).toContain("Profile routes · static eligibility only · default delegate");
+    expect(modelText).toContain("Profile routes · static eligibility only · default generalist");
     expect(modelText).toContain("reviewer · built-in");
     expect(modelText).toContain("close after report");
     expect(modelText).toContain("Launch checks pending");
@@ -1152,7 +1152,7 @@ describe("subagent tool", () => {
     expect(requests[0]?.selection?.source).toBe("profile-parent-candidate");
   });
 
-  it("routes the short form through the neutral delegate profile and records provenance", async () => {
+  it("routes the short form through the neutral generalist profile and records provenance", async () => {
     const requests: StartSubagentRequest[] = [];
     const tool = captureSubagentTools(startCapturingService(requests), ["read"]).get(
       "subagent_start",
@@ -1169,16 +1169,41 @@ describe("subagent tool", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({
       backend: "pi",
-      profile: "delegate",
+      profile: "generalist",
       context: "fresh",
       model: "openai-codex/gpt-5.6-sol",
       selection: {
         source: "profile-parent-candidate",
-        reason: "Profile delegate selected local/pi candidate 1.",
+        reason: "Profile generalist selected local/pi candidate 1.",
         skippedCandidates: [],
       },
     });
-    expect(requests[0]?.profileGuidance).toContain("general delegate");
+    expect(requests[0]?.profileGuidance).toContain("Act as a generalist");
+  });
+
+  it("accepts delegate as a compatibility alias but records generalist", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const tools = captureSubagentTools(startCapturingService(requests), ["read"]);
+    const tool = tools.get("subagent_start");
+
+    const result = await tool?.execute(
+      "call",
+      { agents: [{ task: "Inspect auth", profile: "delegate" }] },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.profile).toBe("generalist");
+    expect(result?.details).toMatchObject({
+      startEntries: [expect.objectContaining({ profile: "generalist" })],
+    });
+
+    const models = await tools
+      .get("subagent_models")
+      ?.execute("call", { profile: "delegate" }, undefined, undefined, context);
+    expect(models?.details).toMatchObject({ profileIds: ["generalist"] });
   });
 
   it("routes every built-in profile through the tool boundary with its guidance and context", async () => {
@@ -1206,7 +1231,7 @@ describe("subagent tool", () => {
       worker: "high",
       reviewer: "high",
       oracle: "high",
-      delegate: "high",
+      generalist: "high",
     } as const;
     const expectedIntent = {
       scout: "read-only",
@@ -1215,13 +1240,13 @@ describe("subagent tool", () => {
       worker: "writer",
       reviewer: "read-only",
       oracle: "read-only",
-      delegate: "read-only",
+      generalist: "read-only",
     } as const;
     for (const request of requests) {
       expect(request.backend).toBe("pi");
       expect(request.context).toBe(request.profile === "oracle" ? "fork" : "fresh");
-      expect(request.effort).toBe(expectedEffort[request.profile ?? "delegate"]);
-      expect(request.writeIntent).toBe(expectedIntent[request.profile ?? "delegate"]);
+      expect(request.effort).toBe(expectedEffort[request.profile ?? "generalist"]);
+      expect(request.writeIntent).toBe(expectedIntent[request.profile ?? "generalist"]);
       // Built-in profile effort defaults are soft preferences, never hard requirements.
       expect(request.effortWasExplicit).toBe(false);
       expect(request.profileGuidance?.length).toBeGreaterThan(20);
@@ -1580,7 +1605,7 @@ describe("subagent tool", () => {
         .get("subagent_start")
         ?.execute(
           "automatic",
-          { agents: [{ profile: "delegate", task: "Probe" }] },
+          { agents: [{ profile: "generalist", task: "Probe" }] },
           undefined,
           undefined,
           context,
@@ -2738,7 +2763,7 @@ describe("subagent tool", () => {
     const models = await tools
       .get("subagent_models")
       ?.execute("call", {}, undefined, undefined, mutable);
-    expect(models?.content[0]?.text).toContain("Default profile: delegate");
+    expect(models?.content[0]?.text).toContain("Default profile: generalist");
     await tools.get("subagent_start")?.execute(
       "call",
       {
@@ -2798,7 +2823,7 @@ describe("subagent tool", () => {
   it("renders explicitly repeated parent candidates in declared order", async () => {
     const profiles = profileServiceFor({
       profiles: {
-        delegate: [
+        generalist: [
           {
             host: "local",
             runtime: "pi",
@@ -2820,7 +2845,7 @@ describe("subagent tool", () => {
     });
     const models = await captureSubagentTools(startCapturingService([]), ["read"], profiles)
       .get("subagent_models")
-      ?.execute("call", { profile: "delegate" }, undefined, undefined, context);
+      ?.execute("call", { profile: "generalist" }, undefined, undefined, context);
     const text = models?.content[0]?.text ?? "";
     expect(text).toContain(
       "1. local/pi/parent:default:fresh:read-only:fastMode=false:closeOnReport=true · eligible",
@@ -2833,8 +2858,8 @@ describe("subagent tool", () => {
         /Candidate adapter is statically eligible before native authentication\/integration\/harness readiness\./g,
       ),
     ).toHaveLength(2);
-    expect(text).not.toContain("Profile delegate selected");
-    expect(text).not.toContain("Profile delegate selected");
+    expect(text).not.toContain("Profile generalist selected");
+    expect(text).not.toContain("Profile generalist selected");
   });
 
   it("renders parent_model_missing skips when no parent model is active", async () => {
@@ -2844,7 +2869,7 @@ describe("subagent tool", () => {
     } as unknown as ExtensionContext;
     const models = await captureSubagentTools(startCapturingService([]))
       .get("subagent_models")
-      ?.execute("call", { profile: "delegate" }, undefined, undefined, noParent);
+      ?.execute("call", { profile: "generalist" }, undefined, undefined, noParent);
     const text = models?.content[0]?.text ?? "";
     expect(text).toContain(
       "local/pi/parent:default:fresh:read-only:fastMode=false:closeOnReport=true · skipped",

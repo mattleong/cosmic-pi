@@ -17,7 +17,7 @@ import {
   sanitizeOutputText,
 } from "../run/state.ts";
 import {
-  isProfileId,
+  normalizeProfileId,
   type ProfileRouteSource,
   type SkippedProfileCandidate,
   type SubagentSelectionProvenance,
@@ -179,13 +179,13 @@ const decodeCard = (value: unknown): SubagentRunCard | undefined => {
       )
     : undefined;
   const usage = decodeUsage(record.usage);
+  const profile =
+    typeof record.profile === "string" ? normalizeProfileId(record.profile) : undefined;
   return {
     id: clean(record.id.trim(), MAX_PROTOCOL_ID_CHARS),
     name: sanitizeName(record.name) || "subagent",
     state: record.state as SubagentRunState,
-    ...(typeof record.profile === "string" && isProfileId(record.profile)
-      ? { profile: record.profile }
-      : {}),
+    ...(profile ? { profile } : {}),
     ...(record.host === "local" || record.host === "herdr" ? { host: record.host } : {}),
     ...(record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex"
       ? { runtime: record.runtime }
@@ -260,13 +260,13 @@ const decodeStartEntries = (value: unknown): ReadonlyArray<SubagentStartEntry> |
       (record.status !== "pending" && record.status !== "started" && record.status !== "failed")
     )
       return [];
+    const profile =
+      typeof record.profile === "string" ? normalizeProfileId(record.profile) : undefined;
     return [
       {
         index: Math.max(0, Math.floor(index)),
         name: clean(record.name, MAX_NAME_CHARS),
-        ...(typeof record.profile === "string" && isProfileId(record.profile)
-          ? { profile: record.profile }
-          : {}),
+        ...(profile ? { profile } : {}),
         status: record.status,
         ...(typeof record.runId === "string"
           ? { runId: clean(record.runId, MAX_PROTOCOL_ID_CHARS) }
@@ -281,10 +281,11 @@ const decodeProfiles = (value: unknown): ReadonlyArray<SubagentProfileRouteCard>
   if (!Array.isArray(value)) return undefined;
   const profiles = value.slice(0, 16).flatMap((entry) => {
     const record = recordOf(entry);
+    const profile =
+      record && typeof record.id === "string" ? normalizeProfileId(record.id) : undefined;
     if (
       !record ||
-      typeof record.id !== "string" ||
-      !isProfileId(record.id) ||
+      !profile ||
       typeof record.description !== "string" ||
       typeof record.source !== "string" ||
       !PROFILE_SOURCES.has(record.source) ||
@@ -319,7 +320,7 @@ const decodeProfiles = (value: unknown): ReadonlyArray<SubagentProfileRouteCard>
     });
     return [
       {
-        id: record.id,
+        id: profile,
         description: clean(record.description, 512),
         source: record.source as ProfileRouteSource,
         isDefault: record.isDefault,
@@ -397,7 +398,7 @@ export function decodeCompactToolDetails(value: unknown): CompactSubagentToolDet
     ? record.profileIds
         .slice(0, 16)
         .filter((id): id is string => typeof id === "string")
-        .map((id) => clean(id, 64))
+        .map((id) => normalizeProfileId(id) ?? clean(id, 64))
     : undefined;
   const profiles = decodeProfiles(record.profiles);
   const actionFailures = Array.isArray(record.actionFailures)
@@ -423,7 +424,10 @@ export function decodeCompactToolDetails(value: unknown): CompactSubagentToolDet
     ...(profiles ? { profiles } : {}),
     ...(profileIds && profileIds.length > 0 ? { profileIds } : {}),
     ...(typeof record.defaultProfile === "string"
-      ? { defaultProfile: clean(record.defaultProfile, 64) }
+      ? {
+          defaultProfile:
+            normalizeProfileId(record.defaultProfile) ?? clean(record.defaultProfile, 64),
+        }
       : {}),
     ...(actionFailures && actionFailures.length > 0 ? { actionFailures } : {}),
     ...(record.timedOut === true ? { timedOut: true } : {}),

@@ -55,13 +55,13 @@ export const PROFILE_DEFINITIONS: Readonly<Record<ProfileId, ProfileDefinition>>
     guidance:
       "Act as an oracle. Reconstruct the inherited decisions, constraints, and open questions; detect drift, contradictions, and hidden assumptions; and recommend the narrowest consistent next move. Preserve established decisions unless strong evidence justifies a clearly explained pivot.",
   },
-  delegate: {
-    id: "delegate",
-    description: "General delegated work that stays close to the assigned task.",
+  generalist: {
+    id: "generalist",
+    description: "General-purpose work without specialized role framing.",
     defaultContext: "fresh",
     defaultWriteIntent: "read-only",
     guidance:
-      "Act as a general delegate. Execute the assigned task directly and efficiently, stay within its scope and your declared write intent, validate material claims, and return a concise self-contained handoff.",
+      "Act as a generalist. Execute the assigned task directly and efficiently, stay within its scope and your declared write intent, validate material claims, and return a concise self-contained handoff.",
   },
 };
 
@@ -90,7 +90,7 @@ export const BUILTIN_PROFILE_ROUTES: Readonly<Record<ProfileId, ProfileRoute>> =
   worker: builtinRoute("worker"),
   reviewer: builtinRoute("reviewer"),
   oracle: builtinRoute("oracle"),
-  delegate: builtinRoute("delegate"),
+  generalist: builtinRoute("generalist"),
 };
 
 export const profileDefinition = (id: ProfileId): ProfileDefinition => PROFILE_DEFINITIONS[id];

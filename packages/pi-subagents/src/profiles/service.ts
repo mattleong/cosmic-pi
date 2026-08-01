@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
 import { SubagentConfigStore } from "../config/store.ts";
 import { profileDefinition } from "./definitions.ts";
-import { isProfileId, type ProfileDefinition } from "./model.ts";
+import { normalizeProfileId, type ProfileDefinition } from "./model.ts";
 import {
   resolveProfilePlan,
   type ProfileResolution,
@@ -39,7 +39,10 @@ export const makeSubagentProfileService = (
   config: ResolvedSubagentConfig,
 ): SubagentProfileServiceShape => ({
   config,
-  definition: (profile) => (isProfileId(profile) ? profileDefinition(profile) : undefined),
+  definition: (profile) => {
+    const normalized = normalizeProfileId(profile);
+    return normalized ? profileDefinition(normalized) : undefined;
+  },
   resolve: (profile, environment) => resolveProfilePlan(profile, config, environment),
 });
 

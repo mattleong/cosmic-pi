@@ -244,7 +244,7 @@ describe("/subagents profile workspace", () => {
 
   it("writes a complete valid route immediately and refreshes optimistic-concurrency state", async () => {
     const initial = inspection();
-    const saved = inspection({ version: 4, profiles: { delegate: "disabled" } });
+    const saved = inspection({ version: 4, profiles: { generalist: "disabled" } });
     const managerActions = actions(initial);
     (managerActions.inspectProfiles as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(initial)
@@ -257,7 +257,7 @@ describe("/subagents profile workspace", () => {
         component.handleInput?.("d");
         await vi.waitFor(() => expect(managerActions.patchProfile).toHaveBeenCalledTimes(1));
         await vi.waitFor(() =>
-          expect(component.render(120).join("\n")).toContain("reload required"),
+          expect(component.render(120).join("\n")).toContain("saved changes pending reload"),
         );
         component.handleInput?.("\u001b");
         component.handleInput?.("\u001b");
@@ -267,7 +267,7 @@ describe("/subagents profile workspace", () => {
 
     expect(managerActions.patchProfile).toHaveBeenCalledWith({
       scope: "global",
-      profile: "delegate",
+      profile: "generalist",
       route: "disabled",
       expectedExists: true,
       expectedDocument: { version: 4 },
@@ -327,7 +327,7 @@ describe("/subagents profile workspace", () => {
     const bridge = makeSubagentProjectionBridge();
     bridge.publish({ revision: 1, runs: [{ state: "running" } as never] });
     const initial = inspection();
-    const saved = inspection({ version: 4 }, { version: 4, profiles: { delegate: "disabled" } });
+    const saved = inspection({ version: 4 }, { version: 4, profiles: { generalist: "disabled" } });
     const managerActions = actions(initial);
     (managerActions.inspectProfiles as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(initial)
@@ -341,7 +341,7 @@ describe("/subagents profile workspace", () => {
           component.handleInput?.("d");
           component.handleInput?.("d");
           await vi.waitFor(() =>
-            expect(component.render(120).join("\n")).toContain("reload required"),
+            expect(component.render(120).join("\n")).toContain("saved changes pending reload"),
           );
           component.handleInput?.("r");
           await vi.waitFor(() => expect(confirm).toHaveBeenCalled());

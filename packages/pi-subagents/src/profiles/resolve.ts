@@ -9,7 +9,7 @@ import type {
 } from "../run/model.ts";
 import { profileDefinition } from "./definitions.ts";
 import {
-  isProfileId,
+  normalizeProfileId,
   type ProfileCandidate,
   type ProfileId,
   type SkippedProfileCandidate,
@@ -264,25 +264,26 @@ export function resolveProfilePlan(
   config: ResolvedSubagentConfig,
   environment: ProfileResolutionEnvironment,
 ): ProfileResolution {
-  if (!isProfileId(requestedProfile))
+  const profile = normalizeProfileId(requestedProfile);
+  if (!profile)
     return {
       kind: "failed",
       code: "profile_unknown",
       message: `Unknown subagent profile "${requestedProfile}". Available profiles: ${Object.keys(config.profiles).join(", ")}.`,
       skippedCandidates: [],
     };
-  const definition = profileDefinition(requestedProfile);
-  const route = config.profiles[requestedProfile];
+  const definition = profileDefinition(profile);
+  const route = config.profiles[profile];
   if (route.candidates.length === 0) {
-    const source = config.profileSources[requestedProfile];
+    const source = config.profileSources[profile];
     const message =
       source === "global-invalid" || source === "project-invalid"
-        ? `Profile ${requestedProfile} has an invalid ${source === "project-invalid" ? "project" : "global"} route and fails closed; repair ${source === "project-invalid" ? config.projectConfigPath : config.globalConfigPath}.`
-        : `Profile ${requestedProfile} is disabled and has no eligible candidate.`;
+        ? `Profile ${profile} has an invalid ${source === "project-invalid" ? "project" : "global"} route and fails closed; repair ${source === "project-invalid" ? config.projectConfigPath : config.globalConfigPath}.`
+        : `Profile ${profile} is disabled and has no eligible candidate.`;
     return {
       kind: "failed",
       code: "profile_no_eligible_model",
-      profile: requestedProfile,
+      profile,
       message,
       skippedCandidates: [],
     };
@@ -292,7 +293,7 @@ export function resolveProfilePlan(
   let pendingSkipped: SkippedProfileCandidate[] = [];
   route.candidates.forEach((candidate, candidateIndex) => {
     const result = resolveCandidate(
-      requestedProfile,
+      profile,
       candidate,
       candidateIndex,
       environment,
@@ -310,7 +311,7 @@ export function resolveProfilePlan(
   if (attempts.length > 0)
     return {
       kind: "resolved",
-      profile: requestedProfile,
+      profile,
       attempts,
       skippedCandidates,
       trailingSkippedCandidates: pendingSkipped,
@@ -321,10 +322,10 @@ export function resolveProfilePlan(
   return {
     kind: "failed",
     code: forkUnavailable ? "fork_context_unavailable" : "profile_no_eligible_model",
-    profile: requestedProfile,
+    profile,
     message: forkUnavailable
-      ? `Profile ${requestedProfile} requires forked context, but the parent session has no stable persisted leaf.`
-      : `Profile ${requestedProfile} has no eligible candidate.${skippedCandidates.length > 0 ? ` ${skippedCandidates.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+      ? `Profile ${profile} requires forked context, but the parent session has no stable persisted leaf.`
+      : `Profile ${profile} has no eligible candidate.${skippedCandidates.length > 0 ? ` ${skippedCandidates.map((candidate) => candidate.reason).join(" ")}` : ""}`,
     skippedCandidates,
   };
 }

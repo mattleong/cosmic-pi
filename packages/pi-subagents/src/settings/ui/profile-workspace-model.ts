@@ -88,21 +88,6 @@ export const draftKindLabel = (draft: ProfileRouteDraft, scope: SubagentConfigSc
   }
 };
 
-export const effectiveProfileSummary = (
-  inspection: SubagentConfigInspection,
-  profile: ProfileId,
-): string => {
-  const route = inspection.config.profiles[profile];
-  const source = profileSourceLabel(inspection.config.profileSources[profile]);
-  const first = route.candidates[0];
-  if (!first)
-    return inspection.config.profileSources[profile].endsWith("-invalid")
-      ? `${source} · fail-closed`
-      : `${source} · disabled`;
-  const count = route.candidates.length;
-  return `${source} · ${count} candidate${count === 1 ? "" : "s"} · ${first.host}/${first.runtime}`;
-};
-
 export const effectiveCandidateEffort = (
   profile: ProfileId,
   candidate: ProfileCandidate,
@@ -118,15 +103,43 @@ export const candidateEffortLabel = (
   parentEffort: SubagentEffort,
 ): string => {
   const effective = effectiveCandidateEffort(profile, candidate, parentEffort);
-  return candidate.effort === "default"
-    ? `default → ${effective}${PROFILE_DEFINITIONS[profile].defaultEffort ? "" : " (inherited)"}`
-    : effective;
+  return candidate.effort === "default" ? `${effective} (default)` : effective;
+};
+
+export const candidateFastModeApplied = (
+  candidate: ProfileCandidate,
+  parentModel?: string | undefined,
+): boolean => {
+  if (!candidate.fastMode) return false;
+  const model =
+    candidate.runtime === "pi" && candidate.model === "parent" ? parentModel : candidate.model;
+  return model !== undefined && supportsSubagentFastMode(candidate.runtime, model);
+};
+
+export const effectiveProfileSummary = (
+  inspection: SubagentConfigInspection,
+  profile: ProfileId,
+  parentEffort: SubagentEffort = "high",
+  parentModel?: string | undefined,
+): string => {
+  const route = inspection.config.profiles[profile];
+  const source = profileSourceLabel(inspection.config.profileSources[profile]);
+  const first = route.candidates[0];
+  if (!first)
+    return inspection.config.profileSources[profile].endsWith("-invalid")
+      ? `${source} · fail-closed`
+      : `${source} · disabled`;
+  const count = route.candidates.length;
+  const effort = candidateEffortLabel(profile, first, parentEffort);
+  const fast = candidateFastModeApplied(first, parentModel) ? " ⚡" : "";
+  return `${source} · ${count} candidate${count === 1 ? "" : "s"} · ${first.host}/${first.runtime} · ${first.model}:${effort}${fast}`;
 };
 
 export const candidateFieldRows = (
   candidate: ProfileCandidate,
   profile?: ProfileId,
   parentEffort: SubagentEffort = "high",
+  parentModel?: string | undefined,
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
   const localPi = candidate.host === "local" && candidate.runtime === "pi";
   const retainedAllowed = candidate.host === "herdr" && candidate.writeIntent === "read-only";
@@ -155,7 +168,11 @@ export const candidateFieldRows = (
     {
       field: "fastMode",
       label: "OpenAI fast mode",
-      value: candidate.fastMode ? "on · priority" : "off",
+      value: candidateFastModeApplied(candidate, parentModel)
+        ? "on · priority"
+        : candidate.fastMode
+          ? "unavailable for model"
+          : "off",
       fixed: candidate.runtime === "claude",
     },
     {
@@ -189,12 +206,10 @@ export const candidateFieldChoices = (
     const defaultChoice = effectiveDefault
       ? {
           value: "default",
-          label: definition?.defaultEffort
-            ? `Profile default → ${effectiveDefault}`
-            : `Inherited → ${effectiveDefault}`,
+          label: `${effectiveDefault} (default)`,
           description: definition?.defaultEffort
-            ? `Use the ${options.profile} profile default (${effectiveDefault})`
-            : `Inherit the current parent effort when available; otherwise use high`,
+            ? `Use the ${options.profile} profile default: ${effectiveDefault}`
+            : `Use the current parent effort (${effectiveDefault}) when available; otherwise high`,
         }
       : {
           value: "default",

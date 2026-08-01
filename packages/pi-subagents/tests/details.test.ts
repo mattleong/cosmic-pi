@@ -161,5 +161,13 @@ describe("persisted subagent card details", () => {
       }),
     ).toBeUndefined();
     expect(decodeStartAwaitCardDetails({ action: "await", runs: "not-an-array" })).toBeUndefined();
+    expect(
+      decodeCompactToolDetails({
+        version: 1,
+        action: "models",
+        profileIds: ["delegate"],
+        defaultProfile: "delegate",
+      }),
+    ).toMatchObject({ profileIds: ["generalist"], defaultProfile: "generalist" });
   });
 });

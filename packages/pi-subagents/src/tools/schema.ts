@@ -1,6 +1,6 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
-import { PROFILE_IDS } from "../profiles/model.ts";
+import { PROFILE_INPUT_IDS } from "../profiles/model.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS } from "../run/limits.ts";
 import { MAX_NAME_CHARS, MAX_TASK_CHARS } from "../run/state.ts";
 
@@ -30,9 +30,9 @@ const StartSpecFields = {
     }),
   ),
   profile: Type.Optional(
-    StringEnum(PROFILE_IDS, {
+    StringEnum(PROFILE_INPUT_IDS, {
       description:
-        "Behavior and model-routing profile. Omit to use configured defaultProfile. The selected profile always determines the model route.",
+        "Behavior and model-routing profile. Omit to use configured defaultProfile. `delegate` is a temporary compatibility alias for `generalist`. The selected profile always determines the model route.",
     }),
   ),
 } as const;
@@ -55,8 +55,9 @@ const MessageParameters = Type.String({
 export const ModelsParameters = Type.Object(
   {
     profile: Type.Optional(
-      StringEnum(PROFILE_IDS, {
-        description: "Optional profile filter; omit to discover every built-in profile route.",
+      StringEnum(PROFILE_INPUT_IDS, {
+        description:
+          "Optional profile filter; omit to discover every built-in profile route. `delegate` is a temporary compatibility alias for `generalist`.",
       }),
     ),
   },

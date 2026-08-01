@@ -13,13 +13,21 @@ export const PROFILE_IDS = [
   "worker",
   "reviewer",
   "oracle",
-  "delegate",
+  "generalist",
 ] as const;
 
+export const LEGACY_PROFILE_ID = "delegate" as const;
+export const PROFILE_INPUT_IDS = [...PROFILE_IDS, LEGACY_PROFILE_ID] as const;
+
 export type ProfileId = (typeof PROFILE_IDS)[number];
+export type ProfileInputId = (typeof PROFILE_INPUT_IDS)[number];
 
 export const isProfileId = (value: string): value is ProfileId =>
   (PROFILE_IDS as ReadonlyArray<string>).includes(value);
+
+/** Normalizes the temporary `delegate` compatibility alias to the canonical profile ID. */
+export const normalizeProfileId = (value: string): ProfileId | undefined =>
+  value === LEGACY_PROFILE_ID ? "generalist" : isProfileId(value) ? value : undefined;
 
 export const PROFILE_CANDIDATE_EFFORTS = [
   "default",

@@ -9,6 +9,7 @@ import { decodeSubagentConfig } from "../src/config/schema.ts";
 import type { SubagentConfigInspection } from "../src/config/store.ts";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
 import {
+  candidateFastModeApplied,
   candidateFieldChoices,
   candidateFieldRows,
   selectCandidateField,
@@ -116,6 +117,7 @@ const makeComponent = (
     inspection: value,
     projectTrusted: value.config.projectTrusted,
     piModel: "openai/parent",
+    parentModel: "openai-codex/gpt-5.6-sol",
     parentEffort: "xhigh",
     getHeight: () => 24,
     requestRender,
@@ -144,7 +146,7 @@ describe("profile settings workspace", () => {
       expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
       const rendered = lines.join("\n");
       expect(rendered).toContain(width > 12 ? "/subagents" : "/subagent");
-      expect(rendered).toContain("delegate");
+      expect(rendered).toContain(width > 12 ? "generalist" : "generali");
     }
   });
 
@@ -152,11 +154,11 @@ describe("profile settings workspace", () => {
     const inherited = candidate("parent", { effort: "default" });
     expect(
       candidateFieldRows(inherited, "scout", "xhigh").find((row) => row.field === "effort")?.value,
-    ).toBe("default → low");
+    ).toBe("low (default)");
     expect(
-      candidateFieldRows(inherited, "delegate", "xhigh").find((row) => row.field === "effort")
+      candidateFieldRows(inherited, "generalist", "xhigh").find((row) => row.field === "effort")
         ?.value,
-    ).toBe("default → xhigh (inherited)");
+    ).toBe("xhigh (default)");
     expect(
       candidateFieldChoices(inherited, "effort", {
         profile: "reviewer",
@@ -164,8 +166,8 @@ describe("profile settings workspace", () => {
       })[0],
     ).toMatchObject({
       value: "default",
-      label: "Profile default → high",
-      description: "Use the reviewer profile default (high)",
+      label: "high (default)",
+      description: "Use the reviewer profile default: high",
     });
 
     const value = inspection(
@@ -178,9 +180,36 @@ describe("profile settings workspace", () => {
     );
     const { component } = makeComponent(value);
     component.handleInput(input.enter);
-    expect(component.render(120).join("\n")).toContain("default → low");
+    expect(component.render(120).join("\n")).toContain("parent:low (default)");
     component.handleInput(input.enter);
-    expect(component.render(120).join("\n")).toContain("Effort         default → low");
+    expect(component.render(120).join("\n")).toContain("Effort         low (default)");
+  });
+
+  it("shows fast markers only when priority mode applies to the resolved model", () => {
+    const configured = candidate("parent", { effort: "default", fastMode: true });
+    expect(candidateFastModeApplied(configured, "openai-codex/gpt-5.6-sol")).toBe(true);
+    expect(candidateFastModeApplied(configured, "anthropic/claude-opus-5")).toBe(false);
+    expect(candidateFastModeApplied(configured)).toBe(false);
+    expect(
+      candidateFastModeApplied(
+        { ...configured, runtime: "claude", model: "claude-opus-5" },
+        "openai-codex/gpt-5.6-sol",
+      ),
+    ).toBe(false);
+
+    const value = inspection({
+      version: 4,
+      defaultProfile: "scout",
+      profiles: { scout: configured },
+    });
+    const eligible = makeComponent(value).component.render(140).join("\n");
+    expect(eligible.split("\n").find((line) => line.includes("scout"))).toContain("⚡");
+    const ineligible = makeComponent(value, {
+      parentModel: "anthropic/claude-opus-5",
+    })
+      .component.render(140)
+      .join("\n");
+    expect(ineligible).not.toContain("⚡");
   });
 
   it("uses neutral ready status, candidate terminology, and safe root navigation", () => {
@@ -230,8 +259,9 @@ describe("profile settings workspace", () => {
     component.handleInput("g");
     const rendered = component.render(100).join("\n");
     expect(rendered).toContain("Project override active for reviewer");
-    expect(rendered).toContain("global edits are saved but do not change its effective");
-    expect(rendered).toContain("route until the project override is reset");
+    expect(rendered).toContain("global edits are saved but remain shadowed");
+    expect(rendered).toContain("Press p to");
+    expect(rendered).toContain("edit or reset the project override");
     component.handleInput(input.enter);
     component.handleInput("d");
     expect(component.render(100).join("\n")).toContain("project override remains effective");
@@ -347,7 +377,7 @@ describe("profile settings workspace", () => {
     expect(component.render(120).at(-1)).toContain("P/N Select");
     expect(component.render(120).at(-1)).toContain("Y Route");
     expect(component.render(120).at(-1)).toContain("Q Close");
-    expect(component.render(120).join("\n")).toContain("Y      Open delegate route");
+    expect(component.render(120).join("\n")).toContain("Y      Open generalist route");
     component.handleInput(input.enter);
     component.handleInput(input.enter);
     const candidatePage = component.render(120).join("\n");
@@ -395,7 +425,7 @@ describe("profile settings workspace", () => {
   it("keeps selected profiles and candidate fields visible in short terminals", () => {
     const { component } = makeComponent(inspection(), { getHeight: () => 12 });
     for (let index = 0; index < 6; index += 1) component.handleInput(input.down);
-    expect(component.render(100).join("\n")).toContain("delegate");
+    expect(component.render(100).join("\n")).toContain("generalist");
     component.handleInput(input.enter);
     component.handleInput(input.enter);
     for (let index = 0; index < 7; index += 1) component.handleInput(input.down);
@@ -405,7 +435,7 @@ describe("profile settings workspace", () => {
   it("keeps route-only actions out of the profiles pane and blocks empty-route Tab navigation", () => {
     const value = inspection(
       { version: 4 },
-      { version: 4, defaultProfile: "delegate", profiles: { delegate: "disabled" } },
+      { version: 4, defaultProfile: "generalist", profiles: { generalist: "disabled" } },
     );
     const { component } = makeComponent(value);
     component.handleInput("p");
@@ -414,24 +444,25 @@ describe("profile settings workspace", () => {
     component.handleInput(input.enter);
     component.handleInput(input.tab);
     const rendered = component.render(120).join("\n");
-    expect(rendered).toContain("delegate route");
+    expect(rendered).toContain("generalist route");
     expect(rendered).toContain("Add a candidate before opening candidate details.");
   });
 
   it("searches profiles and opens the selected route page", () => {
-    const { component } = makeComponent(inspection({ version: 4, defaultProfile: "delegate" }));
+    const { component } = makeComponent(inspection({ version: 4, defaultProfile: "generalist" }));
     component.handleInput("/");
     expect(component.render(120).join("\n")).toContain("Search profiles");
+    expect(component.render(120).join("\n")).toContain("generalist ★ launch default");
     for (const character of "review") component.handleInput(character);
     const filtered = component.render(120).join("\n");
     expect(filtered).toContain("reviewer");
-    expect(filtered).not.toContain("delegate ★ default");
+    expect(filtered).not.toContain("generalist ★ launch default");
     component.handleInput(input.enter);
     expect(component.render(120).join("\n")).toContain("reviewer route");
   });
 
   it("opens a searchable selector for an enum field and persists its exact value", () => {
-    const value = inspection({ version: 4, defaultProfile: "delegate" });
+    const value = inspection({ version: 4, defaultProfile: "generalist" });
     const { component, saveDraft } = makeComponent(value);
     component.handleInput(input.enter);
     component.handleInput(input.enter);
@@ -443,13 +474,13 @@ describe("profile settings workspace", () => {
     expect(saveDraft).toHaveBeenCalledTimes(1);
     const [scope, profile, draft] = saveDraft.mock.calls[0]!;
     expect(scope).toBe("global");
-    expect(profile).toBe("delegate");
+    expect(profile).toBe("generalist");
     expect(draft.candidates[0]).toMatchObject({
       host: "herdr",
       runtime: "pi",
       model: "openai/parent",
     });
-    expect(component.render(130).join("\n")).toContain("Saving delegate");
+    expect(component.render(130).join("\n")).toContain("Saving globally · generalist");
   });
 
   it("requires an advertised model choice before persisting a native runtime change", async () => {
@@ -457,7 +488,7 @@ describe("profile settings workspace", () => {
       current: "claude-opus-5",
       defaultSelector: "sonnet",
       context: {
-        profile: "delegate",
+        profile: "generalist",
         candidateIndex: 0,
         host: "local",
         runtime: "claude",
@@ -480,7 +511,7 @@ describe("profile settings workspace", () => {
       ],
     } satisfies CandidateModelPickerData);
     const { component, saveDraft } = makeComponent(
-      inspection({ version: 4, defaultProfile: "delegate" }),
+      inspection({ version: 4, defaultProfile: "generalist" }),
       { loadModelPicker },
     );
     component.handleInput(input.enter);
@@ -504,7 +535,7 @@ describe("profile settings workspace", () => {
       defaultSelector: "anthropic/claude-opus-5",
     });
     const { component, saveDraft } = makeComponent(
-      inspection({ version: 4, defaultProfile: "delegate" }),
+      inspection({ version: 4, defaultProfile: "generalist" }),
       { loadModelPicker },
     );
     component.handleInput(input.enter);
@@ -670,7 +701,7 @@ describe("profile settings workspace", () => {
   it("requires an in-workspace confirmation for destructive route operations", () => {
     const value = inspection(
       { version: 4 },
-      { version: 4, defaultProfile: "delegate", profiles: { delegate: candidate("parent") } },
+      { version: 4, defaultProfile: "generalist", profiles: { generalist: candidate("parent") } },
     );
     const { component, saveDraft } = makeComponent(value);
     component.handleInput(input.enter);
@@ -684,14 +715,14 @@ describe("profile settings workspace", () => {
   it("shows and confirms the selected-profile reset option for each scope", () => {
     const project = makeComponent(
       inspection(
-        { version: 4, defaultProfile: "delegate" },
-        { version: 4, profiles: { delegate: candidate("openai/project") } },
+        { version: 4, defaultProfile: "generalist" },
+        { version: 4, profiles: { generalist: candidate("openai/project") } },
       ),
     );
     project.component.handleInput("p");
-    expect(project.component.render(140).join("\n")).toContain("Reset delegate");
+    expect(project.component.render(140).join("\n")).toContain("Reset generalist");
     project.component.handleInput("i");
-    expect(project.component.render(140).join("\n")).toContain("Confirm · Reset delegate?");
+    expect(project.component.render(140).join("\n")).toContain("Confirm · Reset generalist?");
     expect(project.component.render(140).join("\n")).toContain(
       "effective route will come from global settings",
     );
@@ -701,12 +732,12 @@ describe("profile settings workspace", () => {
     const global = makeComponent(
       inspection({
         version: 4,
-        defaultProfile: "delegate",
-        profiles: { delegate: candidate("openai/global") },
+        defaultProfile: "generalist",
+        profiles: { generalist: candidate("openai/global") },
       }),
     );
     global.component.handleInput("g");
-    expect(global.component.render(140).join("\n")).toContain("Reset delegate to built-in");
+    expect(global.component.render(140).join("\n")).toContain("Reset generalist to built-in");
     global.component.handleInput("i");
     global.component.handleInput("i");
     expect(global.saveDraft.mock.calls[0]?.[2]).toMatchObject({ kind: "reset" });
@@ -714,11 +745,11 @@ describe("profile settings workspace", () => {
 
   it("restores scope defaults immediately and blocks project scope while untrusted", () => {
     const trustedValue = inspection(
-      { version: 4, profiles: { delegate: candidate("openai/global") } },
+      { version: 4, profiles: { generalist: candidate("openai/global") } },
       {
         version: 4,
-        defaultProfile: "delegate",
-        profiles: { delegate: candidate("openai/project") },
+        defaultProfile: "generalist",
+        profiles: { generalist: candidate("openai/project") },
       },
     );
     const trusted = makeComponent(trustedValue);
@@ -727,7 +758,11 @@ describe("profile settings workspace", () => {
     trusted.component.handleInput("i");
     expect(trusted.saveDraft.mock.calls[0]?.[2]).toMatchObject({ kind: "inherit" });
 
-    const untrustedValue = inspection({ version: 4, defaultProfile: "delegate" }, undefined, false);
+    const untrustedValue = inspection(
+      { version: 4, defaultProfile: "generalist" },
+      undefined,
+      false,
+    );
     const untrusted = makeComponent(untrustedValue);
     untrusted.component.handleInput("p");
     expect(untrusted.component.render(120).join("\n")).toContain(
@@ -754,7 +789,7 @@ describe("profile settings workspace", () => {
     expect(component.render(130).join("\n")).toContain("Reopen /subagents profiles");
     expect(component.render(52).join("\n")).toContain("editing again");
     expect(component.render(52).join("\n")).toContain("× write conflict");
-    expect(component.render(130).join("\n")).not.toContain("reload required");
+    expect(component.render(130).join("\n")).not.toContain("saved changes pending reload");
     component.handleInput(input.enter);
     component.handleInput(input.down);
     component.handleInput(input.enter);
@@ -768,7 +803,11 @@ describe("profile settings workspace", () => {
     component.handleInput(input.enter);
     component.handleInput("d");
     component.handleInput("d");
-    await vi.waitFor(() => expect(component.render(120).join("\n")).toContain("reload required"));
+    await vi.waitFor(() =>
+      expect(component.render(120).join("\n")).toContain("saved changes pending reload"),
+    );
+    expect(component.render(120).join("\n")).toContain("Saved globally · generalist");
+    expect(component.render(120).join("\n")).toContain("r Reload");
     component.handleInput("r");
     expect(reload).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(component.render(120).join("\n")).toContain("Reload canceled"));
@@ -783,7 +822,9 @@ describe("profile settings workspace", () => {
     component.handleInput(input.enter);
     component.handleInput("d");
     component.handleInput("d");
-    await vi.waitFor(() => expect(component.render(120).join("\n")).toContain("reload required"));
+    await vi.waitFor(() =>
+      expect(component.render(120).join("\n")).toContain("saved changes pending reload"),
+    );
     component.handleInput("r");
     await vi.waitFor(() => expect(close).toHaveBeenCalledWith(false));
   });
@@ -804,7 +845,7 @@ describe("profile settings workspace", () => {
     await vi.waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
     expect(saveDraft).toHaveBeenCalledWith(
       "global",
-      "delegate",
+      "generalist",
       expect.objectContaining({
         kind: "explicit",
         candidates: [expect.objectContaining({ fastMode: true })],

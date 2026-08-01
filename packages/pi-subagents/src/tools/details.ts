@@ -20,6 +20,7 @@ import {
 } from "../run/state.ts";
 import {
   isProfileId,
+  normalizeProfileId,
   type ProfileId,
   type ProfileRouteSource,
   type SubagentSelectionProvenance,
@@ -156,6 +157,7 @@ export interface StartAwaitDetailsInput {
 
 const clean = (value: string, maximum: number): string =>
   safeTextPrefix(stripTerminalControls(value).replaceAll("\u0000", ""), maximum);
+const cleanProfileId = (value: string): string => normalizeProfileId(value) ?? clean(value, 64);
 
 const boundedSelection = (
   selection: SubagentSelectionProvenance,
@@ -436,8 +438,7 @@ export function makeCompactToolDetails(input: CompactToolDetailsInput): CompactS
   });
   const profiles = projectProfiles(input.profiles);
   const profileIds =
-    input.profileIds?.slice(0, 16).map((id) => clean(id, 64)) ??
-    profiles?.map((profile) => profile.id);
+    input.profileIds?.slice(0, 16).map(cleanProfileId) ?? profiles?.map((profile) => profile.id);
   const failures = input.actionFailures?.slice(0, MAX_TARGET_RUNS).map((failure) => ({
     id: clean(failure.id, 128),
     ...(failure.code ? { code: clean(failure.code, 64) } : {}),
@@ -449,7 +450,7 @@ export function makeCompactToolDetails(input: CompactToolDetailsInput): CompactS
     ...(runIds.length > 0 ? { runIds, runCount: input.runs?.length } : {}),
     ...(profiles ? { profiles } : {}),
     ...(profileIds && profileIds.length > 0 ? { profileIds } : {}),
-    ...(input.defaultProfile ? { defaultProfile: clean(input.defaultProfile, 64) } : {}),
+    ...(input.defaultProfile ? { defaultProfile: cleanProfileId(input.defaultProfile) } : {}),
     ...(failures && failures.length > 0 ? { actionFailures: failures } : {}),
     ...(input.timedOut ? { timedOut: true } : {}),
     ...(input.attentionRequired ? { attentionRequired: true } : {}),
@@ -482,7 +483,7 @@ export function makeCompactToolDetails(input: CompactToolDetailsInput): CompactS
     action: clean(input.action, 32),
     ...(input.runs ? { runCount: input.runs.length } : {}),
     ...(profileIds && profileIds.length > 0 ? { profileIds } : {}),
-    ...(input.defaultProfile ? { defaultProfile: clean(input.defaultProfile, 64) } : {}),
+    ...(input.defaultProfile ? { defaultProfile: cleanProfileId(input.defaultProfile) } : {}),
     ...(failures && failures.length > 0 ? { actionFailures: failures } : {}),
     ...(input.timedOut ? { timedOut: true } : {}),
     ...(input.attentionRequired ? { attentionRequired: true } : {}),
