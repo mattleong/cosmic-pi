@@ -5,7 +5,7 @@
 
 ## Context
 
-`pi-subagents` currently owns session-scoped Pi children, while `pi-herdr` owns persistent read-only Claude, Pi, and Codex panes. The Phase One multi-backend MVP will present one profile-routed subagent product without preserving those two lifetime models or exposing backend mechanics at every launch.
+Before the unified implementation, `pi-subagents` owned session-scoped Pi children while a separate extension owned persistent read-only Claude, Pi, and Codex panes. The Phase One multi-backend MVP presents one profile-routed subagent product without preserving both lifetime models or exposing backend mechanics at every launch.
 
 This ADR freezes the product contract and the technical interpretations needed before configuration version 4 and the backend refactor begin. Phase A implements only recursion guards, orchestration-tool exclusion, and fail-closed writer cleanup. It does not implement configuration version 4 or merge the backend services.
 
@@ -13,7 +13,7 @@ This ADR freezes the product contract and the technical interpretations needed b
 
 ### One session-owned fleet
 
-Every run started through the unified product is owned by the current parent Pi session, whether its host is local or Herdr. Session shutdown, replacement, tree navigation, or reload ends the unified run and performs the host-appropriate stop/close operation. A Herdr process started by this product does not inherit the standalone `pi-herdr` extension's current persistence across parent sessions.
+Every run started through the unified product is owned by the current parent Pi session, whether its host is local or Herdr. Session shutdown, replacement, tree navigation, or reload ends the unified run and performs the host-appropriate stop/close operation. A Herdr process started by this product does not inherit the retired standalone extension's persistence across parent sessions.
 
 Session ownership is a product lifetime, not necessarily an in-process lifetime. A Herdr server still owns its PTY and process while a run is active, but the parent session owns the obligation and authority to close the resources it launched.
 
@@ -104,7 +104,7 @@ The product documentation and tool output must describe these limits accurately 
 ## Consequences
 
 - Configuration version 4 and backend composition can be designed against one frozen launch and lifetime contract.
-- The standalone `pi-herdr` persistence behavior is not automatically the behavior of a Herdr backend inside unified `pi-subagents`.
+- The retired standalone extension's persistence behavior is not the behavior of a Herdr backend inside unified `pi-subagents`.
 - Nonblocking batch start and separate await remove execution/lifetime branching from launch schemas.
 - Adapters remain materially different behind one capability-aware service; transport-specific guarantees are not flattened into unsafe common promises.
 - Phase A can improve recursion and writer cleanup safety without introducing a package dependency cycle or prematurely implementing the backend refactor.
