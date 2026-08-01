@@ -445,7 +445,9 @@ const codexConfig = (
     "[shell_environment_policy]",
     'inherit = "none"',
     "[features]",
-    ...CODEX_DISABLED_FEATURES.map((feature) => `${feature} = false`),
+    ...CODEX_DISABLED_FEATURES.map(
+      (feature) => `${feature} = ${feature === "fast_mode" && request.fastMode}`,
+    ),
     "hooks = true",
     `[projects.${tomlString(request.cwd)}]`,
     'trust_level = "untrusted"',

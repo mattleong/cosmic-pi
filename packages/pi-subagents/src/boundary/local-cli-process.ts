@@ -306,7 +306,7 @@ export const claudeArgv = (
 
 export const codexArgv = (): ReadonlyArray<string> => ["app-server", "--stdio", "--strict-config"];
 
-const codexBaseConfig = (): ReadonlyArray<string> => [
+const codexBaseConfig = (fastMode = false): ReadonlyArray<string> => [
   'approval_policy = "never"',
   'web_search = "disabled"',
   "[analytics]",
@@ -319,7 +319,7 @@ const codexBaseConfig = (): ReadonlyArray<string> => [
   "auth_elicitation = false",
   "browser_use = false",
   "computer_use = false",
-  "fast_mode = false",
+  `fast_mode = ${fastMode}`,
   "goals = false",
   "guardian_approval = false",
   "hooks = false",
@@ -335,8 +335,8 @@ const codexBaseConfig = (): ReadonlyArray<string> => [
   "workspace_dependencies = false",
 ];
 
-const codexConfig = (supervisor: SupervisorConnectionMetadata): string =>
-  [...codexBaseConfig(), supervisor.codexMcp.tomlFragment, ""].join("\n");
+const codexConfig = (supervisor: SupervisorConnectionMetadata, fastMode: boolean): string =>
+  [...codexBaseConfig(fastMode), supervisor.codexMcp.tomlFragment, ""].join("\n");
 
 const codexCatalogConfig = (): string => [...codexBaseConfig(), ""].join("\n");
 
@@ -511,7 +511,7 @@ const prepareHarness = async (
 
     const codexHome = join(directory, "codex-home");
     await fs.mkdir(codexHome, { mode: 0o700 });
-    const config = codexConfig(request.supervisor);
+    const config = codexConfig(request.supervisor, request.launch.fastMode);
     await writeExclusive(join(codexHome, "config.toml"), config);
     const auth = await readValidatedCodexAuth(sourceEnvironment);
     if (auth) {

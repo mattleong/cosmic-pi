@@ -207,6 +207,7 @@ describe("Herdr native harness security", () => {
             fs.readFile(join(codex.directory, "codex-home", "config.toml"), "utf8"),
           );
           expect(config).toContain('service_tier = "priority"');
+          expect(config).toContain("fast_mode = true");
           expect(codex.argv.join(" ")).not.toContain("must-never-appear-in-argv");
           pi.authorizeCleanup();
           codex.authorizeCleanup();

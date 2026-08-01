@@ -75,9 +75,10 @@ it.runIf(process.env.PI_SUBAGENTS_REAL_CLI_SMOKE === "1")(
               Effect.timeoutOption("500 millis"),
             );
             expect(Option.isNone(claudeEarlyExit)).toBe(true);
-            const codex = yield* makeLocalCodexBackendDriver(processes, supervisors).spawn(
-              request("codex", "gpt-5.6-sol"),
-            );
+            const codex = yield* makeLocalCodexBackendDriver(processes, supervisors).spawn({
+              ...request("codex", "gpt-5.6-sol"),
+              fastMode: true,
+            });
             expect(yield* codex.controls.initialize).toMatchObject({
               model: "gpt-5.6-sol",
               effort: "xhigh",

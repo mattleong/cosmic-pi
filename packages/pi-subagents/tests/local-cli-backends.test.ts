@@ -928,9 +928,10 @@ describe("local CLI Phase One backends", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const backend = yield* makeLocalCodexBackendDriver(processes, supervisor.shape).spawn(
-              launch("codex"),
-            );
+            const backend = yield* makeLocalCodexBackendDriver(processes, supervisor.shape).spawn({
+              ...launch("codex"),
+              fastMode: true,
+            });
             const root = join(directory, "subagents", "local-cli-v1");
             const entries = yield* Effect.promise(() => fs.readdir(root));
             const harnessDirectory = join(root, entries[0]!);
@@ -938,6 +939,10 @@ describe("local CLI Phase One backends", () => {
               fs.readFile(join(harnessDirectory, "codex-home", "auth.json"), "utf8"),
             );
             expect(JSON.parse(copied)).toEqual({ source: "custom-codex-home" });
+            const config = yield* Effect.promise(() =>
+              fs.readFile(join(harnessDirectory, "codex-home", "config.toml"), "utf8"),
+            );
+            expect(config).toContain("fast_mode = true");
             expect(harnessDirectory).not.toContain(sourceCodexHome);
             yield* backend.controls.initialize;
           }),
