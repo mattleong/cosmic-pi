@@ -37,6 +37,18 @@ export const formatCost = (cost: number): string => {
   return `$${value.toFixed(2)}`;
 };
 
+export const formatToolModel = (model: string, effort: string, fastMode?: boolean): string =>
+  `${sanitizeTerminalLine(model)}:${sanitizeTerminalLine(effort)}${fastMode ? " ⚡" : ""}`;
+
+export const formatToolRoute = (
+  host: string,
+  runtime: string,
+  model: string,
+  effort: string,
+  fastMode?: boolean,
+): string =>
+  `${sanitizeTerminalLine(host)}/${sanitizeTerminalLine(runtime)} · ${formatToolModel(model, effort, fastMode)}`;
+
 export const formatDuration = (milliseconds: number): string => {
   const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
   if (seconds < 60) return `${seconds}s`;

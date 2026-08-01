@@ -1,7 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { synchronousNow } from "../boundary/native-clock.ts";
-import type { SubagentEffort } from "../run/model.ts";
 import {
   animatedRunStateGlyph,
   runStateColor,
@@ -36,41 +35,20 @@ export const aggregateRunUsage = (runs: ReadonlyArray<SubagentRunCard>): string 
   return tokens > 0 || cost > 0 ? `${formatTokenCount(tokens)} tokens · ${formatCost(cost)}` : "";
 };
 
-const effortColor = (
-  effort: SubagentEffort,
-):
-  | "thinkingOff"
-  | "thinkingMinimal"
-  | "thinkingLow"
-  | "thinkingMedium"
-  | "thinkingHigh"
-  | "thinkingXhigh"
-  | "thinkingMax" => {
-  switch (effort) {
-    case "off":
-      return "thinkingOff";
-    case "minimal":
-      return "thinkingMinimal";
-    case "low":
-      return "thinkingLow";
-    case "medium":
-      return "thinkingMedium";
-    case "high":
-      return "thinkingHigh";
-    case "xhigh":
-      return "thinkingXhigh";
-    case "max":
-      return "thinkingMax";
-  }
-};
-
 const padVisible = (value: string, width: number): string =>
   `${value}${" ".repeat(Math.max(0, width - visibleWidth(value)))}`;
 
-const runRoute = (run: SubagentRunCard): string =>
-  sanitizeTerminalLine(
-    `${run.profile ? `[${run.profile}] ` : ""}${run.host ?? "local"}/${run.runtime ?? "pi"}/${run.model}`,
+const runRoute = (run: SubagentRunCard, width: number): string => {
+  const hostRoute = `${run.host ?? "local"}/${run.runtime ?? "pi"} · `;
+  const suffix = `:${run.effort}${run.fastMode ? " ⚡" : ""}`;
+  const profile = run.profile ? `[${sanitizeTerminalLine(run.profile)}] ` : "";
+  const fixedWidth = visibleWidth(profile) + visibleWidth(hostRoute) + visibleWidth(suffix);
+  const modelWidth = Math.max(1, width - fixedWidth);
+  return truncateToWidth(
+    `${profile}${hostRoute}${truncateToWidth(sanitizeTerminalLine(run.model), modelWidth)}${suffix}`,
+    width,
   );
+};
 
 const runUsage = (run: SubagentRunCard): string =>
   run.usage && (run.usage.totalTokens > 0 || run.usage.cost > 0)
@@ -98,19 +76,13 @@ export const renderResponsiveRunRows = (
     const id = options.fullId ? run.id : shortRunId(run.id);
     return `${glyph} ${sanitizeTerminalLine(run.name)} · ${sanitizeTerminalLine(id)}`;
   });
-  const efforts = runs.map((run) => sanitizeTerminalLine(run.effort));
-  const intents = runs.map((run) =>
-    sanitizeTerminalLine(
-      `${run.writeIntent ?? "intent unknown"}${run.fastMode ? " · ⚡ fast" : ""}`,
-    ),
-  );
+  const intents = runs.map((run) => sanitizeTerminalLine(run.writeIntent ?? "intent unknown"));
   const states = runs.map((run) =>
     sanitizeTerminalLine(
       options.status?.(run) ??
         [runStateLabel(run.state), run.currentTool, runTiming(run)].filter(Boolean).join(" · "),
     ),
   );
-  const effortWidth = efforts.reduce((max, effort) => Math.max(max, visibleWidth(effort)), 0);
   const intentWidth = intents.reduce((max, intent) => Math.max(max, visibleWidth(intent)), 0);
   const identityWidth = Math.min(
     Math.max(16, ...identities.map((identity) => visibleWidth(identity))),
@@ -120,31 +92,26 @@ export const renderResponsiveRunRows = (
     Math.max(14, ...states.map((state) => visibleWidth(state))),
     Math.max(14, Math.floor(safeWidth * 0.28)),
   );
-  const routeWidth = safeWidth - identityWidth - effortWidth - intentWidth - stateWidth - 12;
+  const routeWidth = safeWidth - identityWidth - intentWidth - stateWidth - 9;
   if (safeWidth >= 88 && routeWidth >= 12)
     return runs.map((run, index) => {
       const color = runStateColor(run.state);
       const identity = theme.fg(color, truncateToWidth(identities[index] ?? "", identityWidth));
-      const route = theme.fg("toolOutput", truncateToWidth(runRoute(run), routeWidth));
-      const effort = efforts[index] ?? "";
+      const route = theme.fg("toolOutput", runRoute(run, routeWidth));
       const intent = theme.fg(
         run.writeIntent === "writer" ? "warning" : "muted",
         intents[index] ?? "",
       );
       const state = theme.fg(color, truncateToWidth(states[index] ?? "", stateWidth));
-      return `${padVisible(identity, identityWidth)} · ${padVisible(route, routeWidth)} · ${padVisible(theme.fg(effortColor(run.effort), effort), effortWidth)} · ${padVisible(intent, intentWidth)} · ${padVisible(state, stateWidth)}`;
+      return `${padVisible(identity, identityWidth)} · ${padVisible(route, routeWidth)} · ${padVisible(intent, intentWidth)} · ${padVisible(state, stateWidth)}`;
     });
   return runs.flatMap((run, index) => {
     const color = runStateColor(run.state);
     const identity = theme.fg(color, identities[index] ?? "");
-    const effort = efforts[index] ?? "";
     const intentText = intents[index] ?? "";
-    const compactRouteWidth = Math.max(
-      1,
-      safeWidth - visibleWidth(effort) - visibleWidth(intentText) - 6,
-    );
-    const route = theme.fg("toolOutput", truncateToWidth(runRoute(run), compactRouteWidth));
-    const metadata = `${route} · ${theme.fg(effortColor(run.effort), effort)} · ${theme.fg(run.writeIntent === "writer" ? "warning" : "muted", intentText)}`;
+    const compactRouteWidth = Math.max(1, safeWidth - visibleWidth(intentText) - 3);
+    const route = theme.fg("toolOutput", runRoute(run, compactRouteWidth));
+    const metadata = `${route} · ${theme.fg(run.writeIntent === "writer" ? "warning" : "muted", intentText)}`;
     const status = [states[index] ?? "", runUsage(run)].filter(Boolean).join(" · ");
     return [
       truncateToWidth(identity, safeWidth),

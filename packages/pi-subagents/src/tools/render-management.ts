@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "../ui/sanitize.ts";
+import { formatToolModel, formatToolRoute } from "./format.ts";
 import type {
   CompactSubagentToolDetails,
   SubagentProfileRouteCard,
@@ -38,7 +39,11 @@ const friendlyCandidateRoute = (value: string): string => {
     );
   if (!match) return value;
   const [, route, effort, context, intent, fast, close] = match;
-  return `${route} · ${effort} · ${context} · ${intent} · ${fast === "true" ? "fast" : "standard"} · ${close === "true" ? "close after report" : "retain after report"}`;
+  const parts = /^(local|herdr)\/(pi|claude|codex)\/(.+)$/.exec(route ?? "");
+  const model = parts
+    ? formatToolRoute(parts[1] ?? "", parts[2] ?? "", parts[3] ?? "", effort ?? "", fast === "true")
+    : formatToolModel(route ?? "", effort ?? "", fast === "true");
+  return `${model} · ${context} · ${intent} · ${close === "true" ? "close after report" : "retain after report"}`;
 };
 
 const profileSource = (source: SubagentProfileRouteCard["source"]): string => {

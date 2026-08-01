@@ -182,7 +182,7 @@ const formatProfileDiscovery = (
   [
     "Profile routes · static preflight",
     `Default profile: ${defaultProfile}`,
-    "Each candidate lists host/runtime/model, effort, context, write intent, and retention.",
+    "Each candidate lists host/runtime/model, effort, context, write intent, fast mode, and retention.",
     "Static eligibility only · executable, authentication, integration, and private-harness checks run at launch.",
     "",
     ...profiles.flatMap((profile) => [

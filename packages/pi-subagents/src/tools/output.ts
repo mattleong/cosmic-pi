@@ -5,7 +5,13 @@ import { runStateLabel } from "../ui/run-state.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { safeTextPrefix } from "../run/state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
-import { formatCost, formatDuration, formatTokenCount, selectionSourceLabel } from "./format.ts";
+import {
+  formatCost,
+  formatDuration,
+  formatTokenCount,
+  formatToolRoute,
+  selectionSourceLabel,
+} from "./format.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./subagent.ts";
 
 const boundedLine = (value: string, maximum: number): string => {
@@ -20,7 +26,8 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
   const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
   const host = run.host ?? "local";
   const runtime = run.runtime ?? run.backend;
-  const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${host}/${runtime}/${sanitizeTerminalLine(run.model)} · ${run.effort}`;
+  const route = formatToolRoute(host, runtime, run.model, run.effort, run.fastMode);
+  const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}`;
   if (!detailed) return header;
   const field = (label: string, value: string): string =>
     `  ${label.padEnd(10)} ${sanitizeTerminalLine(value)}`;
@@ -43,7 +50,7 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     field("ID", run.id),
     field("State", runStateLabel(run.state)),
     run.profile ? field("Profile", run.profile) : undefined,
-    field("Route", `${host}/${runtime}/${run.model} · ${run.effort}`),
+    field("Route", route),
     field(
       "Retention",
       `${run.closeOnReport === false ? "retain backend after report" : "close after report"} · assignment ${run.reportGeneration || 1}${retained ? " · retained now" : ""}`,
@@ -59,7 +66,6 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     run.selection.warning ? field("Route warning", run.selection.warning) : undefined,
     field("Context", run.context),
     field("Intent", run.writeIntent),
-    field("OpenAI fast", run.fastMode ? "on · priority" : "off"),
     field("Capabilities", `${run.capabilities.join(", ") || "none"}; stop/await always available`),
     run.pid ? field("Process", `pid ${run.pid}`) : undefined,
     elapsed ? field("Elapsed", elapsed) : undefined,

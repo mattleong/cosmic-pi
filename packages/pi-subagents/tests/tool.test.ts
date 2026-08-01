@@ -525,6 +525,33 @@ describe("subagent tool", () => {
     expect(modelText).toContain("close after report");
     expect(modelText).toContain("Launch checks pending");
 
+    const fastProfileTools = captureSubagentTools(
+      {} as SubagentServiceShape,
+      ["read"],
+      profileServiceFor({
+        profiles: {
+          reviewer: {
+            host: "local",
+            runtime: "pi",
+            model: "parent",
+            effort: "default",
+            context: "fresh",
+            writeIntent: "read-only",
+            fastMode: true,
+          },
+        },
+      }),
+    );
+    const fastModels = await fastProfileTools
+      .get("subagent_models")
+      ?.execute("call", { profile: "reviewer" }, undefined, undefined, context);
+    const fastModelCard = fastProfileTools
+      .get("subagent_models")
+      ?.renderResult?.(fastModels, { isPartial: false, expanded: true }, theme) as
+      | { readonly render: (width: number) => ReadonlyArray<string> }
+      | undefined;
+    expect(fastModelCard?.render(160).join("\n")).toContain("local/pi · parent:default ⚡");
+
     const management = makeCompactToolDetails({
       action: "send",
       runs: [view({ id: "agent-1", name: "auth-review", state: "running" })],
@@ -599,8 +626,9 @@ describe("subagent tool", () => {
       expect(rendered).toContain("<success>⠋ running-agent · agent-1</success>");
       expect(rendered).toContain("<warning>? waiting-agent · agent-2</warning>");
       expect(rendered).toContain("<warning>waiting for reply</warning>");
-      expect(rendered).toContain("<toolOutput>local/pi/openai-codex/gpt-5.6-sol</toolOutput>");
-      expect(rendered).toContain("<thinkingHigh>high</thinkingHigh>");
+      expect(rendered).toContain(
+        "<toolOutput>local/pi · openai-codex/gpt-5.6-sol:high</toolOutput>",
+      );
       expect(rendered).toContain("<error>× failed-agent · agent-3</error>");
       expect(rendered).toContain("<muted>■ stopped-agent · agent-4</muted>");
       expect(progress([view({ state: "running" })], "any_finished")).toContain(
@@ -851,6 +879,7 @@ describe("subagent tool", () => {
       name: "review-agent",
       model: "openai-codex/gpt-5.6-sol",
       effort: "high",
+      fastMode: true,
       state: "completed",
       finalText: "## Findings\nEverything passed.",
     });
@@ -858,8 +887,9 @@ describe("subagent tool", () => {
     const compact = renderStartAwaitOverviewComponent([run], theme).render(120);
     expect(compact).toHaveLength(3);
     expect(compact[0]).toContain("✓ review-agent · …ent-secret-id");
-    expect(compact[0]).toContain("<toolOutput>local/pi/openai-codex/gpt-5.6-sol</toolOutput>");
-    expect(compact[0]).toContain("<thinkingHigh>high</thinkingHigh>");
+    expect(compact[0]).toContain(
+      "<toolOutput>local/pi · openai-codex/gpt-5.6-sol:high ⚡</toolOutput>",
+    );
     expect(compact[0]).toContain("<success>finished</success>");
     expect(compact[1]).toContain("↳ review-agent: Findings");
     expect(compact[2]).toBe("<dim>▸ final report · expand to view</dim>");
@@ -965,7 +995,7 @@ describe("subagent tool", () => {
 
     const narrow = renderExpandedStartAwaitResult([second], theme).render(36);
     expect(narrow[0]).toContain("longer-agent-name");
-    expect(narrow[1]).toContain(" · high");
+    expect(narrow[1]).toContain(":high");
     expect(narrow[2]).toContain("finished");
     expect(narrow.join("\n")).not.toContain(second.model);
     expect(narrow.every((line) => visibleWidth(line) <= 36)).toBe(true);
@@ -2039,8 +2069,7 @@ describe("subagent tool", () => {
     expect(text).toContain("Name       auth-review");
     expect(text).toContain("ID         agent-1");
     expect(text).toContain("Profile    reviewer");
-    expect(text).toContain("Route      local/pi/openai-codex/gpt-5.6-sol · high");
-    expect(text).toContain("OpenAI fast on · priority");
+    expect(text).toContain("Route      local/pi · openai-codex/gpt-5.6-sol:high ⚡");
     expect(text).toContain("Retention  close after report · assignment 1");
     expect(text).toContain("Selection  profile-candidate candidate 2");
     expect(text).toContain("Reason     Profile reviewer selected configured candidate 2.");
@@ -2761,7 +2790,7 @@ describe("subagent tool", () => {
       ?.execute("call", { profile: "oracle" }, undefined, undefined, ephemeral);
     const text = models?.content[0]?.text ?? "";
     expect(text).toContain(
-      "Each candidate lists host/runtime/model, effort, context, write intent, and retention.",
+      "Each candidate lists host/runtime/model, effort, context, write intent, fast mode, and retention.",
     );
     expect(text).toContain("Forked context requires a persisted parent session");
   });

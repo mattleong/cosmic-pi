@@ -195,7 +195,7 @@ export const prepareSubagentStartArguments = (args: unknown): SubagentStartInput
     );
     if (legacyField)
       throw new Error(
-        `[legacy_launch_override] subagent_start agents[${index}]: ${legacyField} is not accepted. Put host, runtime, model, effort, context, writeIntent, and closeOnReport in the selected version 4 profile route.`,
+        `[legacy_launch_override] subagent_start agents[${index}]: ${legacyField} is not accepted. Put host, runtime, model, effort, context, writeIntent, fastMode, and closeOnReport in the selected version 4 profile route.`,
       );
   });
   return prepared;
