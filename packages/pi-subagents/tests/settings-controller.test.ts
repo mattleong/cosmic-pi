@@ -225,14 +225,14 @@ describe("/subagents profile workspace", () => {
     );
   });
 
-  it("starts in effective project view when trusted and global view when untrusted", async () => {
+  it("starts in global view regardless of project trust", async () => {
     for (const trusted of [true, false]) {
       const value = inspection({ version: 4 }, undefined, trusted);
       const managerActions = actions(value);
       const custom = vi.fn(async (factory) =>
         exerciseWorkspace(factory, (component, done) => {
           const rendered = component.render(120).join("\n");
-          expect(rendered).toContain(trusted ? "[p Project]" : "[g Global]");
+          expect(rendered).toContain("[g Global]");
           expect(rendered).toContain("Profiles");
           done(false);
         }),
@@ -244,7 +244,7 @@ describe("/subagents profile workspace", () => {
 
   it("writes a complete valid route immediately and refreshes optimistic-concurrency state", async () => {
     const initial = inspection();
-    const saved = inspection({ version: 4 }, { version: 4, profiles: { delegate: "disabled" } });
+    const saved = inspection({ version: 4, profiles: { delegate: "disabled" } });
     const managerActions = actions(initial);
     (managerActions.inspectProfiles as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(initial)
@@ -266,10 +266,11 @@ describe("/subagents profile workspace", () => {
     await register(managerActions)("profiles", baseContext({ custom, notify }));
 
     expect(managerActions.patchProfile).toHaveBeenCalledWith({
-      scope: "project",
+      scope: "global",
       profile: "delegate",
       route: "disabled",
-      expectedExists: false,
+      expectedExists: true,
+      expectedDocument: { version: 4 },
       projectTrusted: true,
     });
     expect(managerActions.inspectProfiles).toHaveBeenCalledTimes(2);

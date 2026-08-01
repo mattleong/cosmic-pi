@@ -1202,7 +1202,7 @@ describe("subagent tool", () => {
     const expectedEffort = {
       scout: "low",
       researcher: "medium",
-      planner: "medium",
+      planner: "xhigh",
       worker: "high",
       reviewer: "high",
       oracle: "high",

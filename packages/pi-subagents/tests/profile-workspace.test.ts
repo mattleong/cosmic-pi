@@ -116,6 +116,7 @@ const makeComponent = (
     inspection: value,
     projectTrusted: value.config.projectTrusted,
     piModel: "openai/parent",
+    parentEffort: "xhigh",
     getHeight: () => 24,
     requestRender,
     close,
@@ -147,10 +148,46 @@ describe("profile settings workspace", () => {
     }
   });
 
+  it("shows the effective effort behind profile-default inheritance", () => {
+    const inherited = candidate("parent", { effort: "default" });
+    expect(
+      candidateFieldRows(inherited, "scout", "xhigh").find((row) => row.field === "effort")?.value,
+    ).toBe("default → low");
+    expect(
+      candidateFieldRows(inherited, "delegate", "xhigh").find((row) => row.field === "effort")
+        ?.value,
+    ).toBe("default → xhigh (inherited)");
+    expect(
+      candidateFieldChoices(inherited, "effort", {
+        profile: "reviewer",
+        parentEffort: "xhigh",
+      })[0],
+    ).toMatchObject({
+      value: "default",
+      label: "Profile default → high",
+      description: "Use the reviewer profile default (high)",
+    });
+
+    const value = inspection(
+      { version: 4 },
+      {
+        version: 4,
+        defaultProfile: "scout",
+        profiles: { scout: inherited },
+      },
+    );
+    const { component } = makeComponent(value);
+    component.handleInput(input.enter);
+    expect(component.render(120).join("\n")).toContain("default → low");
+    component.handleInput(input.enter);
+    expect(component.render(120).join("\n")).toContain("Effort         default → low");
+  });
+
   it("uses neutral ready status, candidate terminology, and safe root navigation", () => {
     const { component, close } = makeComponent();
     const rendered = component.render(120).join("\n");
     expect(rendered).toContain("· ready");
+    expect(rendered).toContain("[g Global]");
     expect(rendered).toContain("1 candidate");
     expect(rendered).not.toContain("1 route");
     component.handleInput(input.left);
@@ -168,6 +205,7 @@ describe("profile settings workspace", () => {
       { version: 4, defaultProfile: "reviewer", profiles: { reviewer: candidates } },
     );
     const { component } = makeComponent(value, { getHeight: () => 12 });
+    component.handleInput("p");
     expect(component.render(70).join("\n")).toContain("↑ more");
     component.handleInput(input.enter);
     expect(component.render(70).join("\n")).toContain("1–1 of 8 · ↓ more");
@@ -221,6 +259,7 @@ describe("profile settings workspace", () => {
     const { component } = makeComponent(value, {
       saveDraft: () => pendingSave,
     });
+    component.handleInput("p");
     component.handleInput(input.enter);
     component.handleInput("J");
     expect(component.render(100).join("\n")).toContain("Preview    2 candidates");
@@ -333,9 +372,11 @@ describe("profile settings workspace", () => {
     const { component } = makeComponent(value);
     const profiles = component.render(140).join("\n");
     expect(profiles).toContain("Profiles");
-    expect(profiles).toContain("[p Project]");
+    expect(profiles).toContain("[g Global]");
     expect(profiles).toContain("project override");
 
+    component.handleInput("p");
+    expect(component.render(140).join("\n")).toContain("[p Project]");
     component.handleInput(input.enter);
     const route = component.render(140).join("\n");
     expect(route).toContain("reviewer route");
@@ -367,6 +408,7 @@ describe("profile settings workspace", () => {
       { version: 4, defaultProfile: "delegate", profiles: { delegate: "disabled" } },
     );
     const { component } = makeComponent(value);
+    component.handleInput("p");
     component.handleInput("d");
     expect(component.render(120).join("\n")).not.toContain("Confirm · Disable");
     component.handleInput(input.enter);
@@ -400,7 +442,7 @@ describe("profile settings workspace", () => {
 
     expect(saveDraft).toHaveBeenCalledTimes(1);
     const [scope, profile, draft] = saveDraft.mock.calls[0]!;
-    expect(scope).toBe("project");
+    expect(scope).toBe("global");
     expect(profile).toBe("delegate");
     expect(draft.candidates[0]).toMatchObject({
       host: "herdr",
@@ -521,6 +563,7 @@ describe("profile settings workspace", () => {
       ],
     } satisfies CandidateModelPickerData);
     const { component, saveDraft } = makeComponent(value, { loadModelPicker });
+    component.handleInput("p");
     component.handleInput(input.enter);
     component.handleInput(input.enter);
     for (let index = 0; index < 3; index += 1) component.handleInput(input.down);
@@ -571,7 +614,7 @@ describe("profile settings workspace", () => {
       expect.any(AbortSignal),
     );
     expect(saveDraft).toHaveBeenCalledWith(
-      "project",
+      "global",
       "reviewer",
       expect.objectContaining({
         kind: "explicit",
@@ -610,6 +653,7 @@ describe("profile settings workspace", () => {
       .mockResolvedValueOnce({ inspection: addedValue })
       .mockResolvedValueOnce({ inspection: addedValue });
     const { component } = makeComponent(value, { saveDraft });
+    component.handleInput("p");
     component.handleInput(input.enter);
     component.handleInput("a");
     await vi.waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
@@ -644,6 +688,7 @@ describe("profile settings workspace", () => {
         { version: 4, profiles: { delegate: candidate("openai/project") } },
       ),
     );
+    project.component.handleInput("p");
     expect(project.component.render(140).join("\n")).toContain("Reset delegate");
     project.component.handleInput("i");
     expect(project.component.render(140).join("\n")).toContain("Confirm · Reset delegate?");
@@ -677,6 +722,7 @@ describe("profile settings workspace", () => {
       },
     );
     const trusted = makeComponent(trustedValue);
+    trusted.component.handleInput("p");
     trusted.component.handleInput("i");
     trusted.component.handleInput("i");
     expect(trusted.saveDraft.mock.calls[0]?.[2]).toMatchObject({ kind: "inherit" });
@@ -757,7 +803,7 @@ describe("profile settings workspace", () => {
     component.handleInput(input.enter);
     await vi.waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
     expect(saveDraft).toHaveBeenCalledWith(
-      "project",
+      "global",
       "delegate",
       expect.objectContaining({
         kind: "explicit",

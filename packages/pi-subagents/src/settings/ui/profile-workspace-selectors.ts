@@ -32,6 +32,7 @@ export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly field: Exclude<ProfileWorkspaceField, "model">;
   readonly fieldIndex: number;
   readonly piModel?: string | undefined;
+  readonly parentEffort: SubagentEffort;
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
   readonly fastModeAvailable?: boolean | undefined;
   readonly notice?: string | undefined;
@@ -48,13 +49,17 @@ const currentFieldValue = (
 export const makeCandidateFieldSelector = (
   options: CandidateFieldSelectorOptions,
 ): SearchableSelectPage<string> => {
-  const row = candidateFieldRows(options.candidate)[options.fieldIndex];
+  const row = candidateFieldRows(options.candidate, options.profile, options.parentEffort)[
+    options.fieldIndex
+  ];
   const label = row?.label ?? options.field;
   const current = currentFieldValue(options.candidate, options.field);
   const changeOptions = {
     piModel: options.piModel,
     supportedEfforts: options.supportedEfforts,
     fastModeAvailable: options.fastModeAvailable,
+    profile: options.profile,
+    parentEffort: options.parentEffort,
   };
   return new SearchableSelectPage<string>({
     theme: options.theme,

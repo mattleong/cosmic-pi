@@ -51,6 +51,7 @@ export interface ProfileWorkspaceOptions {
   readonly inspection: SubagentConfigInspection;
   readonly projectTrusted: boolean;
   readonly piModel?: string | undefined;
+  readonly parentEffort: SubagentEffort;
   readonly getHeight: () => number;
   readonly requestRender: () => void;
   readonly matchesKeybinding?:
@@ -121,7 +122,7 @@ export class ProfileWorkspaceComponent implements Component {
   constructor(options: ProfileWorkspaceOptions) {
     this.options = options;
     this.inspection = options.inspection;
-    this.scope = options.projectTrusted ? "project" : "global";
+    this.scope = "global";
     const defaultIndex = PROFILE_IDS.indexOf(options.inspection.config.defaultProfile);
     this.profileIndex = defaultIndex < 0 ? 0 : defaultIndex;
     this.reconcile();
@@ -315,7 +316,9 @@ export class ProfileWorkspaceComponent implements Component {
     const candidate = this.draft().candidates[this.candidateIndex];
     const field = PROFILE_WORKSPACE_FIELDS[this.fieldIndex];
     if (!candidate || !field || this.busy) return;
-    const row = candidateFieldRows(candidate)[this.fieldIndex];
+    const row = candidateFieldRows(candidate, this.profile(), this.options.parentEffort)[
+      this.fieldIndex
+    ];
     if (row?.fixed) {
       this.setMessage("info", `${row.label} is fixed by the current host/runtime policy.`);
       this.renderSoon();
@@ -356,6 +359,7 @@ export class ProfileWorkspaceComponent implements Component {
       field,
       fieldIndex: this.fieldIndex,
       piModel: this.options.piModel,
+      parentEffort: this.options.parentEffort,
       supportedEfforts,
       fastModeAvailable,
       ...(notice ? { notice } : {}),
@@ -770,6 +774,7 @@ export class ProfileWorkspaceComponent implements Component {
         inspection: this.inspection,
         scope: this.scope,
         projectTrusted: this.options.projectTrusted,
+        parentEffort: this.options.parentEffort,
         pane: this.pane,
         profileIndex: this.profileIndex,
         candidateIndex: this.candidateIndex,

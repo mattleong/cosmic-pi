@@ -166,10 +166,11 @@ describe("SubagentConfigStore v4", () => {
         route: {
           host: "local",
           runtime: "pi",
-          model: "openai/new",
+          model: "openai-codex/gpt-5.6-sol",
           effort: "low",
           context: "fresh",
           writeIntent: "read-only",
+          fastMode: true,
           closeOnReport: true,
         },
         expectedExists: true,
@@ -184,12 +185,17 @@ describe("SubagentConfigStore v4", () => {
     expect(saved.profiles.scout).toEqual({
       host: "local",
       runtime: "pi",
-      model: "openai/new",
+      model: "openai-codex/gpt-5.6-sol",
       effort: "low",
       context: "fresh",
       writeIntent: "read-only",
+      fastMode: true,
       closeOnReport: true,
     });
+    const refreshed = await withStore((store) =>
+      store.inspect(paths.cwd, paths.agentDirectory, true),
+    );
+    expect(refreshed.config.profiles.scout.candidates[0]?.fastMode).toBe(true);
   });
 
   it("removes inherited routes and rejects untrusted project writes", async () => {

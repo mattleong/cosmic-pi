@@ -33,7 +33,7 @@ Built-ins preserve the previous behavior with one explicit `local` + `pi` + `par
 | ------------ | ------- | ------------ | ------------- |
 | `scout`      | fresh   | read-only    | low           |
 | `researcher` | fresh   | read-only    | medium        |
-| `planner`    | fresh   | read-only    | medium        |
+| `planner`    | fresh   | read-only    | xhigh         |
 | `worker`     | fresh   | writer       | high          |
 | `reviewer`   | fresh   | read-only    | high          |
 | `oracle`     | fork    | read-only    | high          |
@@ -89,7 +89,7 @@ A route is exactly `"disabled"`, one candidate, or a non-empty ordered candidate
 - `host`: `local` or `herdr`;
 - `runtime`: `pi`, `claude`, or `codex`;
 - `model`: a bounded native runtime selector; Pi uses `parent` or canonical `provider/model`;
-- `effort`: `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`;
+- `effort`: `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; `default` means the profile's soft default (shown as `default → <effective>` in settings), while `delegate` inherits the current parent effort and falls back to `high`;
 - `context`: `fresh` or `fork`;
 - `writeIntent`: `read-only` or `writer`;
 - optional `fastMode`, defaulting to false; when true, eligible Pi or Codex candidates request OpenAI's `priority` service tier;

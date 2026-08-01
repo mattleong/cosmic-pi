@@ -13,7 +13,7 @@ import type {
 } from "../config/store.ts";
 import type { ProfileCandidate, ProfileId } from "../profiles/model.ts";
 import { supportsSubagentFastMode } from "../run/fast-mode.ts";
-import { isActiveRunState, type SubagentEffort } from "../run/model.ts";
+import { decodeSubagentEffort, isActiveRunState, type SubagentEffort } from "../run/model.ts";
 import { SubagentFleetComponent } from "../ui/fleet.ts";
 import { declaredRouteForDraft, type ProfileRouteDraft } from "./profile-route-editor.ts";
 import { loadCandidateModelPicker } from "./ui/candidate-editor.ts";
@@ -172,6 +172,7 @@ async function requestProfileReload(
 }
 
 async function openProfileSettings(
+  pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   bridge: SubagentProjectionBridge,
   actions: FleetManagerActions,
@@ -198,6 +199,14 @@ async function openProfileSettings(
   }
 
   const availableModels = ctx.modelRegistry.getAvailable();
+  let parentEffort: SubagentEffort = "high";
+  if (ctx.model) {
+    try {
+      parentEffort = decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
+    } catch {
+      // Host callback failures use the same conservative fallback as launch resolution.
+    }
+  }
   const preferredPiModel = ctx.model
     ? `${ctx.model.provider}/${ctx.model.id}`
     : availableModels[0]
@@ -237,6 +246,7 @@ async function openProfileSettings(
         theme,
         inspection,
         projectTrusted,
+        parentEffort,
         ...(preferredPiModel ? { piModel: preferredPiModel } : {}),
         getHeight: () => tui.terminal.rows,
         requestRender: () => tui.requestRender(),
@@ -279,7 +289,7 @@ export function registerSubagentManagerCommand(
     handler: (args, ctx) => {
       const command = args.trim().toLowerCase();
       if (!command) return openFleetManager(ctx, bridge, actions);
-      if (command === "profiles") return openProfileSettings(ctx, bridge, actions);
+      if (command === "profiles") return openProfileSettings(pi, ctx, bridge, actions);
       ctx.ui.notify(
         "Usage: /subagents [profiles] — omit arguments for the fleet inspector.",
         "error",

@@ -1,4 +1,5 @@
 import type { SubagentConfigInspection, SubagentConfigScope } from "../../config/store.ts";
+import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import type {
   ProfileCandidate,
   ProfileCandidateEffort,
@@ -47,6 +48,8 @@ export interface CandidateFieldChangeOptions {
   readonly piModel?: string | undefined;
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
   readonly fastModeAvailable?: boolean | undefined;
+  readonly profile?: ProfileId | undefined;
+  readonly parentEffort?: SubagentEffort | undefined;
 }
 
 export interface CandidateFieldChoice {
@@ -100,8 +103,30 @@ export const effectiveProfileSummary = (
   return `${source} · ${count} candidate${count === 1 ? "" : "s"} · ${first.host}/${first.runtime}`;
 };
 
+export const effectiveCandidateEffort = (
+  profile: ProfileId,
+  candidate: ProfileCandidate,
+  parentEffort: SubagentEffort,
+): SubagentEffort =>
+  candidate.effort === "default"
+    ? (PROFILE_DEFINITIONS[profile].defaultEffort ?? parentEffort)
+    : candidate.effort;
+
+export const candidateEffortLabel = (
+  profile: ProfileId,
+  candidate: ProfileCandidate,
+  parentEffort: SubagentEffort,
+): string => {
+  const effective = effectiveCandidateEffort(profile, candidate, parentEffort);
+  return candidate.effort === "default"
+    ? `default → ${effective}${PROFILE_DEFINITIONS[profile].defaultEffort ? "" : " (inherited)"}`
+    : effective;
+};
+
 export const candidateFieldRows = (
   candidate: ProfileCandidate,
+  profile?: ProfileId,
+  parentEffort: SubagentEffort = "high",
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
   const localPi = candidate.host === "local" && candidate.runtime === "pi";
   const retainedAllowed = candidate.host === "herdr" && candidate.writeIntent === "read-only";
@@ -109,7 +134,12 @@ export const candidateFieldRows = (
     { field: "host", label: "Host", value: candidate.host, fixed: false },
     { field: "runtime", label: "Runtime", value: candidate.runtime, fixed: false },
     { field: "model", label: "Model", value: candidate.model, fixed: false },
-    { field: "effort", label: "Effort", value: candidate.effort, fixed: false },
+    {
+      field: "effort",
+      label: "Effort",
+      value: profile ? candidateEffortLabel(profile, candidate, parentEffort) : candidate.effort,
+      fixed: false,
+    },
     {
       field: "context",
       label: "Context",
@@ -153,15 +183,33 @@ export const candidateFieldChoices = (
       { value: "claude", label: "Claude Code", description: "Use Claude's native runtime" },
       { value: "codex", label: "Codex", description: "Use Codex app-server" },
     ];
-  if (field === "effort")
+  if (field === "effort") {
+    const definition = options.profile ? PROFILE_DEFINITIONS[options.profile] : undefined;
+    const effectiveDefault = definition?.defaultEffort ?? options.parentEffort;
+    const defaultChoice = effectiveDefault
+      ? {
+          value: "default",
+          label: definition?.defaultEffort
+            ? `Profile default → ${effectiveDefault}`
+            : `Inherited → ${effectiveDefault}`,
+          description: definition?.defaultEffort
+            ? `Use the ${options.profile} profile default (${effectiveDefault})`
+            : `Inherit the current parent effort when available; otherwise use high`,
+        }
+      : {
+          value: "default",
+          label: "Profile default",
+          description: "Use the profile's soft default effort",
+        };
     return [
-      { value: "default", label: "Runtime default", description: "Use the runtime default" },
+      defaultChoice,
       ...runtimeEfforts(candidate.runtime, options.supportedEfforts).map((effort) => ({
         value: effort,
         label: effort,
         description: `Use ${effort} reasoning effort`,
       })),
     ];
+  }
   if (field === "context")
     return candidate.host === "local" && candidate.runtime === "pi"
       ? [

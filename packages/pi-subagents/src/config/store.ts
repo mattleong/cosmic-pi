@@ -124,6 +124,7 @@ const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {
     effort: value.effort,
     context: value.context,
     writeIntent: value.writeIntent,
+    ...(value.fastMode === undefined ? {} : { fastMode: value.fastMode }),
     ...(value.closeOnReport === undefined ? {} : { closeOnReport: value.closeOnReport }),
   });
   return Array.isArray(route)

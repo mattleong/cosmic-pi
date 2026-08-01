@@ -4,9 +4,11 @@ import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
 import type { SubagentConfigInspection, SubagentConfigScope } from "../../config/store.ts";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
-import { PROFILE_IDS } from "../../profiles/model.ts";
+import { PROFILE_IDS, type ProfileId } from "../../profiles/model.ts";
+import type { SubagentEffort } from "../../run/model.ts";
 import type { ProfileRouteDraft } from "../profile-route-editor.ts";
 import {
+  candidateEffortLabel,
   candidateFieldRows,
   draftKindLabel,
   effectiveProfileSummary,
@@ -24,6 +26,7 @@ export interface ProfileWorkspaceRenderState {
   readonly inspection: SubagentConfigInspection;
   readonly scope: SubagentConfigScope;
   readonly projectTrusted: boolean;
+  readonly parentEffort: SubagentEffort;
   readonly pane: ProfileWorkspacePane;
   readonly profileIndex: number;
   readonly candidateIndex: number;
@@ -162,13 +165,16 @@ const windowStart = (length: number, selected: number, visibleCount: number): nu
   );
 
 const candidateSummary = (
+  profile: ProfileId,
   candidate: ProfileRouteDraft["candidates"][number],
   index: number,
   maximum: number,
+  parentEffort: SubagentEffort,
 ): string => {
   const prefix = `${String(index + 1).padStart(2, "0")} · ${candidate.host}/${candidate.runtime} · `;
   const lifecycle = candidate.closeOnReport ? "close" : "retain";
-  const suffix = ` · ${candidate.effort} · ${candidate.context} · ${candidate.writeIntent} · ${lifecycle}`;
+  const effort = candidateEffortLabel(profile, candidate, parentEffort);
+  const suffix = ` · ${effort} · ${candidate.context} · ${candidate.writeIntent} · ${lifecycle}`;
   const modelWidth = Math.max(4, maximum - visibleWidth(prefix) - visibleWidth(suffix));
   return truncateToWidth(
     `${prefix}${boundedMiddle(candidate.model, modelWidth)}${suffix}`,
@@ -279,7 +285,7 @@ const routePage = (
         ]
       : visible.map((candidate, offset) => {
           const index = start + offset;
-          return `${index === state.candidateIndex ? ">" : " "} ${candidateSummary(candidate, index, Math.max(1, width - 2))}`;
+          return `${index === state.candidateIndex ? ">" : " "} ${candidateSummary(profile, candidate, index, Math.max(1, width - 2), state.parentEffort)}`;
         });
   const actions = routeActions(state);
   return [
@@ -325,7 +331,7 @@ const candidatePage = (
   const profile = selectedProfile(state);
   const candidate = state.draft.candidates[state.candidateIndex];
   const notices = commonNotices(state, theme, width, cancelKey);
-  const fields = candidate ? candidateFieldRows(candidate) : [];
+  const fields = candidate ? candidateFieldRows(candidate, profile, state.parentEffort) : [];
   const visibleCount = Math.max(1, availableHeight - 9 - notices.length);
   const start = windowStart(fields.length, state.fieldIndex, visibleCount);
   const rows = candidate
@@ -443,7 +449,9 @@ const compactWorkspacePage = (
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
   const candidate = state.draft.candidates[state.candidateIndex];
-  const field = candidate ? candidateFieldRows(candidate)[state.fieldIndex] : undefined;
+  const field = candidate
+    ? candidateFieldRows(candidate, profile, state.parentEffort)[state.fieldIndex]
+    : undefined;
   const heading =
     state.pane === "profiles"
       ? `Profiles · ${state.profileIndex + 1}/${PROFILE_IDS.length}`
@@ -455,7 +463,13 @@ const compactWorkspacePage = (
       ? `${profile === state.inspection.config.defaultProfile ? "★ " : ""}${profile} · ${effectiveProfileSummary(state.inspection, profile)}`
       : state.pane === "candidates"
         ? candidate
-          ? candidateSummary(candidate, state.candidateIndex, Math.max(1, width))
+          ? candidateSummary(
+              profile,
+              candidate,
+              state.candidateIndex,
+              Math.max(1, width),
+              state.parentEffort,
+            )
           : state.draft.kind === "invalid"
             ? "Invalid declaration · route fails closed"
             : "No candidates · route disabled"

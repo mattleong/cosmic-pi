@@ -24,7 +24,7 @@ export const PROFILE_DEFINITIONS: Readonly<Record<ProfileId, ProfileDefinition>>
     description: "Concrete implementation planning from requirements and code evidence.",
     defaultContext: "fresh",
     defaultWriteIntent: "read-only",
-    defaultEffort: "medium",
+    defaultEffort: "xhigh",
     guidance:
       "Act as a planner. Turn the requirements and actual code into small ordered tasks with exact files, dependencies, risks, acceptance checks, and validation. Surface material ambiguities instead of guessing. Focus on a plan unless the assigned task explicitly requests implementation.",
   },
