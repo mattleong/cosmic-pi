@@ -5,195 +5,23 @@ import {
   Spacer,
   Text,
   truncateToWidth,
-  visibleWidth,
+  wrapTextWithAnsi,
   type Component,
 } from "@earendil-works/pi-tui";
-import { synchronousNow } from "../boundary/native-clock.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { isAssignmentFinishedRunState, type SubagentEffort } from "../run/model.ts";
+import { isAssignmentFinishedRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { safeTextPrefix } from "../run/state.ts";
-import {
-  animatedRunStateGlyph,
-  runStateColor,
-  runStateGlyph,
-  runStateLabel,
-} from "../ui/run-state.ts";
+import { runStateLabel } from "../ui/run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
-import {
-  decodeStartAwaitCardDetails,
-  type SubagentRunCard,
-  type SubagentStartAwaitCardDetails,
-} from "./details.ts";
+import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
+import type { SubagentRunCard, SubagentStartEntry } from "./details.ts";
 import { attentionRecoveryText, boundToolOutput, selectionSourceLabel } from "./format.ts";
+import { renderCompactResultComponent, renderProfileRoutesComponent } from "./render-management.ts";
+import { renderAwaitProgressComponent } from "./render-await.ts";
+import { aggregateRunUsage, renderResponsiveRunRows } from "./render-run-rows.ts";
+import { renderStartFailures, renderStartProgressComponent } from "./render-start.ts";
 import type { SubagentStartFailure } from "./subagent.ts";
-
-const awaitProgressHeader = (
-  runs: ReadonlyArray<SubagentRunCard>,
-  until: SubagentAwaitUntil,
-): string => {
-  const finished = runs.filter((run) => isAssignmentFinishedRunState(run.state)).length;
-  const condition = until === "all_finished" ? "Waiting for all agents" : "Waiting for first agent";
-  const unfinishedStates = [
-    "starting",
-    "running",
-    "waiting_for_parent",
-    "paused",
-    "stopping",
-  ] as const;
-  const activeSummary = unfinishedStates
-    .flatMap((state) => {
-      const count = runs.filter((run) => run.state === state).length;
-      return count > 0 ? [`${count} ${runStateLabel(state)}`] : [];
-    })
-    .join(" · ");
-  if (finished === runs.length)
-    return `${runs.length} agent${runs.length === 1 ? "" : "s"} finished`;
-  return `${condition} · ${finished} of ${runs.length} finished${activeSummary ? ` · ${activeSummary}` : ""}`;
-};
-
-const awaitRunStatus = (run: SubagentRunCard): string =>
-  sanitizeTerminalLine(
-    `${runStateLabel(run.state)}${run.currentTool ? ` (${run.currentTool})` : ""}`,
-  );
-
-export const formatAwaitProgress = (
-  runs: ReadonlyArray<SubagentRunCard>,
-  until: SubagentAwaitUntil,
-): string =>
-  [
-    awaitProgressHeader(runs, until),
-    ...runs.map(
-      (run) =>
-        `${runStateGlyph(run.state)} ${sanitizeTerminalLine(run.name)} (${sanitizeTerminalLine(run.id)}) · ${awaitRunStatus(run)}`,
-    ),
-  ].join("\n");
-
-const awaitHeaderColor = (
-  runs: ReadonlyArray<SubagentRunCard>,
-): "warning" | "success" | "error" => {
-  if (runs.some((run) => run.state === "failed")) return "error";
-  return runs.length > 0 && runs.every((run) => isAssignmentFinishedRunState(run.state))
-    ? "success"
-    : "warning";
-};
-
-const padVisible = (value: string, width: number): string =>
-  `${value}${" ".repeat(Math.max(0, width - visibleWidth(value)))}`;
-
-class AwaitProgressComponent implements Component {
-  private readonly runs: ReadonlyArray<SubagentRunCard>;
-  private readonly until: SubagentAwaitUntil;
-  private readonly theme: Theme;
-
-  constructor(runs: ReadonlyArray<SubagentRunCard>, until: SubagentAwaitUntil, theme: Theme) {
-    this.runs = runs;
-    this.until = until;
-    this.theme = theme;
-  }
-
-  render(width: number): string[] {
-    const safeWidth = Math.max(1, width);
-    const frame = Math.floor(synchronousNow() / 160);
-    return [
-      truncateToWidth(
-        this.theme.fg(awaitHeaderColor(this.runs), awaitProgressHeader(this.runs, this.until)),
-        safeWidth,
-      ),
-      ...renderResponsiveRunRows(this.runs, safeWidth, this.theme, {
-        frame,
-        status: awaitRunStatus,
-      }),
-    ];
-  }
-
-  invalidate(): void {
-    // Rendering is derived from the current clock frame.
-  }
-}
-
-interface SubagentToolRendererState extends Record<string, unknown> {
-  piSubagentsAwaitTicker?: (() => void) | undefined;
-  piSubagentsAwaitInvalidate?: (() => void) | undefined;
-}
-
-export interface SubagentToolRenderContext {
-  readonly state: SubagentToolRendererState;
-  readonly invalidate: () => void;
-}
-
-export const syncAwaitProgressTicker = (
-  details: SubagentStartAwaitCardDetails | undefined,
-  isPartial: boolean,
-  context: SubagentToolRenderContext | undefined,
-  startTicker: (intervalMs: number, tick: () => void) => () => void,
-): void => {
-  if (!context?.state) return;
-  const shouldAnimate =
-    isPartial &&
-    details?.cancelled !== true &&
-    (details?.action === "start" ||
-      (details?.action === "await" &&
-        details.cards.some((run) => run.state === "starting" || run.state === "running")));
-  if (shouldAnimate) {
-    context.state.piSubagentsAwaitInvalidate = context.invalidate;
-    if (!context.state.piSubagentsAwaitTicker) {
-      const weakState = new WeakRef(context.state);
-      let stopTimer = () => {};
-      const cleanup = () => {
-        try {
-          stopTimer();
-        } catch {
-          // Renderer teardown is best effort while the host tool row is settling.
-        }
-      };
-      stopTimer = startTicker(160, () => {
-        const active = weakState.deref();
-        if (active) active.piSubagentsAwaitInvalidate?.();
-        else cleanup();
-      });
-      context.state.piSubagentsAwaitTicker = cleanup;
-    }
-    return;
-  }
-  const stop = context.state.piSubagentsAwaitTicker;
-  if (!stop) return;
-  context.state.piSubagentsAwaitTicker = undefined;
-  context.state.piSubagentsAwaitInvalidate = undefined;
-  try {
-    stop();
-  } catch {
-    // Renderer teardown is best effort while the host tool row is settling.
-  }
-};
-
-const effortColor = (
-  effort: SubagentEffort,
-):
-  | "thinkingOff"
-  | "thinkingMinimal"
-  | "thinkingLow"
-  | "thinkingMedium"
-  | "thinkingHigh"
-  | "thinkingXhigh"
-  | "thinkingMax" => {
-  switch (effort) {
-    case "off":
-      return "thinkingOff";
-    case "minimal":
-      return "thinkingMinimal";
-    case "low":
-      return "thinkingLow";
-    case "medium":
-      return "thinkingMedium";
-    case "high":
-      return "thinkingHigh";
-    case "xhigh":
-      return "thinkingXhigh";
-    case "max":
-      return "thinkingMax";
-  }
-};
 
 interface RunReportSection {
   readonly name: string;
@@ -266,129 +94,36 @@ const reportAffordance = (
   return theme.fg("dim", `${expanded ? "▾" : "▸"} ${label}${expanded ? "" : " · expand to view"}`);
 };
 
-const renderStartFailures = (
-  failures: ReadonlyArray<SubagentStartFailure>,
-  expanded: boolean,
+const reportPreviews = (
+  runs: ReadonlyArray<SubagentRunCard>,
+  width: number,
   theme: Theme,
-): string =>
-  failures
-    .map((failure) => {
-      const name = sanitizeTerminalLine(failure.name ?? `start #${failure.index + 1}`);
-      const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
-      const summary = `${theme.fg("error", `× ${name}`)} · ${theme.fg("error", `failed to start${code}`)}`;
-      const raw = sanitizeTerminalLine(failure.message);
-      const maximum = expanded ? 2_048 : 240;
-      const marker = "… [truncated]";
-      const detail =
-        raw.length <= maximum
-          ? raw
-          : `${safeTextPrefix(raw, Math.max(0, maximum - marker.length))}${marker}`;
-      return `${summary}\n${theme.fg("dim", detail)}`;
-    })
-    .join("\n");
-
-class StartProgressComponent implements Component {
-  private readonly progress: string;
-  private readonly runs: ReadonlyArray<SubagentRunCard>;
-  private readonly failures: ReadonlyArray<SubagentStartFailure>;
-  private readonly theme: Theme;
-
-  constructor(
-    progress: string,
-    runs: ReadonlyArray<SubagentRunCard>,
-    failures: ReadonlyArray<SubagentStartFailure>,
-    theme: Theme,
-  ) {
-    this.progress = progress;
-    this.runs = runs;
-    this.failures = failures;
-    this.theme = theme;
-  }
-
-  render(width: number): string[] {
-    const safeWidth = Math.max(1, width);
-    const frame = Math.floor(synchronousNow() / 160);
+): ReadonlyArray<string> => {
+  const previews = runs.flatMap((run) => {
+    const firstLine = run.finalText
+      ?.split("\n")
+      .map((line) => line.trim())
+      .find(Boolean)
+      ?.replace(/^#{1,6}\s+/, "");
+    if (!firstLine) return [];
     return [
       truncateToWidth(
-        this.theme.fg("warning", `${animatedRunStateGlyph("starting", frame)} ${this.progress}`),
-        safeWidth,
+        theme.fg("dim", `↳ ${sanitizeTerminalLine(run.name)}: ${sanitizeTerminalLine(firstLine)}`),
+        width,
       ),
-      ...renderResponsiveRunRows(this.runs, safeWidth, this.theme, { frame }),
-      ...renderStartFailures(this.failures, false, this.theme)
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => truncateToWidth(line, safeWidth)),
     ];
-  }
-
-  invalidate(): void {
-    // Rendering is derived from the current clock frame.
-  }
-}
+  });
+  if (previews.length <= 3) return previews;
+  return [
+    ...previews.slice(0, 3),
+    theme.fg("dim", `… ${previews.length - 3} more report previews · expand to view`),
+  ];
+};
 
 export interface OutcomeBanner {
   readonly color: "warning" | "success" | "error" | "accent";
   readonly text: string;
 }
-
-interface ResponsiveRunRowOptions {
-  readonly frame?: number;
-  readonly status?: (run: SubagentRunCard) => string;
-}
-
-const renderResponsiveRunRows = (
-  runs: ReadonlyArray<SubagentRunCard>,
-  width: number,
-  theme: Theme,
-  options: ResponsiveRunRowOptions = {},
-): string[] => {
-  const safeWidth = Math.max(1, width);
-  const names = runs.map((run) => {
-    const glyph =
-      options.frame === undefined
-        ? runStateGlyph(run.state)
-        : animatedRunStateGlyph(run.state, options.frame);
-    return `${glyph} ${sanitizeTerminalLine(run.name)}`;
-  });
-  const efforts = runs.map((run) => sanitizeTerminalLine(run.effort));
-  const states = runs.map((run) =>
-    sanitizeTerminalLine(options.status?.(run) ?? runStateLabel(run.state)),
-  );
-  const nameWidth = names.reduce((max, name) => Math.max(max, visibleWidth(name)), 0);
-  const effortWidth = efforts.reduce((max, effort) => Math.max(max, visibleWidth(effort)), 0);
-  const stateWidth = states.reduce((max, state) => Math.max(max, visibleWidth(state)), 0);
-  const modelWidth = safeWidth - nameWidth - effortWidth - stateWidth - 9;
-  if (safeWidth >= 64 && modelWidth >= 8)
-    return runs.map((run, index) => {
-      const name = theme.fg(runStateColor(run.state), names[index] ?? "");
-      const model = truncateToWidth(
-        sanitizeTerminalLine(`${run.profile ? `[${run.profile}] ` : ""}${run.model}`),
-        modelWidth,
-      );
-      const effort = efforts[index] ?? "";
-      const state = theme.fg(runStateColor(run.state), states[index] ?? "");
-      return `${padVisible(name, nameWidth)} · ${padVisible(theme.fg("toolOutput", model), modelWidth)} · ${padVisible(theme.fg(effortColor(run.effort), effort), effortWidth)} · ${padVisible(state, stateWidth)}`;
-    });
-  return runs.flatMap((run, index) => {
-    const color = runStateColor(run.state);
-    const name = theme.fg(color, names[index] ?? "");
-    const state = theme.fg(color, states[index] ?? "");
-    const effort = efforts[index] ?? "";
-    const modelWidth = Math.max(1, safeWidth - visibleWidth(effort) - 3);
-    const model = theme.fg(
-      "toolOutput",
-      truncateToWidth(
-        sanitizeTerminalLine(`${run.profile ? `[${run.profile}] ` : ""}${run.model}`),
-        modelWidth,
-      ),
-    );
-    return [
-      truncateToWidth(name, safeWidth),
-      truncateToWidth(`${model} · ${theme.fg(effortColor(run.effort), effort)}`, safeWidth),
-      truncateToWidth(state, safeWidth),
-    ];
-  });
-};
 
 class RunOverviewComponent implements Component {
   private readonly runs: ReadonlyArray<SubagentRunCard>;
@@ -397,6 +132,7 @@ class RunOverviewComponent implements Component {
   private readonly theme: Theme;
   private readonly reportSections: ReadonlyArray<RunReportSection>;
   private readonly banner: OutcomeBanner | undefined;
+  private readonly showReportOutcomes: boolean;
 
   constructor(
     runs: ReadonlyArray<SubagentRunCard>,
@@ -405,6 +141,7 @@ class RunOverviewComponent implements Component {
     theme: Theme,
     reportSections: ReadonlyArray<RunReportSection>,
     banner?: OutcomeBanner,
+    showReportOutcomes = true,
   ) {
     this.runs = runs;
     this.failures = failures;
@@ -412,25 +149,60 @@ class RunOverviewComponent implements Component {
     this.theme = theme;
     this.reportSections = reportSections;
     this.banner = banner;
+    this.showReportOutcomes = showReportOutcomes;
   }
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
+    const usage = aggregateRunUsage(this.runs);
     return [
       ...(this.banner
         ? [truncateToWidth(this.theme.fg(this.banner.color, this.banner.text), safeWidth)]
         : []),
-      ...renderResponsiveRunRows(this.runs, safeWidth, this.theme),
+      ...(usage ? [this.theme.fg("dim", `Total usage · ${usage}`)] : []),
+      ...renderResponsiveRunRows(this.runs, safeWidth, this.theme, {
+        fullId: this.expanded,
+      }),
       ...(this.expanded
         ? this.runs.flatMap((run) => {
             const profile = run.profile ? `${sanitizeTerminalLine(run.profile)} · ` : "";
             const summary = sanitizeTerminalLine(
               `${profile}${selectionSourceLabel(run)} · ${run.selection.reason}`,
             );
+            const retention =
+              run.closeOnReport === false
+                ? `retain backend · assignment ${run.reportGeneration || 1}`
+                : `close after report · assignment ${run.reportGeneration || 1}`;
+            const details = [
+              run.context ? `context=${run.context}` : undefined,
+              retention,
+              run.capabilities
+                ? `capabilities=${run.capabilities.join(", ") || "none"}`
+                : undefined,
+            ]
+              .filter((value): value is string => value !== undefined)
+              .join(" · ");
             return [
-              truncateToWidth(this.theme.fg("dim", summary), safeWidth),
-              ...run.selection.skippedCandidates.map((candidate) =>
-                truncateToWidth(
+              ...wrapTextWithAnsi(
+                this.theme.fg("dim", `ID: ${sanitizeTerminalLine(run.id)}`),
+                safeWidth,
+              ),
+              ...wrapTextWithAnsi(this.theme.fg("dim", summary), safeWidth),
+              ...wrapTextWithAnsi(this.theme.fg("dim", details), safeWidth),
+              ...(run.progress
+                ? wrapTextWithAnsi(
+                    this.theme.fg("accent", `  Progress: ${sanitizeTerminalLine(run.progress)}`),
+                    safeWidth,
+                  )
+                : []),
+              ...(run.warning
+                ? wrapTextWithAnsi(
+                    this.theme.fg("warning", `  Warning: ${sanitizeTerminalLine(run.warning)}`),
+                    safeWidth,
+                  )
+                : []),
+              ...run.selection.skippedCandidates.flatMap((candidate) =>
+                wrapTextWithAnsi(
                   this.theme.fg(
                     "dim",
                     sanitizeTerminalLine(
@@ -441,12 +213,10 @@ class RunOverviewComponent implements Component {
                 ),
               ),
               ...(run.selection.warning
-                ? [
-                    truncateToWidth(
-                      this.theme.fg("warning", sanitizeTerminalLine(`  ${run.selection.warning}`)),
-                      safeWidth,
-                    ),
-                  ]
+                ? wrapTextWithAnsi(
+                    this.theme.fg("warning", sanitizeTerminalLine(`  ${run.selection.warning}`)),
+                    safeWidth,
+                  )
                 : []),
             ];
           })
@@ -456,7 +226,10 @@ class RunOverviewComponent implements Component {
         .filter(Boolean)
         .map((line) => truncateToWidth(line, safeWidth)),
       ...this.runs
-        .filter((run) => run.state === "completed" && !run.finalText && !run.error)
+        .filter(
+          (run) =>
+            this.showReportOutcomes && run.state === "completed" && !run.finalText && !run.error,
+        )
         .map((run) =>
           truncateToWidth(
             this.theme.fg(
@@ -477,6 +250,22 @@ class RunOverviewComponent implements Component {
             safeWidth,
           ),
         ),
+      ...this.runs
+        .filter((run) => run.state === "paused")
+        .map((run) =>
+          truncateToWidth(
+            this.theme.fg(
+              "warning",
+              run.capabilities?.includes("resume")
+                ? `${sanitizeTerminalLine(run.name)} is paused · resume or stop it with subagent_lifecycle.`
+                : `${sanitizeTerminalLine(run.name)} cannot resume · stop it and start a replacement.`,
+            ),
+            safeWidth,
+          ),
+        ),
+      ...(!this.expanded && this.showReportOutcomes
+        ? reportPreviews(this.runs, safeWidth, this.theme)
+        : []),
       ...attentionRecoveryText(this.runs)
         .split("\n")
         .filter(Boolean)
@@ -499,13 +288,6 @@ class RunOverviewComponent implements Component {
   }
 }
 
-/** Partial await rendering: the animated in-progress fleet card. */
-export const renderAwaitProgressComponent = (
-  runs: ReadonlyArray<SubagentRunCard>,
-  until: SubagentAwaitUntil,
-  theme: Theme,
-): Component => new AwaitProgressComponent(runs, until, theme);
-
 /** Collapsed start/await rendering: run summaries, launch failures, and the report affordance. */
 export const renderStartAwaitOverviewComponent = (
   runs: ReadonlyArray<SubagentRunCard>,
@@ -520,17 +302,23 @@ export const renderExpandedStartAwaitResult = (
   theme: Theme,
   failures: ReadonlyArray<SubagentStartFailure> = [],
   banner?: OutcomeBanner,
+  showReportOutcomes = true,
 ): Component => {
   const container = new Container();
-  const sections = expandedRunReportSections(runs);
-  container.addChild(new RunOverviewComponent(runs, failures, true, theme, sections, banner));
+  const sections = showReportOutcomes ? expandedRunReportSections(runs) : [];
+  container.addChild(
+    new RunOverviewComponent(runs, failures, true, theme, sections, banner, showReportOutcomes),
+  );
   if (sections.length === 0) return container;
-  for (const section of sections) {
+  for (const [index, section] of sections.entries()) {
     container.addChild(new Spacer(1));
-    const heading = section.kind === "report" ? "Final report" : "Failure";
+    const heading = section.kind === "report" ? "Report" : "Failure";
     container.addChild(
       new Text(
-        theme.fg(section.kind === "report" ? "accent" : "error", `${heading} — ${section.name}`),
+        theme.fg(
+          section.kind === "report" ? "accent" : "error",
+          `${heading} ${index + 1} of ${sections.length} — ${section.name}`,
+        ),
         0,
         0,
       ),
@@ -574,9 +362,16 @@ export const awaitResultBanner = (details: {
   if (details.attentionRequired)
     return {
       color: "warning",
-      text: `Parent reply required for ${waiting} agent${waiting === 1 ? "" : "s"}`,
+      text: `Parent reply required for ${waiting} subagent${waiting === 1 ? "" : "s"}`,
     };
-  if (details.awaitUntil !== "any_finished") return undefined;
+  if (details.awaitUntil !== "any_finished") {
+    if (runs.length === 0 || unfinished.length > 0) return undefined;
+    const failed = runs.filter((run) => run.state === "failed").length;
+    return {
+      color: failed > 0 ? "error" : "success",
+      text: `${runs.length} subagent${runs.length === 1 ? "" : "s"} finished${failed > 0 ? ` · ${failed} failed` : ""}`,
+    };
+  }
   const first = runs
     .filter((run) => isAssignmentFinishedRunState(run.state))
     .sort((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity))[0];
@@ -589,6 +384,19 @@ export const awaitResultBanner = (details: {
   return {
     color: first.state === "failed" ? "error" : "accent",
     text: `${name} ${outcome}${unfinished.length > 0 ? ` · ${unfinished.length} unfinished` : ""}${attention}`,
+  };
+};
+
+const startResultBanner = (
+  runs: ReadonlyArray<SubagentRunCard>,
+  failures: ReadonlyArray<SubagentStartFailure>,
+  entries: ReadonlyArray<SubagentStartEntry> | undefined,
+): OutcomeBanner => {
+  const requested = entries?.length ?? runs.length + failures.length;
+  const text = `Started ${runs.length} of ${requested} subagent${requested === 1 ? "" : "s"}${failures.length > 0 ? ` · ${failures.length} failed` : ""}`;
+  return {
+    color: failures.length === 0 ? "success" : runs.length > 0 ? "warning" : "error",
+    text,
   };
 };
 
@@ -643,14 +451,20 @@ export const renderSubagentResult = (
       .map((part) => part.text ?? "")
       .join(" ");
     const progress = sanitizeTerminalLine(rawProgress || "Starting subagents…");
-    return new StartProgressComponent(progress, details.cards, details.startFailures ?? [], theme);
+    return renderStartProgressComponent(
+      progress,
+      details.cards,
+      details.startFailures ?? [],
+      details.startEntries ?? [],
+      theme,
+    );
   }
   if (!isPartial && details) {
     const failures = details.startFailures ?? [];
     const banner = includeContentOmission(
       details.action === "await"
         ? awaitResultBanner({ ...details, runs: details.cards })
-        : undefined,
+        : startResultBanner(details.cards, failures, details.startEntries),
       details.contentOmitted,
     );
     if (expanded) {
@@ -664,16 +478,67 @@ export const renderSubagentResult = (
             .join("\n"),
         ),
       );
+      if (!fallback) return rendered;
       const container = new Container();
-      container.addChild(rendered);
-      if (fallback) {
-        container.addChild(new Spacer(1));
-        container.addChild(new Text(theme.fg("accent", theme.bold("Bounded tool output")), 0, 0));
-        container.addChild(new Text(theme.fg("toolOutput", fallback), 2, 0));
-      }
+      container.addChild(
+        new Text(
+          theme.fg(
+            "warning",
+            theme.bold("Recovered omitted output · bounded complete result follows"),
+          ),
+          0,
+          0,
+        ),
+      );
+      container.addChild(new Text(theme.fg("toolOutput", fallback), 2, 0));
       return container;
     }
     return renderStartAwaitOverviewComponent(details.cards, theme, failures, banner);
+  }
+  const compact = decodeCompactToolDetails(result.details);
+  if (compact?.action === "models" && compact.profiles)
+    return renderProfileRoutesComponent(compact, expanded, theme);
+  if (compact && compact.action !== "models") {
+    const rendered = renderCompactResultComponent(
+      compact,
+      expanded,
+      theme,
+      (cards, isExpanded, banner, showReports) =>
+        isExpanded
+          ? renderExpandedStartAwaitResult(cards, theme, [], banner, showReports)
+          : new RunOverviewComponent(
+              cards,
+              [],
+              false,
+              theme,
+              showReports ? expandedRunReportSections(cards) : [],
+              banner,
+              showReports,
+            ),
+    );
+    if (!expanded || !compact.contentOmitted) return rendered;
+    const fallback = boundToolOutput(
+      sanitizeTerminalText(
+        result.content
+          .filter((part) => part.type === "text")
+          .map((part) => part.text ?? "")
+          .join("\n"),
+      ),
+    );
+    if (!fallback) return rendered;
+    const container = new Container();
+    container.addChild(
+      new Text(
+        theme.fg(
+          "warning",
+          theme.bold("Recovered omitted output · bounded complete result follows"),
+        ),
+        0,
+        0,
+      ),
+    );
+    container.addChild(new Text(theme.fg("toolOutput", fallback), 2, 0));
+    return container;
   }
   let text = boundToolOutput(
     sanitizeTerminalText(

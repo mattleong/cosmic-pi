@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentRunView } from "../src/run/model.ts";
 import {
+  decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
-  makeCompactToolDetails,
-  makeStartAwaitCardDetails,
-} from "../src/tools/details.ts";
+} from "../src/tools/details-decode.ts";
+import { makeCompactToolDetails, makeStartAwaitCardDetails } from "../src/tools/details.ts";
 
 const run = (index = 1): SubagentRunView => ({
   id: `agent-r1-${index}`,
@@ -58,6 +58,12 @@ describe("persisted subagent card details", () => {
       runtime: "claude",
       closeOnReport: false,
       reportGeneration: 1,
+      context: "fresh",
+      writeIntent: "read-only",
+      capabilities: ["resume"],
+      startedAt: 1,
+      lastActivityAt: 2,
+      usage: { totalTokens: 2 },
       finalTextTruncated: true,
       selection: { host: "herdr", runtime: "claude", closeOnReport: false },
     });
@@ -108,7 +114,13 @@ describe("persisted subagent card details", () => {
     const hostile = `${"\\".repeat(2_000)}${"\ud800".repeat(500)}`;
     const details = makeCompactToolDetails({
       action: hostile,
-      runs: Array.from({ length: 12 }, (_, index) => ({ id: `${index}-${hostile}` })),
+      runs: Array.from({ length: 12 }, (_, index) => ({
+        ...run(index + 1),
+        id: `${index}-${hostile}`,
+        name: hostile,
+        model: hostile,
+        finalText: hostile,
+      })),
       profileIds: Array.from({ length: 20 }, () => hostile),
       defaultProfile: hostile,
       actionFailures: Array.from({ length: 12 }, (_, index) => ({
@@ -120,6 +132,10 @@ describe("persisted subagent card details", () => {
     expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
     expect(details).toMatchObject({ version: 1 });
     expect(Object.isFrozen(details)).toBe(true);
+    expect(decodeCompactToolDetails(details)).toMatchObject({
+      action: details.action.slice(0, 32),
+      runCount: 12,
+    });
   });
 
   it("tolerantly projects valid legacy details and rejects malformed persisted details", () => {

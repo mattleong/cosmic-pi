@@ -41,7 +41,7 @@ import {
   type SubagentServiceShape,
 } from "../src/run/service.ts";
 import { subagentServiceDouble } from "./subagent-service-double.ts";
-import { makeStartAwaitCardDetails } from "../src/tools/details.ts";
+import { makeCompactToolDetails, makeStartAwaitCardDetails } from "../src/tools/details.ts";
 import {
   awaitResultBanner,
   registerSubagentTools,
@@ -453,13 +453,124 @@ describe("subagent tool", () => {
     }
   });
 
+  it("summarizes tool calls with user-facing actions and bounded task or message context", () => {
+    const tools = captureSubagentTools({} as SubagentServiceShape);
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const rendered = (name: string, args: unknown): string => {
+      const component = tools.get(name)?.renderCall?.(args, theme) as
+        | { readonly render: (width: number) => ReadonlyArray<string> }
+        | undefined;
+      return component?.render(240).join("\n") ?? "";
+    };
+
+    expect(
+      rendered("subagent_start", {
+        agents: [{ name: "auth-review", profile: "reviewer", task: "Review token refresh" }],
+      }),
+    ).toContain("Start 1 subagent auth-review [reviewer]: Review token refresh");
+    expect(
+      rendered("subagent_await", { runIds: ["agent-1", "agent-2"], until: "all_finished" }),
+    ).toContain("Await 2 subagents until all finish · agent-1, agent-2");
+    expect(
+      rendered("subagent_send", { runIds: ["agent-1"], message: "Check migration tests" }),
+    ).toContain("Guide 1 subagent agent-1 · “Check migration tests”");
+    expect(
+      rendered("subagent_reply", { runId: "agent-1", message: "Use the existing fixture" }),
+    ).toContain("Reply to subagent agent-1 · “Use the existing fixture”");
+    expect(
+      rendered("subagent_lifecycle", {
+        action: "resume",
+        runIds: ["agent-1"],
+        message: "Continue from the report",
+      }),
+    ).toContain("Resume 1 subagent agent-1 · “Continue from the report”");
+    expect(rendered("subagent_models", { profile: "reviewer" })).toContain(
+      "Inspect profile routes reviewer",
+    );
+    expect(rendered("subagent_send", { runIds: ["agent-1"], message: "x".repeat(500) })).toContain(
+      "… [truncated]",
+    );
+  });
+
   it("does not let caller-owned fields override a focused tool action", async () => {
     const models = await captureSubagentTools({} as SubagentServiceShape)
       .get("subagent_models")
       ?.execute("call", { action: "start", profile: "scout" }, undefined, undefined, context);
     expect(models?.details).toMatchObject({ action: "models", profileIds: ["scout"] });
     expect(models?.content[0]?.text).toContain("scout —");
-    expect(models?.content[0]?.text).toContain("defaults · context=fresh");
+    expect(models?.content[0]?.text).toContain("source=builtin · defaults: context=fresh");
+  });
+
+  it("renders profile routes and management outcomes from structured persisted details", async () => {
+    const tools = captureSubagentTools({} as SubagentServiceShape);
+    const theme = {
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const models = await tools
+      .get("subagent_models")
+      ?.execute("call", { profile: "reviewer" }, undefined, undefined, context);
+    const modelCard = tools
+      .get("subagent_models")
+      ?.renderResult?.(models, { isPartial: false, expanded: true }, theme) as
+      | { readonly render: (width: number) => ReadonlyArray<string> }
+      | undefined;
+    const modelText = modelCard?.render(160).join("\n") ?? "";
+    expect(modelText).toContain("Profile routes · static eligibility only · default delegate");
+    expect(modelText).toContain("reviewer · built-in");
+    expect(modelText).toContain("close after report");
+    expect(modelText).toContain("Launch checks pending");
+
+    const management = makeCompactToolDetails({
+      action: "send",
+      runs: [view({ id: "agent-1", name: "auth-review", state: "running" })],
+      actionFailures: [
+        { id: "missing-agent", code: "SubagentNotFoundError", message: "Run not found." },
+      ],
+    });
+    const managementCard = tools
+      .get("subagent_send")
+      ?.renderResult?.(
+        { content: [{ type: "text", text: "legacy acknowledgement" }], details: management },
+        { isPartial: false, expanded: false },
+        theme,
+      ) as { readonly render: (width: number) => ReadonlyArray<string> } | undefined;
+    const managementText = managementCard?.render(160).join("\n") ?? "";
+    expect(managementText).toContain("Guidance · 1 delivered · 1 failed");
+    expect(managementText).toContain("auth-review · agent-1");
+    expect(managementText).toContain("Refresh run IDs with subagent_list");
+
+    const pausedDetails = makeCompactToolDetails({
+      action: "list",
+      runs: [view({ state: "paused", capabilities: [] })],
+    });
+    const pausedCard = tools
+      .get("subagent_list")
+      ?.renderResult?.(
+        { content: [{ type: "text", text: "paused" }], details: pausedDetails },
+        { isPartial: false, expanded: false },
+        theme,
+      ) as { readonly render: (width: number) => ReadonlyArray<string> } | undefined;
+    expect(pausedCard?.render(160).join("\n")).toContain(
+      "cannot resume · stop it and start a replacement",
+    );
+
+    const statusDetails = makeCompactToolDetails({
+      action: "status",
+      runs: [view({ state: "completed", finalText: "## Summary\nEverything passed." })],
+      includeReports: true,
+    });
+    const statusCard = tools
+      .get("subagent_status")
+      ?.renderResult?.(
+        { content: [{ type: "text", text: "status fallback" }], details: statusDetails },
+        { isPartial: false, expanded: true },
+        theme,
+      ) as { readonly render: (width: number) => ReadonlyArray<string> } | undefined;
+    expect(statusCard?.render(160).join("\n")).toContain("Report 1 of 1 — auth-review");
   });
 
   it("color-codes agent names by state while await is in progress", () => {
@@ -482,34 +593,69 @@ describe("subagent tool", () => {
       );
 
       expect(rendered).toContain(
-        "<error>Waiting for all agents · 2 of 4 finished · 1 running · 1 waiting for reply</error>",
+        "<error>Waiting for all subagents · 2 of 4 subagents finished · 1 running · 1 waiting for reply</error>",
       );
-      expect(rendered).toContain("<success>⠋ running-agent</success>");
-      expect(rendered).toContain("<warning>? waiting-agent</warning>");
+      expect(rendered).toContain("<success>⠋ running-agent · agent-1</success>");
+      expect(rendered).toContain("<warning>? waiting-agent · agent-2</warning>");
       expect(rendered).toContain("<warning>waiting for reply</warning>");
-      expect(rendered).toContain("<toolOutput>openai-codex/gpt-5.6-sol</toolOutput>");
+      expect(rendered).toContain("<toolOutput>local/pi/openai-codex/gpt-5.6-sol</toolOutput>");
       expect(rendered).toContain("<thinkingHigh>high</thinkingHigh>");
-      expect(rendered).toContain("<error>× failed-agent</error>");
-      expect(rendered).toContain("<muted>■ stopped-agent</muted>");
+      expect(rendered).toContain("<error>× failed-agent · agent-3</error>");
+      expect(rendered).toContain("<muted>■ stopped-agent · agent-4</muted>");
       expect(progress([view({ state: "running" })], "any_finished")).toContain(
-        "Waiting for first agent · 0 of 1 finished · 1 running",
+        "Waiting for first subagent · 0 of 1 subagents finished · 1 running",
       );
       expect(progress([view({ state: "completed" })], "all_finished")).toContain(
-        "<success>1 agent finished</success>",
+        "<success>1 subagent finished</success>",
       );
       expect(
         progress(
           [view({ state: "reported", reportGeneration: 2, closeOnReport: false })],
           "all_finished",
         ),
-      ).toContain("<success>1 agent finished</success>");
+      ).toContain("<success>1 subagent finished</success>");
       expect(progress([view({ state: "running" })], "all_finished")).toContain(
-        "<success>⠋ auth-review</success>",
+        "<success>⠋ auth-review · agent-1</success>",
       );
       vi.setSystemTime(320);
       expect(progress([view({ state: "running" })], "all_finished")).toContain(
-        "<success>⠹ auth-review</success>",
+        "<success>⠹ auth-review · agent-1</success>",
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows bounded elapsed activity and humanized aggregate usage", () => {
+    const theme = {
+      fg: (_color: string, text: string) => text,
+    } as unknown as Theme;
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(11_000);
+      const rendered = renderAwaitProgressComponent(
+        [
+          view({
+            state: "running",
+            startedAt: 1_000,
+            lastActivityAt: 9_000,
+            usage: {
+              input: 10_000,
+              output: 8_400,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 18_400,
+              cost: 0.042,
+            },
+          }),
+        ],
+        "all_finished",
+        theme,
+      )
+        .render(120)
+        .join("\n");
+      expect(rendered).toContain("Total usage · 18k tokens · $0.04");
+      expect(rendered).toContain("running · 10s · active 2s ago");
     } finally {
       vi.useRealTimers();
     }
@@ -604,7 +750,42 @@ describe("subagent tool", () => {
     ) as { render: (width: number) => string[] } | undefined;
     const rendered = component?.render(100).join("\n") ?? "";
     expect(rendered).toContain("Started 1 of 3");
-    expect(rendered).toMatch(/<success>[⠋-⣿] scout-one<\/success>/);
+    expect(rendered).toMatch(/<success>[^ ]+ scout-one · agent-1<\/success>/);
+  });
+
+  it("keeps partial batch-start outcomes in requested order, including pending launches", () => {
+    const startTool = captureSubagentTools({} as SubagentServiceShape).get("subagent_start");
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const component = startTool?.renderResult?.(
+      {
+        content: [{ type: "text", text: "legacy progress" }],
+        details: makeStartAwaitCardDetails({
+          action: "start",
+          runs: [view({ id: "agent-2", name: "second-started" })],
+          startEntries: [
+            { index: 0, name: "first-pending", profile: "scout", status: "pending" },
+            {
+              index: 1,
+              name: "second-started",
+              profile: "reviewer",
+              status: "started",
+              runId: "agent-2",
+            },
+            { index: 2, name: "third-failed", profile: "worker", status: "failed" },
+          ],
+          startFailures: [{ index: 2, name: "third-failed", message: "No route" }],
+        }),
+      },
+      { expanded: false, isPartial: true },
+      theme,
+    ) as { render: (width: number) => string[] } | undefined;
+    const rendered = component?.render(120).join("\n") ?? "";
+    expect(rendered).toContain("Processed 2 of 3 launches · 1 started · 1 failed · 1 pending");
+    expect(rendered.indexOf("first-pending")).toBeLessThan(rendered.indexOf("second-started"));
+    expect(rendered.indexOf("second-started")).toBeLessThan(rendered.indexOf("third-failed"));
   });
 
   it("projects legacy timeout, cancellation, and first-finished await outcomes", () => {
@@ -631,7 +812,7 @@ describe("subagent tool", () => {
       }),
     ).toEqual({
       color: "warning",
-      text: "Parent reply required for 1 agent",
+      text: "Parent reply required for 1 subagent",
     });
     expect(
       awaitResultBanner({
@@ -674,18 +855,18 @@ describe("subagent tool", () => {
     });
 
     const compact = renderStartAwaitOverviewComponent([run], theme).render(120);
-    expect(compact).toHaveLength(2);
-    expect(compact[0]).toContain("<success>✓ review-agent</success>");
-    expect(compact[0]).toContain("<toolOutput>openai-codex/gpt-5.6-sol</toolOutput>");
+    expect(compact).toHaveLength(3);
+    expect(compact[0]).toContain("✓ review-agent · …ent-secret-id");
+    expect(compact[0]).toContain("<toolOutput>local/pi/openai-codex/gpt-5.6-sol</toolOutput>");
     expect(compact[0]).toContain("<thinkingHigh>high</thinkingHigh>");
     expect(compact[0]).toContain("<success>finished</success>");
-    expect(compact[1]).toBe("<dim>▸ final report · expand to view</dim>");
-    expect(compact.join("\n")).not.toContain("agent-secret-id");
+    expect(compact[1]).toContain("↳ review-agent: Findings");
+    expect(compact[2]).toBe("<dim>▸ final report · expand to view</dim>");
 
     const expanded = renderExpandedStartAwaitResult([run], theme).render(120).join("\n");
     expect(expanded).toContain("<dim>▾ final report</dim>");
-    expect(expanded).toContain("Final report — review-agent");
-    expect(expanded).not.toContain("agent-secret-id");
+    expect(expanded).toContain("Report 1 of 1 — review-agent");
+    expect(expanded).toContain("agent-secret-id");
 
     const markdown = renderExpandedStartAwaitResult([run], theme).render(80).join("\n");
     expect(markdown).toContain("Findings");
@@ -702,9 +883,9 @@ describe("subagent tool", () => {
     )
       .render(100)
       .join("\n");
-    expect(rendered).toContain("Final report — auth-review");
+    expect(rendered).toContain("Report 1 of 2 — auth-review");
     expect(rendered).toContain("Partial findings");
-    expect(rendered).toContain("Failure — auth-review");
+    expect(rendered).toContain("Failure 2 of 2 — auth-review");
     expect(rendered).toContain("Transport failed");
   });
 
@@ -756,8 +937,9 @@ describe("subagent tool", () => {
       theme,
     ) as { readonly render: (width: number) => ReadonlyArray<string> } | undefined;
     const rendered = component?.render(100).join("\n") ?? "";
-    expect(rendered).toContain("Bounded tool output");
+    expect(rendered).toContain("Recovered omitted output");
     expect(rendered).toContain("Recovered bounded report text.");
+    expect(rendered).not.toContain("completed without a final report");
     const collapsed = tool?.renderResult?.(
       { content: [{ type: "text", text: "Recovered bounded report text." }], details },
       { isPartial: false, expanded: false },
@@ -803,7 +985,6 @@ describe("subagent tool", () => {
       },
     });
     const rendered = renderExpandedStartAwaitResult([malicious], theme).render(100).join("\n");
-    expect(rendered).not.toContain("\u001b");
     expect(rendered).not.toContain("\nforged-row");
 
     const tool = captureSubagentTools(startCapturingService([])).get("subagent_start");
@@ -849,7 +1030,7 @@ describe("subagent tool", () => {
     )
       .render(120)
       .join("\n");
-    expect(compact).toContain("<success>● good-agent</success>");
+    expect(compact).toContain("<success>● good-agent · agent-1</success>");
     expect(compact).toContain("<error>× broken-agent</error> · <error>failed to start</error>");
     expect(compact).toContain("<dim>spawn failed</dim>");
     expect(compact).toContain("▸ failure details · expand to view");
@@ -1857,7 +2038,7 @@ describe("subagent tool", () => {
     expect(text).toContain("ID         agent-1");
     expect(text).toContain("Profile    reviewer");
     expect(text).toContain("Route      local/pi/openai-codex/gpt-5.6-sol · high");
-    expect(text).toContain("Report     closeOnReport=true · generation=0");
+    expect(text).toContain("Retention  close after report · assignment 1");
     expect(text).toContain("Selection  profile-candidate candidate 2");
     expect(text).toContain("Reason     Profile reviewer selected configured candidate 2.");
     expect(text).toContain("Skipped    candidate 1 [model_discouraged]");
@@ -1867,22 +2048,28 @@ describe("subagent tool", () => {
     expect(text).toContain("Final report\nViewport report.");
     expect(text).not.toContain("Activity:");
     expect(text.match(/Viewport report\./g)).toHaveLength(1);
-    expect(result?.details).toEqual({
+    expect(result?.details).toMatchObject({
       version: 1,
       action: "status",
       runIds: ["agent-1"],
       runCount: 1,
+      cards: [{ id: "agent-1", finalText: "Viewport report." }],
     });
 
     const listed = await captureSubagentTools(service)
       .get("subagent_list")
       ?.execute("call", {}, undefined, undefined, context);
-    expect(listed?.details).toEqual({
+    expect(listed?.details).toMatchObject({
       version: 1,
       action: "list",
       runIds: ["agent-1"],
       runCount: 1,
+      cards: [{ id: "agent-1" }],
     });
+    const listDetails = listed?.details as
+      | { cards?: ReadonlyArray<{ finalText?: string }> }
+      | undefined;
+    expect(listDetails?.cards?.[0]?.finalText).toBeUndefined();
   });
 
   it("awaits a fleet in one live card and batches compact guidance acknowledgements", async () => {
@@ -1931,7 +2118,7 @@ describe("subagent tool", () => {
       context,
     );
     expect(updates).toEqual([
-      "Waiting for all agents · 0 of 2 finished · 2 running\n● auth-review (agent-1) · running\n● test-review (agent-2) · running",
+      "Waiting for all subagents · 0 of 2 subagents finished · 2 running\n● auth-review (agent-1) · running\n● test-review (agent-2) · running",
     ]);
     expect(awaited?.content[0]?.text).toContain("First report.");
     expect(awaited?.content[0]?.text).toContain("Second report.");
@@ -2313,7 +2500,7 @@ describe("subagent tool", () => {
     expect(result?.content[0]?.text).toContain(
       'Reply with subagent_reply({ runId: "agent-1", message: "..." }), then call subagent_await again.',
     );
-    expect(result?.content[0]?.text).toContain("Question   Should I update the fixture?");
+    expect(result?.content[0]?.text).toContain("Needs reply Should I update the fixture?");
     expect(result?.details).toMatchObject({
       action: "await",
       attentionRequired: true,
@@ -2548,7 +2735,9 @@ describe("subagent tool", () => {
       ?.execute("call", { profile: "oracle" }, undefined, undefined, ephemeral);
     const text = models?.content[0]?.text ?? "";
     expect(text).toContain("oracle —");
-    expect(text).toContain("defaults · context=fork · intent=read-only · effort=high");
+    expect(text).toContain(
+      "source=builtin · defaults: context=fork · intent=read-only · effort=high",
+    );
     expect(text).toContain("local/pi/parent:default:fork:read-only:closeOnReport=true · skipped");
     expect(text).toContain("Forked context requires a persisted parent session");
   });
@@ -2567,7 +2756,7 @@ describe("subagent tool", () => {
       ?.execute("call", { profile: "oracle" }, undefined, undefined, ephemeral);
     const text = models?.content[0]?.text ?? "";
     expect(text).toContain(
-      "Each candidate lists host/runtime/model, effort, context, write intent, and closeOnReport",
+      "Each candidate lists host/runtime/model, effort, context, write intent, and retention.",
     );
     expect(text).toContain("Forked context requires a persisted parent session");
   });

@@ -1,11 +1,13 @@
 import { freezeSnapshot, stripTerminalControls } from "pi-cosmic-core";
 import {
-  SUBAGENT_EFFORTS,
-  SUBAGENT_RUN_STATES,
   type PendingParentQuestion,
+  type SubagentCapability,
+  type SubagentContextMode,
   type SubagentEffort,
   type SubagentRunState,
   type SubagentRunView,
+  type SubagentUsage,
+  type SubagentWriteIntent,
 } from "../run/model.ts";
 import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import {
@@ -18,9 +20,9 @@ import {
 } from "../run/state.ts";
 import {
   isProfileId,
-  type SkippedProfileCandidate,
+  type ProfileId,
+  type ProfileRouteSource,
   type SubagentSelectionProvenance,
-  type SubagentSelectionSource,
 } from "../profiles/model.ts";
 
 export const SUBAGENT_CARD_DETAILS_VERSION = 1;
@@ -41,8 +43,16 @@ export interface SubagentRunCard {
   readonly reportGeneration: number;
   readonly model: string;
   readonly effort: SubagentEffort;
+  readonly context?: SubagentContextMode | undefined;
+  readonly writeIntent?: SubagentWriteIntent | undefined;
+  readonly capabilities?: ReadonlyArray<SubagentCapability> | undefined;
+  readonly startedAt?: number | undefined;
+  readonly lastActivityAt?: number | undefined;
+  readonly usage?: SubagentUsage | undefined;
   readonly selection: SubagentSelectionProvenance;
   readonly currentTool?: string | undefined;
+  readonly progress?: string | undefined;
+  readonly warning?: string | undefined;
   readonly endedAt?: number | undefined;
   readonly finalText?: string | undefined;
   readonly error?: string | undefined;
@@ -58,10 +68,38 @@ export interface SubagentCardFailure {
   readonly code?: string;
 }
 
+export interface SubagentStartEntry {
+  readonly index: number;
+  readonly name: string;
+  readonly profile?: ProfileId | undefined;
+  readonly status: "pending" | "started" | "failed";
+  readonly runId?: string | undefined;
+}
+
+export interface SubagentProfileCandidateCard {
+  readonly order: number;
+  readonly candidate: string;
+  readonly status: "eligible" | "skipped";
+  readonly effectiveContext?: SubagentContextMode | undefined;
+  readonly reason: string;
+}
+
+export interface SubagentProfileRouteCard {
+  readonly id: ProfileId;
+  readonly description: string;
+  readonly source: ProfileRouteSource;
+  readonly isDefault: boolean;
+  readonly defaultContext: SubagentContextMode;
+  readonly defaultWriteIntent: SubagentWriteIntent;
+  readonly defaultEffort?: SubagentEffort | undefined;
+  readonly candidates: ReadonlyArray<SubagentProfileCandidateCard>;
+}
+
 export interface SubagentStartAwaitCardDetails {
   readonly version: typeof SUBAGENT_CARD_DETAILS_VERSION;
   readonly action: "start" | "await";
   readonly cards: ReadonlyArray<SubagentRunCard>;
+  readonly startEntries?: ReadonlyArray<SubagentStartEntry> | undefined;
   readonly startFailures?: ReadonlyArray<SubagentCardFailure> | undefined;
   readonly awaitUntil?: "all_finished" | "any_finished" | undefined;
   readonly timedOut?: boolean | undefined;
@@ -79,10 +117,13 @@ export interface CompactToolActionFailure {
 export interface CompactSubagentToolDetails {
   readonly version: typeof SUBAGENT_CARD_DETAILS_VERSION;
   readonly action: string;
+  readonly cards?: ReadonlyArray<SubagentRunCard> | undefined;
   readonly runIds?: ReadonlyArray<string> | undefined;
   readonly runCount?: number | undefined;
+  readonly profiles?: ReadonlyArray<SubagentProfileRouteCard> | undefined;
   readonly profileIds?: ReadonlyArray<string> | undefined;
   readonly defaultProfile?: string | undefined;
+  readonly contentOmitted?: boolean | undefined;
   readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
   readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
@@ -90,7 +131,9 @@ export interface CompactSubagentToolDetails {
 
 export interface CompactToolDetailsInput {
   readonly action: string;
-  readonly runs?: ReadonlyArray<Pick<SubagentRunView, "id">> | undefined;
+  readonly runs?: ReadonlyArray<SubagentRunView> | undefined;
+  readonly includeReports?: boolean | undefined;
+  readonly profiles?: ReadonlyArray<SubagentProfileRouteCard> | undefined;
   readonly profileIds?: ReadonlyArray<string> | undefined;
   readonly defaultProfile?: string | undefined;
   readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
@@ -101,6 +144,7 @@ export interface CompactToolDetailsInput {
 export interface StartAwaitDetailsInput {
   readonly action: "start" | "await";
   readonly runs: ReadonlyArray<SubagentRunCard>;
+  readonly startEntries?: ReadonlyArray<SubagentStartEntry> | undefined;
   readonly startFailures?: ReadonlyArray<SubagentCardFailure> | undefined;
   readonly awaitUntil?: "all_finished" | "any_finished" | undefined;
   readonly timedOut?: boolean | undefined;
@@ -143,6 +187,8 @@ const projectCard = (run: SubagentRunCard, budget: number): SubagentRunCard => {
   const name = take(run.name, MAX_NAME_CHARS);
   const model = take(run.model, MAX_CARD_MODEL_CHARS);
   const currentTool = run.currentTool ? take(run.currentTool, 256) : undefined;
+  const progress = run.progress ? take(run.progress, 512) : undefined;
+  const warning = run.warning ? take(run.warning, 512) : undefined;
   const question = run.question
     ? { message: take(run.question.message, MAX_CARD_QUESTION_CHARS) }
     : undefined;
@@ -164,9 +210,19 @@ const projectCard = (run: SubagentRunCard, budget: number): SubagentRunCard => {
     reportGeneration: Math.max(0, Math.floor(run.reportGeneration)),
     model,
     effort: run.effort,
+    ...(run.context ? { context: run.context } : {}),
+    ...(run.writeIntent ? { writeIntent: run.writeIntent } : {}),
+    ...(run.capabilities ? { capabilities: [...run.capabilities] } : {}),
+    ...(run.startedAt === undefined ? {} : { startedAt: boundedNonNegative(run.startedAt) }),
+    ...(run.lastActivityAt === undefined
+      ? {}
+      : { lastActivityAt: boundedNonNegative(run.lastActivityAt) }),
+    ...(run.usage ? { usage: boundedUsage(run.usage) } : {}),
     selection,
     ...(currentTool ? { currentTool } : {}),
-    ...(run.endedAt === undefined ? {} : { endedAt: run.endedAt }),
+    ...(progress ? { progress } : {}),
+    ...(warning ? { warning } : {}),
+    ...(run.endedAt === undefined ? {} : { endedAt: boundedNonNegative(run.endedAt) }),
     ...(finalText ? { finalText } : {}),
     ...(error ? { error } : {}),
     ...(run.finalTextTruncated ||
@@ -194,6 +250,18 @@ const projectFailures = (
 
 const serializedLength = (value: unknown): number => JSON.stringify(value).length;
 
+const boundedNonNegative = (value: number): number =>
+  Number.isFinite(value) ? Math.max(0, value) : 0;
+
+const boundedUsage = (usage: SubagentUsage): SubagentUsage => ({
+  input: boundedNonNegative(usage.input),
+  output: boundedNonNegative(usage.output),
+  cacheRead: boundedNonNegative(usage.cacheRead),
+  cacheWrite: boundedNonNegative(usage.cacheWrite),
+  totalTokens: boundedNonNegative(usage.totalTokens),
+  cost: boundedNonNegative(usage.cost),
+});
+
 const compactCardFallback = (card: SubagentRunCard): SubagentRunCard => ({
   id: clean(card.id, 128),
   name: clean(card.name, 96),
@@ -205,6 +273,11 @@ const compactCardFallback = (card: SubagentRunCard): SubagentRunCard => ({
   reportGeneration: Math.max(0, Math.floor(card.reportGeneration)),
   model: clean(card.model, 96),
   effort: card.effort,
+  ...(card.context ? { context: card.context } : {}),
+  ...(card.writeIntent ? { writeIntent: card.writeIntent } : {}),
+  ...(card.startedAt === undefined ? {} : { startedAt: card.startedAt }),
+  ...(card.lastActivityAt === undefined ? {} : { lastActivityAt: card.lastActivityAt }),
+  ...(card.usage ? { usage: boundedUsage(card.usage) } : {}),
   selection: {
     source: card.selection.source,
     ...(card.selection.host ? { host: card.selection.host } : {}),
@@ -218,6 +291,9 @@ const compactCardFallback = (card: SubagentRunCard): SubagentRunCard => ({
     reason: clean(card.selection.reason, 96),
     skippedCandidates: [],
   },
+  ...(card.currentTool ? { currentTool: clean(card.currentTool, 64) } : {}),
+  ...(card.progress ? { progress: clean(card.progress, 96) } : {}),
+  ...(card.warning ? { warning: clean(card.warning, 96) } : {}),
   ...(card.endedAt === undefined ? {} : { endedAt: card.endedAt }),
   ...(card.finalTextTruncated ? { finalTextTruncated: true } : {}),
   ...(card.errorTruncated ? { errorTruncated: true } : {}),
@@ -231,11 +307,47 @@ const compactFailureFallback = (failure: SubagentCardFailure): SubagentCardFailu
   ...(failure.code ? { code: clean(failure.code, 48) } : {}),
 });
 
+const projectStartEntries = (
+  entries: ReadonlyArray<SubagentStartEntry> | undefined,
+): ReadonlyArray<SubagentStartEntry> | undefined => {
+  if (!entries || entries.length === 0) return undefined;
+  return entries.slice(0, MAX_TARGET_RUNS).map((entry) => ({
+    index: Math.max(0, Math.floor(entry.index)),
+    name: clean(entry.name, MAX_NAME_CHARS),
+    ...(entry.profile && isProfileId(entry.profile) ? { profile: entry.profile } : {}),
+    status: entry.status,
+    ...(entry.runId ? { runId: clean(entry.runId, MAX_PROTOCOL_ID_CHARS) } : {}),
+  }));
+};
+
+const projectProfiles = (
+  profiles: ReadonlyArray<SubagentProfileRouteCard> | undefined,
+): ReadonlyArray<SubagentProfileRouteCard> | undefined => {
+  if (!profiles || profiles.length === 0) return undefined;
+  return profiles.slice(0, 16).map((profile) => ({
+    id: profile.id,
+    description: clean(profile.description, 512),
+    source: profile.source,
+    isDefault: profile.isDefault,
+    defaultContext: profile.defaultContext,
+    defaultWriteIntent: profile.defaultWriteIntent,
+    ...(profile.defaultEffort ? { defaultEffort: profile.defaultEffort } : {}),
+    candidates: profile.candidates.slice(0, 32).map((candidate) => ({
+      order: Math.max(1, Math.floor(candidate.order)),
+      candidate: clean(candidate.candidate, 1_024),
+      status: candidate.status,
+      ...(candidate.effectiveContext ? { effectiveContext: candidate.effectiveContext } : {}),
+      reason: clean(candidate.reason, 1_024),
+    })),
+  }));
+};
+
 /** Versioned, deeply frozen, aggregate-bounded persistence projection for start/await cards. */
 export function makeStartAwaitCardDetails(
   input: StartAwaitDetailsInput,
 ): SubagentStartAwaitCardDetails {
   const failures = projectFailures(input.startFailures);
+  const startEntries = projectStartEntries(input.startEntries);
   const failureBudget =
     failures?.reduce(
       (total, failure) =>
@@ -251,6 +363,7 @@ export function makeStartAwaitCardDetails(
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: input.action,
     cards: cards.map((run) => projectCard(run, perCardBudget)),
+    ...(startEntries ? { startEntries } : {}),
     ...(failures ? { startFailures: failures } : {}),
     ...(input.awaitUntil ? { awaitUntil: input.awaitUntil } : {}),
     ...(input.timedOut ? { timedOut: true } : {}),
@@ -283,6 +396,7 @@ export function makeStartAwaitCardDetails(
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: input.action,
     cards: [],
+    ...(startEntries ? { startEntries } : {}),
     ...(input.awaitUntil ? { awaitUntil: input.awaitUntil } : {}),
     ...(input.timedOut ? { timedOut: true } : {}),
     ...(input.attentionRequired ? { attentionRequired: true } : {}),
@@ -297,199 +411,83 @@ export function makeStartAwaitCardDetails(
   return freezeSnapshot(bounded ?? minimal);
 }
 
-/** Compact, versioned persistence projection for every non-card tool result. */
+/** Compact, versioned persistence projection for every non-start/await tool result. */
 export function makeCompactToolDetails(input: CompactToolDetailsInput): CompactSubagentToolDetails {
-  const runIds = input.runs?.slice(0, MAX_TARGET_RUNS).map((run) => clean(run.id, 128));
-  const profileIds = input.profileIds?.slice(0, 16).map((id) => clean(id, 64));
+  const sourceRuns = input.runs?.slice(0, MAX_TARGET_RUNS) ?? [];
+  const runIds = sourceRuns.map((run) => clean(run.id, 128));
+  const perCardBudget = Math.max(
+    512,
+    Math.floor(CARD_STRING_BUDGET / Math.max(1, sourceRuns.length)),
+  );
+  const cards: SubagentRunCard[] = sourceRuns.map((run): SubagentRunCard => {
+    const card = projectCard(run, perCardBudget);
+    if (input.includeReports) return card;
+    const {
+      finalText: _omittedFinalText,
+      error: _omittedError,
+      finalTextTruncated: _omittedFinalTextFlag,
+      errorTruncated: _omittedErrorFlag,
+      ...summary
+    } = card;
+    return summary;
+  });
+  const profiles = projectProfiles(input.profiles);
+  const profileIds =
+    input.profileIds?.slice(0, 16).map((id) => clean(id, 64)) ??
+    profiles?.map((profile) => profile.id);
   const failures = input.actionFailures?.slice(0, MAX_TARGET_RUNS).map((failure) => ({
     id: clean(failure.id, 128),
     ...(failure.code ? { code: clean(failure.code, 64) } : {}),
     message: clean(failure.message, 256),
   }));
-  const details: CompactSubagentToolDetails = {
+  const base = {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: clean(input.action, 32),
-    ...(runIds && runIds.length > 0 ? { runIds, runCount: input.runs?.length } : {}),
+    ...(runIds.length > 0 ? { runIds, runCount: input.runs?.length } : {}),
+    ...(profiles ? { profiles } : {}),
     ...(profileIds && profileIds.length > 0 ? { profileIds } : {}),
     ...(input.defaultProfile ? { defaultProfile: clean(input.defaultProfile, 64) } : {}),
     ...(failures && failures.length > 0 ? { actionFailures: failures } : {}),
     ...(input.timedOut ? { timedOut: true } : {}),
     ...(input.attentionRequired ? { attentionRequired: true } : {}),
+  } as const;
+  const details: CompactSubagentToolDetails = {
+    ...base,
+    ...(cards.length > 0 ? { cards } : {}),
   };
-  if (serializedLength(details) <= MAX_TOOL_OUTPUT_CHARS) return freezeSnapshot(details);
-  return freezeSnapshot({
+  const withoutReports: CompactSubagentToolDetails = {
+    ...details,
+    ...(cards.length > 0
+      ? {
+          cards: cards.map(
+            ({ finalText: omittedFinalText, error: omittedError, ...card }): SubagentRunCard => ({
+              ...card,
+              ...(omittedFinalText ? { finalTextTruncated: true } : {}),
+              ...(omittedError ? { errorTruncated: true } : {}),
+            }),
+          ),
+        }
+      : {}),
+    ...(cards.some((card) => card.finalText || card.error) ? { contentOmitted: true } : {}),
+  };
+  const compact: CompactSubagentToolDetails = {
+    ...withoutReports,
+    ...(withoutReports.cards ? { cards: withoutReports.cards.map(compactCardFallback) } : {}),
+  };
+  const minimal: CompactSubagentToolDetails = {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: clean(input.action, 32),
     ...(input.runs ? { runCount: input.runs.length } : {}),
+    ...(profileIds && profileIds.length > 0 ? { profileIds } : {}),
+    ...(input.defaultProfile ? { defaultProfile: clean(input.defaultProfile, 64) } : {}),
+    ...(failures && failures.length > 0 ? { actionFailures: failures } : {}),
     ...(input.timedOut ? { timedOut: true } : {}),
     ...(input.attentionRequired ? { attentionRequired: true } : {}),
-  });
-}
-
-const RUN_STATES: ReadonlySet<string> = new Set(SUBAGENT_RUN_STATES);
-const EFFORTS: ReadonlySet<string> = new Set(SUBAGENT_EFFORTS);
-const SOURCES: ReadonlySet<string> = new Set([
-  "profile-candidate",
-  "profile-parent-candidate",
-  "profile-parent-fallback",
-]);
-
-const recordOf = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Readonly<Record<string, unknown>>)
-    : undefined;
-const finiteNumber = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isFinite(value) ? value : undefined;
-
-const decodeSkipped = (value: unknown): ReadonlyArray<SkippedProfileCandidate> =>
-  Array.isArray(value)
-    ? value.slice(0, MAX_CARD_SKIPS).flatMap((entry) => {
-        const record = recordOf(entry);
-        if (
-          !record ||
-          typeof record.candidate !== "string" ||
-          typeof record.code !== "string" ||
-          typeof record.reason !== "string"
-        )
-          return [];
-        const candidateIndex = finiteNumber(record.candidateIndex);
-        return [
-          {
-            ...(candidateIndex === undefined ? {} : { candidateIndex }),
-            candidate: clean(record.candidate, MAX_CARD_PROVENANCE_CHARS),
-            code: clean(record.code, 128),
-            reason: clean(record.reason, MAX_CARD_PROVENANCE_CHARS),
-          },
-        ];
-      })
-    : [];
-
-const decodeSelection = (value: unknown): SubagentSelectionProvenance | undefined => {
-  const record = recordOf(value);
-  if (
-    !record ||
-    typeof record.source !== "string" ||
-    !SOURCES.has(record.source) ||
-    typeof record.reason !== "string"
-  )
-    return undefined;
-  const candidateIndex = finiteNumber(record.candidateIndex);
-  return {
-    // Defensive legacy card decoding: v1 parent-fallback provenance projects as a parent candidate.
-    source: (record.source === "profile-parent-fallback"
-      ? "profile-parent-candidate"
-      : record.source) as SubagentSelectionSource,
-    ...(record.host === "local" || record.host === "herdr" ? { host: record.host } : {}),
-    ...(record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex"
-      ? { runtime: record.runtime }
-      : {}),
-    ...(typeof record.closeOnReport === "boolean" ? { closeOnReport: record.closeOnReport } : {}),
-    ...(candidateIndex === undefined ? {} : { candidateIndex }),
-    reason: clean(record.reason, MAX_CARD_PROVENANCE_CHARS),
-    skippedCandidates: decodeSkipped(record.skippedCandidates),
-    ...(typeof record.warning === "string"
-      ? { warning: clean(record.warning, MAX_CARD_PROVENANCE_CHARS) }
-      : {}),
+    ...(cards.some((card) => card.finalText || card.error) ? { contentOmitted: true } : {}),
   };
-};
-
-const decodeCard = (value: unknown): SubagentRunCard | undefined => {
-  const record = recordOf(value);
-  if (
-    !record ||
-    typeof record.id !== "string" ||
-    !record.id.trim() ||
-    record.id.length > MAX_PROTOCOL_ID_CHARS ||
-    typeof record.name !== "string" ||
-    typeof record.state !== "string" ||
-    !RUN_STATES.has(record.state) ||
-    typeof record.model !== "string" ||
-    typeof record.effort !== "string" ||
-    !EFFORTS.has(record.effort)
-  )
-    return undefined;
-  const selection = decodeSelection(record.selection);
-  if (!selection) return undefined;
-  const questionRecord = recordOf(record.question);
-  return {
-    id: clean(record.id.trim(), MAX_PROTOCOL_ID_CHARS),
-    name: sanitizeName(record.name) || "subagent",
-    state: record.state as SubagentRunState,
-    ...(typeof record.profile === "string" && isProfileId(record.profile)
-      ? { profile: record.profile }
-      : {}),
-    ...(record.host === "local" || record.host === "herdr" ? { host: record.host } : {}),
-    ...(record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex"
-      ? { runtime: record.runtime }
-      : {}),
-    ...(typeof record.closeOnReport === "boolean" ? { closeOnReport: record.closeOnReport } : {}),
-    reportGeneration: Math.max(0, Math.floor(finiteNumber(record.reportGeneration) ?? 0)),
-    model: clean(record.model, MAX_CARD_MODEL_CHARS),
-    effort: record.effort as SubagentEffort,
-    selection,
-    ...(typeof record.currentTool === "string"
-      ? { currentTool: clean(record.currentTool, 256) }
-      : {}),
-    ...(finiteNumber(record.endedAt) === undefined
-      ? {}
-      : { endedAt: finiteNumber(record.endedAt) }),
-    ...(typeof record.finalText === "string"
-      ? { finalText: sanitizeOutputText(record.finalText, MAX_FINAL_TEXT_CHARS) }
-      : {}),
-    ...(typeof record.error === "string"
-      ? { error: sanitizeOutputText(record.error, MAX_ERROR_CHARS) }
-      : {}),
-    ...(record.finalTextTruncated === true ? { finalTextTruncated: true } : {}),
-    ...(record.errorTruncated === true ? { errorTruncated: true } : {}),
-    ...(questionRecord && typeof questionRecord.message === "string"
-      ? { question: { message: clean(questionRecord.message, MAX_CARD_QUESTION_CHARS) } }
-      : {}),
-  };
-};
-
-const decodeFailures = (value: unknown): ReadonlyArray<SubagentCardFailure> | undefined => {
-  if (!Array.isArray(value)) return undefined;
-  const failures = value.slice(0, MAX_TARGET_RUNS).flatMap((entry) => {
-    const record = recordOf(entry);
-    if (record === undefined || typeof record.message !== "string") return [];
-    const index = finiteNumber(record.index);
-    return [
-      {
-        index: index === undefined ? 0 : Math.max(0, Math.floor(index)),
-        ...(typeof record.name === "string" ? { name: sanitizeName(record.name) } : {}),
-        message: clean(record.message, 512),
-        ...(typeof record.code === "string" ? { code: clean(record.code, 128) } : {}),
-      },
-    ];
-  });
-  return failures.length > 0 ? failures : undefined;
-};
-
-/** Tolerant renderer boundary for current details and persisted legacy `{ action, runs }` data. */
-export function decodeStartAwaitCardDetails(
-  value: unknown,
-): SubagentStartAwaitCardDetails | undefined {
-  const record = recordOf(value);
-  if (!record || (record.action !== "start" && record.action !== "await")) return undefined;
-  const hasVersion = Object.prototype.hasOwnProperty.call(record, "version");
-  if (hasVersion && record.version !== SUBAGENT_CARD_DETAILS_VERSION) return undefined;
-  const source = hasVersion ? record.cards : record.runs;
-  if (!Array.isArray(source)) return undefined;
-  const cards = source.slice(0, MAX_TARGET_RUNS).flatMap((entry) => {
-    const card = decodeCard(entry);
-    return card ? [card] : [];
-  });
-  if (source.length > 0 && cards.length === 0) return undefined;
-  return makeStartAwaitCardDetails({
-    action: record.action,
-    runs: cards,
-    startFailures: decodeFailures(record.startFailures),
-    ...(record.awaitUntil === "all_finished" || record.awaitUntil === "any_finished"
-      ? { awaitUntil: record.awaitUntil }
-      : {}),
-    ...(record.timedOut === true ? { timedOut: true } : {}),
-    ...(record.attentionRequired === true ? { attentionRequired: true } : {}),
-    ...(record.cancelled === true ? { cancelled: true } : {}),
-    ...(record.contentOmitted === true ? { contentOmitted: true } : {}),
-  });
+  return freezeSnapshot(
+    [details, withoutReports, compact, minimal].find(
+      (candidate) => serializedLength(candidate) <= MAX_TOOL_OUTPUT_CHARS,
+    ) ?? minimal,
+  );
 }

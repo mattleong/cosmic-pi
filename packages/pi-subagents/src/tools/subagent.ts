@@ -6,7 +6,7 @@ import { withCodePreviewShell } from "pi-code-previews";
 import type { SubagentSessionEnvironment } from "../boundary/host-profile-resolution.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { startHostUiTicker } from "../boundary/host-ui.ts";
-import type { ProfileId } from "../profiles/model.ts";
+import type { ProfileId, ProfileRouteSource } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type {
   SubagentContextMode,
@@ -15,22 +15,15 @@ import type {
   SubagentWriteIntent,
 } from "../run/model.ts";
 import { SubagentService } from "../run/service.ts";
-import {
-  decodeStartAwaitCardDetails,
-  type CompactSubagentToolDetails,
-  type SubagentStartAwaitCardDetails,
-} from "./details.ts";
+import { decodeStartAwaitCardDetails } from "./details-decode.ts";
+import type { CompactSubagentToolDetails, SubagentStartAwaitCardDetails } from "./details.ts";
 import { executeSubagentAction } from "./execute.ts";
-import {
-  renderSubagentCall,
-  renderSubagentResult,
-  syncAwaitProgressTicker,
-  type SubagentToolRenderContext,
-} from "./render.ts";
+import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
+import { renderSubagentCall, renderSubagentResult } from "./render.ts";
 
+export { renderAwaitProgressComponent } from "./render-await.ts";
 export {
   awaitResultBanner,
-  renderAwaitProgressComponent,
   renderExpandedStartAwaitResult,
   renderStartAwaitOverviewComponent,
 } from "./render.ts";
@@ -106,6 +99,8 @@ export interface ProfileCandidateDiscovery {
 export interface SubagentProfileView {
   readonly id: ProfileId;
   readonly description: string;
+  readonly source: ProfileRouteSource;
+  readonly isDefault: boolean;
   readonly defaultContext: "fresh" | "fork";
   readonly defaultWriteIntent: SubagentWriteIntent;
   readonly defaultEffort?: SubagentEffort | undefined;
@@ -142,13 +137,14 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
 
   const models = defineTool({
     name: "subagent_models",
-    label: "Subagent Models",
+    label: "Inspect Profile Routes",
     description:
       "Static preflight of complete version 4 profile candidates in declared order, including host, runtime, model, effort, context, write intent, closeOnReport, and implementation eligibility. All local and Herdr Pi/Claude/Codex adapters are implemented; runtime authentication, native integration, and private-harness readiness are checked at launch.",
     parameters: ModelsParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "models" }, signal, onUpdate, ctx),
-    renderCall: (args, theme) => renderSubagentCall("subagent_models", args.profile ?? "", theme),
+    renderCall: (args, theme) =>
+      renderSubagentCall("Inspect profile routes", args.profile ?? "all profiles", theme),
     renderResult: sharedRenderResult,
   });
 
@@ -172,10 +168,13 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
       executeSubagentAction(pi, runtime, { ...input, action: "start" }, signal, onUpdate, ctx),
     renderCall: (args, theme) =>
       renderSubagentCall(
-        "subagent_start",
+        `Start ${args.agents.length} subagent${args.agents.length === 1 ? "" : "s"}`,
         args.agents
-          .map((agent, index) => agent.name ?? `#${index + 1} ${agent.task.slice(0, 40)}`)
-          .join(", "),
+          .map(
+            (agent, index) =>
+              `${agent.name ?? `#${index + 1}`} [${agent.profile ?? "default"}]: ${agent.task}`,
+          )
+          .join(" · "),
         theme,
       ),
     renderResult: sharedRenderResult,
@@ -188,7 +187,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     parameters: ListParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "list" }, signal, onUpdate, ctx),
-    renderCall: (_args, theme) => renderSubagentCall("subagent_list", "", theme),
+    renderCall: (_args, theme) => renderSubagentCall("List subagents", "", theme),
     renderResult: sharedRenderResult,
   });
 
@@ -201,7 +200,11 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "status" }, signal, onUpdate, ctx),
     renderCall: (args, theme) =>
-      renderSubagentCall("subagent_status", args.runIds.join(", "), theme),
+      renderSubagentCall(
+        `Inspect ${args.runIds.length} subagent${args.runIds.length === 1 ? "" : "s"}`,
+        args.runIds.join(", "),
+        theme,
+      ),
     renderResult: sharedRenderResult,
   });
 
@@ -218,7 +221,11 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "await" }, signal, onUpdate, ctx),
     renderCall: (args, theme) =>
-      renderSubagentCall("subagent_await", args.runIds.join(", "), theme),
+      renderSubagentCall(
+        `Await ${args.runIds.length} subagent${args.runIds.length === 1 ? "" : "s"}`,
+        `${args.until === "all_finished" ? "until all finish" : "until first finishes"} · ${args.runIds.join(", ")}`,
+        theme,
+      ),
     renderResult: sharedRenderResult,
   });
 
@@ -230,7 +237,12 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     parameters: SendParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "send" }, signal, onUpdate, ctx),
-    renderCall: (args, theme) => renderSubagentCall("subagent_send", args.runIds.join(", "), theme),
+    renderCall: (args, theme) =>
+      renderSubagentCall(
+        `Guide ${args.runIds.length} subagent${args.runIds.length === 1 ? "" : "s"}`,
+        `${args.runIds.join(", ")} · “${args.message}”`,
+        theme,
+      ),
     renderResult: sharedRenderResult,
   });
 
@@ -241,20 +253,28 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     parameters: ReplyParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "reply" }, signal, onUpdate, ctx),
-    renderCall: (args, theme) => renderSubagentCall("subagent_reply", args.runId, theme),
+    renderCall: (args, theme) =>
+      renderSubagentCall("Reply to subagent", `${args.runId} · “${args.message}”`, theme),
     renderResult: sharedRenderResult,
   });
 
   const lifecycle = defineTool({
     name: "subagent_lifecycle",
-    label: "Subagent Lifecycle",
+    label: "Manage Subagents",
     description:
       "Interrupt, resume, or stop one or more subagents. Interrupt and resume require the matching capability reported by subagent_list/status; stop is available for every active run. Message is accepted only for resume. Mixed-target calls report each success and failure.",
     parameters: LifecycleParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, input, signal, onUpdate, ctx),
-    renderCall: (args, theme) =>
-      renderSubagentCall("subagent_lifecycle", `${args.action} ${args.runIds.join(", ")}`, theme),
+    renderCall: (args, theme) => {
+      const action = `${args.action[0]?.toUpperCase() ?? ""}${args.action.slice(1)}`;
+      const message = args.action === "resume" && args.message ? ` · “${args.message}”` : "";
+      return renderSubagentCall(
+        `${action} ${args.runIds.length} subagent${args.runIds.length === 1 ? "" : "s"}`,
+        `${args.runIds.join(", ")}${message}`,
+        theme,
+      );
+    },
     renderResult: sharedRenderResult,
   });
 
@@ -266,7 +286,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "rename" }, signal, onUpdate, ctx),
     renderCall: (args, theme) =>
-      renderSubagentCall("subagent_rename", `${args.runId} → ${args.name}`, theme),
+      renderSubagentCall("Rename subagent", `${args.runId} → ${args.name}`, theme),
     renderResult: sharedRenderResult,
   });
 

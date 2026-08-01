@@ -24,7 +24,11 @@ import { MAX_TARGET_RUNS } from "../run/limits.ts";
 import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { sanitizeTerminalLine } from "../ui/sanitize.ts";
-import { makeCompactToolDetails, makeStartAwaitCardDetails } from "./details.ts";
+import {
+  makeCompactToolDetails,
+  makeStartAwaitCardDetails,
+  type SubagentStartEntry,
+} from "./details.ts";
 import { attentionRecoveryText, boundToolOutput, joinBoundedToolText } from "./format.ts";
 import {
   formatActionFailures,
@@ -34,7 +38,7 @@ import {
   formatStartResultDetails,
   renderedCompletionReceipts,
 } from "./output.ts";
-import { formatAwaitProgress } from "./render.ts";
+import { formatAwaitProgress } from "./render-await.ts";
 import type { SubagentModelsInput, SubagentStartSpec, SubagentToolInput } from "./schema.ts";
 import type {
   ProfileCandidateDiscovery,
@@ -160,6 +164,8 @@ const profileDiscovery = (
       {
         id: definition.id,
         description: definition.description,
+        source: profiles.config.profileSources[definition.id],
+        isDefault: profiles.config.defaultProfile === definition.id,
         defaultContext: definition.defaultContext,
         defaultWriteIntent: definition.defaultWriteIntent,
         ...(definition.defaultEffort ? { defaultEffort: definition.defaultEffort } : {}),
@@ -176,12 +182,12 @@ const formatProfileDiscovery = (
   [
     "Profile routes · static preflight",
     `Default profile: ${defaultProfile}`,
-    "Each candidate lists host/runtime/model, effort, context, write intent, and closeOnReport.",
-    "Launch-time executable, authentication, integration, and private-harness checks are not included here.",
+    "Each candidate lists host/runtime/model, effort, context, write intent, and retention.",
+    "Static eligibility only · executable, authentication, integration, and private-harness checks run at launch.",
     "",
     ...profiles.flatMap((profile) => [
-      `${profile.id} — ${profile.description}`,
-      `  defaults · context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"}`,
+      `${profile.id}${profile.isDefault ? " ★ default" : ""} — ${profile.description}`,
+      `  source=${profile.source} · defaults: context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"}`,
       ...(profile.candidates.length > 0
         ? profile.candidates.map(
             (candidate) =>
@@ -254,6 +260,7 @@ export const executeSubagentAction = async (
         ],
         details: makeCompactToolDetails({
           action: input.action,
+          profiles,
           profileIds: profiles.map((profile) => profile.id),
           defaultProfile: profileService.config.defaultProfile,
         }),
@@ -311,6 +318,17 @@ export const executeSubagentAction = async (
       case "start": {
         const specs = yield* startSpecs(input.agents);
         const partialOutcomes = new Map<number, SubagentStartOutcome>();
+        const startEntriesFor = (outcomes: ReadonlyMap<number, SubagentStartOutcome>) =>
+          specs.map((spec, index) => {
+            const outcome = outcomes.get(index);
+            return {
+              index,
+              name: sanitizeTerminalLine(spec.name?.trim() || `launch ${index + 1}`),
+              ...(spec.profile ? { profile: spec.profile } : {}),
+              status: outcome ? ("run" in outcome ? "started" : "failed") : "pending",
+              ...(outcome && "run" in outcome ? { runId: outcome.run.id } : {}),
+            } as const;
+          });
         const failureFor = (
           spec: SubagentStartSpec,
           index: number,
@@ -346,6 +364,7 @@ export const executeSubagentAction = async (
               details: makeStartAwaitCardDetails({
                 action: "start",
                 runs: launched,
+                startEntries: startEntriesFor(partialOutcomes),
                 ...(failures.length > 0 ? { startFailures: failures } : {}),
               }),
             }),
@@ -388,12 +407,16 @@ export const executeSubagentAction = async (
           const failures = ordered.flatMap((outcome) =>
             "failure" in outcome ? [outcome.failure] : [],
           );
-          if (!observation) return Effect.succeed({ runs: launched, startFailures: failures });
+          const finalOutcomes = new Map(ordered.map((outcome) => [outcome.index, outcome]));
+          const startEntries = startEntriesFor(finalOutcomes);
+          if (!observation)
+            return Effect.succeed({ runs: launched, startFailures: failures, startEntries });
           const formatted = formatStartResultDetails(launched, failures);
           return consumeCompletions([observation], formatted.fullyRenderedIds).pipe(
             Effect.as({
               runs: launched,
               startFailures: failures,
+              startEntries,
               text: formatted.text,
             }),
           );
@@ -575,6 +598,7 @@ export const executeSubagentAction = async (
   let executionResult: {
     readonly runs: ReadonlyArray<SubagentRunView>;
     readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
+    readonly startEntries?: ReadonlyArray<SubagentStartEntry>;
     readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
     readonly attentionRequired?: boolean;
     readonly text?: string;
@@ -587,12 +611,14 @@ export const executeSubagentAction = async (
 
   const { runs, attentionRequired, text: formattedText } = executionResult;
   const startFailures = executionResult.startFailures ?? [];
+  const startEntries = executionResult.startEntries;
   const actionFailures = executionResult.actionFailures ?? [];
   const details: unknown =
     input.action === "start"
       ? makeStartAwaitCardDetails({
           action: "start",
           runs,
+          ...(startEntries ? { startEntries } : {}),
           ...(startFailures.length > 0 ? { startFailures } : {}),
         })
       : input.action === "await"
@@ -605,6 +631,7 @@ export const executeSubagentAction = async (
         : makeCompactToolDetails({
             action: input.action,
             runs,
+            includeReports: input.action === "status",
             ...(actionFailures.length > 0 ? { actionFailures } : {}),
             ...(attentionRequired ? { attentionRequired: true } : {}),
           });

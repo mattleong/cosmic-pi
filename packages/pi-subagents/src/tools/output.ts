@@ -1,10 +1,11 @@
 import type { SubagentRunObservation } from "../run/service.ts";
 import type { SubagentRunView } from "../run/model.ts";
+import { synchronousNow } from "../boundary/native-clock.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { safeTextPrefix } from "../run/state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
-import { selectionSourceLabel } from "./format.ts";
+import { formatCost, formatDuration, formatTokenCount, selectionSourceLabel } from "./format.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./subagent.ts";
 
 const boundedLine = (value: string, maximum: number): string => {
@@ -19,10 +20,23 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
   const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
   const host = run.host ?? "local";
   const runtime = run.runtime ?? run.backend;
-  const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${host}/${runtime}/${sanitizeTerminalLine(run.model)}:${run.effort}`;
+  const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${host}/${runtime}/${sanitizeTerminalLine(run.model)} · ${run.effort}`;
   if (!detailed) return header;
   const field = (label: string, value: string): string =>
     `  ${label.padEnd(10)} ${sanitizeTerminalLine(value)}`;
+  const now = synchronousNow();
+  const durationEnd = run.endedAt ?? now;
+  const elapsedMilliseconds = durationEnd - run.startedAt;
+  const activityMilliseconds = now - run.lastActivityAt;
+  const elapsed =
+    elapsedMilliseconds >= 0 && elapsedMilliseconds <= 7 * 24 * 60 * 60 * 1_000
+      ? formatDuration(elapsedMilliseconds)
+      : undefined;
+  const activity =
+    activityMilliseconds >= 0 && activityMilliseconds <= 7 * 24 * 60 * 60 * 1_000
+      ? `${formatDuration(activityMilliseconds)} ago`
+      : undefined;
+  const retained = run.state === "reported" && run.closeOnReport === false;
   return [
     "Subagent status",
     field("Name", run.name),
@@ -31,8 +45,8 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     run.profile ? field("Profile", run.profile) : undefined,
     field("Route", `${host}/${runtime}/${run.model} · ${run.effort}`),
     field(
-      "Report",
-      `closeOnReport=${run.closeOnReport ?? true} · generation=${run.reportGeneration}${run.state === "reported" ? " · backend retained" : ""}`,
+      "Retention",
+      `${run.closeOnReport === false ? "retain backend after report" : "close after report"} · assignment ${run.reportGeneration || 1}${retained ? " · retained now" : ""}`,
     ),
     field("Selection", selectionSourceLabel(run)),
     field("Reason", run.selection.reason),
@@ -47,12 +61,17 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     field("Intent", run.writeIntent),
     field("Capabilities", `${run.capabilities.join(", ") || "none"}; stop/await always available`),
     run.pid ? field("Process", `pid ${run.pid}`) : undefined,
-    field("Usage", `${run.usage.totalTokens} tokens · $${run.usage.cost.toFixed(4)}`),
-    run.currentTool ? field("Tool", run.currentTool) : undefined,
+    elapsed ? field("Elapsed", elapsed) : undefined,
+    activity ? field("Activity", activity) : undefined,
+    field(
+      "Usage",
+      `${formatTokenCount(run.usage.totalTokens)} tokens · ${formatCost(run.usage.cost)}`,
+    ),
+    run.currentTool ? field("Current tool", run.currentTool) : undefined,
     run.progress ? field("Progress", run.progress) : undefined,
     run.warning ? field("Warning", run.warning) : undefined,
-    run.question ? field("Question", run.question.message) : undefined,
-    run.error ? field("Error", run.error) : undefined,
+    run.question ? field("Needs reply", run.question.message) : undefined,
+    run.error ? field("Failure", run.error) : undefined,
     run.finalText
       ? `\nFinal report\n${sanitizeTerminalText(run.finalText)}`
       : run.state === "completed" || run.state === "reported"
@@ -89,8 +108,9 @@ export const formatDetailedRuns = (
   });
   const output = `${prefix}${formatted.join("\n\n")}`;
   if (output.length <= MAX_TOOL_OUTPUT_CHARS) return { text: output, fullyRenderedIds };
+  const marker = "\n… [additional run output omitted; query individual run IDs]";
   return {
-    text: `${safeTextPrefix(output, MAX_TOOL_OUTPUT_CHARS - 1)}…`,
+    text: `${safeTextPrefix(output, Math.max(0, MAX_TOOL_OUTPUT_CHARS - marker.length))}${marker}`,
     fullyRenderedIds: new Set(),
   };
 };
