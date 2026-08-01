@@ -121,7 +121,7 @@ export const makeProfileSearchSelector = (
       value: profile,
       item: {
         value: profile,
-        label: `${profile}${profile === options.inspection.config.defaultProfile ? " ★ launch default" : ""}`,
+        label: `${profile}${profile === "generalist" ? " · implicit fallback" : ""}`,
         description: effectiveProfileSummary(
           options.inspection,
           profile,

@@ -73,7 +73,7 @@ describe("subagent v4 profile configuration and resolution", () => {
     expect(config.defaultProfile).toBe("generalist");
   });
 
-  it("normalizes the legacy delegate profile alias to generalist", () => {
+  it("ignores deprecated defaultProfile and normalizes the delegate route alias", () => {
     const legacyCandidate = candidate({ model: "openai/gpt-parent" });
     const decoded = decodeSubagentConfig(
       document({
@@ -82,7 +82,7 @@ describe("subagent v4 profile configuration and resolution", () => {
       }),
       "global",
     );
-    expect(decoded.file.defaultProfile).toBe("generalist");
+    expect(decoded.file).not.toHaveProperty("defaultProfile");
     expect(decoded.file.profiles?.generalist).toEqual({
       ...legacyCandidate,
       closeOnReport: true,

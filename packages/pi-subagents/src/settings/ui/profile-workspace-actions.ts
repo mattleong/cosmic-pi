@@ -108,6 +108,8 @@ export const profileWorkspaceConfirmation = (input: {
   readonly candidateCount: number;
   readonly scope: SubagentConfigScope;
   readonly projectOverrideActive?: boolean | undefined;
+  readonly currentSummary?: string | undefined;
+  readonly afterSummary?: string | undefined;
 }): ProfileWorkspaceConfirmation => {
   const shadowed = input.projectOverrideActive
     ? " The project override remains effective until it is reset."
@@ -140,5 +142,10 @@ export const profileWorkspaceConfirmation = (input: {
           ? "The global declaration will be removed. The project override remains effective."
           : "The global declaration will be removed. The effective route will return to the built-in profile."
         : "The project declaration will be removed. The effective route will come from global settings or the built-in profile.",
+    ...(input.currentSummary && input.afterSummary
+      ? {
+          preview: [`Current  ${input.currentSummary}`, `After    ${input.afterSummary}`],
+        }
+      : {}),
   };
 };

@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
 import type { SubagentConfigInspection } from "../src/config/store.ts";
-import type { ProfileCandidate } from "../src/profiles/model.ts";
+import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../src/profiles/model.ts";
 import {
   candidateFastModeApplied,
   candidateFieldChoices,
@@ -60,10 +60,19 @@ const input = {
   tab: "\t",
   enter: "\r",
   escape: "\u001b",
+  up: "\u001b[A",
   down: "\u001b[B",
   left: "\u001b[D",
   right: "\u001b[C",
 } as const;
+
+const selectProfile = (component: ProfileWorkspaceComponent, profile: ProfileId): void => {
+  const generalistIndex = PROFILE_IDS.indexOf("generalist");
+  const targetIndex = PROFILE_IDS.indexOf(profile);
+  const key = targetIndex < generalistIndex ? input.up : input.down;
+  for (let index = 0; index < Math.abs(targetIndex - generalistIndex); index += 1)
+    component.handleInput(key);
+};
 
 const theme = {
   fg: (_color: string, text: string) => text,
@@ -179,6 +188,7 @@ describe("profile settings workspace", () => {
       },
     );
     const { component } = makeComponent(value);
+    selectProfile(component, "scout");
     component.handleInput(input.enter);
     expect(component.render(120).join("\n")).toContain("parent:low (default)");
     component.handleInput(input.enter);
@@ -217,6 +227,9 @@ describe("profile settings workspace", () => {
     const rendered = component.render(120).join("\n");
     expect(rendered).toContain("· ready");
     expect(rendered).toContain("[g Global]");
+    expect(rendered).toContain("Sources  [P] Project > [G] Global > [B] Built-in");
+    expect(rendered).toContain("generalist  implicit fallback");
+    expect(rendered).not.toContain("★");
     expect(rendered).toContain("1 candidate");
     expect(rendered).not.toContain("1 route");
     component.handleInput(input.left);
@@ -234,6 +247,7 @@ describe("profile settings workspace", () => {
       { version: 4, defaultProfile: "reviewer", profiles: { reviewer: candidates } },
     );
     const { component } = makeComponent(value, { getHeight: () => 12 });
+    selectProfile(component, "reviewer");
     component.handleInput("p");
     expect(component.render(70).join("\n")).toContain("↑ more");
     component.handleInput(input.enter);
@@ -244,6 +258,13 @@ describe("profile settings workspace", () => {
     const fields = component.render(60).join("\n");
     expect(fields).toContain("…");
     expect(fields).toContain("Enter to choose");
+
+    const wide = makeComponent(value).component;
+    selectProfile(wide, "reviewer");
+    wide.handleInput("p");
+    wide.handleInput(input.enter);
+    expect(wide.render(140).join("\n")).toContain("01 Primary");
+    expect(wide.render(140).join("\n")).toContain("02 Fallback");
   });
 
   it("warns when a project override shadows global edits", () => {
@@ -256,6 +277,7 @@ describe("profile settings workspace", () => {
       },
     );
     const { component } = makeComponent(value);
+    selectProfile(component, "reviewer");
     component.handleInput("g");
     const rendered = component.render(100).join("\n");
     expect(rendered).toContain("Project override active for reviewer");
@@ -267,6 +289,7 @@ describe("profile settings workspace", () => {
     expect(component.render(100).join("\n")).toContain("project override remains effective");
 
     const compact = makeComponent(value, { getHeight: () => 8 }).component;
+    selectProfile(compact, "reviewer");
     compact.handleInput("g");
     const compactRendered = compact.render(100).join("\n");
     expect(compactRendered).toContain("Global scope overrides built-in");
@@ -289,6 +312,7 @@ describe("profile settings workspace", () => {
     const { component } = makeComponent(value, {
       saveDraft: () => pendingSave,
     });
+    selectProfile(component, "reviewer");
     component.handleInput("p");
     component.handleInput(input.enter);
     component.handleInput("J");
@@ -333,6 +357,7 @@ describe("profile settings workspace", () => {
       },
     );
     const { component } = makeComponent(value);
+    selectProfile(component, "reviewer");
     component.handleInput(input.enter);
     component.handleInput(input.enter);
     component.handleInput("g");
@@ -400,10 +425,11 @@ describe("profile settings workspace", () => {
       },
     );
     const { component } = makeComponent(value);
+    selectProfile(component, "reviewer");
     const profiles = component.render(140).join("\n");
     expect(profiles).toContain("Profiles");
     expect(profiles).toContain("[g Global]");
-    expect(profiles).toContain("project override");
+    expect(profiles).toContain("[P] project");
 
     component.handleInput("p");
     expect(component.render(140).join("\n")).toContain("[p Project]");
@@ -452,11 +478,11 @@ describe("profile settings workspace", () => {
     const { component } = makeComponent(inspection({ version: 4, defaultProfile: "generalist" }));
     component.handleInput("/");
     expect(component.render(120).join("\n")).toContain("Search profiles");
-    expect(component.render(120).join("\n")).toContain("generalist ★ launch default");
+    expect(component.render(120).join("\n")).toContain("generalist · implicit fallback");
     for (const character of "review") component.handleInput(character);
     const filtered = component.render(120).join("\n");
     expect(filtered).toContain("reviewer");
-    expect(filtered).not.toContain("generalist ★ launch default");
+    expect(filtered).not.toContain("generalist · implicit fallback");
     component.handleInput(input.enter);
     expect(component.render(120).join("\n")).toContain("reviewer route");
   });
@@ -594,6 +620,7 @@ describe("profile settings workspace", () => {
       ],
     } satisfies CandidateModelPickerData);
     const { component, saveDraft } = makeComponent(value, { loadModelPicker });
+    selectProfile(component, "reviewer");
     component.handleInput("p");
     component.handleInput(input.enter);
     component.handleInput(input.enter);
@@ -612,6 +639,7 @@ describe("profile settings workspace", () => {
     const value = inspection({ version: 4, defaultProfile: "reviewer" });
     const loadModelPicker = vi.fn().mockResolvedValue(modelPicker("parent", "pi"));
     const { component, saveDraft } = makeComponent(value, { loadModelPicker });
+    selectProfile(component, "reviewer");
     component.handleInput(input.tab);
     component.handleInput(input.tab);
     component.handleInput(input.down);
@@ -684,6 +712,7 @@ describe("profile settings workspace", () => {
       .mockResolvedValueOnce({ inspection: addedValue })
       .mockResolvedValueOnce({ inspection: addedValue });
     const { component } = makeComponent(value, { saveDraft });
+    selectProfile(component, "worker");
     component.handleInput("p");
     component.handleInput(input.enter);
     component.handleInput("a");
@@ -726,6 +755,10 @@ describe("profile settings workspace", () => {
     expect(project.component.render(140).join("\n")).toContain(
       "effective route will come from global settings",
     );
+    expect(project.component.render(140).join("\n")).toContain("Current  explicit");
+    expect(project.component.render(140).join("\n")).toContain(
+      "After    inherits [G] global / [B] built-in",
+    );
     project.component.handleInput("i");
     expect(project.saveDraft.mock.calls[0]?.[2]).toMatchObject({ kind: "inherit" });
 
@@ -739,6 +772,8 @@ describe("profile settings workspace", () => {
     global.component.handleInput("g");
     expect(global.component.render(140).join("\n")).toContain("Reset generalist to built-in");
     global.component.handleInput("i");
+    expect(global.component.render(140).join("\n")).toContain("Current  explicit");
+    expect(global.component.render(140).join("\n")).toContain("After    [B] built-in");
     global.component.handleInput("i");
     expect(global.saveDraft.mock.calls[0]?.[2]).toMatchObject({ kind: "reset" });
   });
@@ -860,7 +895,42 @@ describe("profile settings workspace", () => {
     for (let index = 0; index < 7; index += 1) component.handleInput(input.down);
     component.handleInput(input.enter);
     expect(saveDraft).not.toHaveBeenCalled();
-    expect(component.render(130).join("\n")).toContain("fixed by the current");
+    expect(component.render(130).join("\n")).toContain(
+      "Retention is available only to Herdr read-only candidates",
+    );
+  });
+
+  it("shows direct reasons for fields unavailable under the current policy", () => {
+    const rows = candidateFieldRows(
+      candidate("claude-opus-5", { runtime: "claude" }),
+      "reviewer",
+      "high",
+    );
+    expect(rows.find((row) => row.field === "context")).toMatchObject({
+      fixed: true,
+      value: "fresh · fixed: fork requires local Pi",
+      fixedReason: "Fork context is available only to local Pi.",
+    });
+    expect(rows.find((row) => row.field === "fastMode")).toMatchObject({
+      fixed: true,
+      value: "unavailable · Claude does not support OpenAI fast mode",
+    });
+    expect(rows.find((row) => row.field === "closeOnReport")).toMatchObject({
+      fixed: true,
+      value: "close after report · fixed: retain requires Herdr read-only",
+    });
+  });
+
+  it("distinguishes disabled and invalid routes with semantic markers", () => {
+    const disabled = makeComponent(inspection({ version: 4, profiles: { generalist: "disabled" } }))
+      .component.render(120)
+      .join("\n");
+    expect(disabled).toContain("— disabled");
+
+    const invalid = makeComponent(inspection({ version: 4, profiles: { generalist: null } }))
+      .component.render(120)
+      .join("\n");
+    expect(invalid).toContain("× fails closed");
   });
 
   it("offers exact choices for every editable non-model field", () => {

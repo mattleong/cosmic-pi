@@ -520,7 +520,7 @@ describe("subagent tool", () => {
       | { readonly render: (width: number) => ReadonlyArray<string> }
       | undefined;
     const modelText = modelCard?.render(160).join("\n") ?? "";
-    expect(modelText).toContain("Profile routes · static eligibility only · default generalist");
+    expect(modelText).toContain("Profile routes · static eligibility only · fallback generalist");
     expect(modelText).toContain("reviewer · built-in");
     expect(modelText).toContain("close after report");
     expect(modelText).toContain("Launch checks pending");
@@ -1257,7 +1257,7 @@ describe("subagent tool", () => {
     }
   });
 
-  it("uses the configured default profile when the short form omits profile", async () => {
+  it("ignores configured defaultProfile and uses generalist when profile is omitted", async () => {
     const requests: StartSubagentRequest[] = [];
     const profiles = profileServiceFor({ defaultProfile: "reviewer" });
     const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles).get(
@@ -1267,11 +1267,11 @@ describe("subagent tool", () => {
     await tool?.execute("call", { agents: [{ task: "Review" }] }, undefined, undefined, context);
 
     expect(requests[0]).toMatchObject({
-      profile: "reviewer",
+      profile: "generalist",
       context: "fresh",
       selection: { source: "profile-parent-candidate" },
     });
-    expect(requests[0]?.profileGuidance).toContain("independent reviewer");
+    expect(requests[0]?.profileGuidance).toContain("Act as a generalist");
   });
 
   it("uses profile context defaults and never degrades a Pi oracle fork to fresh", async () => {
@@ -2763,7 +2763,7 @@ describe("subagent tool", () => {
     const models = await tools
       .get("subagent_models")
       ?.execute("call", {}, undefined, undefined, mutable);
-    expect(models?.content[0]?.text).toContain("Default profile: generalist");
+    expect(models?.content[0]?.text).toContain("Profile omitted → generalist");
     await tools.get("subagent_start")?.execute(
       "call",
       {

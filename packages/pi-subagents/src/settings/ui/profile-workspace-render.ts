@@ -21,6 +21,7 @@ export interface ProfileWorkspaceConfirmation {
   readonly key: string;
   readonly title: string;
   readonly detail: string;
+  readonly preview?: ReadonlyArray<string> | undefined;
 }
 
 export interface ProfileWorkspaceRenderState {
@@ -112,6 +113,9 @@ const commonNotices = (
         width,
       ),
       ...wrapped(theme.fg("warning", state.pendingConfirmation.detail), width),
+      ...(state.pendingConfirmation.preview ?? []).flatMap((line) =>
+        wrapped(theme.fg("toolOutput", line), width),
+      ),
       ...wrapped(
         theme.fg(
           "warning",
@@ -174,7 +178,8 @@ const candidateSummary = (
   parentEffort: SubagentEffort,
   parentModel?: string | undefined,
 ): string => {
-  const prefix = `${String(index + 1).padStart(2, "0")} · ${candidate.host}/${candidate.runtime} · `;
+  const priority = index === 0 ? "Primary" : "Fallback";
+  const prefix = `${String(index + 1).padStart(2, "0")} ${priority} · ${candidate.host}/${candidate.runtime} · `;
   const lifecycle = candidate.closeOnReport ? "close" : "retain";
   const effort = candidateEffortLabel(profile, candidate, parentEffort);
   const fast = candidateFastModeApplied(candidate, parentModel) ? " ⚡" : "";
@@ -237,7 +242,7 @@ const profilesPage = (
   const profile = selectedProfile(state);
   const actions = routeActions(state);
   const notices = commonNotices(state, theme, width, cancelKey);
-  const visibleCount = Math.max(1, availableHeight - 9 - notices.length);
+  const visibleCount = Math.max(1, availableHeight - 10 - notices.length);
   const start = windowStart(PROFILE_IDS.length, state.profileIndex, visibleCount);
   const visibleProfiles = PROFILE_IDS.slice(start, start + visibleCount);
   return [
@@ -245,15 +250,16 @@ const profilesPage = (
       "accent",
       theme.bold(`Profiles${windowLabel(start, visibleProfiles.length, PROFILE_IDS.length)}`),
     ),
-    "Choose a profile to inspect its effective route or edit its declaration. ★ marks the launch default.",
+    "Choose a profile to inspect its effective route or edit its declaration. Profile omitted → generalist.",
+    "Sources  [P] Project > [G] Global > [B] Built-in",
     scopeLine(state, theme),
     "",
     ...notices,
     ...visibleProfiles.map((entry, offset) => {
       const index = start + offset;
       const marker = index === state.profileIndex ? ">" : " ";
-      const defaultMarker = entry === state.inspection.config.defaultProfile ? "★" : " ";
-      return `${marker}${defaultMarker} ${entry.padEnd(11)} ${effectiveProfileSummary(state.inspection, entry, state.parentEffort, state.parentModel)}`;
+      const fallback = entry === "generalist" ? "implicit fallback" : "";
+      return `${marker} ${entry.padEnd(11)} ${fallback.padEnd(17)} ${effectiveProfileSummary(state.inspection, entry, state.parentEffort, state.parentModel)}`;
     }),
     "",
     theme.fg("muted", "Actions"),
@@ -289,8 +295,8 @@ const routePage = (
     visible.length === 0
       ? [
           state.draft.kind === "invalid"
-            ? "  Invalid declaration · route fails closed"
-            : "  No candidates · route is disabled",
+            ? "  × Invalid declaration · route fails closed"
+            : "  — No candidates · route is disabled",
         ]
       : visible.map((candidate, offset) => {
           const index = start + offset;
@@ -473,7 +479,7 @@ const compactWorkspacePage = (
         : `${profile} · candidate ${state.candidateIndex + 1}`;
   const selected =
     state.pane === "profiles"
-      ? `${profile === state.inspection.config.defaultProfile ? "★ " : ""}${profile} · ${effectiveProfileSummary(state.inspection, profile, state.parentEffort, state.parentModel)}`
+      ? `${profile}${profile === "generalist" ? " · implicit fallback" : ""} · ${effectiveProfileSummary(state.inspection, profile, state.parentEffort, state.parentModel)}`
       : state.pane === "candidates"
         ? candidate
           ? candidateSummary(
@@ -485,8 +491,8 @@ const compactWorkspacePage = (
               state.parentModel,
             )
           : state.draft.kind === "invalid"
-            ? "Invalid declaration · route fails closed"
-            : "No candidates · route disabled"
+            ? "× Invalid declaration · route fails closed"
+            : "— No candidates · route disabled"
         : field
           ? `${field.label}: ${boundedMiddle(field.value, Math.max(1, width - field.label.length - 12))} · ${field.fixed ? "fixed" : "edit"}`
           : "No candidate · return to route";

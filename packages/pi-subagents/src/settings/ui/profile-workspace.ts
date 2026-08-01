@@ -14,8 +14,10 @@ import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profil
 import type { SubagentEffort } from "../../run/model.ts";
 import {
   declaredRouteForDraft,
+  inheritProjectDraft,
   loadProfileRouteDraft,
   replaceRouteCandidate,
+  resetGlobalDraft,
   type CandidateUpdate,
   type ProfileRouteDraft,
 } from "../profile-route-editor.ts";
@@ -27,6 +29,8 @@ import { ProfileModelPickerPage } from "./model-picker.ts";
 import {
   PROFILE_WORKSPACE_FIELDS,
   candidateFieldRows,
+  draftKindLabel,
+  profileRouteDraftSummary,
   type ProfileWorkspaceField,
   type ProfileWorkspacePane,
 } from "./profile-workspace-model.ts";
@@ -126,8 +130,7 @@ export class ProfileWorkspaceComponent implements Component {
     this.options = options;
     this.inspection = options.inspection;
     this.scope = "global";
-    const defaultIndex = PROFILE_IDS.indexOf(options.inspection.config.defaultProfile);
-    this.profileIndex = defaultIndex < 0 ? 0 : defaultIndex;
+    this.profileIndex = PROFILE_IDS.indexOf("generalist");
     this.reconcile();
   }
 
@@ -329,7 +332,10 @@ export class ProfileWorkspaceComponent implements Component {
       this.options.parentModel,
     )[this.fieldIndex];
     if (row?.fixed) {
-      this.setMessage("info", `${row.label} is fixed by the current host/runtime policy.`);
+      this.setMessage(
+        "info",
+        row.fixedReason ?? `${row.label} is fixed by the current host/runtime policy.`,
+      );
       this.renderSoon();
       return;
     }
@@ -781,6 +787,14 @@ export class ProfileWorkspaceComponent implements Component {
     if (this.modelPicker) return this.modelPicker.render(width);
     if (this.selectPage) return this.selectPage.render(width);
     this.reconcile();
+    const profile = this.profile();
+    const draft = this.draft();
+    const resetDraft =
+      this.scope === "global"
+        ? resetGlobalDraft(profile)
+        : inheritProjectDraft(this.inspection, profile);
+    const resetCurrent = `${draftKindLabel(draft, this.scope)} · ${profileRouteDraftSummary(profile, draft, this.options.parentEffort, this.options.parentModel)}`;
+    const resetAfter = `${this.scope === "global" ? "[B] built-in" : "inherits [G] global / [B] built-in"} · ${profileRouteDraftSummary(profile, resetDraft, this.options.parentEffort, this.options.parentModel)}`;
     return renderProfileWorkspace(
       {
         inspection: this.inspection,
@@ -792,7 +806,7 @@ export class ProfileWorkspaceComponent implements Component {
         profileIndex: this.profileIndex,
         candidateIndex: this.candidateIndex,
         fieldIndex: this.fieldIndex,
-        draft: this.draft(),
+        draft,
         busy: this.busy,
         cancellableBusy: this.catalogLoad !== undefined,
         reloadRequired: this.reloadRequired,
@@ -800,11 +814,14 @@ export class ProfileWorkspaceComponent implements Component {
         pendingConfirmation: this.pendingAction
           ? profileWorkspaceConfirmation({
               action: this.pendingAction,
-              profile: this.profile(),
+              profile,
               candidateIndex: this.candidateIndex,
-              candidateCount: this.draft().candidates.length,
+              candidateCount: draft.candidates.length,
               scope: this.scope,
               projectOverrideActive: this.scope === "global" && this.projectOverrideActive(),
+              ...(this.pendingAction === "reset"
+                ? { currentSummary: resetCurrent, afterSummary: resetAfter }
+                : {}),
             })
           : undefined,
       },

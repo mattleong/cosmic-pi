@@ -169,7 +169,7 @@ const profileDiscovery = (
         id: definition.id,
         description: definition.description,
         source: profiles.config.profileSources[definition.id],
-        isDefault: profiles.config.defaultProfile === definition.id,
+        isDefault: definition.id === "generalist",
         defaultContext: definition.defaultContext,
         defaultWriteIntent: definition.defaultWriteIntent,
         ...(definition.defaultEffort ? { defaultEffort: definition.defaultEffort } : {}),
@@ -181,16 +181,16 @@ const profileDiscovery = (
 
 const formatProfileDiscovery = (
   profiles: ReadonlyArray<SubagentProfileView>,
-  defaultProfile: ProfileId,
+  fallbackProfile: ProfileId,
 ): string =>
   [
     "Profile routes · static preflight",
-    `Default profile: ${defaultProfile}`,
+    `Profile omitted → ${fallbackProfile}`,
     "Each candidate lists host/runtime/model, effort, context, write intent, fast mode, and retention.",
     "Static eligibility only · executable, authentication, integration, and private-harness checks run at launch.",
     "",
     ...profiles.flatMap((profile) => [
-      `${profile.id}${profile.isDefault ? " ★ launch default" : ""} — ${profile.description}`,
+      `${profile.id}${profile.isDefault ? " · implicit fallback" : ""} — ${profile.description}`,
       `  source=${profile.source} · defaults: context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"}`,
       ...(profile.candidates.length > 0
         ? profile.candidates.map(

@@ -2,7 +2,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
   LEGACY_PROFILE_ID,
-  normalizeProfileId,
   PROFILE_CANDIDATE_EFFORTS,
   PROFILE_IDS,
   PROFILE_INPUT_IDS,
@@ -23,7 +22,6 @@ export const MAX_MODEL_SELECTOR_CHARS = MAX_NATIVE_MODEL_SELECTOR_CHARS;
 
 export interface SubagentConfigFile {
   readonly version?: number | undefined;
-  readonly defaultProfile?: ProfileId | undefined;
   readonly profiles?: Partial<Readonly<Record<ProfileId, DeclaredProfileRoute>>> | undefined;
 }
 
@@ -97,23 +95,6 @@ const readField = (
     diagnostics.push(path);
     return { present: true };
   }
-};
-
-const decodeField = <A>(
-  record: Readonly<Record<string, unknown>>,
-  key: string,
-  schema: Schema.Decoder<A>,
-  path: string,
-  diagnostics: string[],
-): A | undefined => {
-  const field = readField(record, key, path, diagnostics);
-  if (!field.present) return undefined;
-  const decoded = Schema.decodeUnknownOption(schema)(field.value);
-  if (Option.isNone(decoded)) {
-    diagnostics.push(path);
-    return undefined;
-  }
-  return decoded.value;
 };
 
 /** Syntax-only native selector validation. Catalog availability remains a launch-time boundary. */
@@ -226,16 +207,8 @@ export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedS
     diagnostics.push(`${scope}.<unknown>`);
 
   const versionField = readField(rawRoot, "version", `${scope}.version`, diagnostics);
-  const decodedDefaultProfile = decodeField(
-    rawRoot,
-    "defaultProfile",
-    ProfileIdSchema,
-    `${scope}.defaultProfile`,
-    diagnostics,
-  );
-  const defaultProfile = decodedDefaultProfile
-    ? normalizeProfileId(decodedDefaultProfile)
-    : undefined;
+  // `defaultProfile` is accepted as a deprecated no-op and removed on the next settings write.
+  readField(rawRoot, "defaultProfile", `${scope}.defaultProfile`, diagnostics);
   const profilesField = readField(rawRoot, "profiles", `${scope}.profiles`, diagnostics);
   const decodedProfiles = decodedRecord(profilesField.value);
   if (profilesField.present && !decodedProfiles) diagnostics.push(`${scope}.profiles`);
@@ -270,7 +243,6 @@ export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedS
   return {
     file: {
       ...(version === SUBAGENT_CONFIG_VERSION ? { version } : {}),
-      ...(defaultProfile ? { defaultProfile } : {}),
       ...(Object.keys(profiles).length > 0 ? { profiles } : {}),
     },
     diagnostics: [...new Set(diagnostics)],

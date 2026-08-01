@@ -49,7 +49,7 @@ All six `local|herdr` × `pi|claude|codex` combinations are syntactically repres
 - fast mode outside supported Pi OpenAI routes or Codex's priority-tier-capable native path;
 - unknown candidate keys, runtime-incompatible effort levels, or malformed native selectors (Claude's exact numeric long-context suffixes such as `[1m]` are supported without admitting general glob syntax).
 
-A present-invalid route fails closed. Missing trusted-project routes inherit global routes; missing global routes use built-ins. Every built-in is an explicit local Pi parent candidate using profile context, write-intent, and effort defaults with `fastMode: false` and `closeOnReport: true`; `defaultProfile` is `generalist`, with `delegate` decoded only as a temporary compatibility alias.
+A present-invalid route fails closed. Missing trusted-project routes inherit global routes; missing global routes use built-ins. Every built-in is an explicit local Pi parent candidate using profile context, write-intent, and effort defaults with `fastMode: false` and `closeOnReport: true`. Omitted launch profiles always resolve to `generalist`; deprecated `defaultProfile` fields are ignored and removed on the next settings write, while `delegate` route/tool inputs decode only as a temporary compatibility alias.
 
 Version 3 fails activation with an actionable migration diagnostic. Its removed policy fields are not decoded or silently discarded.
 

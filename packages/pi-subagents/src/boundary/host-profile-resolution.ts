@@ -236,7 +236,7 @@ export const resolveProfileStart = (
       });
 
     const requestedProfile = rawInput.profile?.trim();
-    const selectedProfile = requestedProfile || profiles.config.defaultProfile;
+    const selectedProfile = requestedProfile || "generalist";
     const definition = profiles.definition(selectedProfile);
     if (!definition)
       return yield* new InvalidSubagentRequestError({

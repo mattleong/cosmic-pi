@@ -85,7 +85,7 @@ class ProfileRoutesComponent implements Component {
     const lines: string[] = [
       this.theme.fg(
         "accent",
-        `Profile routes · static eligibility only${this.details.defaultProfile ? ` · default ${this.details.defaultProfile}` : ""}`,
+        `Profile routes · static eligibility only${this.details.defaultProfile ? ` · fallback ${this.details.defaultProfile}` : ""}`,
       ),
     ];
     for (const profile of profiles) {
@@ -101,7 +101,7 @@ class ProfileRoutesComponent implements Component {
       lines.push(
         this.theme.fg(
           color,
-          `${profile.isDefault ? "★" : "•"} ${profile.id} · ${profileSource(profile.source)} · ${eligible}/${profile.candidates.length} eligible${first ? ` · ${first}` : " · disabled"}`,
+          `• ${profile.id}${profile.isDefault ? " · implicit fallback" : ""} · ${profileSource(profile.source)} · ${eligible}/${profile.candidates.length} eligible${first ? ` · ${first}` : " · disabled"}`,
         ),
       );
       if (!this.expanded) continue;

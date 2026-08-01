@@ -147,11 +147,8 @@ const applyProfilePatch = (
   if (patch.profile === "generalist") delete profiles[LEGACY_PROFILE_ID];
   if (patch.route === undefined) delete profiles[patch.profile];
   else profiles[patch.profile] = routeJson(patch.route);
-  const next: JsonObject = {
-    ...current,
-    version: SUBAGENT_CONFIG_VERSION,
-    ...(current.defaultProfile === LEGACY_PROFILE_ID ? { defaultProfile: "generalist" } : {}),
-  };
+  const next: JsonObject = { ...current, version: SUBAGENT_CONFIG_VERSION };
+  delete next.defaultProfile;
   if (Object.keys(profiles).length === 0) delete next.profiles;
   else next.profiles = profiles;
   return next;

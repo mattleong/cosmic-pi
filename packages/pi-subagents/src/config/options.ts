@@ -80,8 +80,7 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     projectTrusted: input.projectTrusted,
     globalConfigExists: input.globalConfigExists,
     projectConfigExists: input.projectTrusted && input.projectConfigExists,
-    defaultProfile:
-      project?.file.defaultProfile ?? input.global.file.defaultProfile ?? ("generalist" as const),
+    defaultProfile: "generalist",
     profiles,
     profileSources,
     diagnostics: [...input.global.diagnostics, ...(project?.diagnostics ?? [])],

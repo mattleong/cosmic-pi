@@ -32,7 +32,7 @@ const StartSpecFields = {
   profile: Type.Optional(
     StringEnum(PROFILE_INPUT_IDS, {
       description:
-        "Behavior and model-routing profile. Omit to use configured defaultProfile. `delegate` is a temporary compatibility alias for `generalist`. The selected profile always determines the model route.",
+        "Behavior and model-routing profile. Omit to use the fixed generalist fallback. `delegate` is a temporary compatibility alias for `generalist`. The selected profile always determines the model route; the deprecated configuration field defaultProfile is ignored.",
     }),
   ),
 } as const;

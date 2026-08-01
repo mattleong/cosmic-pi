@@ -39,7 +39,7 @@ Built-ins preserve the previous behavior with one explicit `local` + `pi` + `par
 | `oracle`     | fork    | read-only    | high          |
 | `generalist` | fresh   | read-only    | parent effort |
 
-`defaultProfile` defaults to `generalist`. Existing version 4 `delegate` values and route keys are accepted as a temporary compatibility alias and normalize to `generalist`.
+Omitting `profile` always selects `generalist`; specialized profiles must be explicit. The deprecated `defaultProfile` configuration field is accepted but ignored and removed on the next settings write. Existing version 4 `delegate` route keys and tool inputs are accepted as a temporary compatibility alias and normalize to `generalist`.
 
 ## Configuration version 4
 
@@ -48,7 +48,6 @@ Global configuration is `<agent-dir>/pi-subagents.json`. Trusted projects may ov
 ```json
 {
   "version": 4,
-  "defaultProfile": "generalist",
   "profiles": {
     "reviewer": [
       {

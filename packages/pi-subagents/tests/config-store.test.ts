@@ -76,7 +76,7 @@ describe("SubagentConfigStore v4", () => {
       ],
     });
     expect(config.profileSources.worker).toBe("global");
-    expect(config.defaultProfile).toBe("worker");
+    expect(config.defaultProfile).toBe("generalist");
   });
 
   it("accepts only v4 documents and never reads an untrusted project", async () => {
@@ -179,7 +179,7 @@ describe("SubagentConfigStore v4", () => {
       }),
     );
     const saved = JSON.parse(await readFile(paths.globalPath, "utf8"));
-    expect(saved.defaultProfile).toBe("planner");
+    expect(saved.defaultProfile).toBeUndefined();
     expect(saved.customFutureField).toEqual({ retained: true });
     expect(saved.profiles.reviewer).toEqual(initial.profiles.reviewer);
     expect(saved.profiles.scout).toEqual({
@@ -237,7 +237,7 @@ describe("SubagentConfigStore v4", () => {
       }),
     );
     const saved = JSON.parse(await readFile(paths.globalPath, "utf8"));
-    expect(saved.defaultProfile).toBe("generalist");
+    expect(saved.defaultProfile).toBeUndefined();
     expect(saved.profiles.delegate).toBeUndefined();
     expect(saved.profiles.generalist).toMatchObject({ model: "openai/new-generalist" });
   });
@@ -312,7 +312,7 @@ describe("SubagentConfigStore v4", () => {
 
   it("does not rewrite an existing document when the patch changes nothing", async () => {
     const paths = await fixture();
-    const raw = JSON.stringify({ version: 4, defaultProfile: "planner" });
+    const raw = JSON.stringify({ version: 4 });
     await writeFile(paths.globalPath, raw);
     const inspection = await withStore((store) =>
       store.inspect(paths.cwd, paths.agentDirectory, true),

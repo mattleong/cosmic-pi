@@ -199,6 +199,8 @@ describe("/subagents profile workspace", () => {
     const managerActions = actions(initial);
     const custom = vi.fn(async (factory) =>
       exerciseWorkspace(factory, async (component) => {
+        component.handleInput?.("\u001b[A");
+        component.handleInput?.("\u001b[A");
         component.handleInput?.("\t");
         component.handleInput?.("\t");
         component.handleInput?.("\u001b[B");

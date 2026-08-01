@@ -42,6 +42,7 @@ export interface ProfileWorkspaceFieldRow {
   readonly label: string;
   readonly value: string;
   readonly fixed: boolean;
+  readonly fixedReason?: string | undefined;
 }
 
 export interface CandidateFieldChangeOptions {
@@ -61,15 +62,15 @@ export interface CandidateFieldChoice {
 export const profileSourceLabel = (source: ProfileRouteSource): string => {
   switch (source) {
     case "project":
-      return "project override";
+      return "[P] project";
     case "global":
-      return "global";
+      return "[G] global";
     case "builtin":
-      return "built-in";
+      return "[B] built-in";
     case "project-invalid":
-      return "project invalid";
+      return "[P] project invalid";
     case "global-invalid":
-      return "global invalid";
+      return "[G] global invalid";
   }
 };
 
@@ -78,9 +79,9 @@ export const draftKindLabel = (draft: ProfileRouteDraft, scope: SubagentConfigSc
     case "explicit":
       return "explicit";
     case "disabled":
-      return "disabled";
+      return "— disabled";
     case "invalid":
-      return "invalid · fail-closed";
+      return "× invalid · fails closed";
     case "inherit":
       return "inherits global";
     case "reset":
@@ -127,12 +128,27 @@ export const effectiveProfileSummary = (
   const first = route.candidates[0];
   if (!first)
     return inspection.config.profileSources[profile].endsWith("-invalid")
-      ? `${source} · fail-closed`
-      : `${source} · disabled`;
+      ? `${source} · × fails closed`
+      : `${source} · — disabled`;
   const count = route.candidates.length;
   const effort = candidateEffortLabel(profile, first, parentEffort);
   const fast = candidateFastModeApplied(first, parentModel) ? " ⚡" : "";
   return `${source} · ${count} candidate${count === 1 ? "" : "s"} · ${first.host}/${first.runtime} · ${first.model}:${effort}${fast}`;
+};
+
+export const profileRouteDraftSummary = (
+  profile: ProfileId,
+  draft: ProfileRouteDraft,
+  parentEffort: SubagentEffort,
+  parentModel?: string | undefined,
+): string => {
+  if (draft.kind === "invalid") return "× invalid · fails closed";
+  const first = draft.candidates[0];
+  if (!first) return "— disabled";
+  const count = draft.candidates.length;
+  const effort = candidateEffortLabel(profile, first, parentEffort);
+  const fast = candidateFastModeApplied(first, parentModel) ? " ⚡" : "";
+  return `${count} candidate${count === 1 ? "" : "s"} · ${first.host}/${first.runtime} · ${first.model}:${effort}${fast}`;
 };
 
 export const candidateFieldRows = (
@@ -143,6 +159,16 @@ export const candidateFieldRows = (
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
   const localPi = candidate.host === "local" && candidate.runtime === "pi";
   const retainedAllowed = candidate.host === "herdr" && candidate.writeIntent === "read-only";
+  const fastModel =
+    candidate.runtime === "pi" && candidate.model === "parent" ? parentModel : candidate.model;
+  const fastAvailable =
+    fastModel !== undefined && supportsSubagentFastMode(candidate.runtime, fastModel);
+  const fastUnavailableReason =
+    candidate.runtime === "claude"
+      ? "Claude does not support OpenAI fast mode"
+      : candidate.model === "parent" && !parentModel
+        ? "no active parent model is available"
+        : "the selected model does not support OpenAI fast mode";
   return [
     { field: "host", label: "Host", value: candidate.host, fixed: false },
     { field: "runtime", label: "Runtime", value: candidate.runtime, fixed: false },
@@ -156,8 +182,9 @@ export const candidateFieldRows = (
     {
       field: "context",
       label: "Context",
-      value: candidate.context,
+      value: localPi ? candidate.context : `${candidate.context} · fixed: fork requires local Pi`,
       fixed: !localPi,
+      ...(!localPi ? { fixedReason: "Fork context is available only to local Pi." } : {}),
     },
     {
       field: "writeIntent",
@@ -168,18 +195,30 @@ export const candidateFieldRows = (
     {
       field: "fastMode",
       label: "OpenAI fast mode",
-      value: candidateFastModeApplied(candidate, parentModel)
-        ? "on · priority"
+      value: fastAvailable
+        ? candidateFastModeApplied(candidate, parentModel)
+          ? "on · priority"
+          : "off · standard"
         : candidate.fastMode
-          ? "unavailable for model"
-          : "off",
-      fixed: candidate.runtime === "claude",
+          ? `configured on · unavailable: ${fastUnavailableReason} · turn off`
+          : `unavailable · ${fastUnavailableReason}`,
+      fixed: !fastAvailable && !candidate.fastMode,
+      ...(!fastAvailable && !candidate.fastMode
+        ? { fixedReason: `${fastUnavailableReason}.` }
+        : {}),
     },
     {
       field: "closeOnReport",
       label: "Report policy",
-      value: candidate.closeOnReport ? "close after report" : "retain for guidance",
+      value: retainedAllowed
+        ? candidate.closeOnReport
+          ? "close after report"
+          : "retain for guidance"
+        : "close after report · fixed: retain requires Herdr read-only",
       fixed: !retainedAllowed,
+      ...(!retainedAllowed
+        ? { fixedReason: "Retention is available only to Herdr read-only candidates." }
+        : {}),
     },
   ];
 };
