@@ -103,6 +103,7 @@ function progressTurn() {
 function harness(
   options: {
     configured?: boolean;
+    enabled?: boolean;
     setupSelection?: string;
     failCardAppends?: number;
     failActionAppend?: boolean;
@@ -198,7 +199,7 @@ function harness(
     loadConfig: () =>
       normalizeAdvisorConfig(
         options.configured === false
-          ? { enabled: false, setupDismissed: false }
+          ? { enabled: options.enabled ?? false, setupDismissed: false }
           : { enabled: true, provider: "p", model: "m", setupDismissed: true },
         "/config",
       ),
@@ -243,8 +244,15 @@ describe("Advisor extension product behavior", () => {
     expect(value.pi.registerMessageRenderer).not.toHaveBeenCalled();
   });
 
-  test("automatic onboarding opens only for unconfigured TUI sessions", async () => {
-    const tui = harness({ configured: false, setupSelection: "Not now" });
+  test("default disabled unconfigured sessions do not open onboarding", async () => {
+    const value = harness({ configured: false, setupSelection: "Not now" });
+    await value.emit("session_start", { type: "session_start" });
+    expect(value.ctx.ui.select).not.toHaveBeenCalled();
+    expect(value.ctx.ui.notify).not.toHaveBeenCalled();
+  });
+
+  test("automatic onboarding opens only when unconfigured Advisor is explicitly enabled", async () => {
+    const tui = harness({ configured: false, enabled: true, setupSelection: "Not now" });
     await tui.emit("session_start", { type: "session_start" });
     expect(tui.ctx.ui.select).toHaveBeenCalledWith("Set up Advisor", ["Not now"]);
     expect(tui.ctx.ui.notify).toHaveBeenCalledWith(
@@ -252,7 +260,7 @@ describe("Advisor extension product behavior", () => {
       "warning",
     );
 
-    const nonUi = harness({ configured: false });
+    const nonUi = harness({ configured: false, enabled: true });
     Object.assign(nonUi.ctx, { mode: "print", hasUI: false });
     await nonUi.emit("session_start", { type: "session_start" });
     expect(nonUi.ctx.ui.select).not.toHaveBeenCalled();

@@ -4,7 +4,7 @@ A private Pi extension that runs a dedicated read-only Advisor model, intervenes
 
 ## Setup and configuration
 
-Run `/advisor setup` and choose an authenticated model. Choosing a model atomically saves the provider/model, turns Advisor on, and dismisses onboarding. **Not now** saves only `setupDismissed: true`. Automatic onboarding opens only in an interactive TUI session when no model is configured and setup has not been dismissed; non-interactive sessions stay silent. `/advisor setup` always reopens it.
+Advisor is disabled by default and does not prompt for a model. Run `/advisor on` or `/advisor setup` to choose an authenticated model. Choosing a model atomically saves the provider/model, turns Advisor on, and dismisses onboarding. **Not now** saves only `setupDismissed: true`. Automatic onboarding opens only in an interactive TUI session when Advisor is explicitly enabled but no model is configured and setup has not been dismissed; non-interactive and disabled sessions stay silent. `/advisor setup` always reopens it.
 
 Global configuration lives at `$PI_CODING_AGENT_DIR/extensions/pi-advisor.json` (normally `~/.pi/agent/extensions/pi-advisor.json`):
 

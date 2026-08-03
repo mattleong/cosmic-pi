@@ -94,6 +94,7 @@ export const makeSessionLifecycle = (d: EventsDeps) => {
         refs.removeHostCancellation = registration.remove;
         registrationCommitted = true;
         if (
+          d.currentConfig().enabled &&
           !d.currentConfig().configured &&
           !d.currentConfig().setupDismissed &&
           ctx.mode === "tui"

@@ -15,7 +15,7 @@ Visible results are strict version-1 custom entries, not messages. Review cards 
 
 ## Configuration
 
-`config/schema.ts` decodes only `{ enabled?, provider?, model?, setupDismissed? }`. Defaults are disabled and onboarding not dismissed. Removed Advisor fields are scrubbed on settings writes; unrelated unknown root fields are preserved but never applied. Fixed runtime values are medium reasoning, fast mode off, 90-second operations, and 120,000 recent-context characters. Model selection persists provider/model/enabled/setup dismissal atomically; `off` changes only the enabled field.
+`config/schema.ts` decodes only `{ enabled?, provider?, model?, setupDismissed? }`. Advisor defaults to disabled and does not admit onboarding while disabled; setup dismissal defaults to false for an explicitly enabled but unconfigured Advisor. Removed Advisor fields are scrubbed on settings writes; unrelated unknown root fields are preserved but never applied. Fixed runtime values are medium reasoning, fast mode off, 90-second operations, and 120,000 recent-context characters. Model selection persists provider/model/enabled/setup dismissal atomically; `off` changes only the enabled field.
 
 ## Source map
 
