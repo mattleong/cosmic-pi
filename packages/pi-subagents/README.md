@@ -6,7 +6,7 @@ Session-scoped, profile-routed background subagents for Pi.
 
 - Seven built-in profiles: `scout`, `researcher`, `planner`, `worker`, `reviewer`, `oracle`, and `generalist`.
 - `subagent_start` accepts one required `agents` array (1–12 items). Each item contains only `task`, optional `profile`, and optional `name`.
-- Start is always background and nonblocking. Its response is admission-only even if a report races prompt confirmation; report payloads remain queued for exact-once notification or `subagent_await` delivery. Use `subagent_await` separately with `all_finished` or `any_finished`.
+- Start is always background and nonblocking. Launch independent workstreams early and continue working; unclaimed completion reports are delivered automatically. Use `subagent_await` with `all_finished` or `any_finished` only when progress or final synthesis depends on selected reports.
 - Version-4 profile routes own host, runtime, model, effort, context, write intent, OpenAI fast mode, and report-close behavior. Native selectors use one fail-closed 256-character grammar across config, settings, and all six adapter preflights: a leading alphanumeric followed by alphanumerics or `._:/@-`, including Pi registry context variants such as `cursor/gpt-5.5@1m`, plus Claude's optional exact long-context suffix such as `[1m]`.
 - Ordered candidates receive bounded readiness preflight before run, lease, supervisor, or process ownership. Unavailable executables, unauthenticated CLIs, unsupported fresh/context/effort/write-policy combinations, and missing private-harness prerequisites become typed skips, allowing fallback to a later candidate.
 - Once `SubagentService.start` begins, routing never falls through to another candidate; spawn or later outcome uncertainty is surfaced on that selected run and is never retried arbitrarily.
@@ -113,18 +113,30 @@ Session overrides write no project, global, or Pi session-history data. They sur
 
 ## Starting and waiting
 
+For substantial work, first check whether the task contains at least two independent workstreams. Launch one to three bounded read-only assignments early in one batch, then continue the main agent's independent work. Good delegation candidates include unfamiliar or multi-package codebase reconnaissance, external research that can run beside local inspection, implementation planning, and independent review. Skip delegation for trivial or tightly serial tasks.
+
+Prefer `scout`, `researcher`, `planner`, `reviewer`, and `oracle` for parallel work. Use `worker` only for an explicit implementation handoff while the main agent does not edit. There must be no more than one shared-cwd writer, counting the main agent; serialize writers unless isolated worktrees are available.
+
 ```json
 {
   "agents": [
-    { "task": "Review the authentication changes", "profile": "reviewer" },
-    { "task": "Implement the accepted fix", "profile": "worker", "name": "auth-worker" }
+    {
+      "task": "Map the authentication entry points, tests, and likely regression risks.",
+      "profile": "scout",
+      "name": "auth-scout"
+    },
+    {
+      "task": "Independently review the authentication changes for correctness and missing tests.",
+      "profile": "reviewer",
+      "name": "auth-review"
+    }
   ]
 }
 ```
 
 Legacy per-launch `execution`, `context`, `writeIntent`, `effort`, `backend`, and `model` fields are rejected with `[legacy_launch_override]` guidance. No public start path can request foreground execution.
 
-Use `subagent_models` to inspect complete configured candidates and static eligibility; executable/auth/harness readiness is checked at launch. It does not claim unsupported backends are available. Use `subagent_await` rather than polling status; “finished” means the selected run's current assignment is `reported` or terminal, not necessarily that a retained host resource closed. A parent question returns early so the parent can call `subagent_reply` and await again. For a future retained run, `subagent_send` from `reported` begins the next assignment on the same backend resource; `resume` remains for paused or closed completed sessions where supported.
+Use `subagent_models` to inspect complete configured candidates and static eligibility; executable/auth/harness readiness is checked at launch. It does not claim unsupported backends are available. Completion reports that are not claimed by an await are delivered automatically. Use `subagent_await` only at a dependency or synthesis barrier, and use it rather than polling status; “finished” means the selected run's current assignment is `reported` or terminal, not necessarily that a retained host resource closed. A parent question returns early so the parent can call `subagent_reply` and await again. For a future retained run, `subagent_send` from `reported` begins the next assignment on the same backend resource; `resume` remains for paused or closed completed sessions where supported.
 
 ## Commands and tools
 

@@ -58,6 +58,7 @@ interface CapturedTool {
   readonly renderShell?: "default" | "self";
   readonly renderCall?: (...args: ReadonlyArray<unknown>) => unknown;
   readonly renderResult?: (...args: ReadonlyArray<unknown>) => unknown;
+  readonly promptSnippet?: string;
   readonly promptGuidelines?: ReadonlyArray<string>;
   readonly parameters?: unknown;
   readonly prepareArguments?: (args: unknown) => unknown;
@@ -302,6 +303,74 @@ describe("subagent tool", () => {
     const tools = ["read", "grep", "edit", "write", "bash", "mcp"];
     expect(piToolsForWriteIntent(tools, "read-only")).toEqual(["read", "grep"]);
     expect(piToolsForWriteIntent(tools, "writer")).toEqual(tools);
+  });
+
+  it("publishes a deterministic read-only-first delegation policy", () => {
+    const tools = captureSubagentTools({} as SubagentServiceShape);
+    const start = tools.get("subagent_start");
+    const awaitTool = tools.get("subagent_await");
+    const startPrompt = [
+      start?.description,
+      start?.promptSnippet,
+      ...(start?.promptGuidelines ?? []),
+    ]
+      .filter((value): value is string => value !== undefined)
+      .join(" ");
+    const awaitPrompt = [
+      awaitTool?.description,
+      awaitTool?.promptSnippet,
+      ...(awaitTool?.promptGuidelines ?? []),
+    ]
+      .filter((value): value is string => value !== undefined)
+      .join(" ");
+    const scenarios = [
+      {
+        name: "substantial parallel reconnaissance",
+        prompt: startPrompt,
+        evidence: ["two or more", "one to three read-only", "scout", "codebase reconnaissance"],
+      },
+      {
+        name: "external research beside local inspection",
+        prompt: startPrompt,
+        evidence: ["researcher", "sourced external research", "independent workstreams"],
+      },
+      {
+        name: "independent plan and review",
+        prompt: startPrompt,
+        evidence: ["planner", "reviewer", "independent verification"],
+      },
+      {
+        name: "trivial or serial opt-out",
+        prompt: startPrompt,
+        evidence: ["skip subagent_start", "trivial", "tightly serial"],
+      },
+      {
+        name: "explicit writer handoff",
+        prompt: startPrompt,
+        evidence: ["profile=worker only", "main agent does not edit", "one writer"],
+      },
+      {
+        name: "dependency barrier awaiting",
+        prompt: `${startPrompt} ${awaitPrompt}`,
+        evidence: [
+          "continue independent work",
+          "final synthesis depends",
+          "delivered automatically",
+        ],
+      },
+    ] as const;
+
+    expect(start?.promptSnippet).toContain("Parallelize independent reconnaissance");
+    expect(awaitTool?.promptSnippet).toContain("dependency or synthesis barrier");
+    for (const scenario of scenarios) {
+      for (const evidence of scenario.evidence)
+        expect(scenario.prompt, `${scenario.name}: ${evidence}`).toContain(evidence);
+    }
+    for (const guideline of [
+      ...(start?.promptGuidelines ?? []),
+      ...(awaitTool?.promptGuidelines ?? []),
+    ])
+      expect(guideline).toMatch(/\bsubagent_(?:start|await|models|status|reply)\b/);
   });
 
   it("removes every Herdr orchestration tool from parent-resolved writer tools", async () => {

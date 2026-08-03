@@ -12,7 +12,7 @@ A pnpm workspace for pi extensions.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-directory-models`](packages/pi-directory-models) — per-directory model and thinking-level preferences for fresh Pi sessions.
 - [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements, beginning with the footer and information area.
-- [`pi-subagents`](packages/pi-subagents) — session-scoped Pi foreground/background subagents with supervisor communication and a `/subagents` fleet UI.
+- [`pi-subagents`](packages/pi-subagents) — session-scoped background subagents with supervisor communication and a `/subagents` fleet UI.
 
 ## Requirements
 

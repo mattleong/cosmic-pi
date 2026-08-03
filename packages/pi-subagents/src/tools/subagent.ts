@@ -152,14 +152,15 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_start",
     label: "Start Subagents",
     description:
-      "Launch one to twelve session-scoped background subagents from one agents array using configured version 4 profile routes. Every task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. Each item accepts only task, optional profile, and optional name. The selected profile supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport. Ordered readiness failures fall through only before spawn; post-ownership uncertainty never falls through. Successful launches remain active when a peer launch fails.",
-    promptSnippet: "Launch delegated subagents using a task profile",
+      "Launch one to twelve session-scoped background subagents for bounded, independent workstreams such as codebase reconnaissance, external research, planning, and independent review. Start is nonblocking: launch a batch early and continue working. Every task must be self-contained with relevant paths, constraints, evidence to inspect, and a concrete deliverable. Each item accepts only task, optional profile, and optional name. The selected profile supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport. Ordered readiness failures fall through only before spawn; post-ownership uncertainty never falls through. Successful launches remain active when a peer launch fails.",
+    promptSnippet:
+      "Parallelize independent reconnaissance, research, planning, and review with background subagents",
     promptGuidelines: [
-      "Use subagent_start for delegated work that can proceed independently; make every task self-contained with relevant paths, constraints, evidence, and its expected deliverable. Start is always background and nonblocking; use subagent_await separately.",
-      "Use subagent_start only for profile routing. Each agent item accepts task, optional profile, and optional name; the version 4 route exclusively supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport.",
-      "Choose a profile by task: scout for local reconnaissance, researcher for sourced external research, planner for plans, worker for implementation, reviewer for independent review, oracle for inherited-decision analysis, and generalist for general work.",
-      "Keep only one writer in the shared cwd, counting the main agent itself; do not edit while a writer subagent is active.",
-      "Parallelize read-only research, inspection, and review; serialize writes unless isolated worktrees are introduced later.",
+      "Before substantial work, check for independent workstreams. When two or more exist, use subagent_start early to launch one to three read-only subagents in one batch; skip subagent_start only for trivial or tightly serial tasks.",
+      "Use subagent_start for bounded slices rather than the whole assignment: scout for local reconnaissance, researcher for sourced external research, planner for implementation planning, reviewer for independent verification, oracle for inherited-decision analysis, and generalist for other read-only work.",
+      "Use subagent_start with self-contained tasks that include relevant paths, constraints, evidence, and deliverables. Each agent item accepts task, optional profile, and optional name; the selected version 4 profile exclusively supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport.",
+      "After subagent_start, continue independent work instead of waiting idle. Use subagent_await only when progress or final synthesis depends on a report; unclaimed completion reports are delivered automatically.",
+      "Use subagent_start with profile=worker only for an explicit implementation handoff while the main agent does not edit. Keep one writer in the shared cwd, counting the main agent, and serialize writers unless isolated worktrees are available.",
       "Use subagent_models only to inspect configured profile routing; never substitute a model or bypass a profile whose route has no eligible candidate.",
     ],
     parameters: StartParameters,
@@ -212,10 +213,10 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     name: "subagent_await",
     label: "Await Subagents",
     description:
-      "Wait for selected background subagents to finish with live progress. Returns early if a subagent needs a parent reply, then call it again after subagent_reply. A retained run in reported state counts as finished for its current assignment.",
-    promptSnippet: "Wait for background subagents and collect their final reports",
+      "Wait for selected background subagents when progress or final synthesis depends on their reports, with live progress. Returns early if a subagent needs a parent reply, then call it again after subagent_reply. A retained run in reported state counts as finished for its current assignment.",
+    promptSnippet: "Wait at a dependency or synthesis barrier for selected subagent reports",
     promptGuidelines: [
-      "Do not poll subagent_status. After independent work, call subagent_await to collect results; if it returns for a parent question, use subagent_reply and then call subagent_await again. Use subagent_status only for troubleshooting or a user-requested snapshot.",
+      "Use subagent_await only when progress or final synthesis depends on selected reports; otherwise continue independent work and let unclaimed completion reports arrive automatically. Do not poll subagent_status. If subagent_await returns for a parent question, use subagent_reply and then call subagent_await again; use subagent_status only for troubleshooting or a user-requested snapshot.",
     ],
     parameters: AwaitParameters,
     execute: (_id, input, signal, onUpdate, ctx) =>

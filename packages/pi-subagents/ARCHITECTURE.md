@@ -73,6 +73,8 @@ The TypeBox object is strict. Friendly validation and host resolution also rejec
 
 Start is always background and nonblocking. The public tool executes all admitted batch items without waiting. Existing service foreground fields remain dormant staging compatibility only; no public path sets them. `subagent_await` retains the existing `all_finished` and `any_finished` semantics.
 
+Main-agent prompt metadata follows a read-only-first adoption policy: before substantial work, check for at least two independent workstreams; launch one to three bounded read-only assignments early; skip delegation for trivial or tightly serial work; continue independent parent work after launch; and await only at a dependency or final-synthesis barrier because unclaimed completion reports are delivered automatically. Worker launches remain explicit implementation handoffs: the prompt requires the main agent not to edit and preserves the one-shared-cwd-writer rule.
+
 `subagent_models` projects all complete v4 candidates as statically eligible when their adapter/context contract matches; dynamic executable/auth/integration/harness readiness remains launch-time.
 
 ## Local Pi ownership and safety
