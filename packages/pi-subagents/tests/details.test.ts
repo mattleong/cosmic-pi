@@ -12,6 +12,7 @@ const run = (index = 1): SubagentRunView => ({
   task: "Secret full task that must not persist in card details.",
   selection: {
     source: "profile-candidate",
+    routeSource: "session",
     host: "herdr",
     runtime: "claude",
     closeOnReport: false,
@@ -66,7 +67,12 @@ describe("persisted subagent card details", () => {
       lastActivityAt: 2,
       usage: { totalTokens: 2 },
       finalTextTruncated: true,
-      selection: { host: "herdr", runtime: "claude", closeOnReport: false },
+      selection: {
+        routeSource: "session",
+        host: "herdr",
+        runtime: "claude",
+        closeOnReport: false,
+      },
     });
     expect(serialized.length).toBeLessThanOrEqual(48_000);
     expect(serialized).not.toContain("Secret full task");

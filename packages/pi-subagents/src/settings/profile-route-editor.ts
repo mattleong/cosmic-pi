@@ -1,6 +1,7 @@
 import { MAX_PROFILE_CANDIDATES, isNativeProfileModelSelector } from "../config/schema.ts";
 import type { SubagentConfigInspection, SubagentConfigScope } from "../config/store.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../profiles/definitions.ts";
+import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import type {
   DeclaredProfileCandidate,
@@ -17,6 +18,12 @@ import {
   type SubagentRuntime,
 } from "../run/model.ts";
 import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
+
+export type ProfileSettingsScope = "session" | SubagentConfigScope;
+
+export interface ProfileSettingsInspection extends SubagentConfigInspection {
+  readonly session: SessionProfileSnapshot;
+}
 
 export type ProfileRouteDraftKind = "explicit" | "disabled" | "reset" | "inherit" | "invalid";
 
@@ -74,8 +81,8 @@ const candidatesFromDeclaration = (
       : [cloneCandidate(declared as DeclaredProfileCandidate)];
 
 const declaredAt = (
-  inspection: SubagentConfigInspection,
-  scope: SubagentConfigScope,
+  inspection: ProfileSettingsInspection,
+  scope: Exclude<ProfileSettingsScope, "session">,
   profile: ProfileId,
 ): DeclaredProfileRoute | undefined =>
   scope === "global"
@@ -83,8 +90,8 @@ const declaredAt = (
     : inspection.project?.file.profiles?.[profile];
 
 const scopeRouteInvalid = (
-  inspection: SubagentConfigInspection,
-  scope: SubagentConfigScope,
+  inspection: ProfileSettingsInspection,
+  scope: Exclude<ProfileSettingsScope, "session">,
   profile: ProfileId,
 ): boolean =>
   (scope === "global" ? inspection.global : inspection.project)?.invalidProfileRoutes.includes(
@@ -92,7 +99,7 @@ const scopeRouteInvalid = (
   ) ?? false;
 
 const globalReferenceCandidates = (
-  inspection: SubagentConfigInspection,
+  inspection: ProfileSettingsInspection,
   profile: ProfileId,
 ): ReadonlyArray<ProfileCandidate> => {
   if (inspection.global.invalidProfileRoutes.includes(profile)) return [];
@@ -104,10 +111,21 @@ const globalReferenceCandidates = (
 
 /** Loads the exact declaration state without collapsing or reordering ordered candidates. */
 export function loadProfileRouteDraft(
-  inspection: SubagentConfigInspection,
-  scope: SubagentConfigScope,
+  inspection: ProfileSettingsInspection,
+  scope: ProfileSettingsScope,
   profile: ProfileId,
 ): ProfileRouteDraft {
+  if (scope === "session") {
+    const declared = inspection.session.overrides[profile];
+    if (declared)
+      return declared.candidates.length === 0
+        ? { kind: "disabled", candidates: [] }
+        : { kind: "explicit", candidates: cloneCandidates(declared.candidates) };
+    return {
+      kind: "inherit",
+      candidates: cloneCandidates(inspection.session.baseConfig.profiles[profile].candidates),
+    };
+  }
   if (scopeRouteInvalid(inspection, scope, profile)) return { kind: "invalid", candidates: [] };
   const declared = declaredAt(inspection, scope, profile);
   if (declared === undefined)
@@ -124,11 +142,19 @@ export const resetGlobalDraft = (profile: ProfileId): ProfileRouteDraft => ({
 });
 
 export const inheritProjectDraft = (
-  inspection: SubagentConfigInspection,
+  inspection: ProfileSettingsInspection,
   profile: ProfileId,
 ): ProfileRouteDraft => ({
   kind: "inherit",
   candidates: globalReferenceCandidates(inspection, profile),
+});
+
+export const inheritSessionDraft = (
+  inspection: ProfileSettingsInspection,
+  profile: ProfileId,
+): ProfileRouteDraft => ({
+  kind: "inherit",
+  candidates: cloneCandidates(inspection.session.baseConfig.profiles[profile].candidates),
 });
 
 export const disableRouteDraft = (): ProfileRouteDraft => ({ kind: "disabled", candidates: [] });
@@ -371,7 +397,7 @@ export const candidateMenuSummary = (candidate: ProfileCandidate, index: number)
 
 export const completeRouteSummary = (
   draft: ProfileRouteDraft,
-  scope: SubagentConfigScope,
+  scope: ProfileSettingsScope,
 ): string => {
   if (draft.kind === "disabled") return "Disabled";
   if (draft.kind === "invalid") return "Invalid fail-closed route (replacement required)";
@@ -379,7 +405,9 @@ export const completeRouteSummary = (
     draft.kind === "reset"
       ? "Reset to built-in (remove global declaration)"
       : draft.kind === "inherit"
-        ? "Inherit global (remove project declaration)"
+        ? scope === "session"
+          ? "Inherit active session base (clear temporary override)"
+          : "Inherit global (remove project declaration)"
         : "Explicit ordered route";
   const candidates = draft.candidates
     .map(
@@ -389,7 +417,9 @@ export const completeRouteSummary = (
     .join("\n");
   return candidates
     ? `${disposition}\n${candidates}`
-    : scope === "project"
-      ? "Inherit global (resolved route has no candidates)"
-      : "Reset to built-in";
+    : scope === "session"
+      ? "Inherit active session base (resolved route has no candidates)"
+      : scope === "project"
+        ? "Inherit global (resolved route has no candidates)"
+        : "Reset to built-in";
 };

@@ -164,6 +164,7 @@ const boundedSelection = (
   take: (value: string, maximum: number) => string,
 ): SubagentSelectionProvenance => ({
   source: selection.source,
+  ...(selection.routeSource ? { routeSource: selection.routeSource } : {}),
   ...(selection.host ? { host: selection.host } : {}),
   ...(selection.runtime ? { runtime: selection.runtime } : {}),
   ...(selection.closeOnReport === undefined ? {} : { closeOnReport: selection.closeOnReport }),

@@ -359,7 +359,14 @@ describe("subagent v4 profile configuration and resolution", () => {
     });
     await Effect.runPromise(
       SubagentProfileService.use((service) =>
-        Effect.sync(() => expect(service.config.diagnostics).toContain("global.<unknown>")),
+        service.capture.pipe(
+          Effect.tap((snapshot) =>
+            Effect.sync(() =>
+              expect(snapshot.effectiveConfig.diagnostics).toContain("global.<unknown>"),
+            ),
+          ),
+          Effect.asVoid,
+        ),
       ).pipe(
         Effect.provide(
           subagentProfileServiceLayer({

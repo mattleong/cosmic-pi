@@ -56,6 +56,7 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
       `${run.closeOnReport === false ? "retain backend after report" : "close after report"} · assignment ${run.reportGeneration || 1}${retained ? " · retained now" : ""}`,
     ),
     field("Selection", selectionSourceLabel(run)),
+    run.selection.routeSource ? field("Route source", run.selection.routeSource) : undefined,
     field("Reason", run.selection.reason),
     ...run.selection.skippedCandidates.map((candidate) =>
       field(

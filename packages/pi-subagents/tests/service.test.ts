@@ -295,7 +295,7 @@ function fakeChildLayer(
 }
 
 const profileLayerFor = (global: unknown) =>
-  Layer.succeed(
+  Layer.effect(
     SubagentProfileService,
     makeSubagentProfileService(
       resolveSubagentConfig({

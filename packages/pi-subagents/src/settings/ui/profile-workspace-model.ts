@@ -1,4 +1,4 @@
-import type { SubagentConfigInspection, SubagentConfigScope } from "../../config/store.ts";
+import type { ProfileSettingsInspection, ProfileSettingsScope } from "../profile-route-editor.ts";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import type {
   ProfileCandidate,
@@ -61,6 +61,8 @@ export interface CandidateFieldChoice {
 
 export const profileSourceLabel = (source: ProfileRouteSource): string => {
   switch (source) {
+    case "session":
+      return "[S] session";
     case "project":
       return "[P] project";
     case "global":
@@ -74,7 +76,7 @@ export const profileSourceLabel = (source: ProfileRouteSource): string => {
   }
 };
 
-export const draftKindLabel = (draft: ProfileRouteDraft, scope: SubagentConfigScope): string => {
+export const draftKindLabel = (draft: ProfileRouteDraft, scope: ProfileSettingsScope): string => {
   switch (draft.kind) {
     case "explicit":
       return "explicit";
@@ -83,7 +85,7 @@ export const draftKindLabel = (draft: ProfileRouteDraft, scope: SubagentConfigSc
     case "invalid":
       return "× invalid · fails closed";
     case "inherit":
-      return "inherits global";
+      return scope === "session" ? "inherits active config" : "inherits global";
     case "reset":
       return scope === "global" ? "built-in" : "scope default";
   }
@@ -118,16 +120,16 @@ export const candidateFastModeApplied = (
 };
 
 export const effectiveProfileSummary = (
-  inspection: SubagentConfigInspection,
+  inspection: ProfileSettingsInspection,
   profile: ProfileId,
   parentEffort: SubagentEffort = "high",
   parentModel?: string | undefined,
 ): string => {
-  const route = inspection.config.profiles[profile];
-  const source = profileSourceLabel(inspection.config.profileSources[profile]);
+  const route = inspection.session.effectiveConfig.profiles[profile];
+  const source = profileSourceLabel(inspection.session.effectiveConfig.profileSources[profile]);
   const first = route.candidates[0];
   if (!first)
-    return inspection.config.profileSources[profile].endsWith("-invalid")
+    return inspection.session.effectiveConfig.profileSources[profile].endsWith("-invalid")
       ? `${source} · × fails closed`
       : `${source} · — disabled`;
   const count = route.candidates.length;

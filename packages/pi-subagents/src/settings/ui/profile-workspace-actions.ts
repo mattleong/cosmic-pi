@@ -1,5 +1,4 @@
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
-import type { SubagentConfigInspection, SubagentConfigScope } from "../../config/store.ts";
 import type { ProfileId } from "../../profiles/model.ts";
 import {
   addRouteCandidate,
@@ -7,10 +6,13 @@ import {
   disableRouteDraft,
   duplicateRouteCandidate,
   inheritProjectDraft,
+  inheritSessionDraft,
   moveRouteCandidate,
   removeRouteCandidate,
   resetGlobalDraft,
   type ProfileRouteDraft,
+  type ProfileSettingsInspection,
+  type ProfileSettingsScope,
 } from "../profile-route-editor.ts";
 import type { ProfileWorkspaceConfirmation } from "./profile-workspace-render.ts";
 
@@ -37,8 +39,8 @@ export const applyProfileWorkspaceDraftAction = (input: {
   readonly draft: ProfileRouteDraft;
   readonly profile: ProfileId;
   readonly candidateIndex: number;
-  readonly scope: SubagentConfigScope;
-  readonly inspection: SubagentConfigInspection;
+  readonly scope: ProfileSettingsScope;
+  readonly inspection: ProfileSettingsInspection;
 }): ProfileWorkspaceDraftActionResult => {
   if (input.action === "add") {
     if (input.draft.candidates.length >= MAX_PROFILE_CANDIDATES)
@@ -87,16 +89,22 @@ export const applyProfileWorkspaceDraftAction = (input: {
         };
   if (
     (input.scope === "global" && input.draft.kind === "reset") ||
-    (input.scope === "project" && input.draft.kind === "inherit")
+    (input.scope !== "global" && input.draft.kind === "inherit")
   )
     return { unchanged: true };
   return {
     draft:
       input.scope === "global"
         ? resetGlobalDraft(input.profile)
-        : inheritProjectDraft(input.inspection, input.profile),
+        : input.scope === "project"
+          ? inheritProjectDraft(input.inspection, input.profile)
+          : inheritSessionDraft(input.inspection, input.profile),
     description:
-      input.scope === "global" ? "profile reset to built-in" : "profile reset to inherit global",
+      input.scope === "global"
+        ? "profile reset to built-in"
+        : input.scope === "project"
+          ? "profile reset to inherit global"
+          : "session override cleared",
     candidateIndex: 0,
   };
 };
@@ -106,7 +114,7 @@ export const profileWorkspaceConfirmation = (input: {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
   readonly candidateCount: number;
-  readonly scope: SubagentConfigScope;
+  readonly scope: ProfileSettingsScope;
   readonly projectOverrideActive?: boolean | undefined;
   readonly currentSummary?: string | undefined;
   readonly afterSummary?: string | undefined;
@@ -122,7 +130,9 @@ export const profileWorkspaceConfirmation = (input: {
         input.candidateCount === 1
           ? input.projectOverrideActive
             ? "This is the last global candidate. Removing it disables the global declaration; the project override remains effective."
-            : "This is the last candidate. Removing it disables the route after reload."
+            : input.scope === "session"
+              ? "This is the last candidate. Removing it disables the route immediately for future launches; active runs are unchanged."
+              : "This is the last candidate. Removing it disables the route after reload."
           : `The remaining candidates keep their order and the route is saved immediately.${shadowed}`,
     };
   if (input.action === "disable")
@@ -131,7 +141,9 @@ export const profileWorkspaceConfirmation = (input: {
       title: `Disable the ${input.profile} route?`,
       detail: input.projectOverrideActive
         ? "The global route declaration will be disabled; the project override remains effective."
-        : "No candidate will launch for this profile after reload.",
+        : input.scope === "session"
+          ? "This immediately disables the profile for future launches; active runs are unchanged."
+          : "No candidate will launch for this profile after reload.",
     };
   return {
     key: "i",
@@ -141,7 +153,9 @@ export const profileWorkspaceConfirmation = (input: {
         ? input.projectOverrideActive
           ? "The global declaration will be removed. The project override remains effective."
           : "The global declaration will be removed. The effective route will return to the built-in profile."
-        : "The project declaration will be removed. The effective route will come from global settings or the built-in profile.",
+        : input.scope === "project"
+          ? "The project declaration will be removed. The effective route will come from global settings or the built-in profile."
+          : "The temporary session override will be removed. The active project, global, or built-in route will apply immediately.",
     ...(input.currentSummary && input.afterSummary
       ? {
           preview: [`Current  ${input.currentSummary}`, `After    ${input.afterSummary}`],

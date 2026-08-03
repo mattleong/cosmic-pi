@@ -69,6 +69,7 @@ export type DeclaredProfileRoute =
   | ReadonlyArray<DeclaredProfileCandidate>
   | "disabled";
 export type ProfileRouteSource =
+  | "session"
   | "project"
   | "global"
   | "builtin"
@@ -97,6 +98,8 @@ export type SubagentSelectionSource = "profile-candidate" | "profile-parent-cand
 
 export interface SubagentSelectionProvenance {
   readonly source: SubagentSelectionSource;
+  /** Configuration layer that supplied the selected ordered route. */
+  readonly routeSource?: ProfileRouteSource | undefined;
   readonly host?: SubagentHost | undefined;
   readonly runtime?: SubagentRuntime | undefined;
   readonly closeOnReport?: boolean | undefined;

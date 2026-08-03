@@ -6,8 +6,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
-import type { SubagentConfigInspection } from "../src/config/store.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../src/profiles/model.ts";
+import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
 import {
   candidateFastModeApplied,
   candidateFieldChoices,
@@ -19,24 +19,27 @@ import {
   ProfileWorkspaceComponent,
   type ProfileWorkspaceSaveResult,
 } from "../src/settings/ui/profile-workspace.ts";
+import type { ProfileSettingsInspection } from "../src/settings/profile-route-editor.ts";
 
 const inspection = (
   global: Record<string, unknown> = { version: 4 },
   project?: Record<string, unknown>,
   trusted = true,
-): SubagentConfigInspection => {
+): ProfileSettingsInspection => {
   const decodedGlobal = decodeSubagentConfig(global, "global");
   const decodedProject = project ? decodeSubagentConfig(project, "project") : undefined;
+  const config = resolveSubagentConfig({
+    globalConfigPath: "/agent/pi-subagents.json",
+    projectConfigPath: "/repo/.pi/pi-subagents.json",
+    projectTrusted: trusted,
+    globalConfigExists: true,
+    projectConfigExists: project !== undefined,
+    global: decodedGlobal,
+    ...(decodedProject ? { project: decodedProject } : {}),
+  });
   return {
-    config: resolveSubagentConfig({
-      globalConfigPath: "/agent/pi-subagents.json",
-      projectConfigPath: "/repo/.pi/pi-subagents.json",
-      projectTrusted: trusted,
-      globalConfigExists: true,
-      projectConfigExists: project !== undefined,
-      global: decodedGlobal,
-      ...(decodedProject ? { project: decodedProject } : {}),
-    }),
+    config,
+    session: makeSessionProfileSnapshot(config),
     globalDocument: global,
     ...(project ? { projectDocument: project } : {}),
     global: decodedGlobal,
@@ -121,6 +124,7 @@ const makeComponent = (
   const reload = vi.fn().mockResolvedValue(false);
   const close = vi.fn();
   const requestRender = vi.fn();
+  const clearSessionOverrides = vi.fn().mockResolvedValue({ inspection: value });
   const component = new ProfileWorkspaceComponent({
     theme,
     inspection: value,
@@ -132,13 +136,22 @@ const makeComponent = (
     requestRender,
     close,
     saveDraft,
+    clearSessionOverrides,
     loadModelPicker,
     supportedPiEfforts: () => ["low", "medium", "high", "xhigh"],
     fastModeAvailable: () => false,
     reload,
     ...overrides,
   });
-  return { component, saveDraft, loadModelPicker, reload, close, requestRender };
+  return {
+    component,
+    saveDraft,
+    clearSessionOverrides,
+    loadModelPicker,
+    reload,
+    close,
+    requestRender,
+  };
 };
 
 describe("profile settings workspace", () => {
@@ -227,7 +240,7 @@ describe("profile settings workspace", () => {
     const rendered = component.render(120).join("\n");
     expect(rendered).toContain("· ready");
     expect(rendered).toContain("[g Global]");
-    expect(rendered).toContain("Sources  [P] Project > [G] Global > [B] Built-in");
+    expect(rendered).toContain("Sources  [S] Session > [P] Project > [G] Global > [B] Built-in");
     expect(rendered).toContain("generalist  implicit fallback");
     expect(rendered).not.toContain("★");
     expect(rendered).toContain("1 candidate");
@@ -236,6 +249,67 @@ describe("profile settings workspace", () => {
     expect(close).not.toHaveBeenCalled();
     component.handleInput(input.escape);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies session routes immediately without marking reload pending", async () => {
+    const value = inspection();
+    const { component, saveDraft } = makeComponent(value, { initialScope: "session" });
+    selectProfile(component, "reviewer");
+    component.handleInput(input.enter);
+    component.handleInput("d");
+    component.handleInput("d");
+    await vi.waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+    expect(saveDraft).toHaveBeenCalledWith(
+      "session",
+      "reviewer",
+      expect.objectContaining({ kind: "disabled" }),
+    );
+    const rendered = component.render(120).join("\n");
+    expect(rendered).toContain("Applied to this session · reviewer · route disabled");
+    expect(rendered).not.toContain("saved changes pending reload");
+  });
+
+  it("changes a candidate model only in session scope", async () => {
+    const value = inspection();
+    const { component, saveDraft } = makeComponent(value, { initialScope: "session" });
+    selectProfile(component, "reviewer");
+    component.handleInput(input.enter);
+    component.handleInput(input.enter);
+    component.handleInput(input.down);
+    component.handleInput(input.down);
+    component.handleInput(input.enter);
+    await vi.waitFor(() => expect(component.render(120).join("\n")).toContain("Choose model"));
+    component.handleInput(input.enter);
+    await vi.waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+    expect(saveDraft).toHaveBeenCalledWith(
+      "session",
+      "reviewer",
+      expect.objectContaining({
+        kind: "explicit",
+        candidates: [expect.objectContaining({ model: "anthropic/claude-opus-5" })],
+      }),
+    );
+  });
+
+  it("shows session provenance and confirms clearing all temporary overrides", async () => {
+    const base = inspection();
+    const value = {
+      ...base,
+      session: makeSessionProfileSnapshot(base.config, {
+        revision: 1,
+        overrides: { reviewer: { candidates: [candidate("openai/session")] } },
+      }),
+    };
+    const { component, clearSessionOverrides } = makeComponent(value, {
+      initialScope: "session",
+    });
+    const rendered = component.render(140).join("\n");
+    expect(rendered).toContain("1 session override · applies now");
+    expect(rendered).toContain("[S] Session > [P] Project");
+    component.handleInput("X");
+    expect(component.render(140).join("\n")).toContain("Clear all session profile overrides?");
+    component.handleInput("X");
+    await vi.waitFor(() => expect(clearSessionOverrides).toHaveBeenCalledTimes(1));
   });
 
   it("shows overflow position and keeps long model rows aligned", () => {
@@ -327,6 +401,26 @@ describe("profile settings workspace", () => {
     const rendered = component.render(100).join("\n");
     expect(rendered).toContain("This is the last candidate");
     expect(rendered).toContain("disables the route after reload");
+  });
+
+  it("describes session remove and disable actions as immediate for future launches", () => {
+    const removal = makeComponent().component;
+    removal.handleInput("s");
+    removal.handleInput(input.enter);
+    removal.handleInput("x");
+    const removalText = removal.render(120).join("\n");
+    expect(removalText).toContain("immediately for future launches");
+    expect(removalText).toContain("active runs are unchanged");
+    expect(removalText).not.toContain("after reload");
+
+    const disable = makeComponent().component;
+    disable.handleInput("s");
+    disable.handleInput(input.enter);
+    disable.handleInput("d");
+    const disableText = disable.render(120).join("\n");
+    expect(disableText).toContain("immediately disables the profile for future launches");
+    expect(disableText).toContain("active runs are unchanged");
+    expect(disableText).not.toContain("after reload");
   });
 
   it("hides no-op route actions and marks narrow fixed fields", () => {

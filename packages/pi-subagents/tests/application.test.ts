@@ -4,7 +4,13 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey, type Component } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
 
@@ -259,6 +265,154 @@ describe("subagent Pi registration", () => {
     expect(active).not.toContain("subagent_status");
     await Promise.resolve(handlers.get("session_shutdown")?.({}, context()));
     expect(active).toEqual(["read"]);
+  });
+
+  it("preserves session overrides across tree and reload but clears them for a new session", async () => {
+    const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+    let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+    let active = ["read"];
+    const pi = {
+      registerTool: vi.fn((tool: { readonly name: string }) => {
+        active = [...new Set([...active, tool.name])];
+      }),
+      registerCommand: vi.fn(
+        (
+          _name: string,
+          definition: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> },
+        ) => {
+          command = definition.handler;
+        },
+      ),
+      on: vi.fn((name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
+        handlers.set(name, handler);
+      }),
+      getActiveTools: vi.fn(() => [...active]),
+      setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
+        active = [...names];
+      }),
+      sendMessage: vi.fn(),
+      getThinkingLevel: vi.fn(() => "high"),
+    } as unknown as ExtensionAPI;
+    registerSubagentApplication(pi, {
+      getAgentDirectory: testAgentDirectory,
+      loadSettings: () => Promise.resolve(),
+    });
+
+    let component: Component | undefined;
+    let closeOverlay: ((value: boolean) => void) | undefined;
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const ui = {
+      notify: vi.fn(),
+      confirm: vi.fn().mockResolvedValue(false),
+      custom: vi.fn((factory: (...args: unknown[]) => Component) => {
+        let resolve!: (value: boolean) => void;
+        const result = new Promise<boolean>((done) => {
+          resolve = done;
+        });
+        closeOverlay = resolve;
+        component = factory(
+          { terminal: { rows: 24 }, requestRender: vi.fn() },
+          theme,
+          {
+            matches: (data: string, id: string) =>
+              id === "tui.select.confirm"
+                ? matchesKey(data, Key.enter)
+                : id === "tui.select.cancel"
+                  ? matchesKey(data, Key.escape)
+                  : false,
+            getKeys: () => [],
+          },
+          resolve,
+        );
+        return result;
+      }),
+    };
+    const ctx = {
+      cwd: process.cwd(),
+      signal: undefined,
+      isProjectTrusted: () => true,
+      hasUI: true,
+      mode: "tui",
+      ui,
+      model: undefined,
+      modelRegistry: { getAvailable: () => [] },
+      sessionManager: { getSessionId: () => "application-reload-session" },
+    } as unknown as ExtensionCommandContext;
+
+    await Promise.resolve(handlers.get("session_start")?.({ reason: "startup" }, ctx));
+    const first = command?.("profiles session", ctx) ?? Promise.resolve();
+    await vi.waitFor(() => expect(component).toBeDefined());
+    component?.handleInput?.("\r");
+    component?.handleInput?.("d");
+    component?.handleInput?.("d");
+    await vi.waitFor(() =>
+      expect(component?.render(120).join("\n")).toContain("1 session override · applies now"),
+    );
+    closeOverlay?.(false);
+    await first;
+
+    component = undefined;
+    await Promise.resolve(handlers.get("session_tree")?.({}, ctx));
+    const afterTree = command?.("profiles session", ctx) ?? Promise.resolve();
+    await vi.waitFor(() =>
+      expect(component?.render(120).join("\n")).toContain("1 session override · applies now"),
+    );
+    closeOverlay?.(false);
+    await afterTree;
+
+    component = undefined;
+    await Promise.resolve(handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
+    await Promise.resolve(handlers.get("session_start")?.({ reason: "reload" }, ctx));
+    const afterReload = command?.("profiles session", ctx) ?? Promise.resolve();
+    await vi.waitFor(() =>
+      expect(component?.render(120).join("\n")).toContain("1 session override · applies now"),
+    );
+    closeOverlay?.(false);
+    await afterReload;
+
+    component = undefined;
+    await Promise.resolve(handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
+    await Promise.resolve(handlers.get("session_start")?.({ reason: "reload" }, ctx));
+    const afterSecondReload = command?.("profiles session", ctx) ?? Promise.resolve();
+    await vi.waitFor(() =>
+      expect(component?.render(120).join("\n")).toContain("1 session override · applies now"),
+    );
+    closeOverlay?.(false);
+    await afterSecondReload;
+
+    const failedTreeContext = { ...ctx } as unknown as Record<string, unknown>;
+    Object.defineProperty(failedTreeContext, "cwd", {
+      get: () => {
+        throw new Error("tree capture failed");
+      },
+    });
+    await Promise.resolve(
+      handlers.get("session_tree")?.({}, failedTreeContext as unknown as ExtensionCommandContext),
+    );
+    component = undefined;
+    await Promise.resolve(handlers.get("session_shutdown")?.({ reason: "reload" }, ctx));
+    await Promise.resolve(handlers.get("session_start")?.({ reason: "reload" }, ctx));
+    const afterFailedTreeReload = command?.("profiles session", ctx) ?? Promise.resolve();
+    await vi.waitFor(() =>
+      expect(component?.render(120).join("\n")).toContain("1 session override · applies now"),
+    );
+    closeOverlay?.(false);
+    await afterFailedTreeReload;
+
+    component = undefined;
+    await Promise.resolve(handlers.get("session_shutdown")?.({ reason: "new" }, ctx));
+    await Promise.resolve(handlers.get("session_start")?.({ reason: "new" }, ctx));
+    const afterNew = command?.("profiles session", ctx) ?? Promise.resolve();
+    await vi.waitFor(() => expect(component).toBeDefined());
+    expect((component as Component | undefined)?.render(120).join("\n")).not.toContain(
+      "session override · applies now",
+    );
+    closeOverlay?.(false);
+    await afterNew;
+    await Promise.resolve(handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
   });
 
   it("fails activation visibly when subagent tool registration throws", async () => {

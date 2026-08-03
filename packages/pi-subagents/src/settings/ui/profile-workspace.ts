@@ -9,17 +9,19 @@ import {
   type KeyId,
 } from "@earendil-works/pi-tui";
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
-import type { SubagentConfigInspection, SubagentConfigScope } from "../../config/store.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../run/model.ts";
 import {
   declaredRouteForDraft,
   inheritProjectDraft,
+  inheritSessionDraft,
   loadProfileRouteDraft,
   replaceRouteCandidate,
   resetGlobalDraft,
   type CandidateUpdate,
   type ProfileRouteDraft,
+  type ProfileSettingsInspection,
+  type ProfileSettingsScope,
 } from "../profile-route-editor.ts";
 import {
   updateCandidateFromModelChoice,
@@ -31,6 +33,7 @@ import {
   candidateFieldRows,
   draftKindLabel,
   profileRouteDraftSummary,
+  profileSourceLabel,
   type ProfileWorkspaceField,
   type ProfileWorkspacePane,
 } from "./profile-workspace-model.ts";
@@ -47,13 +50,17 @@ import {
 import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
 
 export type ProfileWorkspaceSaveResult =
-  | { readonly inspection: SubagentConfigInspection }
+  | {
+      readonly inspection: ProfileSettingsInspection;
+      readonly conflictMessage?: string | undefined;
+    }
   | { readonly refreshError: string };
 
 export interface ProfileWorkspaceOptions {
   readonly theme: Theme;
-  readonly inspection: SubagentConfigInspection;
+  readonly inspection: ProfileSettingsInspection;
   readonly projectTrusted: boolean;
+  readonly initialScope?: ProfileSettingsScope | undefined;
   readonly piModel?: string | undefined;
   readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
@@ -67,10 +74,11 @@ export interface ProfileWorkspaceOptions {
     | undefined;
   readonly close: (reloadRequired: boolean) => void;
   readonly saveDraft: (
-    scope: SubagentConfigScope,
+    scope: ProfileSettingsScope,
     profile: ProfileId,
     draft: ProfileRouteDraft,
   ) => Promise<ProfileWorkspaceSaveResult>;
+  readonly clearSessionOverrides: () => Promise<ProfileWorkspaceSaveResult>;
   readonly loadModelPicker: (
     profile: ProfileId,
     candidateIndex: number,
@@ -84,7 +92,7 @@ export interface ProfileWorkspaceOptions {
   readonly reload: () => Promise<boolean>;
 }
 
-type PendingAction = "remove" | "disable" | "reset";
+type PendingAction = "remove" | "disable" | "reset" | "clear-session";
 type WorkspaceMessage = {
   readonly kind: "info" | "success" | "warning" | "error";
   readonly text: string;
@@ -92,9 +100,9 @@ type WorkspaceMessage = {
 
 const paneOrder: ReadonlyArray<ProfileWorkspacePane> = ["profiles", "candidates", "fields"];
 const confirmationKey = (action: PendingAction): string =>
-  action === "remove" ? "x" : action === "disable" ? "d" : "i";
-const saveScopeLabel = (scope: SubagentConfigScope): string =>
-  scope === "global" ? "globally" : "to project";
+  action === "remove" ? "x" : action === "disable" ? "d" : action === "reset" ? "i" : "X";
+const saveScopeLabel = (scope: ProfileSettingsScope): string =>
+  scope === "session" ? "to this session" : scope === "global" ? "globally" : "to project";
 
 const sameCandidate = (left: ProfileCandidate, right: ProfileCandidate): boolean =>
   left.host === right.host &&
@@ -107,15 +115,15 @@ const sameCandidate = (left: ProfileCandidate, right: ProfileCandidate): boolean
   left.closeOnReport === right.closeOnReport;
 
 export class ProfileWorkspaceComponent implements Component {
-  private inspection: SubagentConfigInspection;
-  private scope: SubagentConfigScope;
+  private inspection: ProfileSettingsInspection;
+  private scope: ProfileSettingsScope;
   private pane: ProfileWorkspacePane = "profiles";
   private profileIndex: number;
   private candidateIndex = 0;
   private fieldIndex = 0;
   private optimisticDraft: ProfileRouteDraft | undefined;
   private optimisticProfile: ProfileId | undefined;
-  private optimisticScope: SubagentConfigScope | undefined;
+  private optimisticScope: ProfileSettingsScope | undefined;
   private busy = false;
   private refreshBlocked = false;
   private reloadRequired = false;
@@ -129,7 +137,7 @@ export class ProfileWorkspaceComponent implements Component {
   constructor(options: ProfileWorkspaceOptions) {
     this.options = options;
     this.inspection = options.inspection;
-    this.scope = "global";
+    this.scope = options.initialScope ?? "global";
     this.profileIndex = PROFILE_IDS.indexOf("generalist");
     this.reconcile();
   }
@@ -220,7 +228,7 @@ export class ProfileWorkspaceComponent implements Component {
     this.clearMessage();
   }
 
-  private changeScope(scope: SubagentConfigScope): void {
+  private changeScope(scope: ProfileSettingsScope): void {
     if (scope === "project" && !this.options.projectTrusted) {
       this.setMessage("warning", "Project profile settings require a trusted project.");
       return;
@@ -232,9 +240,11 @@ export class ProfileWorkspaceComponent implements Component {
     if (this.pane === "fields" && this.draft().candidates.length === 0) this.pane = "candidates";
     this.setMessage(
       "info",
-      scope === "global"
-        ? "Global scope overrides built-in profile defaults."
-        : "Project scope overrides global profile settings.",
+      scope === "session"
+        ? "Session scope is temporary, applies immediately, and writes no files."
+        : scope === "global"
+          ? "Global scope overrides built-in profile defaults after reload."
+          : "Project scope overrides global profile settings after reload.",
     );
   }
 
@@ -266,13 +276,16 @@ export class ProfileWorkspaceComponent implements Component {
     this.candidateIndex = preferredCandidateIndex;
     this.busy = true;
     this.pendingAction = undefined;
-    this.setMessage("info", `Saving ${saveScopeLabel(scope)} · ${profile} · ${description}`);
+    this.setMessage(
+      "info",
+      `${scope === "session" ? "Applying" : "Saving"} ${saveScopeLabel(scope)} · ${profile} · ${description}`,
+    );
     this.renderSoon();
     void this.options
       .saveDraft(scope, profile, next)
       .then((result) => {
         this.busy = false;
-        this.reloadRequired = true;
+        if (scope !== "session") this.reloadRequired = true;
         this.candidateIndex = preferredCandidateIndex;
         if ("refreshError" in result) {
           this.refreshBlocked = true;
@@ -283,8 +296,9 @@ export class ProfileWorkspaceComponent implements Component {
           this.optimisticProfile = undefined;
           this.optimisticScope = undefined;
           this.setMessage(
-            "success",
-            `Saved ${saveScopeLabel(scope)} · ${profile} · ${description}`,
+            result.conflictMessage ? "warning" : "success",
+            result.conflictMessage ??
+              `${scope === "session" ? "Applied" : "Saved"} ${saveScopeLabel(scope)} · ${profile} · ${description}`,
           );
         }
         this.renderSoon();
@@ -296,6 +310,41 @@ export class ProfileWorkspaceComponent implements Component {
         this.busy = false;
         this.refreshBlocked = true;
         const message = error instanceof Error ? error.message : "Could not save profile settings.";
+        this.setMessage("error", `${message} Reopen /subagents profiles before editing again.`);
+        this.renderSoon();
+      });
+  }
+
+  private clearAllSessionOverrides(): void {
+    if (this.busy) return;
+    this.busy = true;
+    this.pendingAction = undefined;
+    this.setMessage("info", "Clearing all session profile overrides…");
+    this.renderSoon();
+    void this.options
+      .clearSessionOverrides()
+      .then((result) => {
+        this.busy = false;
+        if ("refreshError" in result) {
+          this.refreshBlocked = true;
+          this.setMessage("error", result.refreshError);
+        } else {
+          this.inspection = result.inspection;
+          this.optimisticDraft = undefined;
+          this.optimisticProfile = undefined;
+          this.optimisticScope = undefined;
+          this.setMessage(
+            result.conflictMessage ? "warning" : "success",
+            result.conflictMessage ?? "Cleared all session profile overrides.",
+          );
+        }
+        this.renderSoon();
+      })
+      .catch((error: unknown) => {
+        this.busy = false;
+        this.refreshBlocked = true;
+        const message =
+          error instanceof Error ? error.message : "Could not clear session overrides.";
         this.setMessage("error", `${message} Reopen /subagents profiles before editing again.`);
         this.renderSoon();
       });
@@ -603,12 +652,22 @@ export class ProfileWorkspaceComponent implements Component {
 
   private arm(action: PendingAction): void {
     if (this.busy) return;
+    if (action === "clear-session") {
+      if (Object.keys(this.inspection.session.overrides).length === 0) {
+        this.setMessage("info", "No session overrides are active.");
+        this.renderSoon();
+        return;
+      }
+      this.pendingAction = action;
+      this.renderSoon();
+      return;
+    }
     const draft = this.draft();
     if (
       (action === "disable" && draft.kind === "disabled") ||
       (action === "reset" &&
         ((this.scope === "global" && draft.kind === "reset") ||
-          (this.scope === "project" && draft.kind === "inherit")))
+          (this.scope !== "global" && draft.kind === "inherit")))
     ) {
       this.setMessage("info", "No profile change was needed.");
       this.renderSoon();
@@ -619,7 +678,8 @@ export class ProfileWorkspaceComponent implements Component {
   }
 
   private confirmPending(): void {
-    if (this.pendingAction) this.performDraftAction(this.pendingAction);
+    if (this.pendingAction === "clear-session") this.clearAllSessionOverrides();
+    else if (this.pendingAction) this.performDraftAction(this.pendingAction);
   }
 
   private requestReload(): void {
@@ -752,6 +812,7 @@ export class ProfileWorkspaceComponent implements Component {
     } else if (matchesKey(data, Key.right) || this.matches(data, Key.enter, "tui.select.confirm"))
       this.forward();
     else if (printable === "/" && this.pane === "profiles") this.openProfileSearch();
+    else if (printable === "s") this.changeScope("session");
     else if (printable === "g") this.changeScope("global");
     else if (printable === "p") this.changeScope("project");
     else if (
@@ -779,6 +840,8 @@ export class ProfileWorkspaceComponent implements Component {
       this.arm("remove");
     else if (printable === "d" && this.pane === "candidates") this.arm("disable");
     else if (printable === "i" && this.pane !== "fields") this.arm("reset");
+    else if (printable === "X" && this.scope === "session" && this.pane === "profiles")
+      this.arm("clear-session");
     else if (printable === "r") this.requestReload();
     this.renderSoon();
   }
@@ -792,9 +855,14 @@ export class ProfileWorkspaceComponent implements Component {
     const resetDraft =
       this.scope === "global"
         ? resetGlobalDraft(profile)
-        : inheritProjectDraft(this.inspection, profile);
+        : this.scope === "project"
+          ? inheritProjectDraft(this.inspection, profile)
+          : inheritSessionDraft(this.inspection, profile);
     const resetCurrent = `${draftKindLabel(draft, this.scope)} · ${profileRouteDraftSummary(profile, draft, this.options.parentEffort, this.options.parentModel)}`;
-    const resetAfter = `${this.scope === "global" ? "[B] built-in" : "inherits [G] global / [B] built-in"} · ${profileRouteDraftSummary(profile, resetDraft, this.options.parentEffort, this.options.parentModel)}`;
+    const baseSource = profileSourceLabel(
+      this.inspection.session.baseConfig.profileSources[profile],
+    );
+    const resetAfter = `${this.scope === "global" ? "[B] built-in" : this.scope === "project" ? "inherits [G] global / [B] built-in" : `inherits ${baseSource}`} · ${profileRouteDraftSummary(profile, resetDraft, this.options.parentEffort, this.options.parentModel)}`;
     return renderProfileWorkspace(
       {
         inspection: this.inspection,
@@ -811,19 +879,27 @@ export class ProfileWorkspaceComponent implements Component {
         cancellableBusy: this.catalogLoad !== undefined,
         reloadRequired: this.reloadRequired,
         message: this.message,
-        pendingConfirmation: this.pendingAction
-          ? profileWorkspaceConfirmation({
-              action: this.pendingAction,
-              profile,
-              candidateIndex: this.candidateIndex,
-              candidateCount: draft.candidates.length,
-              scope: this.scope,
-              projectOverrideActive: this.scope === "global" && this.projectOverrideActive(),
-              ...(this.pendingAction === "reset"
-                ? { currentSummary: resetCurrent, afterSummary: resetAfter }
-                : {}),
-            })
-          : undefined,
+        pendingConfirmation:
+          this.pendingAction === "clear-session"
+            ? {
+                key: "X",
+                title: "Clear all session profile overrides?",
+                detail:
+                  "Every temporary route will be removed. Active project, global, or built-in routes will apply immediately to new launches.",
+              }
+            : this.pendingAction
+              ? profileWorkspaceConfirmation({
+                  action: this.pendingAction,
+                  profile,
+                  candidateIndex: this.candidateIndex,
+                  candidateCount: draft.candidates.length,
+                  scope: this.scope,
+                  projectOverrideActive: this.scope === "global" && this.projectOverrideActive(),
+                  ...(this.pendingAction === "reset"
+                    ? { currentSummary: resetCurrent, afterSummary: resetAfter }
+                    : {}),
+                })
+              : undefined,
       },
       {
         theme: this.options.theme,

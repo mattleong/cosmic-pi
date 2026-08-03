@@ -6,16 +6,22 @@ import { synchronousNow } from "../boundary/native-clock.ts";
 import { startHostUiTicker, type SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
-import type {
-  SubagentConfigInspection,
-  SubagentConfigScope,
-  SubagentProfilePatch,
-} from "../config/store.ts";
+import { normalizeDeclaredProfileRoute } from "../config/options.ts";
+import type { SubagentProfilePatch } from "../config/store.ts";
 import type { ProfileCandidate, ProfileId } from "../profiles/model.ts";
+import {
+  SessionProfileConflictError,
+  type SessionProfilePatch,
+} from "../profiles/session-overrides.ts";
 import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import { decodeSubagentEffort, isActiveRunState, type SubagentEffort } from "../run/model.ts";
 import { SubagentFleetComponent } from "../ui/fleet.ts";
-import { declaredRouteForDraft, type ProfileRouteDraft } from "./profile-route-editor.ts";
+import {
+  declaredRouteForDraft,
+  type ProfileRouteDraft,
+  type ProfileSettingsInspection,
+  type ProfileSettingsScope,
+} from "./profile-route-editor.ts";
 import { loadCandidateModelPicker } from "./ui/candidate-editor.ts";
 import { createProfileModelChoices } from "./ui/model-picker.ts";
 import {
@@ -31,8 +37,10 @@ export interface FleetManagerActions {
   readonly send: (id: string, message: string) => Promise<void>;
   readonly reply: (id: string, message: string) => Promise<void>;
   readonly rename: (id: string, name: string) => Promise<void>;
-  readonly inspectProfiles: (projectTrusted: boolean) => Promise<SubagentConfigInspection>;
+  readonly inspectProfiles: (projectTrusted: boolean) => Promise<ProfileSettingsInspection>;
   readonly patchProfile: (patch: SubagentProfilePatch) => Promise<void>;
+  readonly patchSessionProfile: (patch: SessionProfilePatch) => Promise<void>;
+  readonly clearSessionProfiles: (expectedRevision: number) => Promise<void>;
   readonly listNativeModels: (
     runtime: LocalCliRuntime,
     signal?: AbortSignal,
@@ -176,6 +184,7 @@ async function openProfileSettings(
   ctx: ExtensionCommandContext,
   bridge: SubagentProjectionBridge,
   actions: FleetManagerActions,
+  initialScope: ProfileSettingsScope = "global",
 ): Promise<void> {
   if (ctx.mode !== "tui" || !ctx.hasUI || typeof ctx.ui.custom !== "function") {
     if (ctx.hasUI)
@@ -187,7 +196,14 @@ async function openProfileSettings(
   }
 
   const projectTrusted = isProjectTrusted(ctx);
-  let inspection: SubagentConfigInspection;
+  const selectedInitialScope =
+    initialScope === "project" && !projectTrusted ? "global" : initialScope;
+  if (selectedInitialScope !== initialScope)
+    ctx.ui.notify(
+      "Project profile settings require a trusted project; opened Global scope.",
+      "warning",
+    );
+  let inspection: ProfileSettingsInspection;
   try {
     inspection = await actions.inspectProfiles(projectTrusted);
   } catch (error) {
@@ -213,31 +229,76 @@ async function openProfileSettings(
     : availableModels[0]
       ? `${availableModels[0].provider}/${availableModels[0].id}`
       : undefined;
+  const refreshInspection = async (
+    conflictMessage?: string,
+  ): Promise<ProfileWorkspaceSaveResult> => {
+    try {
+      inspection = await actions.inspectProfiles(isProjectTrusted(ctx));
+      return { inspection, ...(conflictMessage ? { conflictMessage } : {}) };
+    } catch {
+      return {
+        refreshError:
+          "Profile settings changed, but the workspace could not refresh. Reopen /subagents profiles before editing again.",
+      };
+    }
+  };
   const saveDraft = async (
-    scope: SubagentConfigScope,
+    scope: ProfileSettingsScope,
     profile: ProfileId,
     draft: ProfileRouteDraft,
   ): Promise<ProfileWorkspaceSaveResult> => {
     const declaration = declaredRouteForDraft(draft);
     if (!declaration.valid) throw new Error(declaration.error);
-    const expectedDocument =
-      scope === "global" ? inspection.globalDocument : inspection.projectDocument;
-    await actions.patchProfile({
-      scope,
-      profile,
-      ...(declaration.route === undefined ? {} : { route: declaration.route }),
-      expectedExists: expectedDocument !== undefined,
-      ...(expectedDocument === undefined ? {} : { expectedDocument }),
-      projectTrusted: isProjectTrusted(ctx),
-    });
+    if (scope === "session") {
+      try {
+        await actions.patchSessionProfile({
+          profile,
+          ...(declaration.route === undefined
+            ? {}
+            : { route: normalizeDeclaredProfileRoute(declaration.route) }),
+          expectedRevision: inspection.session.revision,
+        });
+      } catch (error) {
+        if (
+          error instanceof SessionProfileConflictError ||
+          (typeof error === "object" &&
+            error !== null &&
+            (error as { readonly _tag?: unknown })._tag === "SessionProfileConflictError")
+        )
+          return refreshInspection(
+            "Session profile settings changed concurrently; refreshed the active routes. Retry your edit.",
+          );
+        throw error;
+      }
+    } else {
+      const expectedDocument =
+        scope === "global" ? inspection.globalDocument : inspection.projectDocument;
+      await actions.patchProfile({
+        scope,
+        profile,
+        ...(declaration.route === undefined ? {} : { route: declaration.route }),
+        expectedExists: expectedDocument !== undefined,
+        ...(expectedDocument === undefined ? {} : { expectedDocument }),
+        projectTrusted: isProjectTrusted(ctx),
+      });
+    }
+    return refreshInspection();
+  };
+  const clearSessionOverrides = async (): Promise<ProfileWorkspaceSaveResult> => {
     try {
-      inspection = await actions.inspectProfiles(isProjectTrusted(ctx));
-      return { inspection };
-    } catch {
-      return {
-        refreshError:
-          "Profile settings were saved, but the workspace could not refresh. Reload or reopen /subagents profiles before editing again.",
-      };
+      await actions.clearSessionProfiles(inspection.session.revision);
+      return refreshInspection();
+    } catch (error) {
+      if (
+        error instanceof SessionProfileConflictError ||
+        (typeof error === "object" &&
+          error !== null &&
+          (error as { readonly _tag?: unknown })._tag === "SessionProfileConflictError")
+      )
+        return refreshInspection(
+          "Session profile settings changed concurrently; refreshed the active routes. Retry clearing them.",
+        );
+      throw error;
     }
   };
 
@@ -247,6 +308,7 @@ async function openProfileSettings(
         theme,
         inspection,
         projectTrusted,
+        initialScope: selectedInitialScope,
         parentEffort,
         ...(preferredPiModel ? { piModel: preferredPiModel } : {}),
         ...(parentModel ? { parentModel } : {}),
@@ -259,6 +321,7 @@ async function openProfileSettings(
             : fallback,
         close: done,
         saveDraft,
+        clearSessionOverrides,
         loadModelPicker: (profile, candidateIndex, candidate, signal) =>
           loadCandidateModelPicker(ctx, {
             profile,
@@ -284,16 +347,41 @@ export function registerSubagentManagerCommand(
 ): void {
   pi.registerCommand("subagents", {
     description: "Open the subagent fleet or configure profiles",
-    getArgumentCompletions: (prefix) =>
-      "profiles".startsWith(prefix.trim().toLowerCase())
-        ? [{ value: "profiles", label: "profiles", description: "Configure profile routes" }]
-        : null,
+    getArgumentCompletions: (prefix) => {
+      const query = prefix.trim().toLowerCase();
+      const choices = [
+        { value: "profiles", label: "profiles", description: "Configure profile routes" },
+        {
+          value: "profiles session",
+          label: "profiles session",
+          description: "Configure temporary routes for this session",
+        },
+        {
+          value: "profiles global",
+          label: "profiles global",
+          description: "Configure global profile routes",
+        },
+        {
+          value: "profiles project",
+          label: "profiles project",
+          description: "Configure trusted-project profile routes",
+        },
+      ];
+      const matches = choices.filter((choice) => choice.value.startsWith(query));
+      return matches.length > 0 ? matches : null;
+    },
     handler: (args, ctx) => {
       const command = args.trim().toLowerCase();
       if (!command) return openFleetManager(ctx, bridge, actions);
       if (command === "profiles") return openProfileSettings(pi, ctx, bridge, actions);
+      if (command === "profiles session")
+        return openProfileSettings(pi, ctx, bridge, actions, "session");
+      if (command === "profiles global")
+        return openProfileSettings(pi, ctx, bridge, actions, "global");
+      if (command === "profiles project")
+        return openProfileSettings(pi, ctx, bridge, actions, "project");
       ctx.ui.notify(
-        "Usage: /subagents [profiles] — omit arguments for the fleet inspector.",
+        "Usage: /subagents [profiles [session|global|project]] — omit arguments for the fleet inspector.",
         "error",
       );
       return Promise.resolve();

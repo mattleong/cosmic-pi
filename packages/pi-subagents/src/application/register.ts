@@ -14,7 +14,10 @@ import {
 import { makeHostNotifier } from "../boundary/host-notifier.ts";
 import { makeSubagentProjectionBridge } from "../boundary/host-ui.ts";
 import { NativeModelCatalog } from "../boundary/native-model-catalog.ts";
+import type { ResolvedSubagentConfig } from "../config/options.ts";
 import { SubagentConfigStore } from "../config/store.ts";
+import { SubagentProfileService } from "../profiles/service.ts";
+import type { SessionProfileOverrideSeed } from "../profiles/session-overrides.ts";
 import {
   makeSubagentLayer,
   type SubagentApplication,
@@ -23,6 +26,8 @@ import {
 import { SubagentService } from "../run/service.ts";
 import { registerSubagentManagerCommand } from "../settings/controller.ts";
 import { registerSubagentTools, SUBAGENT_TOOL_NAMES } from "../tools/subagent.ts";
+import { makeProfileOverrideHandoff } from "./profile-override-handoff.ts";
+import { makeProfileReloadHandoff, profileReloadSessionKey } from "./profile-reload-handoff.ts";
 
 const SUBAGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(SUBAGENT_TOOL_NAMES);
 
@@ -41,6 +46,11 @@ interface CapturedActivation {
   readonly cwd: string;
   readonly projectTrusted: boolean;
   readonly agentDirectory: string;
+  readonly generation: number;
+  readonly sessionKey?: string | undefined;
+  readonly reloadHandoffKey?: string | undefined;
+  readonly sessionBaseConfig?: ResolvedSubagentConfig | undefined;
+  readonly sessionOverrides: SessionProfileOverrideSeed;
 }
 
 function deactivateSubagentTools(pi: ExtensionAPI): ReadonlyArray<string> {
@@ -82,6 +92,9 @@ export function registerSubagentApplication(
   let currentActivation: CapturedActivation | undefined;
   let startupFailureTools: ReadonlyArray<string> = [];
   let preparationGeneration = 0;
+  let activeProfileGeneration = -1;
+  const profileOverrideHandoff = makeProfileOverrideHandoff();
+  const profileReloadHandoff = makeProfileReloadHandoff();
   let hasRegisteredTools = false;
 
   const rememberDisabledTools = (names: ReadonlyArray<string>): void => {
@@ -101,6 +114,18 @@ export function registerSubagentApplication(
           cwd: activation.cwd,
           agentDirectory: activation.agentDirectory,
           projectTrusted: activation.projectTrusted,
+          ...(activation.sessionBaseConfig
+            ? { sessionBaseConfig: activation.sessionBaseConfig }
+            : {}),
+          publishSessionBaseConfig: (config) =>
+            profileOverrideHandoff.publishBaseConfig(
+              activation.generation,
+              activeProfileGeneration,
+              config,
+            ),
+          initialSessionOverrides: activation.sessionOverrides,
+          publishSessionOverrides: (seed) =>
+            profileOverrideHandoff.publish(activation.generation, activeProfileGeneration, seed),
           publish: bridge.publish,
           notify,
         }),
@@ -114,6 +139,7 @@ export function registerSubagentApplication(
     onActivated: (activation) => {
       currentContext = activation.ctx;
       currentActivation = activation;
+      if (activation.reloadHandoffKey) profileReloadHandoff.clear(activation.reloadHandoffKey);
       bridge.setContext(activation.ctx);
       reactivateSubagentTools(pi, startupFailureTools);
       startupFailureTools = [];
@@ -155,9 +181,17 @@ export function registerSubagentApplication(
       if (!activation)
         return Promise.reject(new Error("Subagents are not active; run /reload and try again."));
       return run(
-        Effect.flatMap(SubagentConfigStore, (store) =>
-          store.inspect(activation.cwd, activation.agentDirectory, projectTrusted),
-        ),
+        Effect.gen(function* () {
+          const store = yield* SubagentConfigStore;
+          const profiles = yield* SubagentProfileService;
+          const persistent = yield* store.inspect(
+            activation.cwd,
+            activation.agentDirectory,
+            projectTrusted,
+          );
+          const session = yield* profiles.capture;
+          return { ...persistent, session };
+        }),
       );
     },
     patchProfile: (patch) => {
@@ -170,6 +204,14 @@ export function registerSubagentApplication(
         ),
       );
     },
+    patchSessionProfile: (patch) =>
+      run(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))).then(
+        () => undefined,
+      ),
+    clearSessionProfiles: (expectedRevision) =>
+      run(
+        SubagentProfileService.use((profiles) => profiles.clearSessionProfiles(expectedRevision)),
+      ).then(() => undefined),
     listNativeModels: (runtime, signal) => {
       const activation = currentActivation;
       if (!activation)
@@ -181,7 +223,20 @@ export function registerSubagentApplication(
     },
   });
 
-  const prepareActivation = (ctx: ExtensionContext): Promise<void> => {
+  const prepareActivation = (
+    ctx: ExtensionContext,
+    preserveSessionOverrides: boolean,
+    restoredReload?:
+      | {
+          readonly sessionKey: string;
+          readonly seed: SessionProfileOverrideSeed;
+        }
+      | undefined,
+  ): Promise<void> => {
+    if (!preserveSessionOverrides) {
+      activeProfileGeneration = -1;
+      profileOverrideHandoff.clear();
+    }
     const generation = ++preparationGeneration;
     bridge.clear();
     // No registered Subagents tool may target the inactive slot while capture, settings, or runtime
@@ -208,18 +263,28 @@ export function registerSubagentApplication(
           notifyActivationFailure(ctx, "Subagents failed to capture the session environment.");
       });
     }
-    const activation: CapturedActivation = {
-      ctx,
-      cwd: captured.cwd,
-      projectTrusted,
-      agentDirectory,
-    };
     const settings = Promise.resolve()
-      .then(() => boundaries.loadSettings(activation.cwd, activation.projectTrusted))
+      .then(() => boundaries.loadSettings(captured.cwd, projectTrusted))
       .catch(() => undefined);
     return Promise.all([shutdown, settings])
       .then(() => {
         if (generation !== preparationGeneration) return undefined;
+        const sessionBaseConfig = profileOverrideHandoff.captureBaseConfig();
+        const sessionKey = profileReloadSessionKey(ctx);
+        if (restoredReload)
+          profileOverrideHandoff.publish(generation, generation, restoredReload.seed);
+        const activation: CapturedActivation = {
+          ctx,
+          cwd: captured.cwd,
+          projectTrusted,
+          agentDirectory,
+          generation,
+          ...(sessionKey ? { sessionKey } : {}),
+          ...(restoredReload ? { reloadHandoffKey: restoredReload.sessionKey } : {}),
+          ...(sessionBaseConfig ? { sessionBaseConfig } : {}),
+          sessionOverrides: restoredReload?.seed ?? profileOverrideHandoff.capture(),
+        };
+        activeProfileGeneration = generation;
         try {
           registerSubagentTools(pi, {
             environment: {
@@ -245,7 +310,15 @@ export function registerSubagentApplication(
       .then(() => undefined);
   };
 
-  pi.on("session_start", (_event, ctx) => prepareActivation(ctx));
+  pi.on("session_start", (event, ctx) => {
+    if (event.reason !== "reload") {
+      profileReloadHandoff.clear();
+      return prepareActivation(ctx, false);
+    }
+    const sessionKey = profileReloadSessionKey(ctx);
+    const seed = sessionKey ? profileReloadHandoff.capture(sessionKey) : undefined;
+    return prepareActivation(ctx, false, sessionKey && seed ? { sessionKey, seed } : undefined);
+  });
 
   pi.on("turn_end", (_event, ctx) => {
     if (!currentContext) return;
@@ -253,10 +326,17 @@ export function registerSubagentApplication(
     bridge.setContext(ctx);
   });
 
-  pi.on("session_tree", (_event, ctx) => prepareActivation(ctx));
+  pi.on("session_tree", (_event, ctx) => prepareActivation(ctx, true));
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", (event, ctx) => {
     ++preparationGeneration;
+    activeProfileGeneration = -1;
+    const sessionKey = profileReloadSessionKey(ctx) ?? currentActivation?.sessionKey;
+    if (event.reason === "reload") {
+      const authoritative = profileOverrideHandoff.captureAuthoritative();
+      if (sessionKey && authoritative) profileReloadHandoff.publish(sessionKey, authoritative);
+    } else profileReloadHandoff.clear();
+    profileOverrideHandoff.clear();
     rememberDisabledTools(deactivateSubagentTools(pi));
     bridge.clear();
     return slot.shutdown();

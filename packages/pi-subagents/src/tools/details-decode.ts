@@ -68,6 +68,7 @@ const CAPABILITIES: ReadonlySet<string> = new Set([
   "native-fork",
 ]);
 const PROFILE_SOURCES: ReadonlySet<string> = new Set([
+  "session",
   "project",
   "project-invalid",
   "global",
@@ -140,6 +141,9 @@ const decodeSelection = (value: unknown): SubagentSelectionProvenance | undefine
     source: (record.source === "profile-parent-fallback"
       ? "profile-parent-candidate"
       : record.source) as SubagentSelectionSource,
+    ...(typeof record.routeSource === "string" && PROFILE_SOURCES.has(record.routeSource)
+      ? { routeSource: record.routeSource as ProfileRouteSource }
+      : {}),
     ...(record.host === "local" || record.host === "herdr" ? { host: record.host } : {}),
     ...(record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex"
       ? { runtime: record.runtime }

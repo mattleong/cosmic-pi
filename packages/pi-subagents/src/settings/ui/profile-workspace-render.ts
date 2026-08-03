@@ -2,11 +2,15 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
-import type { SubagentConfigInspection, SubagentConfigScope } from "../../config/store.ts";
+
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import { PROFILE_IDS, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../run/model.ts";
-import type { ProfileRouteDraft } from "../profile-route-editor.ts";
+import type {
+  ProfileRouteDraft,
+  ProfileSettingsInspection,
+  ProfileSettingsScope,
+} from "../profile-route-editor.ts";
 import {
   candidateEffortLabel,
   candidateFastModeApplied,
@@ -25,8 +29,8 @@ export interface ProfileWorkspaceConfirmation {
 }
 
 export interface ProfileWorkspaceRenderState {
-  readonly inspection: SubagentConfigInspection;
-  readonly scope: SubagentConfigScope;
+  readonly inspection: ProfileSettingsInspection;
+  readonly scope: ProfileSettingsScope;
   readonly projectTrusted: boolean;
   readonly parentEffort: SubagentEffort;
   readonly parentModel?: string | undefined;
@@ -63,18 +67,40 @@ const selectedProfile = (state: ProfileWorkspaceRenderState) =>
   PROFILE_IDS[state.profileIndex] ?? PROFILE_IDS[0];
 
 const scopeLine = (state: ProfileWorkspaceRenderState, theme: Theme): string => {
+  const session =
+    state.scope === "session" ? theme.fg("accent", theme.bold("[s Session]")) : "s Session";
   const global =
     state.scope === "global" ? theme.fg("accent", theme.bold("[g Global]")) : "g Global";
   const projectLabel = state.projectTrusted ? "p Project" : "p Project unavailable";
   const project =
     state.scope === "project" ? theme.fg("accent", theme.bold(`[${projectLabel}]`)) : projectLabel;
   const effect =
-    state.scope === "global" ? "overrides built-in defaults" : "overrides global settings";
-  return `Scope  ${global}   ${project}  · ${effect}`;
+    state.scope === "session"
+      ? "temporary · applies now"
+      : state.scope === "global"
+        ? "overrides built-in defaults after reload"
+        : "overrides global settings after reload";
+  return `Scope  ${session}   ${global}   ${project}  · ${effect}`;
 };
 
 const wrapped = (value: string, width: number): ReadonlyArray<string> =>
   wrapTextWithAnsi(value, Math.max(1, width));
+
+const sessionOverrideActive = (state: ProfileWorkspaceRenderState): boolean =>
+  state.scope !== "session" &&
+  state.inspection.session.overrides[selectedProfile(state)] !== undefined;
+
+const persistentRouteDiffersFromActiveBase = (state: ProfileWorkspaceRenderState): boolean => {
+  const profile = selectedProfile(state);
+  return (
+    state.inspection.config.profileSources[profile] !==
+      state.inspection.session.baseConfig.profileSources[profile] ||
+    !sameCandidates(
+      state.inspection.config.profiles[profile].candidates,
+      state.inspection.session.baseConfig.profiles[profile].candidates,
+    )
+  );
+};
 
 const projectOverrideActive = (state: ProfileWorkspaceRenderState): boolean => {
   if (state.scope !== "global") return false;
@@ -94,6 +120,30 @@ const commonNotices = (
   cancelKey = "Esc",
 ): ReadonlyArray<string> => {
   const lines: string[] = [];
+  if (state.scope !== "session" && persistentRouteDiffersFromActiveBase(state)) {
+    lines.push(
+      ...wrapped(
+        theme.fg(
+          "warning",
+          `! Saved ${selectedProfile(state)} settings differ from the active session base. Effective shows the active route; reload applies the saved route.`,
+        ),
+        width,
+      ),
+      "",
+    );
+  }
+  if (sessionOverrideActive(state)) {
+    lines.push(
+      ...wrapped(
+        theme.fg(
+          "warning",
+          `! Session override active for ${selectedProfile(state)}; persistent edits are saved but remain shadowed. Press s to edit or clear it.`,
+        ),
+        width,
+      ),
+      "",
+    );
+  }
   if (projectOverrideActive(state)) {
     lines.push(
       ...wrapped(
@@ -226,7 +276,7 @@ const routeActions = (state: ProfileWorkspaceRenderState) => {
     disable: state.draft.kind !== "disabled",
     reset: !(
       (state.scope === "global" && state.draft.kind === "reset") ||
-      (state.scope === "project" && state.draft.kind === "inherit")
+      (state.scope !== "global" && state.draft.kind === "inherit")
     ),
   };
 };
@@ -251,7 +301,7 @@ const profilesPage = (
       theme.bold(`Profiles${windowLabel(start, visibleProfiles.length, PROFILE_IDS.length)}`),
     ),
     "Choose a profile to inspect its effective route or edit its declaration. Profile omitted → generalist.",
-    "Sources  [P] Project > [G] Global > [B] Built-in",
+    "Sources  [S] Session > [P] Project > [G] Global > [B] Built-in",
     scopeLine(state, theme),
     "",
     ...notices,
@@ -267,8 +317,11 @@ const profilesPage = (
     "  /      Search profiles",
     ...(actions.reset
       ? [
-          `  i      Reset ${profile} ${state.scope === "global" ? "to built-in" : "to inherit global"}`,
+          `  i      Reset ${profile} ${state.scope === "global" ? "to built-in" : state.scope === "project" ? "to inherit global" : "to active config"}`,
         ]
+      : []),
+    ...(state.scope === "session" && Object.keys(state.inspection.session.overrides).length > 0
+      ? ["  X      Clear all session overrides"]
       : []),
   ];
 };
@@ -282,7 +335,7 @@ const routePage = (
   cancelKey: string,
 ): ReadonlyArray<string> => {
   const profile = selectedProfile(state);
-  const effective = state.inspection.config.profiles[profile];
+  const effective = state.inspection.session.effectiveConfig.profiles[profile];
   const candidates = state.draft.candidates;
   const notices = commonNotices(state, theme, width, cancelKey);
   const hasPreview =
@@ -329,7 +382,7 @@ const routePage = (
     ...(actions.disable ? ["  d      Disable route"] : []),
     ...(actions.reset
       ? [
-          `  i      Reset ${profile} ${state.scope === "global" ? "to built-in" : "to inherit global"}`,
+          `  i      Reset ${profile} ${state.scope === "global" ? "to built-in" : state.scope === "project" ? "to inherit global" : "to active config"}`,
         ]
       : []),
   ];
@@ -411,13 +464,13 @@ const helpText = (
     return renderResponsiveManagerFooter(Math.max(0, width), [
       [
         `${navigation} Select · ${pages} Page · Home/End`,
-        `${enter} Route · / Search · g Global · ${state.projectTrusted ? "p Project" : "p Project unavailable"}`,
+        `${enter} Route · / Search · s Session · g Global · ${state.projectTrusted ? "p Project" : "p Project unavailable"}`,
         `${canReset ? "i Reset · " : ""}Tab Next`,
         state.reloadRequired ? `r Reload · ${escape} Close` : `${escape} Close`,
       ],
       [
         `${navigation} · ${pages} · ${enter} · / Search`,
-        `${state.projectTrusted ? "g/p Scope" : "g Global"}${canReset ? " · i Reset" : ""} · Tab`,
+        `${state.projectTrusted ? "s/g/p Scope" : "s/g Scope"}${canReset ? " · i Reset" : ""} · Tab`,
         state.reloadRequired ? `r Reload · ${escape}` : `${escape} Close`,
       ],
     ]);
@@ -450,7 +503,7 @@ const helpText = (
   return renderResponsiveManagerFooter(Math.max(0, width), [
     [
       `${navigation} Field · ${pages} Page · Home/End · ${enter} Choose`,
-      `${state.projectTrusted ? "g/p Scope" : "g Global"} · ${escape} Route · ⇧Tab Back`,
+      `${state.projectTrusted ? "s/g/p Scope" : "s/g Scope"} · ${escape} Route · ⇧Tab Back`,
       state.reloadRequired ? "r Reload" : "",
     ],
   ]);
@@ -498,7 +551,7 @@ const compactWorkspacePage = (
           : "No candidate · return to route";
   const actions =
     state.pane === "profiles"
-      ? `${confirmKey} route · / search · g/p scope${routeActions(state).reset ? " · i reset" : ""}`
+      ? `${confirmKey} route · / search · s/g/p scope${routeActions(state).reset ? " · i reset" : ""}`
       : state.pane === "candidates"
         ? state.draft.candidates.length > 0
           ? `${confirmKey} edit · a add · x remove · ${cancelKey} profiles`
@@ -524,10 +577,14 @@ const compactWorkspacePage = (
           : state.message.kind === "success"
             ? "success"
             : "muted";
-    const shadow = projectOverrideActive(state)
-      ? " · Project override active; press p to edit/reset"
-      : "";
+    const shadow = sessionOverrideActive(state)
+      ? " · Session override active; press s to edit/reset"
+      : projectOverrideActive(state)
+        ? " · Project override active; press p to edit/reset"
+        : "";
     status.push(theme.fg(color, `${state.message.text}${shadow}`));
+  } else if (sessionOverrideActive(state)) {
+    status.push(theme.fg("warning", "Session override active · press s to edit/reset"));
   } else if (projectOverrideActive(state)) {
     status.push(theme.fg("warning", "Project override active · press p to edit/reset"));
   }
@@ -565,11 +622,17 @@ export const renderProfileWorkspace = (
   if (width < 4) return Array.from({ length: height }, () => " ".repeat(width));
   const theme = options.theme;
   const inner = width - 2;
+  const sessionOverrides = Object.keys(state.inspection.session.overrides).length;
   const status = state.busy
     ? theme.fg("warning", state.cancellableBusy ? "◌ loading catalog" : "◌ saving/reloading")
     : state.reloadRequired
       ? theme.fg("warning", "● saved changes pending reload · r Reload")
-      : theme.fg("muted", "ready");
+      : sessionOverrides > 0
+        ? theme.fg(
+            "accent",
+            `${sessionOverrides} session override${sessionOverrides === 1 ? "" : "s"} · applies now`,
+          )
+        : theme.fg("muted", "ready");
   const titleRaw = ` ${breadcrumb(state)} · ${status} `;
   const title = truncateToWidth(titleRaw, inner, "");
   const top = `${theme.fg("borderAccent", "╭")}${title}${theme.fg(

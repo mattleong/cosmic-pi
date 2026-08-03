@@ -24,6 +24,7 @@ import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
 import { PROFILE_IDS } from "../src/profiles/model.ts";
 import { makeSubagentProfileService, SubagentProfileService } from "../src/profiles/service.ts";
+import type { SessionProfileOverrideSeed } from "../src/profiles/session-overrides.ts";
 import { piToolsForWriteIntent } from "../src/run/coordination.ts";
 import {
   InvalidSubagentRequestError,
@@ -112,19 +113,26 @@ const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   ...overrides,
 });
 
-const profileServiceFor = (global: unknown, project?: unknown) =>
-  makeSubagentProfileService(
-    resolveSubagentConfig({
-      globalConfigPath: "/agent/pi-subagents.json",
-      projectConfigPath: "/project/.pi/pi-subagents.json",
-      projectTrusted: true,
-      globalConfigExists: global !== undefined,
-      projectConfigExists: project !== undefined,
-      global: decodeSubagentConfig({ version: 4, ...((global ?? {}) as object) }),
-      ...(project === undefined
-        ? {}
-        : { project: decodeSubagentConfig({ version: 4, ...(project as object) }) }),
-    }),
+const profileServiceFor = (
+  global: unknown,
+  project?: unknown,
+  initialSessionOverrides?: SessionProfileOverrideSeed,
+) =>
+  Effect.runSync(
+    makeSubagentProfileService(
+      resolveSubagentConfig({
+        globalConfigPath: "/agent/pi-subagents.json",
+        projectConfigPath: "/project/.pi/pi-subagents.json",
+        projectTrusted: true,
+        globalConfigExists: global !== undefined,
+        projectConfigExists: project !== undefined,
+        global: decodeSubagentConfig({ version: 4, ...((global ?? {}) as object) }),
+        ...(project === undefined
+          ? {}
+          : { project: decodeSubagentConfig({ version: 4, ...(project as object) }) }),
+      }),
+      { initialSessionOverrides },
+    ),
   );
 
 const defaultProfileService = profileServiceFor(undefined);
@@ -1174,11 +1182,59 @@ describe("subagent tool", () => {
       model: "openai-codex/gpt-5.6-sol",
       selection: {
         source: "profile-parent-candidate",
-        reason: "Profile generalist selected local/pi candidate 1.",
+        reason: "Profile generalist selected built-in route candidate 1 (local/pi).",
         skippedCandidates: [],
       },
     });
     expect(requests[0]?.profileGuidance).toContain("Act as a generalist");
+  });
+
+  it("uses one active session override for discovery and launch provenance", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const profiles = profileServiceFor(undefined, undefined, {
+      revision: 1,
+      overrides: {
+        reviewer: {
+          candidates: [
+            {
+              host: "local",
+              runtime: "pi",
+              model: "openai-codex/gpt-5.6-sol",
+              effort: "low",
+              context: "fresh",
+              writeIntent: "read-only",
+              fastMode: false,
+              closeOnReport: true,
+            },
+          ],
+        },
+      },
+    });
+    const tools = captureSubagentTools(startCapturingService(requests), ["read"], profiles);
+    const models = await tools
+      .get("subagent_models")
+      ?.execute("call", { profile: "reviewer" }, undefined, undefined, context);
+    expect(models?.content[0]?.text).toContain("source=session");
+    expect(models?.content[0]?.text).toContain("openai-codex/gpt-5.6-sol:low");
+
+    await tools
+      .get("subagent_start")
+      ?.execute(
+        "call",
+        { agents: [{ task: "Review auth", profile: "reviewer" }] },
+        undefined,
+        undefined,
+        context,
+      );
+    expect(requests[0]).toMatchObject({
+      profile: "reviewer",
+      model: "openai-codex/gpt-5.6-sol",
+      effort: "low",
+      selection: {
+        routeSource: "session",
+        reason: "Profile reviewer selected session override candidate 1 (local/pi).",
+      },
+    });
   });
 
   it("accepts delegate as a compatibility alias but records generalist", async () => {
@@ -1800,6 +1856,37 @@ describe("subagent tool", () => {
 
     expect(sessionOwnedStarts).toBe(1);
     expect(result?.content[0]?.text).toContain("agent-1");
+  });
+
+  it("captures one profile snapshot for an entire concurrent start batch", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const base = profileServiceFor(undefined);
+    let captures = 0;
+    const profiles = {
+      ...base,
+      capture: Effect.sync(() => {
+        captures += 1;
+      }).pipe(Effect.flatMap(() => base.capture)),
+    };
+    const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles).get(
+      "subagent_start",
+    );
+
+    await tool?.execute(
+      "call",
+      {
+        agents: [
+          { task: "One", profile: "scout" },
+          { task: "Two", profile: "reviewer" },
+        ],
+      },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(captures).toBe(1);
+    expect(requests).toHaveLength(2);
   });
 
   it("accepts exactly twelve batch starts at the runtime boundary", async () => {

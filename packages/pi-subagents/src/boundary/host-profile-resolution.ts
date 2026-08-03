@@ -20,6 +20,7 @@ import {
 } from "../profiles/model.ts";
 import type { ProfileCandidateAttempt, ProfileResolutionEnvironment } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
+import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 
 export interface SubagentProfileStartSpec {
   readonly task: string;
@@ -213,6 +214,7 @@ export const resolveProfileStart = (
   rawInput: SubagentProfileStartSpec,
   ctx: ExtensionContext,
   environment: SubagentSessionEnvironment,
+  capturedProfiles?: SessionProfileSnapshot,
 ): Effect.Effect<
   StartSubagentRequest,
   InvalidSubagentRequestError,
@@ -220,6 +222,7 @@ export const resolveProfileStart = (
 > =>
   Effect.gen(function* () {
     const profiles = yield* SubagentProfileService;
+    const profileSnapshot = capturedProfiles ?? (yield* profiles.capture);
     const task = rawInput.task.trim();
     if (!task)
       return yield* new InvalidSubagentRequestError({
@@ -245,7 +248,7 @@ export const resolveProfileStart = (
       });
     const parentSessionFile = ctx.sessionManager.getSessionFile();
     const parentLeafId = stableParentLeaf(ctx);
-    const plan = profiles.resolve(definition.id, hostProfileEnvironment(pi, ctx));
+    const plan = profiles.resolve(profileSnapshot, definition.id, hostProfileEnvironment(pi, ctx));
     if (plan.kind === "failed")
       return yield* new InvalidSubagentRequestError({ code: plan.code, message: plan.message });
 
@@ -294,6 +297,7 @@ export const resolveProfileStart = (
               concrete,
               selection: {
                 source: attempt.source,
+                routeSource: attempt.routeSource,
                 host: attempt.host,
                 runtime: attempt.runtime,
                 closeOnReport: attempt.closeOnReport,

@@ -6,31 +6,37 @@ import { describe, expect, it, vi } from "vitest";
 import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
-import type { SubagentConfigInspection } from "../src/config/store.ts";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
+import {
+  makeSessionProfileSnapshot,
+  SessionProfileConflictError,
+} from "../src/profiles/session-overrides.ts";
 import {
   registerSubagentManagerCommand,
   type FleetManagerActions,
 } from "../src/settings/controller.ts";
+import type { ProfileSettingsInspection } from "../src/settings/profile-route-editor.ts";
 import { createProfileModelChoices } from "../src/settings/ui/model-picker.ts";
 
 const inspection = (
   global: Record<string, unknown> = { version: 4 },
   project?: Record<string, unknown>,
   trusted = true,
-): SubagentConfigInspection => {
+): ProfileSettingsInspection => {
   const decodedGlobal = decodeSubagentConfig(global, "global");
   const decodedProject = project ? decodeSubagentConfig(project, "project") : undefined;
+  const config = resolveSubagentConfig({
+    globalConfigPath: "/agent/pi-subagents.json",
+    projectConfigPath: "/repo/.pi/pi-subagents.json",
+    projectTrusted: trusted,
+    globalConfigExists: true,
+    projectConfigExists: project !== undefined,
+    global: decodedGlobal,
+    ...(decodedProject ? { project: decodedProject } : {}),
+  });
   return {
-    config: resolveSubagentConfig({
-      globalConfigPath: "/agent/pi-subagents.json",
-      projectConfigPath: "/repo/.pi/pi-subagents.json",
-      projectTrusted: trusted,
-      globalConfigExists: true,
-      projectConfigExists: project !== undefined,
-      global: decodedGlobal,
-      ...(decodedProject ? { project: decodedProject } : {}),
-    }),
+    config,
+    session: makeSessionProfileSnapshot(config),
     globalDocument: global,
     ...(project ? { projectDocument: project } : {}),
     global: decodedGlobal,
@@ -60,6 +66,8 @@ const actions = (value = inspection()): FleetManagerActions => ({
   rename: () => Promise.resolve(),
   inspectProfiles: vi.fn().mockResolvedValue(value),
   patchProfile: vi.fn().mockResolvedValue(undefined),
+  patchSessionProfile: vi.fn().mockResolvedValue(undefined),
+  clearSessionProfiles: vi.fn().mockResolvedValue(undefined),
   listNativeModels: vi.fn().mockResolvedValue([]),
 });
 
@@ -156,7 +164,7 @@ describe("/subagents profile workspace", () => {
       ui: { notify },
     } as unknown as ExtensionCommandContext);
     expect(notify).toHaveBeenCalledWith(
-      expect.stringContaining("Usage: /subagents [profiles]"),
+      expect.stringContaining("Usage: /subagents [profiles [session|global|project]]"),
       "error",
     );
   });
@@ -242,6 +250,69 @@ describe("/subagents profile workspace", () => {
       await register(managerActions)("profiles", baseContext({ custom, notify: vi.fn() }, trusted));
       expect(managerActions.inspectProfiles).toHaveBeenCalledWith(trusted);
     }
+  });
+
+  it("dispatches session edits in memory without persistent writes or reload prompts", async () => {
+    const initial = inspection();
+    const managerActions = actions(initial);
+    const notify = vi.fn();
+    const custom = vi.fn(async (factory) =>
+      exerciseWorkspace(factory, async (component) => {
+        component.handleInput?.("\r");
+        component.handleInput?.("d");
+        component.handleInput?.("d");
+        await vi.waitFor(() => expect(managerActions.patchSessionProfile).toHaveBeenCalledTimes(1));
+      }),
+    );
+
+    await register(managerActions)("profiles session", baseContext({ custom, notify }));
+
+    expect(managerActions.patchSessionProfile).toHaveBeenCalledWith({
+      profile: "generalist",
+      route: { candidates: [] },
+      expectedRevision: 0,
+    });
+    expect(managerActions.patchProfile).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("Run /reload"), "info");
+  });
+
+  it("refreshes and permits retry after a session revision conflict", async () => {
+    const initial = inspection();
+    const fresh = {
+      ...initial,
+      session: makeSessionProfileSnapshot(initial.config, { revision: 1, overrides: {} }),
+    };
+    const managerActions = actions(initial);
+    (managerActions.inspectProfiles as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValue(fresh);
+    (managerActions.patchSessionProfile as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(
+        new SessionProfileConflictError({
+          expectedRevision: 0,
+          actualRevision: 1,
+          message: "session conflict",
+        }),
+      )
+      .mockResolvedValueOnce(undefined);
+    const custom = vi.fn(async (factory) =>
+      exerciseWorkspace(factory, async (component) => {
+        component.handleInput?.("\r");
+        component.handleInput?.("d");
+        component.handleInput?.("d");
+        await vi.waitFor(() =>
+          expect(component.render(120).join("\n")).toContain("refreshed the active routes"),
+        );
+        component.handleInput?.("d");
+        component.handleInput?.("d");
+        await vi.waitFor(() => expect(managerActions.patchSessionProfile).toHaveBeenCalledTimes(2));
+        expect(managerActions.patchSessionProfile).toHaveBeenLastCalledWith(
+          expect.objectContaining({ expectedRevision: 1 }),
+        );
+      }),
+    );
+
+    await register(managerActions)("profiles session", baseContext({ custom, notify: vi.fn() }));
   });
 
   it("writes a complete valid route immediately and refreshes optimistic-concurrency state", async () => {

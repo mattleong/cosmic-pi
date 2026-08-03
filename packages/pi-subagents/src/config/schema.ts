@@ -118,7 +118,7 @@ export const isNativeProfileModelSelector = (runtime: string, selector: string):
 export const isCanonicalProfileModelSelector = (selector: string): boolean =>
   isNativeProfileModelSelector("pi", selector);
 
-const decodeCandidate = (value: unknown): ProfileCandidate | undefined => {
+export const decodeProfileCandidate = (value: unknown): ProfileCandidate | undefined => {
   const record = decodedRecord(value);
   if (
     !record ||
@@ -167,7 +167,7 @@ const decodeRoute = (
 ): DeclaredProfileRoute | undefined => {
   if (value === "disabled") return value;
   if (!Array.isArray(value)) {
-    const candidate = decodeCandidate(value);
+    const candidate = decodeProfileCandidate(value);
     if (!candidate) diagnostics.push(path);
     return candidate;
   }
@@ -188,7 +188,7 @@ const decodeRoute = (
       invalid = true;
       continue;
     }
-    const candidate = decodeCandidate(item);
+    const candidate = decodeProfileCandidate(item);
     if (!candidate) {
       diagnostics.push(`${path}[${index}]`);
       invalid = true;

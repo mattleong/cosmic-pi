@@ -1,9 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { SubagentConfigInspection } from "../../config/store.ts";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../run/model.ts";
-import type { CandidateUpdate } from "../profile-route-editor.ts";
+import type { CandidateUpdate, ProfileSettingsInspection } from "../profile-route-editor.ts";
 import {
   candidateFieldChoices,
   candidateFieldRows,
@@ -100,7 +99,7 @@ export const makeCandidateFieldSelector = (
 };
 
 export interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
-  readonly inspection: SubagentConfigInspection;
+  readonly inspection: ProfileSettingsInspection;
   readonly current: ProfileId;
   readonly parentEffort: SubagentEffort;
   readonly parentModel?: string | undefined;

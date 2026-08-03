@@ -12,6 +12,7 @@ import {
   normalizeProfileId,
   type ProfileCandidate,
   type ProfileId,
+  type ProfileRouteSource,
   type SkippedProfileCandidate,
   type SubagentSelectionSource,
 } from "./model.ts";
@@ -31,6 +32,7 @@ export interface ProfileResolutionEnvironment {
 export interface ProfileCandidateAttempt {
   readonly profile: ProfileId;
   readonly source: SubagentSelectionSource;
+  readonly routeSource: ProfileRouteSource;
   readonly candidateIndex: number;
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
@@ -94,8 +96,10 @@ const unsupportedPiEffort = (
   );
 };
 
+type UnscopedProfileCandidateAttempt = Omit<ProfileCandidateAttempt, "routeSource">;
+
 interface CandidateResult {
-  readonly attempt?: ProfileCandidateAttempt | undefined;
+  readonly attempt?: UnscopedProfileCandidateAttempt | undefined;
   readonly skipped?: SkippedProfileCandidate | undefined;
 }
 
@@ -111,7 +115,7 @@ const baseAttempt = (
   effort: SubagentEffort,
   effortWasExplicit: boolean,
   model = candidate.model,
-): ProfileCandidateAttempt => ({
+): UnscopedProfileCandidateAttempt => ({
   profile,
   source: candidate.model === "parent" ? "profile-parent-candidate" : "profile-candidate",
   candidateIndex,
@@ -279,7 +283,9 @@ export function resolveProfilePlan(
     const message =
       source === "global-invalid" || source === "project-invalid"
         ? `Profile ${profile} has an invalid ${source === "project-invalid" ? "project" : "global"} route and fails closed; repair ${source === "project-invalid" ? config.projectConfigPath : config.globalConfigPath}.`
-        : `Profile ${profile} is disabled and has no eligible candidate.`;
+        : source === "session"
+          ? `Profile ${profile} is temporarily disabled by a session override; clear it in /subagents profiles session to reveal the loaded persistent route.`
+          : `Profile ${profile} is disabled and has no eligible candidate.`;
     return {
       kind: "failed",
       code: "profile_no_eligible_model",
@@ -289,6 +295,13 @@ export function resolveProfilePlan(
     };
   }
   const attempts: ProfileCandidateAttempt[] = [];
+  const routeSource = config.profileSources[profile];
+  const routeLabel =
+    routeSource === "builtin"
+      ? "built-in route"
+      : routeSource === "session"
+        ? "session override"
+        : `${routeSource} route`;
   const skippedCandidates: SkippedProfileCandidate[] = [];
   let pendingSkipped: SkippedProfileCandidate[] = [];
   route.candidates.forEach((candidate, candidateIndex) => {
@@ -300,7 +313,12 @@ export function resolveProfilePlan(
       definition.defaultEffort,
     );
     if (result.attempt) {
-      attempts.push({ ...result.attempt, skippedBefore: pendingSkipped });
+      attempts.push({
+        ...result.attempt,
+        routeSource,
+        reason: `Profile ${profile} selected ${routeLabel} candidate ${result.attempt.candidateIndex + 1} (${result.attempt.host}/${result.attempt.runtime}).`,
+        skippedBefore: pendingSkipped,
+      });
       pendingSkipped = [];
     }
     if (result.skipped) {

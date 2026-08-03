@@ -14,6 +14,7 @@ import {
 import { normalizeProfileId, PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
 import { profileCandidateLabel } from "../profiles/resolve.ts";
 import { SubagentProfileService, type SubagentProfileServiceShape } from "../profiles/service.ts";
+import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import {
   InvalidSubagentRequestError,
   subagentErrorCode,
@@ -140,6 +141,7 @@ const profileDiscovery = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   profiles: SubagentProfileServiceShape,
+  snapshot: SessionProfileSnapshot,
 ): ReadonlyArray<SubagentProfileView> => {
   const requestedProfile = input.profile ? normalizeProfileId(input.profile) : undefined;
   const ids = input.profile ? (requestedProfile ? [requestedProfile] : []) : PROFILE_IDS;
@@ -147,8 +149,8 @@ const profileDiscovery = (
   return ids.flatMap((id) => {
     const definition = profiles.definition(id);
     if (!definition) return [];
-    const route = profiles.config.profiles[definition.id];
-    const resolution = profiles.resolve(definition.id, environment);
+    const route = snapshot.effectiveConfig.profiles[definition.id];
+    const resolution = profiles.resolve(snapshot, definition.id, environment);
     const attempts = resolution.kind === "resolved" ? resolution.attempts : [];
     const skipped = resolution.skippedCandidates;
     const candidates: ProfileCandidateDiscovery[] = route.candidates.map((candidate, index) => {
@@ -168,7 +170,7 @@ const profileDiscovery = (
       {
         id: definition.id,
         description: definition.description,
-        source: profiles.config.profileSources[definition.id],
+        source: snapshot.effectiveConfig.profileSources[definition.id],
         isDefault: definition.id === "generalist",
         defaultContext: definition.defaultContext,
         defaultWriteIntent: definition.defaultWriteIntent,
@@ -252,13 +254,14 @@ export const executeSubagentAction = async (
   if (input.action === "models") {
     const discovery = Effect.gen(function* () {
       const profileService = yield* SubagentProfileService;
-      const profiles = profileDiscovery(input, pi, ctx, profileService);
+      const snapshot = yield* profileService.capture;
+      const profiles = profileDiscovery(input, pi, ctx, profileService, snapshot);
       return {
         content: [
           {
             type: "text" as const,
             text: boundToolOutput(
-              formatProfileDiscovery(profiles, profileService.config.defaultProfile),
+              formatProfileDiscovery(profiles, snapshot.effectiveConfig.defaultProfile),
             ),
           },
         ],
@@ -266,7 +269,7 @@ export const executeSubagentAction = async (
           action: input.action,
           profiles,
           profileIds: profiles.map((profile) => profile.id),
-          defaultProfile: profileService.config.defaultProfile,
+          defaultProfile: snapshot.effectiveConfig.defaultProfile,
         }),
       };
     });
@@ -378,8 +381,10 @@ export const executeSubagentAction = async (
             Effect.asVoid,
           );
         };
+        const profileService = yield* SubagentProfileService;
+        const profileSnapshot = yield* profileService.capture;
         const resolveRequest = (spec: SubagentStartSpec) =>
-          resolveProfileStart(pi, spec, ctx, runtime.environment);
+          resolveProfileStart(pi, spec, ctx, runtime.environment, profileSnapshot);
         const launchOne = (spec: SubagentStartSpec, index: number) =>
           resolveRequest(spec).pipe(
             Effect.flatMap((request) =>

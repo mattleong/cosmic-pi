@@ -29,7 +29,7 @@ const normalizeCandidate = (candidate: DeclaredProfileCandidate): ProfileCandida
   closeOnReport: candidate.closeOnReport ?? true,
 });
 
-const normalizeRoute = (route: DeclaredProfileRoute): ProfileRoute => {
+export const normalizeDeclaredProfileRoute = (route: DeclaredProfileRoute): ProfileRoute => {
   if (route === "disabled") return { candidates: [] };
   const candidates = Array.isArray(route)
     ? (route as ReadonlyArray<DeclaredProfileCandidate>)
@@ -61,13 +61,13 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
       profiles[id] = { candidates: [] };
       profileSources[id] = "project-invalid";
     } else if (project?.file.profiles?.[id] !== undefined) {
-      profiles[id] = normalizeRoute(project.file.profiles[id]);
+      profiles[id] = normalizeDeclaredProfileRoute(project.file.profiles[id]);
       profileSources[id] = "project";
     } else if (input.global.invalidProfileRoutes.includes(id)) {
       profiles[id] = { candidates: [] };
       profileSources[id] = "global-invalid";
     } else if (input.global.file.profiles?.[id] !== undefined) {
-      profiles[id] = normalizeRoute(input.global.file.profiles[id]);
+      profiles[id] = normalizeDeclaredProfileRoute(input.global.file.profiles[id]);
       profileSources[id] = "global";
     } else {
       profiles[id] = cloneRoute(BUILTIN_PROFILE_ROUTES[id]);

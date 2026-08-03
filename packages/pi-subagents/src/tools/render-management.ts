@@ -54,6 +54,8 @@ const friendlyCandidateRoute = (value: string, fastModeApplied: boolean): string
 
 const profileSource = (source: SubagentProfileRouteCard["source"]): string => {
   switch (source) {
+    case "session":
+      return "session override";
     case "project":
       return "project override";
     case "project-invalid":

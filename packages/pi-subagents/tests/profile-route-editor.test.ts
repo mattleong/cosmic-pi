@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig, isNativeProfileModelSelector } from "../src/config/schema.ts";
-import type { SubagentConfigInspection } from "../src/config/store.ts";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
+import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
 import {
   addRouteCandidate,
   candidateValidationError,
@@ -21,6 +21,7 @@ import {
   updateCandidateControls,
   updateCandidateModel,
   type ProfileRouteDraft,
+  type ProfileSettingsInspection,
 } from "../src/settings/profile-route-editor.ts";
 
 const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
@@ -38,19 +39,21 @@ const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): Pr
 const inspection = (
   global: Record<string, unknown> = { version: 4 },
   project?: Record<string, unknown>,
-): SubagentConfigInspection => {
+): ProfileSettingsInspection => {
   const decodedGlobal = decodeSubagentConfig(global, "global");
   const decodedProject = project ? decodeSubagentConfig(project, "project") : undefined;
+  const config = resolveSubagentConfig({
+    globalConfigPath: "/agent/pi-subagents.json",
+    projectConfigPath: "/repo/.pi/pi-subagents.json",
+    projectTrusted: true,
+    globalConfigExists: true,
+    projectConfigExists: project !== undefined,
+    global: decodedGlobal,
+    ...(decodedProject ? { project: decodedProject } : {}),
+  });
   return {
-    config: resolveSubagentConfig({
-      globalConfigPath: "/agent/pi-subagents.json",
-      projectConfigPath: "/repo/.pi/pi-subagents.json",
-      projectTrusted: true,
-      globalConfigExists: true,
-      projectConfigExists: project !== undefined,
-      global: decodedGlobal,
-      ...(decodedProject ? { project: decodedProject } : {}),
-    }),
+    config,
+    session: makeSessionProfileSnapshot(config),
     globalDocument: global,
     ...(project ? { projectDocument: project } : {}),
     global: decodedGlobal,
@@ -77,6 +80,29 @@ describe("ordered profile-route editor state", () => {
     expect(completeRouteSummary(draft, "global")).toContain(
       "3. host=local · runtime=codex · model=gpt-5.6-codex",
     );
+  });
+
+  it("loads session overrides as explicit routes and resets to the active base", () => {
+    const base = inspection(
+      { version: 4, profiles: { reviewer: candidate("openai/global") } },
+      { version: 4, profiles: { reviewer: candidate("openai/project") } },
+    );
+    const value = {
+      ...base,
+      session: makeSessionProfileSnapshot(base.config, {
+        revision: 1,
+        overrides: { reviewer: { candidates: [candidate("openai/session")] } },
+      }),
+    };
+    expect(loadProfileRouteDraft(value, "session", "reviewer")).toEqual({
+      kind: "explicit",
+      candidates: [candidate("openai/session")],
+    });
+    const inherited = { ...value, session: makeSessionProfileSnapshot(base.config) };
+    expect(loadProfileRouteDraft(inherited, "session", "reviewer")).toEqual({
+      kind: "inherit",
+      candidates: [candidate("openai/project")],
+    });
   });
 
   it("models reset, inherit, disabled, and invalid fail-closed declarations distinctly", () => {
