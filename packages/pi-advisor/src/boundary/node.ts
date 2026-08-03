@@ -1,35 +1,18 @@
-// Synchronous Node compatibility helpers are confined to this explicit boundary.
+// Synchronous, bounded instruction reads are confined to this explicit boundary.
 // @effect-diagnostics effect/nodeBuiltinImport:off
-// @effect-diagnostics effect/globalDate:off
-// @effect-diagnostics effect/globalConsole:off
 import {
   closeSync,
   constants,
   fstatSync,
-  chmodSync,
-  existsSync,
   lstatSync,
-  mkdirSync,
   openSync,
-  readFileSync,
   readSync,
   realpathSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep, isAbsolute } from "node:path";
+import { dirname, join, relative, resolve, sep, isAbsolute } from "node:path";
 
 export const nodeDirname = dirname;
 export const nodeJoin = join;
-
-export function readTextFileOptionalSync(path: string): string | undefined {
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return undefined;
-  }
-}
 
 export function readTextFileBoundedStableOptionalSync(
   path: string,
@@ -79,33 +62,4 @@ export function readTextFileBoundedStableOptionalSync(
       }
     }
   }
-}
-
-export function writeTextFileAtomicSync(path: string, text: string): void {
-  const directory = dirname(path);
-  const existed = existsSync(directory);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (!existed || basename(directory) === "extensions") chmodSync(directory, 0o700);
-  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-  let ownsTemporary = false;
-  try {
-    writeFileSync(temporary, text, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    ownsTemporary = true;
-    chmodSync(temporary, 0o600);
-    renameSync(temporary, path);
-    ownsTemporary = false;
-  } finally {
-    if (ownsTemporary) {
-      try {
-        rmSync(temporary, { force: true });
-      } catch {
-        // Preserve the acquisition failure; best-effort cleanup must not replace it.
-      }
-    }
-  }
-}
-
-export function warnSyncBoundary(_message: string): void {
-  // Pi owns the TTY. console.warn corrupts the editor/input region the same way
-  // Effect's default logger does. Sync fail-open paths stay silent at the host boundary.
 }

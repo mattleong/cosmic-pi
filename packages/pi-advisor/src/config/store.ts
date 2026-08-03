@@ -5,13 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { JsonDocumentStore, type JsonDocumentModification, type JsonObject } from "pi-cosmic-core";
-import { standaloneAdvisorExecutor, type AdvisorPlatform } from "../boundary/executor.ts";
-import { parseJson, stringifyJson } from "../boundary/json.ts";
-import {
-  readTextFileOptionalSync,
-  warnSyncBoundary,
-  writeTextFileAtomicSync,
-} from "../boundary/node.ts";
+import type { AdvisorPlatform } from "../boundary/executor.ts";
 import { getAdvisorConfigPath, normalizeAdvisorConfig } from "./options.ts";
 import {
   AdvisorConfigError,
@@ -27,9 +21,6 @@ const mapConfigError = (operation: string, path: string) => () =>
     message: `Unable to ${operation} Advisor configuration.`,
   });
 
-const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
-const isJsonObject = (value: unknown): value is JsonObject => Schema.is(JsonObjectSchema)(value);
-
 export const readRawAdvisorConfigEffect = Effect.fn("AdvisorConfig.readRaw")(function* (
   path = getAdvisorConfigPath(),
 ) {
@@ -44,38 +35,11 @@ export const readRawAdvisorConfigEffect = Effect.fn("AdvisorConfig.readRaw")(fun
   );
 });
 
-export function readRawAdvisorConfig(path = getAdvisorConfigPath()): JsonObject {
-  const source = readTextFileOptionalSync(path);
-  if (source === undefined) return {};
-  try {
-    const decoded = parseJson(source);
-    if (isJsonObject(decoded)) return decoded;
-  } catch {
-    // Report malformed existing files while keeping reads fail-open.
-  }
-  warnSyncBoundary(`Advisor config read failed at ${path}.`);
-  return {};
-}
-
-export function readRawAdvisorConfigAsync(path = getAdvisorConfigPath()): Promise<JsonObject> {
-  return standaloneAdvisorExecutor.run(readRawAdvisorConfigEffect(path));
-}
-
 export const loadAdvisorConfigEffect = Effect.fn("AdvisorConfig.load")(function* (
   path = getAdvisorConfigPath(),
 ) {
   return normalizeAdvisorConfig(yield* readRawAdvisorConfigEffect(path), path);
 });
-
-export function loadAdvisorConfig(path = getAdvisorConfigPath()): ResolvedAdvisorConfig {
-  return normalizeAdvisorConfig(readRawAdvisorConfig(path), path);
-}
-
-export function loadAdvisorConfigAsync(
-  path = getAdvisorConfigPath(),
-): Promise<ResolvedAdvisorConfig> {
-  return standaloneAdvisorExecutor.run(loadAdvisorConfigEffect(path));
-}
 
 const protectAdvisorConfigDirectoryEffect = Effect.fn("AdvisorConfig.protectDirectory")(function* (
   path: string,
@@ -89,28 +53,6 @@ const protectAdvisorConfigDirectoryEffect = Effect.fn("AdvisorConfig.protectDire
     yield* fs.chmod(directory, 0o700);
   }
 });
-
-export const writeRawAdvisorConfigEffect = Effect.fn("AdvisorConfig.writeRaw")(function* (
-  raw: JsonObject,
-  path = getAdvisorConfigPath(),
-) {
-  const documents = yield* JsonDocumentStore;
-  yield* protectAdvisorConfigDirectoryEffect(path).pipe(
-    Effect.mapError(mapConfigError("protect directory", path)),
-  );
-  yield* documents.writeObject(path, raw).pipe(Effect.mapError(mapConfigError("write", path)));
-});
-
-export function writeRawAdvisorConfig(raw: JsonObject, path = getAdvisorConfigPath()): void {
-  writeTextFileAtomicSync(path, `${stringifyJson(raw)}\n`);
-}
-
-export function writeRawAdvisorConfigAsync(
-  raw: JsonObject,
-  path = getAdvisorConfigPath(),
-): Promise<void> {
-  return standaloneAdvisorExecutor.run(writeRawAdvisorConfigEffect(raw, path));
-}
 
 export const writeAdvisorConfigPatchEffect = Effect.fn("AdvisorConfig.patch")(function* <
   AfterCommitR = never,
@@ -155,34 +97,6 @@ export const writeAdvisorConfigPatchEffect = Effect.fn("AdvisorConfig.patch")(fu
     .pipe(Effect.mapError(mapConfigError("update", path)));
   return normalizeAdvisorConfig(next ?? {}, path);
 });
-
-export function writeAdvisorConfigPatch(
-  patch: AdvisorConfigPatch,
-  path = getAdvisorConfigPath(),
-): ResolvedAdvisorConfig {
-  const source = readTextFileOptionalSync(path);
-  let raw: JsonObject = {};
-  if (source !== undefined) {
-    const decoded = parseJson(source);
-    if (!isJsonObject(decoded))
-      throw new AdvisorConfigError({
-        operation: "update",
-        path,
-        message: "Unable to update Advisor configuration.",
-      });
-    raw = decoded;
-  }
-  const next = patchAdvisorConfig(raw, patch);
-  writeRawAdvisorConfig(next, path);
-  return normalizeAdvisorConfig(next, path);
-}
-
-export function writeAdvisorConfigPatchAsync(
-  patch: AdvisorConfigPatch,
-  path = getAdvisorConfigPath(),
-): Promise<ResolvedAdvisorConfig> {
-  return standaloneAdvisorExecutor.run(writeAdvisorConfigPatchEffect(patch, path));
-}
 
 export class AdvisorConfigStoreError extends Schema.TaggedErrorClass<AdvisorConfigStoreError>()(
   "AdvisorConfigStoreError",

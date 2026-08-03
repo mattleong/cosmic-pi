@@ -59,9 +59,6 @@ function harness(
         failures: 0,
       },
     }),
-    update: (next) => {
-      config = next;
-    },
     persist,
   };
   const actions: AdvisorCommandActions = {

@@ -31,6 +31,7 @@ import {
 } from "./controller-types.ts";
 import { AdvisorReviewQueueService } from "../queue/service.ts";
 import { AdvisorRuntimeService } from "../runtime/runtime.ts";
+import { ADVISOR_COMMAND_DESCRIPTION } from "../settings/controller.ts";
 
 export function createAdvisorExtension(dependencies: AdvisorExtensionDependencies = {}) {
   return function registerPersistentAdvisorExtension(pi: ExtensionAPI): void {
@@ -97,7 +98,7 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
       ignoreFailure(runController((controller) => controller.event(name, event as never, ctx)));
 
     pi.registerCommand("advisor", {
-      description: "Advisor review, settings, and actions",
+      description: ADVISOR_COMMAND_DESCRIPTION,
       getArgumentCompletions: (prefix) =>
         hostBindings.commandDefinition("advisor")?.getArgumentCompletions?.(prefix) ?? null,
       handler: (args, ctx) =>

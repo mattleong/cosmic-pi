@@ -10,7 +10,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { advisorPlatformLayer } from "../src/boundary/executor.ts";
 import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
-import { readRawAdvisorConfig, writeAdvisorConfigPatchEffect } from "../src/config/store.ts";
+import { readRawAdvisorConfigEffect, writeAdvisorConfigPatchEffect } from "../src/config/store.ts";
 
 it.effect("publishes committed config before interruption can observe the renamed document", () =>
   Effect.scoped(
@@ -37,7 +37,9 @@ it.effect("publishes committed config before interruption can observe the rename
       ).pipe(Effect.provide(platform), Effect.forkChild({ startImmediately: true }));
 
       yield* Deferred.await(commitStarted);
-      expect(readRawAdvisorConfig(path)).toMatchObject({ enabled: false });
+      expect(yield* readRawAdvisorConfigEffect(path).pipe(Effect.provide(platform))).toMatchObject({
+        enabled: false,
+      });
       expect(published?.enabled).toBe(false);
 
       const interruption = yield* Fiber.interrupt(writer).pipe(
@@ -49,7 +51,9 @@ it.effect("publishes committed config before interruption can observe the rename
       yield* Deferred.succeed(releaseCommit, undefined);
       yield* Fiber.join(interruption);
       expect(publications).toBe(1);
-      expect(readRawAdvisorConfig(path)).toMatchObject({ enabled: false });
+      expect(yield* readRawAdvisorConfigEffect(path).pipe(Effect.provide(platform))).toMatchObject({
+        enabled: false,
+      });
       expect(published?.enabled).toBe(false);
     }),
   ),

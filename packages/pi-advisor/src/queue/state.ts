@@ -98,15 +98,10 @@ export const settleCheckpoint = (
 export const cancelQueuedCheckpoint = (state: ReviewQueueState): ReviewQueueState =>
   dropQueuedCheckpoint(state);
 
-export const resetReviewQueue = (state: ReviewQueueState): ReviewQueueState => ({
+export const disposeReviewQueue = (state: ReviewQueueState): ReviewQueueState => ({
   epoch: state.epoch + 1,
-  disposed: false,
+  disposed: true,
   pendingCount: 0,
   processedThrough: 0,
   active: undefined,
-});
-
-export const disposeReviewQueue = (state: ReviewQueueState): ReviewQueueState => ({
-  ...resetReviewQueue(state),
-  disposed: true,
 });

@@ -92,7 +92,7 @@ export class AdvisorRuntime {
       activeChild: this.activeChild,
       resetRequiredReason: () => this.resetRequiredReason,
       onDiagnostic: (message) => this.options?.onDiagnostic?.(message),
-      dispose: () => this.disposeEffect(),
+      dispose: () => this.disposeChildEffect(),
     });
     this.sessionEvents = makeAdvisorSessionEvents({
       epoch: () => this.epoch,
@@ -541,7 +541,7 @@ export class AdvisorRuntime {
       yield* Scope.close(result.active.scope, Exit.void);
     });
   }
-  private disposeChildEffect() {
+  disposeChildEffect() {
     const self = this;
     return self.lifecycleLock.withPermits(1)(
       Effect.gen(function* () {

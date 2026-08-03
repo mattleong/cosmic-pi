@@ -264,7 +264,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         getState: () => applicationStateStore.get(),
         updateApplicationState,
         mutateMetrics,
-        currentConfig,
         ingest,
         recordReceipt,
         notifyBestEffort,
@@ -302,7 +301,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         catchUpTimeoutMs,
       });
 
-      const { cancelEffect, commandActions, applyCommittedConfigEffect } = makeCommandWorkflows({
+      const { commandActions, applyCommittedConfigEffect } = makeCommandWorkflows({
         pi,
         refs,
         getState: () => applicationStateStore.get(),
@@ -329,7 +328,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           getMetrics: () => projection.getSnapshot().metrics,
           persist: (patch, path) =>
             parentExecutor.run(configStore.patch(patch, path, applyCommittedConfigEffect)),
-          update: (next) => runSessionEffect(applyCommittedConfigEffect(next)),
         },
         commandActions,
         (effect) => runSessionEffect(effect),
@@ -411,7 +409,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         event: invokeEvent,
         compact: (_event, ctx) => compactEffect(ctx),
         tree: (_event, ctx) => treeEffect(ctx),
-        cancel: cancelEffect,
         command: invokeCommand,
       });
       yield* Effect.addFinalizer(() =>

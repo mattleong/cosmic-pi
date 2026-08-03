@@ -95,9 +95,6 @@ export interface AdvisorControllerShape {
     event: never,
     ctx: ExtensionContext,
   ) => Effect.Effect<unknown, AdvisorExtensionError>;
-  readonly cancel: (
-    ctx: Parameters<NonNullable<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>>[1],
-  ) => Effect.Effect<unknown, AdvisorExtensionError>;
   readonly command: (
     name: string,
     args: string,

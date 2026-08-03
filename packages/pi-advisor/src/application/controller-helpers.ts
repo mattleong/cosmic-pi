@@ -10,7 +10,6 @@ import {
   type AdvisorRuntimeDriver,
   type AdvisorRuntimeServiceShape,
 } from "../runtime/runtime.ts";
-import type { ResolvedAdvisorConfig } from "../config/options.ts";
 import {
   appendAdvisorReviewCardAtHostBoundary,
   sendCompactAdvisorGuidanceAtHostBoundary,
@@ -25,7 +24,6 @@ import {
   type AdvisorReview,
 } from "../review/index.ts";
 import { readAdvisorContextEntriesAtHostBoundary } from "../boundary/host-context.ts";
-import type { ReviewPhase } from "./controller-types.ts";
 
 export const advisorRuntimeEffectsFromDriver = (
   driver: AdvisorRuntimeDriver,
@@ -153,20 +151,9 @@ export function classifyFailure(error: unknown): string {
   return "provider";
 }
 
-export function sendTriggeredCorrection(
-  pi: ExtensionAPI,
-  _config: ResolvedAdvisorConfig,
-  review: AdvisorReview,
-  _phase: ReviewPhase,
-  _recovering = false,
-): AdvisorGuidancePublishResult {
-  return publishAdvisorGuidance(pi, review, true);
-}
-
 /** Visible findings are durable local entries and never context messages. */
 export function sendAdvisorAdvice(
   pi: ExtensionAPI,
-  _config: ResolvedAdvisorConfig,
   review: AdvisorReview,
 ): AdvisorReviewCardPublishResult {
   return appendAdvisorReviewCardAtHostBoundary(pi, sanitizeAdvisorReview(review));
@@ -175,7 +162,6 @@ export function sendAdvisorAdvice(
 /** Automatic perspectives are local cards plus compact, non-waking guidance. */
 export function sendAdvisorPerspective(
   pi: ExtensionAPI,
-  _config: ResolvedAdvisorConfig,
   review: AdvisorReview,
 ): AdvisorGuidancePublishResult {
   const published = appendAdvisorReviewCardAtHostBoundary(pi, sanitizeAdvisorReview(review));
@@ -191,11 +177,8 @@ export function sendAdvisorPerspective(
 /** Corrections use a local card plus a separate compact hidden guidance message. */
 export function sendCorrection(
   pi: ExtensionAPI,
-  _config: ResolvedAdvisorConfig,
   review: AdvisorReview,
-  _phase: ReviewPhase,
   triggerTurn: boolean,
-  _recovering: boolean,
 ): AdvisorGuidancePublishResult {
   return publishAdvisorGuidance(pi, review, triggerTurn);
 }

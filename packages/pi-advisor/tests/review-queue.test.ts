@@ -36,7 +36,6 @@ type TestQueue = AdvisorReviewQueue & {
     request: Parameters<AdvisorReviewQueue["checkpointEffect"]>[0],
   ) => Promise<AdvisorCheckpoint>;
   dispose: () => Promise<void>;
-  reset: (seed: string, stateSummary?: string) => Promise<void>;
 };
 
 const activeQueueCleanups = new Set<() => Promise<void>>();
@@ -79,7 +78,6 @@ async function makeQueue(
   };
   activeQueueCleanups.add(dispose);
   queue.checkpoint = (request) => managed.runPromise(queue.checkpointEffect(request));
-  queue.reset = (seed, state) => managed.runPromise(queue.resetEffect(seed, state));
   queue.dispose = dispose;
   return queue;
 }
@@ -874,36 +872,31 @@ describe("AdvisorReviewQueue", () => {
     await queue.dispose();
   });
 
-  test("reset and dispose await active abort finalizers before settling", async () => {
-    for (const operation of ["reset", "dispose"] as const) {
-      const harness = runtimeHarness();
-      const abortRelease = deferred<void>();
-      (harness.runtime.abort as ReturnType<typeof vi.fn>).mockImplementation(
-        () => abortRelease.promise,
-      );
-      const queue = await makeQueue(harness.runtime);
-      queue.ingest(1, { type: "user", text: operation });
-      const checkpoint = queue
-        .checkpoint({ checkpointId: operation, focus: "standard", parentTurnId: 1 })
-        .catch((error: unknown) => error);
-      await tick();
+  test("dispose awaits active abort finalizers before settling", async () => {
+    const harness = runtimeHarness();
+    const abortRelease = deferred<void>();
+    (harness.runtime.abort as ReturnType<typeof vi.fn>).mockImplementation(
+      () => abortRelease.promise,
+    );
+    const queue = await makeQueue(harness.runtime);
+    queue.ingest(1, { type: "user", text: "dispose" });
+    const checkpoint = queue
+      .checkpoint({ checkpointId: "dispose", focus: "standard", parentTurnId: 1 })
+      .catch((error: unknown) => error);
+    await tick();
 
-      const settlement = operation === "reset" ? queue.reset("seed") : queue.dispose();
-      let settled = false;
-      void settlement.then(() => {
-        settled = true;
-      });
-      await tick();
-      expect(harness.runtime.abort).toHaveBeenCalledOnce();
-      expect(settled).toBe(false);
-      if (operation === "reset") expect(harness.runtime.reprime).not.toHaveBeenCalled();
+    const settlement = queue.dispose();
+    let settled = false;
+    void settlement.then(() => {
+      settled = true;
+    });
+    await tick();
+    expect(harness.runtime.abort).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
 
-      abortRelease.resolve();
-      await settlement;
-      if (operation === "reset") expect(harness.runtime.reprime).toHaveBeenCalledOnce();
-      await checkpoint;
-      if (operation === "reset") await queue.dispose();
-    }
+    abortRelease.resolve();
+    await settlement;
+    await checkpoint;
   });
 
   test("active cancellation fails with Cancelled and interrupts the runtime", async () => {
@@ -962,32 +955,5 @@ describe("AdvisorReviewQueue", () => {
       expect(error).toBeInstanceOf(AdvisorQueueDisposedError);
       expect((error as AdvisorQueueDisposedError)._tag).toBe("Disposed");
     }
-  });
-
-  test("hard reset aborts and rejects stale checkpoint work", async () => {
-    const harness = runtimeHarness();
-    const queue = await makeQueue(harness.runtime);
-    queue.ingest(1, { type: "user", text: "old branch" });
-    const checkpoint = queue.checkpoint({
-      checkpointId: "old",
-      focus: "standard",
-      parentTurnId: 1,
-    });
-    await vi.waitFor(() => expect(harness.requests).toHaveLength(1));
-    const rejection = checkpoint.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    await queue.reset("new branch", "state");
-    const request = harness.requests[0];
-    if (!request) throw new Error("missing request");
-    harness.pending[0]?.resolve(result(request));
-    const error = await rejection;
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(/stale|reset/i);
-
-    expect(harness.calls).toContain("abort");
-    expect(harness.runtime.reprime).toHaveBeenCalledWith("new branch", "state");
-    expect(queue.processedThrough).toBe(0);
   });
 });

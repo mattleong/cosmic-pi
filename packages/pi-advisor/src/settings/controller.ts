@@ -29,19 +29,13 @@ export type {
 } from "./types.ts";
 
 const ADVISOR_COMMAND = "advisor";
+export const ADVISOR_COMMAND_DESCRIPTION = "Advisor controls, review, and usage";
 const SUBCOMMANDS = ["on", "off", "review", "fix", "dismiss", "cancel", "setup", "usage"] as const;
-
-const NOOP_COMMAND_ACTIONS: AdvisorCommandActions = {
-  cancel: () => false,
-  fixLast: () => "unavailable",
-  dismissLast: () => "unavailable",
-  reviewLast: () => "unavailable",
-};
 
 export function registerAdvisorCommands(
   pi: AdvisorCommandRegistrar,
   state: AdvisorConfigState,
-  actions: AdvisorCommandActions = NOOP_COMMAND_ACTIONS,
+  actions: AdvisorCommandActions,
   runCommand?: <A>(effect: Effect.Effect<A, PiCommandError, PiCommandAdapter>) => Promise<A>,
 ): void {
   const execute = (operation: () => Promise<void>): Promise<void> =>
@@ -54,7 +48,7 @@ export function registerAdvisorCommands(
         ).catch(() => undefined)
       : operation();
   pi.registerCommand(ADVISOR_COMMAND, {
-    description: "Advisor controls, review, and usage",
+    description: ADVISOR_COMMAND_DESCRIPTION,
     getArgumentCompletions: (prefix) => {
       const normalizedPrefix = prefix.toLowerCase();
       const matches = SUBCOMMANDS.filter((value) => value.startsWith(normalizedPrefix)).map(

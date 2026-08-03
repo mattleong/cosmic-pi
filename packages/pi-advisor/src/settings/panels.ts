@@ -4,7 +4,6 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { selectAdvisorOnboardingAtHostBoundary } from "../boundary/host-onboarding.ts";
 import { latestOpenAdvisorReviewCardAtHostBoundary } from "../boundary/host-review-cards.ts";
 import { type AdvisorConfigPatch, type ResolvedAdvisorConfig } from "../config/options.ts";
-import { writeAdvisorConfigPatchAsync } from "../config/store.ts";
 import type { AdvisorSessionMetrics } from "../domain/metrics.ts";
 import { formatLastReview, formatModel, formatUsageDuration } from "./format.ts";
 import type { AdvisorCommandActions, AdvisorConfigState } from "./types.ts";
@@ -96,19 +95,16 @@ export function updateConfig(
   patch: AdvisorConfigPatch,
 ): Promise<boolean> {
   const path = state.get().configPath;
-  return (
-    state.persist
-      ? state.persist(patch, path).then(() => true)
-      : writeAdvisorConfigPatchAsync(patch, path).then((next) =>
-          Promise.resolve(state.update(next)).then(() => true),
-        )
-  ).catch((error: unknown) => {
-    ctx.ui.notify(
-      `Could not save advisor settings: ${error instanceof Error ? error.message : String(error)}`,
-      "error",
-    );
-    return false;
-  });
+  return state.persist(patch, path).then(
+    () => true,
+    (error: unknown) => {
+      ctx.ui.notify(
+        `Could not save advisor settings: ${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+      return false;
+    },
+  );
 }
 
 export function showAdvisorStatus(

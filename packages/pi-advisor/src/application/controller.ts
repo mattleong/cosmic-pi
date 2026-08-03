@@ -35,7 +35,6 @@ export const advisorControllerLayer = Layer.effect(
       event: (name) => unavailable(name),
       compact: () => unavailable("session compact"),
       tree: () => unavailable("session tree"),
-      cancel: () => unavailable("cancel"),
       command: (name) => unavailable(`command ${name}`),
     });
     yield* Effect.addFinalizer(() => resources.stopChild);

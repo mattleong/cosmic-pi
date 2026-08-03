@@ -643,6 +643,96 @@ describe("AdvisorRuntime", () => {
     }
   });
 
+  test.each(["child disposal", "fatal safety rejection"] as const)(
+    "keeps control-mailbox abort signaling live after %s and restart",
+    async (restartCause) => {
+      const emitters: Array<(event: never) => void> = [];
+      const makeSession = (sessionFile?: string) => {
+        const pendingPrompt = promiseLatch<void>();
+        return {
+          sessionFile,
+          messages: [],
+          isStreaming: true,
+          getActiveToolNames: vi.fn(() => []),
+          getToolDefinition: vi.fn(),
+          subscribe: vi.fn((emit: (event: never) => void) => {
+            emitters.push(emit);
+            return vi.fn();
+          }),
+          prompt: vi.fn(() => pendingPrompt.promise),
+          steer: vi.fn(async () => undefined),
+          followUp: vi.fn(async () => undefined),
+          abort: vi.fn(async () => undefined),
+          dispose: vi.fn(),
+        };
+      };
+      const firstSession = makeSession(
+        restartCause === "fatal safety rejection" ? "/tmp/forbidden.jsonl" : undefined,
+      );
+      const restartedSession = makeSession();
+      const sessions = [firstSession, restartedSession];
+      const layer = advisorRuntimeServiceLayer(standaloneAdvisorExecutor, {
+        createChildModel: vi.fn(async () => ({
+          modelRuntime: {} as never,
+          model: { provider: "p", id: "m" } as never,
+          thinkingLevel: "medium" as const,
+        })),
+        createTools: vi.fn(async () => []),
+        createSession: vi.fn(async () => ({
+          session: sessions.shift() as unknown as AgentSession,
+          extensionsResult: {} as never,
+        })),
+      }).pipe(Layer.provideMerge(advisorPlatformLayer));
+      const managed = ManagedRuntime.make(layer);
+      try {
+        const service = await managed.runPromise(AdvisorRuntimeService);
+        const options = {
+          ctx: { cwd: process.cwd(), modelRegistry: {} as never },
+          config: config(),
+          seed: "seed",
+        };
+        if (restartCause === "fatal safety rejection")
+          await expect(managed.runPromise(service.start(options))).rejects.toThrow(
+            /persistent file/i,
+          );
+        else {
+          await managed.runPromise(service.start(options));
+          await managed.runPromise(service.dispose());
+        }
+        await managed.runPromise(service.start(options));
+
+        const checkpoint = managed
+          .runPromise(
+            service.checkpoint({
+              checkpointId: "after-restart",
+              processedThrough: 1,
+              observations: "current observations",
+              focus: "standard",
+            }),
+          )
+          .then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+        await vi.waitFor(() => expect(restartedSession.prompt).toHaveBeenCalledOnce());
+        emitters.at(-1)?.({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            delta: "x".repeat(MAX_ADVISOR_STREAM_CHARS + 1),
+          },
+        } as never);
+
+        await vi.waitFor(() => expect(restartedSession.abort).toHaveBeenCalledOnce());
+        expect(await checkpoint).toMatchObject({
+          message: expect.stringMatching(/maximum response size|fresh context/i),
+        });
+      } finally {
+        await managed.dispose();
+      }
+    },
+  );
+
   test("replacement and reprime wait for the prior abort before creating a new child", async () => {
     const { promise: oldAbortGate, resolve: releaseOldAbort } = promiseLatch<void>();
     const makeSession = (abort: () => Promise<void>) => ({

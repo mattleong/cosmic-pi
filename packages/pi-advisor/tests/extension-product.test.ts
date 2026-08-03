@@ -425,6 +425,11 @@ describe("Advisor extension product behavior", () => {
       }),
     );
     expect(value.sent).toHaveLength(0);
+    await value.commands.get("advisor")!.handler("", value.ctx as never);
+    expect(value.ctx.ui.select).toHaveBeenLastCalledWith(
+      expect.stringContaining("issue shown"),
+      expect.any(Array),
+    );
   });
 
   test("reports a clean result when a manual review passes", async () => {

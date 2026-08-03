@@ -136,14 +136,6 @@ export class AdvisorObservationBuffer {
     return this.records.length;
   }
 
-  reset(epoch: number): void {
-    this.epoch = epoch;
-    this.records = [];
-    this.omission = undefined;
-    this.coalescingBarriers.clear();
-    this.protectedThrough = 0;
-  }
-
   /** Freeze an exact checkpoint target so later synchronous ingestion cannot coalesce or evict it. */
   freezeThrough(sequence = this.nextSequence): number {
     if (sequence > 0) {

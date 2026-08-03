@@ -95,7 +95,9 @@ export const advisorRuntimeServiceLayer = (
             steer: (observations) => provide(runtime.steerEffect(observations)),
             reprime: (seed, stateSummary) => provide(runtime.reprimeEffect(seed, stateSummary)),
             abort: () => provide(runtime.abortEffect()),
-            dispose: () => provide(runtime.disposeEffect()),
+            // The service is reused across branch/config restarts. Queue ownership ends at the
+            // current child; terminal mailbox shutdown belongs only to the layer finalizer below.
+            dispose: () => provide(runtime.disposeChildEffect()),
           }),
         };
       }),

@@ -63,13 +63,11 @@ export interface AdvisorActiveTrajectoryState {
 
 export interface AdvisorPersistentRecoveryState {
   readonly review: AdvisorReview;
-  readonly config: ResolvedAdvisorConfig;
   readonly phase: "final" | "progress";
   readonly epoch: number;
   readonly parentTurnId: number;
   readonly configRevision: number;
   readonly cancellationEpoch: number;
-  readonly recovering: boolean;
   readonly findingIds: readonly string[];
   readonly budgetBefore: AdvisorInterventionBudgetSnapshot;
   readonly dedupeRollback: AdvisorFindingDedupeRollback;

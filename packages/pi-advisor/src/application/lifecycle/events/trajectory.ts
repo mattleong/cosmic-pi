@@ -210,9 +210,9 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
       evidence: signal.evidence,
       abortSafe: signal.abortSafe,
     });
-    d.mutateTrajectory(observation.id, (current) => ({ ...current, reviewQueued: true }));
     const currentResource = refs.activeTrajectoryResource;
     if (!currentResource || currentResource.id !== observation.id) return;
+    d.mutateTrajectory(observation.id, (current) => ({ ...current, reviewQueued: true }));
     d.requestCheckpoint({
       ctx: currentResource.ctx,
       focus: "trajectory",

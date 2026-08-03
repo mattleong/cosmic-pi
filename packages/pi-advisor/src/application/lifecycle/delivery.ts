@@ -4,7 +4,6 @@ import {
   abortAdvisorParentAtHostBoundary,
   type AdvisorAbortInput,
 } from "../../boundary/host-context.ts";
-import type { ResolvedAdvisorConfig } from "../../config/options.ts";
 import {
   filterAdvisorFindingsWithRollback,
   rollbackAdvisorFindingDedupe,
@@ -66,7 +65,6 @@ export interface DeliveryDeps {
     update: (state: AdvisorApplicationState) => AdvisorApplicationState,
   ) => void;
   readonly mutateMetrics: (mutate: (next: AdvisorApplicationState["metrics"]) => void) => void;
-  readonly currentConfig: () => ResolvedAdvisorConfig;
   readonly ingest: (input: Parameters<AdvisorReviewQueue["ingest"]>[1]) => void;
   readonly recordReceipt: (ids: readonly string[]) => void;
   readonly notifyBestEffort: (
@@ -143,8 +141,8 @@ export const makeDeliver =
         findings: [],
       };
       const published = manualSuggestion
-        ? { ...sendAdvisorAdvice(d.pi, d.currentConfig(), perspectiveReview), guidanceSent: false }
-        : sendAdvisorPerspective(d.pi, d.currentConfig(), perspectiveReview);
+        ? { ...sendAdvisorAdvice(d.pi, perspectiveReview), guidanceSent: false }
+        : sendAdvisorPerspective(d.pi, perspectiveReview);
       if (!published.appended) {
         d.notifyBestEffort(ctx, "Advisor could not show its suggestion card.", "warning");
         return suppress();
@@ -158,10 +156,15 @@ export const makeDeliver =
           interventionBudget: commitAdvisorIntervention(state.interventionBudget, "concern", false),
         }));
       d.mutateMetrics((next) => {
-        next.outcomes.perspective += 1;
-        next.perspectivesDelivered = incrementBounded(next.perspectivesDelivered);
+        if (manualSuggestion) {
+          next.outcomes.advice += 1;
+          next.lastAction = "advice";
+        } else {
+          next.outcomes.perspective += 1;
+          next.perspectivesDelivered = incrementBounded(next.perspectivesDelivered);
+          next.lastAction = "perspective";
+        }
         next.cards = incrementBounded(next.cards);
-        next.lastAction = "perspective";
       });
       if (published.guidanceSent)
         d.ingest({
@@ -346,7 +349,7 @@ export const makeDeliver =
         next.cards = incrementBounded(next.cards);
       });
     const publishLocalCard = (commitBudget = budgeted): boolean => {
-      const published = sendAdvisorAdvice(d.pi, d.currentConfig(), filteredReview);
+      const published = sendAdvisorAdvice(d.pi, filteredReview);
       if (!published.appended) return false;
       commitPresentation(false, "advice", false, commitBudget);
       recordCard();
@@ -357,14 +360,7 @@ export const makeDeliver =
       triggerTurn: boolean,
       commitBudget = budgeted,
     ) => {
-      const published = sendCorrection(
-        d.pi,
-        d.currentConfig(),
-        filteredReview,
-        phase,
-        triggerTurn,
-        false,
-      );
+      const published = sendCorrection(d.pi, filteredReview, triggerTurn);
       if (published.appended) recordCard();
       if (published.appended || published.guidanceSent)
         commitPresentation(
@@ -387,7 +383,7 @@ export const makeDeliver =
     };
     if (route === "silent") {
       rollbackUndelivered(emission);
-      suppress();
+      return suppress();
     } else if (route === "push-direct") {
       if (!publishLocalCard()) {
         rollbackUndelivered(emission);
@@ -434,13 +430,11 @@ export const makeDeliver =
         ...state,
         pendingPersistentRecovery: {
           review: filteredReview,
-          config: { ...d.currentConfig() },
           phase,
           epoch: state.epoch,
           parentTurnId: state.parentTurnId,
           configRevision: d.getConfigRevision(),
           cancellationEpoch: state.cancellationEpoch,
-          recovering: true,
           findingIds,
           budgetBefore,
           dedupeRollback: filtered.rollback,

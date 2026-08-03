@@ -124,5 +124,5 @@ export const makeCommandWorkflows = (d: CommandWorkflowDeps) => {
       }
     });
 
-  return { cancelEffect, commandActions, applyCommittedConfigEffect };
+  return { commandActions, applyCommittedConfigEffect };
 };

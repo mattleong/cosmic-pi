@@ -12,10 +12,7 @@ import {
   clearAdvisorCancellation,
   completeAdvisorPrimaryTurn,
 } from "../../../review/routing.ts";
-import {
-  reviewWithAcknowledgedFindings,
-  sendTriggeredCorrection,
-} from "../../controller-helpers.ts";
+import { reviewWithAcknowledgedFindings, sendCorrection } from "../../controller-helpers.ts";
 import { parentHasPendingMessages, parentIsIdle, parentSignalAborted } from "../parent-session.ts";
 import type { EventsDeps } from "./types.ts";
 
@@ -58,12 +55,10 @@ export const registerTurnEvents = (d: EventsDeps): void => {
       d.clearPendingRecovery();
       return;
     }
-    const published = sendTriggeredCorrection(
+    const published = sendCorrection(
       d.pi,
-      recovery.config,
       reviewWithAcknowledgedFindings(recovery.review, recovery.findingIds),
-      recovery.phase,
-      recovery.recovering,
+      true,
     );
     if (!published.guidanceSent) {
       if (published.appended)

@@ -38,7 +38,6 @@ import {
   dropQueuedCheckpoint,
   enqueueCheckpoint,
   initialReviewQueueState,
-  resetReviewQueue,
   settleCheckpoint,
   type ReviewQueueState,
 } from "./state.ts";
@@ -168,39 +167,6 @@ export class AdvisorReviewQueue {
         );
       }),
     );
-  }
-
-  resetEffect(seed: string, stateSummary?: string) {
-    const self = this;
-    return Effect.gen(function* () {
-      const before = MutableRef.get(self.stateProjection);
-      if (before.disposed) return;
-      const error = new AdvisorQueueResetRequiredError({
-        message: "Advisor review queue was reset.",
-      });
-      const active = self.findActive(before);
-      yield* self.transition((state) => resetReviewQueue(state));
-      yield* self.rejectAll(error);
-      const worker = self.checkpointFiber;
-      self.checkpointFiber = undefined;
-      if (worker) yield* interruptFiberWithin(worker);
-      else
-        yield* self.runtime
-          .abort()
-          .pipe(Effect.mapError(toQueueError("Advisor runtime abort failed.")));
-      if (active) {
-        self.requests.delete(active);
-        isolate(() => self.options.onCheckpointSettled?.(active.request));
-      }
-      yield* self.clearRequestQueue();
-      self.observations.reset(MutableRef.get(self.stateProjection).epoch);
-      const current = MutableRef.get(self.stateProjection);
-      if (current.disposed || current.epoch !== before.epoch + 1) return;
-      yield* self.runtime
-        .reprime(seed, stateSummary)
-        .pipe(Effect.mapError(toQueueError("Advisor runtime re-prime failed.")));
-      yield* self.startCheckpointWorker();
-    });
   }
 
   disposeEffect() {
