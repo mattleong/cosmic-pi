@@ -13,6 +13,7 @@ import {
 } from "pi-cosmic-core";
 import type { AdvisorEffectExecutor, AdvisorPlatform } from "../boundary/executor.ts";
 import { makeAdvisorHostBindings } from "../boundary/host-bindings.ts";
+import { registerAdvisorReviewCardRendererAtHostBoundary } from "../boundary/host-review-cards.ts";
 import {
   captureAdvisorSessionInputAtHostBoundary,
   type AdvisorSessionInput,
@@ -28,13 +29,12 @@ import {
   type AdvisorControllerShape,
   type AdvisorExtensionDependencies,
 } from "./controller-types.ts";
-import { registerAdvisorReviewRenderer } from "../ui/renderer.ts";
 import { AdvisorReviewQueueService } from "../queue/service.ts";
 import { AdvisorRuntimeService } from "../runtime/runtime.ts";
 
 export function createAdvisorExtension(dependencies: AdvisorExtensionDependencies = {}) {
   return function registerPersistentAdvisorExtension(pi: ExtensionAPI): void {
-    registerAdvisorReviewRenderer(pi);
+    registerAdvisorReviewCardRendererAtHostBoundary(pi);
     const hostBindings = makeAdvisorHostBindings();
     let parentSlot!: PiSessionRuntimeSlot<
       AdvisorSessionInput,
@@ -96,15 +96,13 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
     const forwardEvent = (name: string, event: unknown, ctx: ExtensionContext): Promise<void> =>
       ignoreFailure(runController((controller) => controller.event(name, event as never, ctx)));
 
-    for (const name of ["advisor", "advisor-settings", "advisor-status", "advisor-usage"]) {
-      pi.registerCommand(name, {
-        description: `Advisor ${name.replace("advisor", "").replace("-", " ").trim() || "control"}`,
-        getArgumentCompletions: (prefix) =>
-          hostBindings.commandDefinition(name)?.getArgumentCompletions?.(prefix) ?? null,
-        handler: (args, ctx) =>
-          ignoreFailure(runController((controller) => controller.command(name, args, ctx))),
-      });
-    }
+    pi.registerCommand("advisor", {
+      description: "Advisor review, settings, and actions",
+      getArgumentCompletions: (prefix) =>
+        hostBindings.commandDefinition("advisor")?.getArgumentCompletions?.(prefix) ?? null,
+      handler: (args, ctx) =>
+        ignoreFailure(runController((controller) => controller.command("advisor", args, ctx))),
+    });
 
     pi.on("session_start", (_event, ctx) => {
       const captured = captureAdvisorSessionInputAtHostBoundary(ctx);

@@ -105,7 +105,7 @@ describe("advisor emission guard", () => {
   test("suppresses equal/lower normalized duplicates and accepts escalation", () => {
     const guard = emissionGuard();
     expect(guard.evaluate("one", review("concern")).accepted).toBe(true);
-    expect(guard.evaluate("two", review("nit", " missing TIMEOUT handling "))).toEqual({
+    expect(guard.evaluate("two", review("concern", " missing TIMEOUT handling "))).toEqual({
       accepted: false,
       reason: "duplicate",
     });

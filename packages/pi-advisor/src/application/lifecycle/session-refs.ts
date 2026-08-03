@@ -33,7 +33,6 @@ export interface SessionRefs {
   childStartedOnce: boolean;
   trajectorySequence: number;
   activeTrajectoryResource: ActiveTrajectoryResource | undefined;
-  perspectiveCheckpointUsed: boolean;
   activeToolCalls: Map<string, { toolName: string; args: unknown }>;
   latestStateSummary: string;
   latestDurableSummary: AdvisorDurableReviewSummary;
@@ -56,7 +55,6 @@ export const createSessionRefs = (): SessionRefs => ({
   childStartedOnce: false,
   trajectorySequence: 0,
   activeTrajectoryResource: undefined,
-  perspectiveCheckpointUsed: false,
   activeToolCalls: new Map(),
   latestStateSummary: "",
   latestDurableSummary: summarizeAdvisorReview(),

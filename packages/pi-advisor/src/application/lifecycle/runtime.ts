@@ -48,7 +48,6 @@ export interface RuntimeDeps {
   ) => void;
   readonly mutateMetrics: (mutate: (next: AdvisorApplicationState["metrics"]) => void) => void;
   readonly currentConfig: () => ResolvedAdvisorConfig;
-  readonly isPaused: () => boolean;
   readonly isStarted: () => boolean;
   readonly advanceDomainCounter: (
     key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
@@ -142,7 +141,6 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
         yield* stopRuntimeUnlockedEffect();
         if (
           startEpoch !== d.getState().epoch ||
-          d.isPaused() ||
           (!d.currentConfig().enabled && !allowDisabled) ||
           !d.currentConfig().configured
         )
@@ -281,6 +279,7 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
             if (refs.runtime === nextRuntime) refs.runtime = undefined;
             if (startEpoch === d.getState().epoch) {
               const kind = classifyFailure(error);
+              d.setAdvisorStatus(ctx, "advisor: unavailable");
               d.mutateMetrics((next) => {
                 next.failure += 1;
                 next.outcomes.failures += 1;
@@ -324,13 +323,6 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
         ),
       );
     });
-  const startRuntime = (
-    ctx: ExtensionContext,
-    restoration: "preserve-live" | "restore-branch" = "preserve-live",
-    allowDisabled = false,
-  ): Promise<number | undefined> =>
-    d.runSessionEffect(startRuntimeEffect(ctx, restoration, allowDisabled));
-
   const runWithExplicitRuntimeEffect = <T>(
     ctx: ExtensionContext,
     action: () => T,
@@ -366,7 +358,6 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
     stopRuntimeEffect,
     stopRuntime,
     startRuntimeEffect,
-    startRuntime,
     runWithExplicitRuntimeEffect,
   };
 };

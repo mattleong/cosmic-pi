@@ -10,7 +10,12 @@ import { PiCommandAdapter } from "../../boundary/host-commands.ts";
 import { HostNotifier } from "../../boundary/host-notifier.ts";
 import { createLedgerFingerprint } from "../../checkpoint/ledger.ts";
 import { makeCheckpointOrchestrator } from "../../checkpoint/orchestrator.ts";
-import { normalizeAdvisorConfig } from "../../config/options.ts";
+import {
+  ADVISOR_FAST_MODE,
+  ADVISOR_RECENT_CONTEXT_CHARS,
+  ADVISOR_THINKING_LEVEL,
+  normalizeAdvisorConfig,
+} from "../../config/options.ts";
 import { ConfigStore } from "../../config/store.ts";
 import { FailureLogger } from "../../logging/logger.ts";
 import { AdvisorReviewQueue, AdvisorReviewQueueService } from "../../queue/service.ts";
@@ -73,7 +78,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       const projection = yield* makeAdvisorProjection({
         config: normalizeAdvisorConfig({}, ""),
         metrics: emptyAdvisorSessionMetrics(),
-        paused: false,
         started: false,
       });
       const productionController = {
@@ -99,7 +103,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         updateApplicationState,
         mutateMetrics,
         currentConfig,
-        isPaused,
         isStarted,
         mutateTrajectory,
         setDomainCounter,
@@ -125,7 +128,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         makeLifecycleStatusControls({
           statusService,
           currentConfig,
-          isPaused,
           updateApplicationState,
         });
 
@@ -146,7 +148,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         buildAdvisorContext({
           messages,
           candidate: refs.lastCandidate?.candidate ?? "[No completed candidate at this cursor.]",
-          maxChars: currentConfig().maxContextChars,
+          maxChars: ADVISOR_RECENT_CONTEXT_CHARS,
         }).transcript;
       const activeSeed = (ctx: ExtensionContext): string =>
         seedFromMessages(activeContextMessages(ctx));
@@ -157,8 +159,8 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           model: currentConfig().model ?? "",
           cwd: refs.activeSessionInput?.cwd ?? "",
           guidance: refs.instructions.content ?? "",
-          fastMode: currentConfig().fastMode,
-          thinkingLevel: currentConfig().thinkingLevel,
+          fastMode: ADVISOR_FAST_MODE,
+          thinkingLevel: ADVISOR_THINKING_LEVEL,
         });
 
       const parentAnchor = readParentAnchor;
@@ -210,7 +212,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         stopRuntimeEffect,
         stopRuntime,
         startRuntimeEffect,
-        startRuntime,
         runWithExplicitRuntimeEffect,
       } = makeRuntimeControls({
         refs,
@@ -218,7 +219,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         updateApplicationState,
         mutateMetrics,
         currentConfig,
-        isPaused,
         isStarted,
         advanceDomainCounter,
         clearPersistentTrajectory,
@@ -277,7 +277,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         updateApplicationState,
         mutateMetrics,
         currentConfig,
-        isPaused,
         isStarted,
         advanceDomainCounter,
         latchCancellation,
@@ -286,6 +285,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         persistCurrentLedger,
         persistLedger,
         notifyBestEffort,
+        setAdvisorStatus,
         failureLogger,
         applicationScope,
         checkpointOrchestrator,
@@ -303,6 +303,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       });
 
       const { cancelEffect, commandActions, applyCommittedConfigEffect } = makeCommandWorkflows({
+        pi,
         refs,
         getState: () => applicationStateStore.get(),
         updateApplicationState,
@@ -315,11 +316,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         persistCurrentLedger,
         checkpointOrchestrator,
         startRuntimeEffect,
-        stopRuntimeEffect,
         runSessionEffect,
-        setAdvisorStatus,
-        publishControllerSnapshotNow,
-        startRuntime,
         runWithExplicitRuntimeEffect,
         requestCheckpoint,
         parentExecutor,
@@ -347,7 +344,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
           updateApplicationState,
           mutateMetrics,
           currentConfig,
-          isPaused,
           advanceDomainCounter,
           setDomainCounter,
           clearPersistentTrajectory,

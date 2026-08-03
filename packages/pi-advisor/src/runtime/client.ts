@@ -1,4 +1,4 @@
-import { clampThinkingLevel, streamSimple } from "@earendil-works/pi-ai/compat";
+import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
 import {
   ModelRuntime,
   type ExtensionContext,
@@ -7,10 +7,9 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import { standaloneAdvisorExecutor } from "../boundary/executor.ts";
 import { snapshotData } from "../domain/safe-data.ts";
-import type { ResolvedAdvisorConfig } from "../config/options.ts";
+import { ADVISOR_THINKING_LEVEL, type ResolvedAdvisorConfig } from "../config/options.ts";
 
 export class AdvisorModelError extends Schema.TaggedErrorClass<AdvisorModelError>()(
   "AdvisorModelError",
@@ -85,15 +84,7 @@ export const createAdvisorChildModelEffect = Effect.fn("AdvisorClient.createChil
       );
     }
     const selectedProvider = ctx.modelRegistry.getRegisteredProviderConfig(providerId);
-    if (config.fastMode && supportsFastModel(providerId, modelId)) {
-      modelRuntime.registerProvider(providerId, {
-        ...selectedProvider,
-        api: parentModel.api,
-        headers: { ...selectedProvider?.headers, ...parentAuth.headers },
-        streamSimple: (model, context, options) =>
-          streamSimple(model, context, { ...options, onPayload: applyFastServiceTier }),
-      });
-    } else if (!selectedProviderRegistered && (selectedProvider || parentAuth.headers)) {
+    if (!selectedProviderRegistered && (selectedProvider || parentAuth.headers)) {
       modelRuntime.registerProvider(providerId, {
         ...selectedProvider,
         headers: { ...selectedProvider?.headers, ...parentAuth.headers },
@@ -129,7 +120,7 @@ export const createAdvisorChildModelEffect = Effect.fn("AdvisorClient.createChil
     );
   }
   const thinkingLevel = yield* tryModelSync("Advisor thinking level selection failed.", () =>
-    clampThinkingLevel(model, config.thinkingLevel),
+    clampThinkingLevel(model, ADVISOR_THINKING_LEVEL),
   );
   return {
     modelRuntime,
@@ -143,11 +134,5 @@ export function createAdvisorChildModel(
 ): Promise<AdvisorChildModel> {
   return standaloneAdvisorExecutor.run(createAdvisorChildModelEffect(ctx, config));
 }
-function applyFastServiceTier(payload: unknown): unknown | undefined {
-  return typeof payload === "object" && payload !== null && !Array.isArray(payload)
-    ? { ...payload, service_tier: FAST_SERVICE_TIER }
-    : undefined;
-}
 const tryModelSync = <A>(message: string, operation: () => A) =>
   Effect.try({ try: operation, catch: () => modelError(message) });
-export const _clientTest = { applyFastServiceTier };

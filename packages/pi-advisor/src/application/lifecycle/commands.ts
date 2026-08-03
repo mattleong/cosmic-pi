@@ -1,7 +1,12 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import type { AdvisorEffectExecutor, AdvisorPlatform } from "../../boundary/executor.ts";
 import type { PiCommandAdapter } from "../../boundary/host-commands.ts";
+import {
+  appendAdvisorReviewActionAtHostBoundary,
+  latestOpenAdvisorReviewCardAtHostBoundary,
+  sendCompactAdvisorGuidanceAtHostBoundary,
+} from "../../boundary/host-review-cards.ts";
 import { summarizeAdvisorReview } from "../../checkpoint/ledger.ts";
 import type { CheckpointOrchestratorShape } from "../../checkpoint/orchestrator.ts";
 import type { ResolvedAdvisorConfig } from "../../config/options.ts";
@@ -11,6 +16,7 @@ import type { EventsDeps } from "./events/types.ts";
 import type { SessionRefs } from "./session-refs.ts";
 
 export interface CommandWorkflowDeps {
+  readonly pi: ExtensionAPI;
   readonly refs: SessionRefs;
   readonly getState: () => AdvisorApplicationState;
   readonly updateApplicationState: (
@@ -25,17 +31,9 @@ export interface CommandWorkflowDeps {
   readonly persistCurrentLedger: (ctx: ExtensionContext) => void;
   readonly checkpointOrchestrator: CheckpointOrchestratorShape;
   readonly startRuntimeEffect: EventsDeps["startRuntimeEffect"];
-  readonly stopRuntimeEffect: () => Effect.Effect<void>;
   readonly runSessionEffect: <A, E>(
     effect: Effect.Effect<A, E, AdvisorPlatform | PiCommandAdapter>,
   ) => Promise<A>;
-  readonly setAdvisorStatus: (ctx: ExtensionContext, text?: string) => void;
-  readonly publishControllerSnapshotNow: () => void;
-  readonly startRuntime: (
-    ctx: ExtensionContext,
-    restoration?: "preserve-live" | "restore-branch",
-    allowDisabled?: boolean,
-  ) => Promise<number | undefined>;
   readonly runWithExplicitRuntimeEffect: EventsDeps["runWithExplicitRuntimeEffect"];
   readonly requestCheckpoint: EventsDeps["requestCheckpoint"];
   readonly parentExecutor: AdvisorEffectExecutor;
@@ -46,54 +44,42 @@ export const makeCommandWorkflows = (d: CommandWorkflowDeps) => {
     ctx: Parameters<AdvisorCommandActions["cancel"]>[0],
   ): Effect.Effect<boolean> =>
     Effect.suspend(() => {
-      const hadRequestedReview = d.getState().reviewNext;
       const hadExplicitStart = d.refs.pendingExplicitStart !== undefined;
       const hadRecovery = Boolean(d.getState().pendingPersistentRecovery);
-      d.updateApplicationState((state) => ({ ...state, reviewNext: false }));
+      const hadWork =
+        hadExplicitStart ||
+        hadRecovery ||
+        Boolean(d.refs.queue && d.refs.queue.pendingCheckpoints > 0);
+      if (!hadWork) return Effect.succeed(false);
       d.refs.pendingExplicitStart = undefined;
       d.clearPendingRecovery();
       d.clearPendingReceipt();
       d.latchCancellation();
       d.advanceDomainCounter("cancellationEpoch");
       d.persistCurrentLedger(ctx);
-      const hadWork =
-        hadRequestedReview ||
-        hadExplicitStart ||
-        hadRecovery ||
-        Boolean(
-          d.refs.queue &&
-          (d.refs.queue.pendingCheckpoints > 0 ||
-            d.refs.queue.backlog > 0 ||
-            d.refs.queue.processedThrough < d.refs.queue.sequence),
-        );
       return d.checkpointOrchestrator
         .cancelAll()
-        .pipe(Effect.andThen(d.startRuntimeEffect(ctx)), Effect.as(hadWork));
+        .pipe(Effect.andThen(d.startRuntimeEffect(ctx)), Effect.as(true));
     });
 
   const commandActions: AdvisorCommandActions = {
     cancel: (ctx) => d.runSessionEffect(cancelEffect(ctx)),
-    pause: (ctx) => {
-      d.updateApplicationState((state) => ({ ...state, paused: true, reviewNext: false }));
-      d.refs.pendingExplicitStart = undefined;
-      d.clearPendingRecovery();
-      d.clearPendingReceipt();
-      d.latchCancellation();
-      d.advanceDomainCounter("cancellationEpoch");
-      d.persistCurrentLedger(ctx);
-      d.advanceDomainCounter("epoch");
-      void d.runSessionEffect(
-        d.checkpointOrchestrator.cancelAll().pipe(Effect.andThen(d.stopRuntimeEffect())),
-      );
-      d.setAdvisorStatus(ctx, "advisor: paused");
-      d.publishControllerSnapshotNow();
+    fixLast: (ctx) => {
+      const card = latestOpenAdvisorReviewCardAtHostBoundary(ctx);
+      if (!card) return "unavailable";
+      if (!sendCompactAdvisorGuidanceAtHostBoundary(d.pi, card, true)) return "delivery-failed";
+      return appendAdvisorReviewActionAtHostBoundary(d.pi, card, "fix")
+        ? "applied"
+        : "state-failed";
     },
-    resume: (ctx) => {
-      d.updateApplicationState((state) => ({ ...state, paused: false }));
-      d.publishControllerSnapshotNow();
-      void d.startRuntime(ctx);
+    dismissLast: (ctx) => {
+      const card = latestOpenAdvisorReviewCardAtHostBoundary(ctx);
+      if (!card) return "unavailable";
+      return appendAdvisorReviewActionAtHostBoundary(d.pi, card, "dismiss")
+        ? "applied"
+        : "state-failed";
     },
-    reviewLast: (ctx, focus) => {
+    reviewLast: (ctx) => {
       const candidate = d.refs.lastCandidate;
       if (!candidate) return d.runSessionEffect(Effect.succeed("unavailable" as const));
       return d.runSessionEffect(
@@ -102,28 +88,23 @@ export const makeCommandWorkflows = (d: CommandWorkflowDeps) => {
             if (d.refs.lastCandidate !== candidate) return undefined;
             return d.requestCheckpoint({
               ctx,
-              focus,
+              focus: "standard",
               phase: "final",
-              source: focus === "verification" ? "verify" : "last",
+              source: "last",
               requiresEnabled: false,
             });
           })
           .pipe(Effect.map((handle) => (handle ? ("started" as const) : ("cancelled" as const)))),
       );
     },
-    reviewNext: () => {
-      d.updateApplicationState((state) => ({ ...state, reviewNext: true }));
-    },
   };
 
   const applyCommittedConfigEffect = (next: ResolvedAdvisorConfig): Effect.Effect<void> =>
     Effect.sync(() => {
-      const enabledChanged = d.currentConfig().enabled !== next.enabled;
       const disabling = d.currentConfig().enabled && !next.enabled;
       d.updateApplicationState((state) => ({
         ...state,
         config: next,
-        paused: enabledChanged ? false : state.paused,
       }));
       d.refs.configRevision += 1;
       d.clearPendingRecovery();

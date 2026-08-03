@@ -11,21 +11,20 @@ import {
   type AdvisorRuntimeServiceShape,
 } from "../runtime/runtime.ts";
 import type { ResolvedAdvisorConfig } from "../config/options.ts";
-import { safeAdvisorLabel } from "../domain/label.ts";
+import {
+  appendAdvisorReviewCardAtHostBoundary,
+  sendCompactAdvisorGuidanceAtHostBoundary,
+  type AdvisorGuidancePublishResult,
+  type AdvisorReviewCardPublishResult,
+} from "../boundary/host-review-cards.ts";
 import {
   AdvisorReviewParseError,
-  buildAdvisorAdvice,
-  buildAdvisorPerspective,
-  buildProgressSteer,
-  buildRevisionSteer,
   canonicalAdvisorFindingFingerprint,
   sanitizeAdvisorReview,
   type AdvisorFinding,
   type AdvisorReview,
 } from "../review/index.ts";
-import { ADVISOR_REVIEW_MESSAGE_TYPE } from "../ui/renderer.ts";
 import { readAdvisorContextEntriesAtHostBoundary } from "../boundary/host-context.ts";
-import type { HostNotifierShape } from "../boundary/host-notifier.ts";
 import type { ReviewPhase } from "./controller-types.ts";
 
 export const advisorRuntimeEffectsFromDriver = (
@@ -156,87 +155,61 @@ export function classifyFailure(error: unknown): string {
 
 export function sendTriggeredCorrection(
   pi: ExtensionAPI,
-  config: ResolvedAdvisorConfig,
+  _config: ResolvedAdvisorConfig,
   review: AdvisorReview,
-  phase: ReviewPhase,
-  recovering = false,
-): void {
-  sendCorrection(pi, config, review, phase, true, recovering);
+  _phase: ReviewPhase,
+  _recovering = false,
+): AdvisorGuidancePublishResult {
+  return publishAdvisorGuidance(pi, review, true);
 }
 
+/** Visible findings are durable local entries and never context messages. */
 export function sendAdvisorAdvice(
   pi: ExtensionAPI,
-  config: ResolvedAdvisorConfig,
+  _config: ResolvedAdvisorConfig,
   review: AdvisorReview,
-): void {
-  sendAdvisorMessage(pi, config, review, "advice", buildAdvisorAdvice);
+): AdvisorReviewCardPublishResult {
+  return appendAdvisorReviewCardAtHostBoundary(pi, sanitizeAdvisorReview(review));
 }
 
+/** Automatic perspectives are local cards plus compact, non-waking guidance. */
 export function sendAdvisorPerspective(
   pi: ExtensionAPI,
-  config: ResolvedAdvisorConfig,
+  _config: ResolvedAdvisorConfig,
   review: AdvisorReview,
-): void {
-  sendAdvisorMessage(pi, config, review, "perspective", buildAdvisorPerspective);
+): AdvisorGuidancePublishResult {
+  const published = appendAdvisorReviewCardAtHostBoundary(pi, sanitizeAdvisorReview(review));
+  return {
+    ...published,
+    guidanceSent:
+      published.appended && published.card
+        ? sendCompactAdvisorGuidanceAtHostBoundary(pi, published.card, false)
+        : false,
+  };
 }
 
+/** Corrections use a local card plus a separate compact hidden guidance message. */
 export function sendCorrection(
   pi: ExtensionAPI,
-  config: ResolvedAdvisorConfig,
+  _config: ResolvedAdvisorConfig,
   review: AdvisorReview,
-  phase: ReviewPhase,
+  _phase: ReviewPhase,
   triggerTurn: boolean,
-  recovering: boolean,
-): void {
-  const action = recovering ? "recovery" : phase === "progress" ? "guidance" : "revision";
-  sendAdvisorMessage(
-    pi,
-    config,
-    review,
-    action,
-    (safeReview) =>
-      phase === "progress"
-        ? buildProgressSteer(safeReview, recovering)
-        : buildRevisionSteer(safeReview),
-    triggerTurn,
-  );
+  _recovering: boolean,
+): AdvisorGuidancePublishResult {
+  return publishAdvisorGuidance(pi, review, triggerTurn);
 }
 
-export function sendAdvisorMessage(
+function publishAdvisorGuidance(
   pi: ExtensionAPI,
-  config: ResolvedAdvisorConfig,
   review: AdvisorReview,
-  action: "advice" | "guidance" | "perspective" | "recovery" | "revision",
-  content: (review: AdvisorReview) => string,
-  triggerTurn = false,
-): void {
-  if (!config.provider || !config.model) return;
-  const safeReview = sanitizeAdvisorReview(review);
-  pi.sendMessage(
-    {
-      customType: ADVISOR_REVIEW_MESSAGE_TYPE,
-      content: content(safeReview),
-      display: true,
-      details: {
-        action,
-        review: safeReview,
-        provider: safeAdvisorLabel(config.provider),
-        model: safeAdvisorLabel(config.model),
-      },
-    },
-    triggerTurn ? { deliverAs: "steer", triggerTurn: true } : { deliverAs: "steer" },
-  );
-}
-
-export function warnIfSetupRequired(
-  ctx: ExtensionContext,
-  config: ResolvedAdvisorConfig,
-  notify: HostNotifierShape["notify"],
-): void {
-  if (!config.enabled || config.configured) return;
-  notify(
-    ctx,
-    "Advisor review is enabled but no dedicated model is configured. Use /advisor-settings.",
-    "warning",
-  );
+  triggerTurn: boolean,
+): AdvisorGuidancePublishResult {
+  const published = appendAdvisorReviewCardAtHostBoundary(pi, sanitizeAdvisorReview(review));
+  return {
+    ...published,
+    guidanceSent: published.card
+      ? sendCompactAdvisorGuidanceAtHostBoundary(pi, published.card, triggerTurn)
+      : false,
+  };
 }

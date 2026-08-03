@@ -94,13 +94,11 @@ export interface AdvisorAbortState {
  */
 export interface AdvisorApplicationState {
   readonly config: ResolvedAdvisorConfig;
-  readonly paused: boolean;
   readonly started: boolean;
   readonly metrics: AdvisorSessionMetrics;
   readonly resourceSummary: AdvisorResourceSummary;
   readonly guidancePaths: readonly string[];
   readonly hasLastCandidate: boolean;
-  readonly reviewNext: boolean;
   readonly activeTrajectory: AdvisorActiveTrajectoryState | undefined;
   readonly pendingPersistentRecovery: AdvisorPersistentRecoveryState | undefined;
   readonly abortInProgress: AdvisorAbortState | undefined;
@@ -160,7 +158,6 @@ export const initialAdvisorApplicationState = (
   config: ResolvedAdvisorConfig = normalizeAdvisorConfig({}, ""),
 ): AdvisorApplicationState => ({
   config,
-  paused: false,
   started: false,
   metrics: emptyAdvisorSessionMetrics(),
   resourceSummary: {
@@ -173,7 +170,6 @@ export const initialAdvisorApplicationState = (
   },
   guidancePaths: [],
   hasLastCandidate: false,
-  reviewNext: false,
   activeTrajectory: undefined,
   pendingPersistentRecovery: undefined,
   abortInProgress: undefined,

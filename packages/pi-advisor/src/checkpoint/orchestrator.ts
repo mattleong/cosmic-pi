@@ -1,6 +1,6 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import type * as Exit from "effect/Exit";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 import type { AdvisorEffectExecutor, AdvisorPlatform } from "../boundary/executor.ts";
@@ -90,7 +90,10 @@ export const makeCheckpointOrchestrator = (
         return undefined;
       }
     };
-    const start: CheckpointOrchestratorShape["start"] = (effect, hooks) => {
+    const start = <A, E>(
+      effect: Effect.Effect<A, E, AdvisorPlatform>,
+      hooks: AdvisorCheckpointHooks,
+    ): AdvisorOrchestratedCheckpoint<A, E> => {
       const entry: ActiveCheckpoint = {
         hooks,
         fiber: undefined,
@@ -100,15 +103,31 @@ export const makeCheckpointOrchestrator = (
         cancellationFinalized: false,
       };
       active.add(entry);
-      const fiber = executor.fork(
-        effect.pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              active.delete(entry);
-            }),
+      let fiber: Fiber.Fiber<A, E>;
+      try {
+        fiber = executor.fork(
+          effect.pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                active.delete(entry);
+              }),
+            ),
           ),
-        ),
-      );
+        );
+      } catch (error) {
+        active.delete(entry);
+        try {
+          hooks.invalidate();
+        } catch {
+          // Admission already failed; invalidation is best-effort bookkeeping.
+        }
+        return {
+          invalidate: hooks.invalidate,
+          cancel: () => {},
+          cancelEffect: Effect.void,
+          settlement: Effect.succeed(Exit.die(error) as Exit.Exit<A, E>),
+        };
+      }
       entry.fiber = fiber;
       return {
         invalidate: hooks.invalidate,

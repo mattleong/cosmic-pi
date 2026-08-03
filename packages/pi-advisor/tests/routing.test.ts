@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import type { AdvisorSeverity } from "../src/review/index.ts";
 import {
   ADVISOR_IMMUNITY_COMPLETED_TURNS,
   armAdvisorInterruption,
@@ -10,63 +11,43 @@ import {
   routeAdvisorFinding,
   type AdvisorParentState,
 } from "../src/review/routing.ts";
-import type { AdvisorReviewPolicy } from "../src/config/options.ts";
-import type { AdvisorSeverity } from "../src/review/index.ts";
 
 const states: AdvisorParentState[] = ["active", "idle", "final", "aborting"];
-const policies: AdvisorReviewPolicy[] = ["corrective", "guardrail", "advisory"];
-const severities: AdvisorSeverity[] = ["nit", "concern", "blocker"];
+const severities: AdvisorSeverity[] = ["concern", "blocker"];
 
 describe("advisor routing", () => {
-  test("covers every severity, policy, parent state, immunity and cancellation combination", () => {
+  test("covers every severity, parent state, immunity and cancellation combination", () => {
     let cases = 0;
     for (const severity of severities) {
-      for (const policy of policies) {
-        for (const parentState of states) {
-          for (const immunityActive of [false, true]) {
-            for (const cancellationLatched of [false, true]) {
-              const route = routeAdvisorFinding({
-                severity,
-                policy,
-                parentState,
-                immunityActive,
-                cancellationLatched,
-                sameTurnStrongSignal: false,
-                abortSafe: false,
-              });
-              expect([
-                "silent",
-                "push-direct",
-                "steer-live",
-                "abort-recover",
-                "trigger-correction",
-              ]).toContain(route);
-              if (severity === "nit" || cancellationLatched || parentState === "aborting") {
-                expect(route).toBe("silent");
-              }
-              cases += 1;
+      for (const parentState of states) {
+        for (const immunityActive of [false, true]) {
+          for (const cancellationLatched of [false, true]) {
+            const route = routeAdvisorFinding({
+              severity,
+              parentState,
+              immunityActive,
+              cancellationLatched,
+              sameTurnStrongSignal: false,
+              abortSafe: false,
+            });
+            expect(["silent", "steer-live", "abort-recover", "trigger-correction"]).toContain(
+              route,
+            );
+            if (cancellationLatched || parentState === "aborting") {
+              expect(route).toBe("silent");
             }
+            cases += 1;
           }
         }
       }
     }
-    expect(cases).toBe(144);
+    expect(cases).toBe(32);
   });
 
-  test("guardrail concerns push directly and corrective concerns respect immunity", () => {
+  test("active findings steer while idle findings trigger a correction", () => {
     expect(
       routeAdvisorFinding({
         severity: "concern",
-        policy: "guardrail",
-        parentState: "active",
-        immunityActive: false,
-        cancellationLatched: false,
-      }),
-    ).toBe("push-direct");
-    expect(
-      routeAdvisorFinding({
-        severity: "concern",
-        policy: "corrective",
         parentState: "active",
         immunityActive: false,
         cancellationLatched: false,
@@ -74,35 +55,17 @@ describe("advisor routing", () => {
     ).toBe("steer-live");
     expect(
       routeAdvisorFinding({
-        severity: "concern",
-        policy: "corrective",
-        parentState: "active",
-        immunityActive: true,
-        cancellationLatched: false,
-      }),
-    ).toBe("silent");
-  });
-
-  test.each([
-    ["advisory", "concern"],
-    ["advisory", "blocker"],
-    ["guardrail", "concern"],
-  ] as const)("automatic direct %s %s advice is immediate-or-drop", (policy, severity) => {
-    expect(
-      routeAdvisorFinding({
-        severity,
-        policy,
-        parentState: "active",
-        immunityActive: false,
-        cancellationLatched: false,
-      }),
-    ).toBe("push-direct");
-    expect(
-      routeAdvisorFinding({
-        severity,
-        policy,
+        severity: "blocker",
         parentState: "final",
         immunityActive: false,
+        cancellationLatched: false,
+      }),
+    ).toBe("trigger-correction");
+    expect(
+      routeAdvisorFinding({
+        severity: "concern",
+        parentState: "idle",
+        immunityActive: true,
         cancellationLatched: false,
       }),
     ).toBe("silent");
@@ -111,7 +74,6 @@ describe("advisor routing", () => {
   test("only a same-turn strong blocker at a safe boundary can abort", () => {
     const base = {
       severity: "blocker" as const,
-      policy: "guardrail" as const,
       parentState: "active" as const,
       immunityActive: true,
       cancellationLatched: false,
@@ -143,7 +105,6 @@ describe("advisor routing", () => {
     expect(
       routeAdvisorFinding({
         severity: "blocker",
-        policy: "corrective",
         parentState: "final",
         immunityActive: isAdvisorImmunityActive(state),
         cancellationLatched: false,
@@ -155,7 +116,6 @@ describe("advisor routing", () => {
     expect(
       routeAdvisorFinding({
         severity: "blocker",
-        policy: "corrective",
         parentState: "idle",
         immunityActive: isAdvisorImmunityActive(state),
         cancellationLatched: state.cancellationLatched,

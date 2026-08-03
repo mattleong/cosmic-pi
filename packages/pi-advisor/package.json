@@ -38,7 +38,6 @@
   "dependencies": {
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
-    "pi-better-openai": "workspace:*",
     "pi-cosmic-core": "workspace:*",
     "typebox": "catalog:"
   },

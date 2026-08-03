@@ -293,7 +293,7 @@ describe("advisor prompts and formatting", () => {
     expect(ADVISOR_SYSTEM_PROMPT).toContain("cannot mutate files or launch processes");
     expect(ADVISOR_SYSTEM_PROMPT).toContain("Return exactly one JSON object");
     expect(ADVISOR_SYSTEM_PROMPT).toContain("at most 5 distinct findings");
-    expect(ADVISOR_SYSTEM_PROMPT).toContain("ordered from blocker to concern to nit");
+    expect(ADVISOR_SYSTEM_PROMPT).toContain("ordered from blocker to concern");
     expect(ADVISOR_SYSTEM_PROMPT).toContain("nitpicks");
     expect(ADVISOR_SYSTEM_PROMPT).toContain('"confidence":"low"|"medium"|"high"');
   });

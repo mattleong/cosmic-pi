@@ -37,7 +37,7 @@ export const registerTrajectoryEvents = (d: EventsDeps): void => {
     }
     d.clearPendingReceipt();
     d.advanceDomainCounter("parentTurnId");
-    if (!d.currentConfig().enabled || d.isPaused() || !d.currentConfig().configured) return;
+    if (!d.currentConfig().enabled || !d.currentConfig().configured) return;
     const observation: AdvisorActiveTrajectoryState = {
       abortAllowed: false,
       detector: emptyAdvisorTrajectoryDetector(),

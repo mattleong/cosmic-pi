@@ -83,7 +83,7 @@ describe("checkpoint ledger", () => {
       cwd: "/project",
       guidance: "trusted",
       fastMode: true,
-      thinkingLevel: "high",
+      thinkingLevel: "medium",
     });
     const ledger = createCheckpointLedger({
       fingerprint,
@@ -118,7 +118,7 @@ describe("checkpoint ledger", () => {
 
     expect(ledger.reviewSummary).toEqual({
       verdict: "revise",
-      severityCounts: { nit: 0, concern: 1, blocker: 1 },
+      severityCounts: { concern: 1, blocker: 1 },
       categoryCounts: { intent: 0, correctness: 1, completeness: 0, evidence: 1 },
     });
     expect(ledger.emissionHashes).toHaveLength(MAX_LEDGER_EMISSION_HASHES);
@@ -181,14 +181,14 @@ describe("checkpoint ledger", () => {
     expect(parseLedger(ledger)).toEqual(ledger);
   });
 
-  test("excludes legacy and unsafe unknown configuration from the runtime fingerprint", () => {
+  test("excludes unsafe unknown configuration from the runtime fingerprint", () => {
     const known = {
       provider: "p",
       model: "m",
       cwd: "/project",
       guidance: "trusted",
       fastMode: true,
-      thinkingLevel: "high",
+      thinkingLevel: "medium",
     };
     const injected = {
       ...known,

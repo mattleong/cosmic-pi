@@ -28,7 +28,6 @@ export interface EventsDeps {
   ) => void;
   readonly mutateMetrics: (mutate: (next: AdvisorApplicationState["metrics"]) => void) => void;
   readonly currentConfig: () => ResolvedAdvisorConfig;
-  readonly isPaused: () => boolean;
   readonly advanceDomainCounter: (
     key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
   ) => number;

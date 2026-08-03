@@ -17,7 +17,7 @@ import type { AdvisorFindingCategory, AdvisorReview, AdvisorSeverity } from "../
 import { isRecord } from "../shared/utils.ts";
 
 export const ADVISOR_CHECKPOINT_ENTRY_TYPE = "pi-advisor-checkpoint";
-export const ADVISOR_CHECKPOINT_PROTOCOL_VERSION = 2;
+export const ADVISOR_CHECKPOINT_PROTOCOL_VERSION = 3;
 export const MAX_LEDGER_EMISSION_HASHES = 32;
 
 const BoundedCountSchema = Schema.Number.check(
@@ -27,7 +27,6 @@ const BoundedCountSchema = Schema.Number.check(
 const ReviewSummaryWireSchema = Schema.Struct({
   verdict: Schema.Literals(["none", "pass", "revise"]),
   severityCounts: Schema.Struct({
-    nit: BoundedCountSchema,
     concern: BoundedCountSchema,
     blocker: BoundedCountSchema,
   }),
@@ -44,7 +43,7 @@ const FindingLifecycleWireSchema = Schema.Struct({
   key: Schema.String.check(Schema.isPattern(/^[a-f\d]{64}$/)),
   generation: NonNegativeIntSchema,
   category: Schema.Literals(["intent", "correctness", "completeness", "evidence"]),
-  severity: Schema.Literals(["nit", "concern", "blocker"]),
+  severity: Schema.Literals(["concern", "blocker"]),
   status: Schema.Literals(["open", "acknowledged", "resolved", "superseded"]),
   firstSeenTurn: NonNegativeIntSchema,
   lastSeenTurn: NonNegativeIntSchema,
@@ -52,10 +51,10 @@ const FindingLifecycleWireSchema = Schema.Struct({
 const InterventionBudgetWireSchema = Schema.Struct({
   delivered: NonNegativeIntSchema,
   correctionUsed: Schema.Boolean,
-  highestSeverity: Schema.optional(Schema.Literals(["nit", "concern", "blocker"])),
+  highestSeverity: Schema.optional(Schema.Literals(["concern", "blocker"])),
 });
 const AdvisorCheckpointLedgerInputSchema = Schema.Struct({
-  protocolVersion: Schema.Literal(2),
+  protocolVersion: Schema.Literal(3),
   fingerprint: Schema.String.check(Schema.isPattern(/^[a-f\d]{64}$/i)),
   anchorId: Schema.String.check(Schema.isNonEmpty()),
   reviewSummary: ReviewSummaryWireSchema,
@@ -65,11 +64,11 @@ const AdvisorCheckpointLedgerInputSchema = Schema.Struct({
     immunityUntilCompletedTurn: NonNegativeIntSchema,
   }),
   emissionHashes: Schema.Array(
-    Schema.String.check(Schema.isPattern(/^(?:nit|concern|blocker):[a-f\d]{64}$/i)),
+    Schema.String.check(Schema.isPattern(/^(?:concern|blocker):[a-f\d]{64}$/i)),
   ).check(Schema.isMaxLength(MAX_LEDGER_EMISSION_HASHES)),
 });
 export const AdvisorCheckpointLedgerWireSchema = Schema.Struct({
-  protocolVersion: Schema.Literal(2),
+  protocolVersion: Schema.Literal(3),
   fingerprint: Schema.String.check(Schema.isPattern(/^[a-f\d]{64}$/i)),
   anchorId: Schema.String.check(Schema.isNonEmpty()),
   reviewSummary: ReviewSummaryWireSchema,
@@ -85,7 +84,7 @@ export const AdvisorCheckpointLedgerWireSchema = Schema.Struct({
     ),
   ),
   emissionHashes: Schema.Array(
-    Schema.String.check(Schema.isPattern(/^(?:nit|concern|blocker):[a-f\d]{64}$/i)),
+    Schema.String.check(Schema.isPattern(/^(?:concern|blocker):[a-f\d]{64}$/i)),
   ).check(Schema.isMaxLength(MAX_LEDGER_EMISSION_HASHES)),
 });
 
@@ -96,7 +95,7 @@ export interface AdvisorDurableReviewSummary {
 }
 
 export interface AdvisorCheckpointLedger {
-  protocolVersion: 2;
+  protocolVersion: 3;
   fingerprint: string;
   anchorId: string;
   reviewSummary: AdvisorDurableReviewSummary;
@@ -261,7 +260,7 @@ function emptyReviewSummary(
 ): AdvisorDurableReviewSummary {
   return {
     verdict,
-    severityCounts: { nit: 0, concern: 0, blocker: 0 },
+    severityCounts: { concern: 0, blocker: 0 },
     categoryCounts: { intent: 0, correctness: 0, completeness: 0, evidence: 0 },
   };
 }
@@ -286,5 +285,5 @@ function sanitizeFindingLifecycle(values: readonly unknown[]): AdvisorFindingRec
 }
 
 function isEmissionRecord(value: unknown): value is string {
-  return typeof value === "string" && /^(?:nit|concern|blocker):[a-f\d]{64}$/i.test(value);
+  return typeof value === "string" && /^(?:concern|blocker):[a-f\d]{64}$/i.test(value);
 }

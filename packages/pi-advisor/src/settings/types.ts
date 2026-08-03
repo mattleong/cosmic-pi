@@ -1,7 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { AdvisorConfigPatch, ResolvedAdvisorConfig } from "../config/options.ts";
 import type { AdvisorSessionMetrics } from "../domain/metrics.ts";
-import type { AdvisorReviewFocus } from "../review/index.ts";
 
 export interface AdvisorConfigState {
   get(): ResolvedAdvisorConfig;
@@ -12,16 +11,19 @@ export interface AdvisorConfigState {
 }
 
 export type AdvisorReviewRequestResult = "started" | "unavailable" | "cancelled";
+export type AdvisorCardActionResult =
+  | "applied"
+  | "unavailable"
+  | "delivery-failed"
+  | "state-failed";
 
 export interface AdvisorCommandActions {
   cancel(ctx: ExtensionCommandContext): boolean | Promise<boolean>;
-  pause(ctx: ExtensionCommandContext): void;
-  resume(ctx: ExtensionCommandContext): void;
+  fixLast(ctx: ExtensionCommandContext): AdvisorCardActionResult;
+  dismissLast(ctx: ExtensionCommandContext): AdvisorCardActionResult;
   reviewLast(
     ctx: ExtensionCommandContext,
-    focus: AdvisorReviewFocus,
   ): AdvisorReviewRequestResult | Promise<AdvisorReviewRequestResult>;
-  reviewNext(ctx: ExtensionCommandContext): void;
 }
 
 export interface AdvisorCommandRegistrar {

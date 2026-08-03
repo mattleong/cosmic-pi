@@ -2,7 +2,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 import { ModelRuntime, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { _clientTest, AdvisorModelError, createAdvisorChildModel } from "../src/runtime/client.ts";
+import { AdvisorModelError, createAdvisorChildModel } from "../src/runtime/client.ts";
 import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
 
 function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisorConfig {
@@ -11,11 +11,7 @@ function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisor
     enabled: true,
     provider: "advisor-provider",
     model: "advisor-model",
-    fastMode: false,
-    thinkingLevel: "medium",
-    reviewPolicy: "guardrail",
-    timeoutMs: 30_000,
-    maxContextChars: 48_000,
+    setupDismissed: true,
     configured: true,
     ...overrides,
   };
@@ -92,27 +88,6 @@ describe("advisor child model construction", () => {
 
     expect(runtime.setRuntimeApiKey).not.toHaveBeenCalled();
     expect(runtime.getAuth).toHaveBeenCalledOnce();
-  });
-
-  test("registers the selected model API for fast-mode builtin providers", async () => {
-    const { ctx, runtime } = harness({ usingOAuth: true });
-    await createAdvisorChildModel(
-      ctx,
-      config({ provider: "openai-codex", model: "gpt-5.6-sol", fastMode: true }),
-    );
-
-    expect(runtime.registerProvider).toHaveBeenCalledWith(
-      "openai-codex",
-      expect.objectContaining({ api: "openai-responses", streamSimple: expect.any(Function) }),
-    );
-  });
-
-  test("retains fast-mode priority payload behavior for supported child models", async () => {
-    expect(_clientTest.applyFastServiceTier({ model: "gpt" })).toEqual({
-      model: "gpt",
-      service_tier: "priority",
-    });
-    expect(_clientTest.applyFastServiceTier("invalid")).toBeUndefined();
   });
 
   test("rejects hostile authentication accessors before Schema access", async () => {

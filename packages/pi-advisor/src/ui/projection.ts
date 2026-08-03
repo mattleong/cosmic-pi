@@ -7,7 +7,6 @@ import type { AdvisorSessionMetrics } from "../domain/metrics.ts";
 export interface AdvisorControllerSnapshot {
   readonly config: ResolvedAdvisorConfig;
   readonly metrics: AdvisorSessionMetrics;
-  readonly paused: boolean;
   readonly started: boolean;
 }
 

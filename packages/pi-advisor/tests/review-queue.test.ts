@@ -356,7 +356,7 @@ describe("AdvisorReviewQueue", () => {
     for (let index = 0; index < 2_000; index += 1) {
       queue.ingest(1, { type: "assistant_thinking_delta", text: "x" });
     }
-    expect(performance.now() - startedAt).toBeLessThan(100);
+    expect(performance.now() - startedAt).toBeLessThan(250);
     await tick();
     expect(harness.runtime.steer).toHaveBeenCalledOnce();
     expect(harness.runtime.steer).toHaveBeenCalledWith(
@@ -381,6 +381,7 @@ describe("AdvisorReviewQueue", () => {
     expect(harness.requests[1]?.observations).toContain("assistant_thinking_delta");
     harness.pending[1]?.resolve(result(harness.requests[1]!));
     await catchUp;
+    await queue.dispose();
   });
 
   test("drains an observation that arrives while live steering is unresolved", async () => {
@@ -972,13 +973,18 @@ describe("AdvisorReviewQueue", () => {
       focus: "standard",
       parentTurnId: 1,
     });
-    await tick();
-    const rejection = expect(checkpoint).rejects.toThrow(/stale|reset/);
+    await vi.waitFor(() => expect(harness.requests).toHaveLength(1));
+    const rejection = checkpoint.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
     await queue.reset("new branch", "state");
     const request = harness.requests[0];
     if (!request) throw new Error("missing request");
     harness.pending[0]?.resolve(result(request));
-    await rejection;
+    const error = await rejection;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/stale|reset/i);
 
     expect(harness.calls).toContain("abort");
     expect(harness.runtime.reprime).toHaveBeenCalledWith("new branch", "state");

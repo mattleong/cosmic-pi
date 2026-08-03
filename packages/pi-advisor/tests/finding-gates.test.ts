@@ -26,10 +26,10 @@ describe("advisor finding gates", () => {
   });
 
   test("treats missing confidence and evidence metadata conservatively", () => {
-    const legacy = finding({ confidence: undefined, evidenceBasis: undefined });
-    const decision = gateAdvisorFinding(legacy);
+    const incomplete = finding({ confidence: undefined, evidenceBasis: undefined });
+    const decision = gateAdvisorFinding(incomplete);
     expect(decision).toMatchObject({ actionable: false, reason: "low-confidence" });
-    expect(decision.finding.severity).toBe("nit");
+    expect(decision.finding.severity).toBe("blocker");
   });
 
   test("suppresses low-confidence or evidence-free findings", () => {

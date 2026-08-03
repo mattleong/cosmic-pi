@@ -27,19 +27,16 @@ import {
   AdvisorRuntimeResetRequiredError,
   type AdvisorRuntimeServiceShape,
 } from "../src/runtime/runtime.ts";
+import { ADVISOR_OPERATION_TIMEOUT_MS } from "../src/config/options.ts";
 
-const runtimeOptions = (timeoutMs: number) => ({
+const runtimeOptions = () => ({
   ctx: { cwd: process.cwd(), modelRegistry: {} as never },
   config: {
     configPath: "/tmp/config",
     enabled: true,
     provider: "p",
     model: "m",
-    fastMode: false,
-    thinkingLevel: "medium" as const,
-    reviewPolicy: "guardrail" as const,
-    timeoutMs,
-    maxContextChars: 48_000,
+    setupDismissed: true,
     configured: true,
   },
   seed: "seed",
@@ -203,14 +200,14 @@ describe("advisor Effect clock boundaries", () => {
         createSession,
       });
       const startup = yield* runtime
-        .startEffect(runtimeOptions(25))
+        .startEffect(runtimeOptions())
         .pipe(
           Effect.provide(advisorPlatformLayer),
           Effect.flip,
           Effect.forkChild({ startImmediately: true }),
         );
       yield* Deferred.await(modelStarted);
-      yield* TestClock.adjust(25);
+      yield* TestClock.adjust(ADVISOR_OPERATION_TIMEOUT_MS);
       const failure = yield* Fiber.join(startup);
       expect(failure.message).toContain("startup timed out");
       expect(createSession).not.toHaveBeenCalled();
@@ -246,17 +243,17 @@ describe("advisor Effect clock boundaries", () => {
         },
       });
       const firstStart = yield* runtime
-        .startEffect(runtimeOptions(25))
+        .startEffect(runtimeOptions())
         .pipe(
           Effect.provide(advisorPlatformLayer),
           Effect.flip,
           Effect.forkChild({ startImmediately: true }),
         );
       yield* Deferred.await(createStarted);
-      yield* TestClock.adjust(25);
+      yield* TestClock.adjust(ADVISOR_OPERATION_TIMEOUT_MS);
       expect((yield* Fiber.join(firstStart)).message).toContain("startup timed out");
 
-      yield* runtime.startEffect(runtimeOptions(1_000)).pipe(Effect.provide(advisorPlatformLayer));
+      yield* runtime.startEffect(runtimeOptions()).pipe(Effect.provide(advisorPlatformLayer));
       expect(createCalls).toBe(2);
       expect(runtime.childSession).toBe(replacement);
       expect(first.dispose).not.toHaveBeenCalled();
@@ -293,14 +290,14 @@ describe("advisor Effect clock boundaries", () => {
         },
       });
       const startup = yield* runtime
-        .startEffect(runtimeOptions(25))
+        .startEffect(runtimeOptions())
         .pipe(
           Effect.provide(advisorPlatformLayer),
           Effect.flip,
           Effect.forkChild({ startImmediately: true }),
         );
       yield* Deferred.await(createStarted);
-      yield* TestClock.adjust(25);
+      yield* TestClock.adjust(ADVISOR_OPERATION_TIMEOUT_MS);
       expect((yield* Fiber.join(startup)).message).toContain("startup timed out");
       yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
       expect(session.dispose).not.toHaveBeenCalled();
@@ -336,14 +333,14 @@ describe("advisor Effect clock boundaries", () => {
         },
       });
       const startup = yield* runtime
-        .startEffect(runtimeOptions(25))
+        .startEffect(runtimeOptions())
         .pipe(
           Effect.provide(advisorPlatformLayer),
           Effect.flip,
           Effect.forkChild({ startImmediately: true }),
         );
       yield* Deferred.await(createStarted);
-      yield* TestClock.adjust(25);
+      yield* TestClock.adjust(ADVISOR_OPERATION_TIMEOUT_MS);
       expect((yield* Fiber.join(startup)).message).toContain("startup timed out");
       yield* runtime.disposeEffect().pipe(Effect.provide(advisorPlatformLayer));
 
@@ -397,11 +394,7 @@ describe("advisor Effect clock boundaries", () => {
             enabled: true,
             provider: "p",
             model: "m",
-            fastMode: false,
-            thinkingLevel: "medium",
-            reviewPolicy: "guardrail",
-            timeoutMs: 30_000,
-            maxContextChars: 48_000,
+            setupDismissed: true,
             configured: true,
           },
           seed: "seed",
@@ -477,11 +470,7 @@ describe("advisor Effect clock boundaries", () => {
           enabled: true,
           provider: "p",
           model: "m",
-          fastMode: false,
-          thinkingLevel: "medium" as const,
-          reviewPolicy: "guardrail" as const,
-          timeoutMs: 25,
-          maxContextChars: 48_000,
+          setupDismissed: true,
           configured: true,
         },
         seed: "seed",
@@ -497,7 +486,7 @@ describe("advisor Effect clock boundaries", () => {
         Effect.forkChild({ startImmediately: true }),
       );
       yield* Effect.yieldNow;
-      yield* TestClock.adjust(24);
+      yield* TestClock.adjust(ADVISOR_OPERATION_TIMEOUT_MS - 1);
       expect(completed).toBe(false);
       expect(stuck.dispose).not.toHaveBeenCalled();
       yield* TestClock.adjust(1);

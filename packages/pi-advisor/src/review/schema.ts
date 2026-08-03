@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 export const ADVISOR_VERDICTS = ["pass", "suggest", "revise"] as const;
-export const ADVISOR_SEVERITIES = ["nit", "concern", "blocker"] as const;
+export const ADVISOR_SEVERITIES = ["concern", "blocker"] as const;
 export const ADVISOR_SUGGESTION_KINDS = [
   "alternative",
   "investigation",
@@ -36,7 +36,6 @@ export type AdvisorReviewFocus =
   | "observation"
   | "perspective"
   | "trajectory"
-  | "verification"
   | "blocker-verification";
 
 export const MAX_ADVISOR_FINDINGS = 5;
@@ -142,11 +141,10 @@ Corrective review rubric:
 Severity meanings:
 - blocker: likely wrong, unsafe, destructive, or misses the core request and requires interruption.
 - concern: materially incomplete, unsupported, or misleading.
-- nit: optional, stylistic, or low-impact; record sparingly and never use it to trigger work.
 
 For every finding, identify its category and quote or precisely reference the transcript evidence. Use the evidence category when the problem is an unsupported claim rather than a demonstrated contradiction. Do not claim external verification. Set confidence to high only when the evidence strongly supports the finding. Set evidenceBasis to direct only for a precise transcript quote, tool result, or inspected file; use inferred for reasoned implications and none for suspicions. Keep fingerprint short and semantically stable across rewordings of the same issue.
 
-Report at most ${MAX_ADVISOR_SUGGESTIONS} distinct suggestions or at most ${MAX_ADVISOR_FINDINGS} distinct findings, ordered from blocker to concern to nit. Keep summary, suggestion, rationale, issue, and recommendation within ${MAX_ADVISOR_SUMMARY_CHARS} characters, evidence within ${MAX_ADVISOR_EVIDENCE_CHARS} characters, and fingerprints within ${MAX_ADVISOR_FINGERPRINT_CHARS} characters.
+Report at most ${MAX_ADVISOR_SUGGESTIONS} distinct suggestions or at most ${MAX_ADVISOR_FINDINGS} distinct findings, ordered from blocker to concern. Keep summary, suggestion, rationale, issue, and recommendation within ${MAX_ADVISOR_SUMMARY_CHARS} characters, evidence within ${MAX_ADVISOR_EVIDENCE_CHARS} characters, and fingerprints within ${MAX_ADVISOR_FINGERPRINT_CHARS} characters.
 
 Keep the two lanes separate:
 - "pass": no materially useful missing angle and no corrective finding; suggestions and findings are empty.
@@ -154,7 +152,7 @@ Keep the two lanes separate:
 - "revise": one or more concrete corrective findings; suggestions are empty so correction is not diluted.
 
 At a checkpoint, follow this rule: Return exactly one JSON object and no prose or markdown. Echo the exact checkpointId and processedThrough requested by the trusted runtime envelope. It must use this exact shape:
-{"checkpointId":"exact requested id","processedThrough":0,"stateSummary":"bounded compact state","verdict":"pass"|"suggest"|"revise","summary":"non-empty summary","suggestions":[{"fingerprint":"short-stable-semantic-key","kind":"alternative"|"investigation"|"verification"|"simplification"|"tradeoff"|"edge-case","suggestion":"non-empty possible angle","rationale":"why it may help","relevance":"possible"|"likely"|"high"}],"findings":[{"fingerprint":"short-stable-semantic-key","category":"intent"|"correctness"|"completeness"|"evidence","severity":"nit"|"concern"|"blocker","confidence":"low"|"medium"|"high","evidenceBasis":"none"|"inferred"|"direct","issue":"non-empty issue","evidence":"non-empty transcript evidence","recommendation":"non-empty recommendation"}]}
+{"checkpointId":"exact requested id","processedThrough":0,"stateSummary":"bounded compact state","verdict":"pass"|"suggest"|"revise","summary":"non-empty summary","suggestions":[{"fingerprint":"short-stable-semantic-key","kind":"alternative"|"investigation"|"verification"|"simplification"|"tradeoff"|"edge-case","suggestion":"non-empty possible angle","rationale":"why it may help","relevance":"possible"|"likely"|"high"}],"findings":[{"fingerprint":"short-stable-semantic-key","category":"intent"|"correctness"|"completeness"|"evidence","severity":"concern"|"blocker","confidence":"low"|"medium"|"high","evidenceBasis":"none"|"inferred"|"direct","issue":"non-empty issue","evidence":"non-empty transcript evidence","recommendation":"non-empty recommendation"}]}
 
 The bounded stateSummary may retain conclusions and routing context, but never raw transcript deltas, thinking, tool output, file content, or credentials.`;
 /** Effect-native provider protocol boundary. Expected validation failures stay typed. */

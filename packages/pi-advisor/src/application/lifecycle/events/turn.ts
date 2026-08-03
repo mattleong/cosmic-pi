@@ -1,4 +1,3 @@
-import * as Effect from "effect/Effect";
 import { captureAdvisorAbortInputAtHostBoundary } from "../../../boundary/host-context.ts";
 import {
   assistantStopReason,
@@ -51,7 +50,6 @@ export const registerTurnEvents = (d: EventsDeps): void => {
       recovery.configRevision !== refs.configRevision ||
       recovery.cancellationEpoch !== d.getState().cancellationEpoch ||
       !d.currentConfig().enabled ||
-      d.isPaused() ||
       !d.currentConfig().configured ||
       signalAborted ||
       !parentIsIdle(ctx) ||
@@ -60,23 +58,45 @@ export const registerTurnEvents = (d: EventsDeps): void => {
       d.clearPendingRecovery();
       return;
     }
-    d.updateApplicationState((state) => ({
-      ...state,
-      pendingPersistentRecovery: undefined,
-      abortInProgress: undefined,
-      findingLifecycle: acknowledgeAdvisorFindings(state.findingLifecycle, recovery.findingIds),
-    }));
-    sendTriggeredCorrection(
+    const published = sendTriggeredCorrection(
       d.pi,
       recovery.config,
       reviewWithAcknowledgedFindings(recovery.review, recovery.findingIds),
       recovery.phase,
       recovery.recovering,
     );
+    if (!published.guidanceSent) {
+      if (published.appended)
+        d.mutateMetrics((next) => {
+          next.cards = (next.cards ?? 0) + 1;
+        });
+      d.clearPendingRecovery();
+      d.notifyBestEffort(
+        ctx,
+        published.appended
+          ? "Advisor showed the recovery issue locally but could not restart the agent."
+          : "Advisor could not deliver recovery guidance.",
+        "warning",
+      );
+      return;
+    }
+    d.updateApplicationState((state) => ({
+      ...state,
+      pendingPersistentRecovery: undefined,
+      abortInProgress: undefined,
+      findingLifecycle: acknowledgeAdvisorFindings(state.findingLifecycle, recovery.findingIds),
+    }));
     d.mutateMetrics((next) => {
       next.outcomes.recovery += 1;
       next.interventionsDelivered = (next.interventionsDelivered ?? 0) + 1;
+      if (published.appended) next.cards = (next.cards ?? 0) + 1;
     });
+    if (!published.appended)
+      d.notifyBestEffort(
+        ctx,
+        "Advisor recovered the agent but could not show its review card.",
+        "warning",
+      );
     d.recordReceipt(recovery.findingIds);
     d.ingest({
       type: "advisor_intervention",
@@ -138,59 +158,25 @@ export const registerTurnEvents = (d: EventsDeps): void => {
       refs.lastCandidate = { candidate: classification.candidate };
       d.updateApplicationState((state) => ({ ...state, hasLastCandidate: true }));
     }
-    const explicitlyRequested = classification.phase === "final" && d.getState().reviewNext;
-    if (explicitlyRequested) {
-      d.updateApplicationState((state) => ({ ...state, reviewNext: false }));
-      return d.runSessionEffect(
-        d
-          .runWithExplicitRuntimeEffect(ctx, () =>
-            d.requestCheckpoint({
-              ctx,
-              focus: "standard",
-              phase: "final",
-              source: "next",
-              requiresEnabled: false,
-            }),
-          )
-          .pipe(
-            Effect.flatMap((handle) =>
-              handle ? d.awaitCatchUpEffectOwned(handle, ctx) : Effect.void,
-            ),
-          ),
-      );
-    }
     if (!d.currentConfig().enabled) {
       d.recordSkip("disabled");
-      return;
-    }
-    if (d.isPaused()) {
-      d.recordSkip("session-paused");
       return;
     }
     if (!d.currentConfig().configured) {
       d.recordSkip("unconfigured");
       return;
     }
-    const perspectiveCheckpoint =
-      classification.phase === "progress" && !refs.perspectiveCheckpointUsed;
+    // Tool-calling/progress boundaries are observation-only. They must neither
+    // checkpoint the Advisor nor delay the parent agent.
+    if (classification.phase === "progress") return;
     const handle = d.requestCheckpoint({
       ctx,
-      focus:
-        classification.phase === "progress"
-          ? perspectiveCheckpoint
-            ? "perspective"
-            : "observation"
-          : "standard",
-      phase: classification.phase,
-      source:
-        classification.phase === "progress"
-          ? perspectiveCheckpoint
-            ? "automatic-perspective"
-            : "automatic-catch-up"
-          : "automatic-final",
+      focus: "standard",
+      phase: "final",
+      source: "automatic-final",
       requiresEnabled: true,
     });
-    if (handle && perspectiveCheckpoint) refs.perspectiveCheckpointUsed = true;
-    return handle ? d.awaitCatchUp(handle, ctx) : undefined;
+    if (!handle) return;
+    return d.awaitCatchUp(handle, ctx);
   });
 };

@@ -12,13 +12,10 @@ export interface AdvisorFindingGateDecision {
 export function gateAdvisorFinding(finding: AdvisorFinding): AdvisorFindingGateDecision {
   const confidence = finding.confidence ?? "low";
   const evidenceBasis = finding.evidenceBasis ?? "none";
-  if (finding.severity === "nit") {
-    return { actionable: false, finding };
-  }
   if (confidence === "low" || evidenceBasis === "none") {
     return {
       actionable: false,
-      finding: { ...finding, severity: "nit" },
+      finding,
       reason: confidence === "low" ? "low-confidence" : "no-evidence",
     };
   }

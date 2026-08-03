@@ -1,11 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   advisorStatusIsAnimatedAtHostBoundary,
-  resolveAdvisorStatusEffortAtHostBoundary,
   setAdvisorStatusAtHostBoundary,
 } from "../../boundary/host-status.ts";
 import type { ResolvedAdvisorConfig } from "../../config/options.ts";
-import { redactSensitiveText } from "../../domain/redaction.ts";
 import type { AdvisorStatusServiceShape } from "../../status/service.ts";
 import {
   STATUS_KEY,
@@ -18,12 +16,11 @@ import { setAdvisorSpinnerOwner, type AdvisorApplicationState } from "../state.t
 export const makeLifecycleStatusControls = (options: {
   readonly statusService: AdvisorStatusServiceShape;
   readonly currentConfig: () => ResolvedAdvisorConfig;
-  readonly isPaused: () => boolean;
   readonly updateApplicationState: (
     update: (state: AdvisorApplicationState) => AdvisorApplicationState,
   ) => void;
 }) => {
-  const { statusService, currentConfig, isPaused, updateApplicationState } = options;
+  const { statusService, currentConfig, updateApplicationState } = options;
 
   const stopStatusSpinner = (): void => {
     statusService.clear();
@@ -37,24 +34,14 @@ export const makeLifecycleStatusControls = (options: {
 
   const renderReviewStatus = (ctx: ExtensionContext, frameIndex: number): void => {
     try {
-      const renderConfig = currentConfig();
+      currentConfig();
       const frame =
         STATUS_SPINNER_FRAMES[frameIndex % STATUS_SPINNER_FRAMES.length] ??
         STATUS_SPINNER_FRAMES[0];
-      const effort = resolveAdvisorStatusEffortAtHostBoundary(
-        ctx,
-        renderConfig.provider,
-        renderConfig.model,
-        renderConfig.thinkingLevel,
-      );
-      if (!effort.ok) {
-        stopStatusSpinner();
-        return;
-      }
       const rendered = setAdvisorStatusAtHostBoundary(
         ctx,
         STATUS_KEY,
-        `${frame} ${redactSensitiveText(renderConfig.model ?? "advisor").slice(0, 256)}:${effort.value} advising…`,
+        `${frame} Advisor reviewing…`,
       );
       if (!rendered) stopStatusSpinner();
     } catch {
@@ -83,7 +70,7 @@ export const makeLifecycleStatusControls = (options: {
   const settleStatusSpinner = (ctx: ExtensionContext, owner: string): void => {
     if (!statusService.settle(owner)) return;
     updateApplicationState((state) => setAdvisorSpinnerOwner(state));
-    setAdvisorStatusAtHostBoundary(ctx, STATUS_KEY, isPaused() ? "advisor: paused" : undefined);
+    setAdvisorStatusAtHostBoundary(ctx, STATUS_KEY, undefined);
   };
 
   return {

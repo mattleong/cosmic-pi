@@ -14,7 +14,6 @@ const initial = {
     discarded: 0,
     outcomes: emptyAdvisorOutcomes(),
   },
-  paused: false,
   started: false,
 };
 
@@ -34,15 +33,14 @@ it.effect("deeply freezes snapshots and preserves publication on projection fail
         attempted: 1,
         outcomes: { ...initial.metrics.outcomes, findings: 1 },
       },
-      paused: true,
     };
     yield* projection.replace(updated);
     const after = projection.getSnapshot();
     expect(after).not.toBe(before);
-    expect(after).toMatchObject({ paused: true, metrics: { attempted: 1 } });
-    expect(before).toMatchObject({ paused: false, metrics: { attempted: 0 } });
+    expect(after).toMatchObject({ metrics: { attempted: 1 } });
+    expect(before).toMatchObject({ metrics: { attempted: 0 } });
     expect(after.config.enabled).toBe(false);
-    expect(before.config.enabled).toBe(true);
+    expect(before.config.enabled).toBe(false);
     expect(before.metrics.outcomes.findings).toBe(0);
 
     const invalid = { ...initial, config: { ...initial.config, capability: () => 42 } };

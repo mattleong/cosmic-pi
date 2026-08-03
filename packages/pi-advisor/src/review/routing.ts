@@ -1,4 +1,3 @@
-import type { AdvisorReviewPolicy } from "../config/options.ts";
 import type { AdvisorSeverity } from "./schema.ts";
 
 export const ADVISOR_IMMUNITY_COMPLETED_TURNS = 3;
@@ -13,7 +12,6 @@ export type AdvisorRoute =
 
 export interface AdvisorRoutingInput {
   severity: AdvisorSeverity;
-  policy: AdvisorReviewPolicy;
   parentState: AdvisorParentState;
   immunityActive: boolean;
   cancellationLatched: boolean;
@@ -25,19 +23,10 @@ export interface AdvisorRoutingInput {
 
 /** Pure delivery policy. It never infers safety from elapsed time or model severity alone. */
 export function routeAdvisorFinding(input: AdvisorRoutingInput): AdvisorRoute {
-  if (input.severity === "nit") return "silent";
-
   // Automatic findings are either delivered immediately or dropped. Never
   // attach stale advice to a later user prompt.
   if (input.cancellationLatched || input.parentState === "aborting") return "silent";
   if (input.severity === "concern" && input.immunityActive) return "silent";
-
-  if (
-    input.policy === "advisory" ||
-    (input.severity === "concern" && input.policy === "guardrail")
-  ) {
-    return input.parentState === "active" ? "push-direct" : "silent";
-  }
 
   if (input.parentState === "active") {
     if (

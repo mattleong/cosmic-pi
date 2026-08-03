@@ -35,11 +35,7 @@ const resolvedConfig = (): ResolvedAdvisorConfig => ({
   enabled: true,
   provider: "provider",
   model: "model",
-  fastMode: false,
-  thinkingLevel: "medium",
-  reviewPolicy: "guardrail",
-  timeoutMs: 30_000,
-  maxContextChars: 48_000,
+  setupDismissed: true,
   configured: true,
 });
 
@@ -143,6 +139,7 @@ function makeHarness() {
     registerCommand: (name: string, command: Omit<ResolvedCommand, "name" | "sourceInfo">) =>
       commands.set(name, command),
     registerMessageRenderer: vi.fn(),
+    registerEntryRenderer: vi.fn(),
     sendMessage,
     appendEntry: vi.fn(),
   } as unknown as ExtensionAPI;
@@ -176,7 +173,16 @@ function makeHarness() {
     }
   };
 
-  return { commands, ctx, driver, emit, pending, requests, sendMessage };
+  return {
+    commands,
+    ctx,
+    driver,
+    emit,
+    pending,
+    requests,
+    sendMessage,
+    appendEntry: vi.mocked(pi.appendEntry),
+  };
 }
 
 const hostileContext = (method: string, secret: string): ExtensionContext => {
@@ -382,7 +388,7 @@ describe("advisor host session adapters", () => {
     expect(value.ctx.abort).not.toHaveBeenCalled();
   });
 
-  test("treats a hostile idle read as active and uses non-triggering direct advice", async () => {
+  test("treats a hostile idle read as active and uses non-triggering correction guidance", async () => {
     const value = makeHarness();
     await value.emit("session_start", { type: "session_start" });
     const completed = value.emit("turn_end", finalTurn("candidate"));
@@ -395,11 +401,14 @@ describe("advisor host session adapters", () => {
     value.pending[0]!.resolve(revise(value.requests[0]!));
     await completed;
 
-    expect(value.sendMessage).toHaveBeenCalledOnce();
-    expect(value.sendMessage.mock.lastCall?.[0]).toMatchObject({
-      details: { action: "advice" },
-    });
-    expect(value.sendMessage.mock.lastCall?.[1]).toEqual({ deliverAs: "steer" });
+    expect(value.appendEntry).toHaveBeenCalledWith(
+      "pi-advisor-review-card-v1",
+      expect.objectContaining({ version: 1, kind: "issues" }),
+    );
+    expect(value.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ customType: "pi-advisor-guidance-v1", display: false }),
+      { deliverAs: "steer" },
+    );
   });
 
   test("falls back to direct advice when the hostile parent abort throws", async () => {
@@ -429,11 +438,14 @@ describe("advisor host session adapters", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(value.ctx.abort).toHaveBeenCalledOnce();
-      expect(value.sendMessage).toHaveBeenCalledOnce();
-      expect(value.sendMessage.mock.lastCall?.[0]).toMatchObject({
-        details: { action: "advice" },
-      });
-      expect(value.sendMessage.mock.lastCall?.[1]).toEqual({ deliverAs: "steer" });
+      expect(value.appendEntry).toHaveBeenCalledWith(
+        "pi-advisor-review-card-v1",
+        expect.objectContaining({ version: 1, kind: "issues" }),
+      );
+      expect(value.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ customType: "pi-advisor-guidance-v1", display: false }),
+        { deliverAs: "steer" },
+      );
       expect(value.ctx.ui.notify).toHaveBeenCalledWith(
         "Advisor could not abort the parent safely.",
         "warning",

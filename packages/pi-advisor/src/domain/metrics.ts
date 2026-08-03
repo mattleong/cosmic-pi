@@ -52,6 +52,7 @@ export interface AdvisorSessionMetrics {
   skippedReviews?: Record<string, number>;
   backgroundState?: "idle" | "queued" | "reviewing" | "revision-pending";
   cacheReadTokens?: number;
+  cards?: number;
   cacheWriteTokens?: number;
   activeCatchUpWaits?: number;
   activeToolNames?: readonly string[];
@@ -88,10 +89,8 @@ export interface AdvisorSessionMetrics {
   perspectivesDelivered?: number;
   findingLifecycle?: Record<"open" | "acknowledged" | "resolved" | "superseded", number>;
   interventionBudget?: AdvisorInterventionBudgetSnapshot;
-  paused?: boolean;
   processedSequence?: number;
   queuedReviews?: number;
-  reviewNext?: boolean;
   sequence?: number;
   suppressedFindings?: number;
   settledReviews?: number;

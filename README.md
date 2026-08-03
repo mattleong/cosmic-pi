@@ -4,7 +4,7 @@ A pnpm workspace for pi extensions.
 
 ## Packages
 
-- [`pi-advisor`](packages/pi-advisor) — automatic review by a dedicated model with one fail-open revision pass.
+- [`pi-advisor`](packages/pi-advisor) — active second-model advice with bounded interventions and local review cards.
 - [`pi-better-openai`](packages/pi-better-openai) — fast mode, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
 - [`pi-better-xai`](packages/pi-better-xai) — xAI/Grok subscription usage visibility and Cosmic UI footer polish.
 - [`pi-background-terminals`](packages/pi-background-terminals) — session-scoped background jobs with an agent tool and full-screen `/ps` manager.

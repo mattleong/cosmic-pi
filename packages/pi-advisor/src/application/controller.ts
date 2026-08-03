@@ -16,7 +16,6 @@ export const advisorControllerLayer = Layer.effect(
     const projection = yield* makeAdvisorProjection({
       config: normalizeAdvisorConfig({}, ""),
       metrics: emptyAdvisorSessionMetrics(),
-      paused: false,
       started: false,
     });
     const unavailable = (operation: string) =>

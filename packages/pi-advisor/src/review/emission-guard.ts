@@ -62,7 +62,7 @@ export const createAdvisorEmissionGuardState = (
   };
   let current = state;
   for (const record of records.slice(-state.capacity)) {
-    const match = /^(nit|concern|blocker):([a-f\d]{64})$/i.exec(record);
+    const match = /^(concern|blocker):([a-f\d]{64})$/i.exec(record);
     if (match)
       current = recordHash(
         current,

@@ -19,8 +19,6 @@ const PHASE_RULES: Record<AdvisorReviewFocus, string> = {
     "Perspective checkpoint: identify at most one materially useful angle the assistant has not already considered. Return suggest for a concrete alternative, investigation path, verification method, simplification, trade-off, or likely edge case. Return pass rather than repeating known reasoning or manufacturing a defect. Use revise only for a concrete issue already requiring correction.",
   trajectory:
     "Trajectory checkpoint: only concrete wrong direction, unsafe action, contradiction, or repeated non-progress is corrective. If there is no corrective issue but one timely, materially different angle could prevent wasted work, return suggest; otherwise pass.",
-  verification:
-    "Evidence verification: check factual support, cited evidence, and validation claims in the completed response.",
   "blocker-verification":
     "Blocker verification: return only previously proposed blockers that still have high confidence and direct evidence.",
 };

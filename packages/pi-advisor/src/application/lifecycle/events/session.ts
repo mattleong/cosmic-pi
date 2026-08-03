@@ -4,11 +4,11 @@ import {
   registerAdvisorAbortListenerEffect,
   type AdvisorSessionInput,
 } from "../../../boundary/host-context.ts";
+import { selectAdvisorOnboardingAtHostBoundary } from "../../../boundary/host-onboarding.ts";
 import { summarizeAdvisorReview } from "../../../checkpoint/ledger.ts";
 import { getAdvisorConfigPath } from "../../../config/options.ts";
 import { loadAdvisorInstructionsEffect } from "../../../review/instructions.ts";
 import { emptyAdvisorRoutingState } from "../../../review/routing.ts";
-import { warnIfSetupRequired } from "../../controller-helpers.ts";
 import { AdvisorExtensionError, extensionError } from "../../controller-types.ts";
 import { initialAdvisorApplicationState } from "../../state.ts";
 import type { EventsDeps } from "./types.ts";
@@ -62,8 +62,6 @@ export const makeSessionLifecycle = (d: EventsDeps) => {
         ).pipe(Effect.mapError(extensionError("instruction load")));
         d.updateApplicationState((state) => ({
           ...state,
-          paused: false,
-          reviewNext: false,
           guidancePaths: [...refs.instructions.paths],
           hasLastCandidate: false,
         }));
@@ -86,8 +84,6 @@ export const makeSessionLifecycle = (d: EventsDeps) => {
           reportedDiagnostics: [],
         }));
         yield* d.publishControllerSnapshot();
-        if (!d.currentConfig().configured)
-          warnIfSetupRequired(ctx, d.currentConfig(), d.notifyBestEffort);
         if (hostCancellationPending)
           return yield* new AdvisorExtensionError({
             operation: "session initialization",
@@ -97,6 +93,50 @@ export const makeSessionLifecycle = (d: EventsDeps) => {
         yield* d.startRuntimeEffect(ctx, "restore-branch");
         refs.removeHostCancellation = registration.remove;
         registrationCommitted = true;
+        if (
+          !d.currentConfig().configured &&
+          !d.currentConfig().setupDismissed &&
+          ctx.mode === "tui"
+        ) {
+          const onboarding = Effect.tryPromise({
+            try: () => selectAdvisorOnboardingAtHostBoundary(ctx),
+            catch: extensionError("setup"),
+          }).pipe(
+            Effect.flatMap((selected) => {
+              if (!selected) return Effect.void;
+              const patch =
+                selected.type === "model"
+                  ? {
+                      provider: selected.provider,
+                      model: selected.model,
+                      enabled: true,
+                      setupDismissed: true,
+                    }
+                  : { setupDismissed: true };
+              return d.configStore
+                .patch(patch, d.currentConfig().configPath, (next) =>
+                  Effect.sync(() => {
+                    refs.configRevision += 1;
+                    d.updateApplicationState((state) => ({ ...state, config: next }));
+                  }),
+                )
+                .pipe(
+                  Effect.flatMap(() =>
+                    selected.type === "model" ? d.startRuntimeEffect(ctx) : Effect.void,
+                  ),
+                );
+            }),
+            Effect.catch(() => Effect.void),
+          );
+          yield* Effect.try({
+            try: () => d.parentExecutor.fork(onboarding),
+            catch: () =>
+              new AdvisorExtensionError({
+                operation: "setup admission",
+                message: "Advisor setup could not be admitted.",
+              }),
+          }).pipe(Effect.ignore);
+        }
       });
       yield* initialize.pipe(
         Effect.onExit(() =>

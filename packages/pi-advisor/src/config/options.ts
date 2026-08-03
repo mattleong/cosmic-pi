@@ -10,24 +10,17 @@ import {
 export { isRecord } from "../shared/utils.ts";
 export {
   ADVISOR_CONFIG_BASENAME,
-  ADVISOR_REVIEW_POLICIES,
-  ADVISOR_THINKING_LEVELS,
+  ADVISOR_FAST_MODE,
+  ADVISOR_OPERATION_TIMEOUT_MS,
+  ADVISOR_RECENT_CONTEXT_CHARS,
+  ADVISOR_THINKING_LEVEL,
   AdvisorConfigError,
-  AdvisorReviewPolicySchema,
-  AdvisorThinkingLevelSchema,
-  clampContextChars,
-  clampTimeoutMs,
   DEFAULT_ADVISOR_CONFIG,
   isAdvisorConfigured,
-  MAX_CONTEXT_CHARS,
-  MAX_TIMEOUT_MS,
-  MIN_CONTEXT_CHARS,
-  MIN_TIMEOUT_MS,
   patchAdvisorConfig,
   ResolvedAdvisorConfigSchema,
   type AdvisorConfig,
   type AdvisorConfigPatch,
-  type AdvisorReviewPolicy,
   type ResolvedAdvisorConfig,
 } from "./schema.ts";
 

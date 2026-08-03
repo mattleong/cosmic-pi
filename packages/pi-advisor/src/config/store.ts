@@ -15,7 +15,6 @@ import {
 import { getAdvisorConfigPath, normalizeAdvisorConfig } from "./options.ts";
 import {
   AdvisorConfigError,
-  migrateLegacyReviewPolicy,
   patchAdvisorConfig,
   type AdvisorConfigPatch,
   type ResolvedAdvisorConfig,
@@ -129,7 +128,7 @@ export const writeAdvisorConfigPatchEffect = Effect.fn("AdvisorConfig.patch")(fu
     return yield* modifyObject(path, (raw) =>
       Effect.try({
         try: () => {
-          const document = patchAdvisorConfig(migrateLegacyReviewPolicy(raw), patch);
+          const document = patchAdvisorConfig(raw, patch);
           const next = normalizeAdvisorConfig(document, path);
           return {
             value: next,
@@ -150,7 +149,7 @@ export const writeAdvisorConfigPatchEffect = Effect.fn("AdvisorConfig.patch")(fu
   let next: JsonObject | undefined;
   yield* documents
     .updateObject(path, (raw) => {
-      next = patchAdvisorConfig(migrateLegacyReviewPolicy(raw), patch);
+      next = patchAdvisorConfig(raw, patch);
       return next;
     })
     .pipe(Effect.mapError(mapConfigError("update", path)));
@@ -173,7 +172,7 @@ export function writeAdvisorConfigPatch(
       });
     raw = decoded;
   }
-  const next = patchAdvisorConfig(migrateLegacyReviewPolicy(raw), patch);
+  const next = patchAdvisorConfig(raw, patch);
   writeRawAdvisorConfig(next, path);
   return normalizeAdvisorConfig(next, path);
 }

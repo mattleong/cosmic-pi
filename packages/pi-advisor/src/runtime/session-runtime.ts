@@ -14,6 +14,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { makeSynchronousIngress, type SynchronousIngress } from "pi-cosmic-core";
+import { ADVISOR_OPERATION_TIMEOUT_MS, ADVISOR_RECENT_CONTEXT_CHARS } from "../config/options.ts";
 import { AdvisorTrajectoryDetector } from "../review/trajectory.ts";
 import { createAdvisorChildModelEffect, AdvisorModelError } from "./client.ts";
 import { ADVISOR_TOOL_NAMES, createAdvisorToolsEffect, type AdvisorToolRunner } from "./tools.ts";
@@ -36,7 +37,6 @@ import {
   unsafeToolNames,
 } from "./session.ts";
 import {
-  DEFAULT_ADVISOR_SESSION_ABORT_TIMEOUT_MS,
   MAX_ADVISOR_STREAM_CHARS,
   MAX_ADVISOR_TOOL_ROUNDS,
   AdvisorRuntimeResetRequiredError,
@@ -203,7 +203,7 @@ export class AdvisorRuntime {
                   ),
                 );
               return self
-                .acquireChildEffect(result.session, startEpoch, options.config.timeoutMs)
+                .acquireChildEffect(result.session, startEpoch, ADVISOR_OPERATION_TIMEOUT_MS)
                 .pipe(Effect.as(result));
             }),
           ),
@@ -219,11 +219,11 @@ export class AdvisorRuntime {
         self.pendingSeed = {
           seed: options.seed,
           ...(options.stateSummary === undefined ? {} : { stateSummary: options.stateSummary }),
-          maxContextChars: options.config.maxContextChars,
+          maxContextChars: ADVISOR_RECENT_CONTEXT_CHARS,
         };
       });
       yield* initialize.pipe(
-        Effect.timeout(Duration.millis(options.config.timeoutMs)),
+        Effect.timeout(Duration.millis(ADVISOR_OPERATION_TIMEOUT_MS)),
         Effect.mapError((error) =>
           error instanceof AdvisorModelError
             ? error
@@ -303,7 +303,7 @@ export class AdvisorRuntime {
         ),
         Effect.andThen(self.sessionEvents.awaitChildEventsEffect(checkpointEpoch)),
         Effect.onInterrupt(() => self.abortEffect()),
-        Effect.timeout(Duration.millis(self.options?.config.timeoutMs ?? 30_000)),
+        Effect.timeout(Duration.millis(ADVISOR_OPERATION_TIMEOUT_MS)),
         Effect.mapError((error) => {
           if (self.resetRequiredReason)
             return new AdvisorRuntimeResetRequiredError({ message: self.resetRequiredReason });
@@ -502,10 +502,7 @@ export class AdvisorRuntime {
           const active = selected.active;
           if (!active) return;
           const outcome = yield* Effect.interruptible(
-            awaitSessionAbortEffect(
-              active.session,
-              self.options?.config.timeoutMs ?? DEFAULT_ADVISOR_SESSION_ABORT_TIMEOUT_MS,
-            ),
+            awaitSessionAbortEffect(active.session, ADVISOR_OPERATION_TIMEOUT_MS),
           ).pipe(
             Effect.onInterrupt(() =>
               self.forceDetachChildEffect(

@@ -11,7 +11,7 @@ import {
   registerAdvisorAbortListenerAtHostBoundary,
   type AdvisorHostContextError,
 } from "../../boundary/host-context.ts";
-import type { ResolvedAdvisorConfig } from "../../config/options.ts";
+import { ADVISOR_OPERATION_TIMEOUT_MS, type ResolvedAdvisorConfig } from "../../config/options.ts";
 import type { FailureLoggerShape } from "../../logging/logger.ts";
 import type { AdvisorReviewQueue } from "../../queue/service.ts";
 import { summarizeAdvisorReview } from "../../checkpoint/ledger.ts";
@@ -53,7 +53,6 @@ export interface CheckpointDeps {
   ) => void;
   readonly mutateMetrics: (mutate: (next: AdvisorApplicationState["metrics"]) => void) => void;
   readonly currentConfig: () => ResolvedAdvisorConfig;
-  readonly isPaused: () => boolean;
   readonly isStarted: () => boolean;
   readonly advanceDomainCounter: (
     key: "epoch" | "cancellationEpoch" | "parentTurnId" | "requestSequence",
@@ -64,6 +63,7 @@ export interface CheckpointDeps {
   readonly persistCurrentLedger: (ctx: ExtensionContext) => void;
   readonly persistLedger: (anchor: ParentAnchor) => void;
   readonly notifyBestEffort: CheckpointNotify;
+  readonly setAdvisorStatus: (ctx: ExtensionContext, text?: string) => void;
   readonly failureLogger: FailureLoggerShape;
   readonly applicationScope: Scope.Scope;
   readonly checkpointOrchestrator: CheckpointOrchestratorShape;
@@ -114,7 +114,7 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
     const requestAbortInput = abortCapture.input;
     if (
       (!d.refs.queue || !d.isStarted()) &&
-      (!d.currentConfig().enabled || !d.currentConfig().configured || d.isPaused())
+      (!d.currentConfig().enabled || !d.currentConfig().configured)
     ) {
       return undefined;
     }
@@ -140,7 +140,7 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
         outcomeRecorded = true;
         d.mutateMetrics((next) => {
           next.discarded += 1;
-          if (options.source !== "automatic-catch-up") next.outcomes.discarded += 1;
+          next.outcomes.discarded += 1;
         });
       }
       return "discarded";
@@ -193,19 +193,14 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
         requestParentTurnId === d.getState().parentTurnId &&
         requestConfigRevision === d.refs.configRevision &&
         !parentSignalAborted(requestAbortInput) &&
-        (!options.requiresEnabled ||
-          (d.currentConfig().enabled && !d.isPaused() && d.currentConfig().configured)) &&
+        (!options.requiresEnabled || (d.currentConfig().enabled && d.currentConfig().configured)) &&
         !parentHasPendingMessages(options.ctx) &&
         d.branchContains(options.ctx, anchor) &&
         (options.trajectoryId === undefined ||
           d.getState().activeTrajectory?.id === options.trajectoryId);
       if (!requestIsCurrent()) return discardRequest();
       const verifyBlocker =
-        options.source !== "automatic-catch-up" &&
-        options.source !== "last" &&
-        options.source !== "verify" &&
-        d.currentConfig().reviewPolicy !== "advisory" &&
-        checkpoint.findings.some(isVerificationCandidate);
+        options.source !== "last" && checkpoint.findings.some(isVerificationCandidate);
       if (verifyBlocker) {
         d.mutateMetrics((next) => {
           next.blockerVerificationAttempts = (next.blockerVerificationAttempts ?? 0) + 1;
@@ -239,10 +234,8 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
         return discardRequest();
       }
 
-      if (options.source !== "automatic-catch-up") {
-        d.refs.latestStateSummary = checkpoint.stateSummary;
-        d.refs.latestDurableSummary = summarizeAdvisorReview(checkpoint);
-      }
+      d.refs.latestStateSummary = checkpoint.stateSummary;
+      d.refs.latestDurableSummary = summarizeAdvisorReview(checkpoint);
       d.deliver(
         checkpoint,
         options.phase,
@@ -266,7 +259,7 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
           const kind = classifyFailure(error);
           d.mutateMetrics((next) => {
             next.failure += 1;
-            if (options.source !== "automatic-catch-up") next.outcomes.failures += 1;
+            next.outcomes.failures += 1;
             next.lastAction = "failure";
             next.lastFailureKind = kind;
           });
@@ -276,12 +269,13 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
             error,
             ...(d.currentConfig().model ? { model: d.currentConfig().model } : {}),
             ...(d.currentConfig().provider ? { provider: d.currentConfig().provider } : {}),
-            timeoutMs: d.currentConfig().timeoutMs,
+            timeoutMs: ADVISOR_OPERATION_TIMEOUT_MS,
           };
           yield* Effect.forkIn(
             d.failureLogger.log(d.currentConfig().configPath, failureDetails),
             d.applicationScope,
           );
+          d.setAdvisorStatus(options.ctx, "advisor: unavailable");
           if (!d.getState().reportedFailures.includes(kind)) {
             d.updateApplicationState((state) => ({
               ...state,
@@ -289,7 +283,7 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
             }));
             d.notifyBestEffort(
               options.ctx,
-              `Advisor ${kind} failure; keeping the primary response. See /advisor status --verbose.`,
+              `Advisor ${kind} failure; keeping the primary response. See the Advisor failure log.`,
               "warning",
             );
           }

@@ -1,190 +1,160 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
-  registerAdvisorReviewRenderer,
-  type AdvisorReviewMessageDetails,
+  ADVISOR_REVIEW_ACTION_TYPE,
+  ADVISOR_REVIEW_CARD_TYPE,
+  decodeAdvisorReviewAction,
+  decodeAdvisorReviewCard,
+  makeAdvisorReviewCard,
+  renderAdvisorReviewCard,
 } from "../src/ui/renderer.ts";
+import {
+  latestOpenAdvisorReviewCardAtHostBoundary,
+  registerAdvisorReviewCardRendererAtHostBoundary,
+} from "../src/boundary/host-review-cards.ts";
 
-describe("advisor review renderer", () => {
-  function captureRenderer() {
-    let renderer: ((message: unknown, options: unknown, theme: unknown) => unknown) | undefined;
-    registerAdvisorReviewRenderer({
-      registerMessageRenderer: (_type: string, nextRenderer: typeof renderer) => {
-        renderer = nextRenderer;
-      },
-    } as unknown as ExtensionAPI);
-    const theme = {
-      bold: (text: string) => text,
-      fg: (_color: string, text: string) => text,
+const review = {
+  verdict: "revise" as const,
+  summary: "A material issue remains.",
+  findings: [
+    {
+      category: "correctness" as const,
+      severity: "blocker" as const,
+      confidence: "high" as const,
+      evidenceBasis: "direct" as const,
+      id: "af_deadbeefdeadbeefdeadbeefdeadbeef",
+      status: "open" as const,
+      issue: "The result is wrong.",
+      evidence: "The test reports a mismatch.",
+      recommendation: "Correct the implementation.",
+    },
+  ],
+};
+const theme = {
+  bold: (value: string) => value,
+  fg: (_name: string, value: string) => value,
+} as never;
+
+describe("Advisor local review cards", () => {
+  test("creates a bounded strict v1 card without hidden metadata", () => {
+    const card = makeAdvisorReviewCard("arc_test", review)!;
+    expect(card).toEqual({
+      version: 1,
+      cardId: "arc_test",
+      kind: "issues",
+      summary: "A material issue remains.",
+      items: [
+        {
+          issue: "The result is wrong.",
+          evidence: "The test reports a mismatch.",
+          suggestedFix: "Correct the implementation.",
+        },
+      ],
+    });
+    expect(JSON.stringify(card)).not.toMatch(
+      /provider|model|verdict|confidence|category|status|af_/,
+    );
+  });
+
+  test("redacts secrets and strips terminal controls before persistence", () => {
+    const unsafe = {
+      ...review,
+      summary: "token=secret-value\u001b[31m",
+      findings: [{ ...review.findings[0]!, issue: "bad\u0007issue" }],
     };
-    return {
-      render(details: unknown, options: unknown, width = 100): string {
-        const component = renderer?.({ details }, options, theme) as {
-          render(width: number): string[];
-        };
-        return component.render(width).join("\n");
-      },
-      raw(message: unknown, options: unknown = {}, customTheme: unknown = theme): unknown {
-        return renderer?.(message, options, customTheme);
-      },
-    };
-  }
-
-  test("renders the complete critique and configured model", () => {
-    const { render } = captureRenderer();
-
-    const details: AdvisorReviewMessageDetails = {
-      action: "advice",
-      provider: "anthropic",
-      model: "reviewer",
-      review: {
-        verdict: "revise",
-        summary: "One material issue remains.",
-        findings: [
-          {
-            category: "evidence",
-            severity: "concern",
-            issue: "The validation claim is unsupported.",
-            evidence: "No validation command result appears in the transcript.",
-            recommendation: "Report the actual command result.",
-          },
-        ],
-      },
-    };
-    const output = render(details, { expanded: true });
-
-    expect(output).toContain("Advisor provided advice anthropic/reviewer");
-    expect(output).toContain("One material issue remains.");
-    expect(output).toContain("The validation claim is unsupported.");
-    expect(output).toContain("Report the actual command result.");
-
-    const collapsedOutput = render(details, { expanded: false });
-    expect(collapsedOutput).toContain("1 concern · One material issue remains.");
-    expect(collapsedOutput).not.toContain("The validation claim is unsupported.");
-
-    expect(render({ ...details, action: "guidance" }, { expanded: false })).toContain(
-      "Advisor suggested a course correction",
-    );
-    expect(render({ ...details, action: "recovery" }, { expanded: false })).toContain(
-      "Advisor interrupted a stalled trajectory",
-    );
+    const card = makeAdvisorReviewCard("arc_safe", unsafe)!;
+    expect(JSON.stringify(card)).not.toContain("secret-value");
+    expect(JSON.stringify(card)).not.toContain("\\u001b");
+    expect(card.items[0]?.issue).toBe("badissue");
   });
 
-  test("renders optional perspective guidance separately from findings", () => {
-    const { render } = captureRenderer();
-    const output = render(
+  test("strictly rejects old and malformed render data", () => {
+    expect(decodeAdvisorReviewCard({ review, provider: "p", model: "m" })).toBeUndefined();
+    expect(
+      decodeAdvisorReviewCard({
+        version: 1,
+        cardId: "arc_x",
+        kind: "issues",
+        summary: "x",
+        items: [],
+      }),
+    ).toBeUndefined();
+    expect(decodeAdvisorReviewAction({ version: 1, cardId: "arc_x", action: "fix" })).toEqual({
+      version: 1,
+      cardId: "arc_x",
+      action: "fix",
+    });
+    expect(
+      decodeAdvisorReviewAction({ version: 0, cardId: "arc_x", action: "fix" }),
+    ).toBeUndefined();
+    expect(
+      decodeAdvisorReviewAction({ version: 1, cardId: "arc_x", action: "fix", extra: true }),
+    ).toBeUndefined();
+    expect(
+      decodeAdvisorReviewCard({
+        version: 1,
+        cardId: "arc_x",
+        kind: "issues",
+        summary: "x",
+        items: [{ issue: "x", evidence: "y", suggestedFix: "z" }],
+        extra: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      decodeAdvisorReviewCard({
+        version: 1,
+        cardId: "arc_x",
+        kind: "issues",
+        summary: "x".repeat(801),
+        items: [{ issue: "x", evidence: "y", suggestedFix: "z" }],
+      }),
+    ).toBeUndefined();
+  });
+
+  test("collapsed and expanded views expose only the approved fields", () => {
+    const card = makeAdvisorReviewCard("arc_test", review)!;
+    const collapsed = renderAdvisorReviewCard(card, false, theme)!.render(120).join("\n");
+    expect(collapsed).toContain("Advisor · 1 issue");
+    expect(collapsed).toContain(review.summary);
+    expect(collapsed).not.toContain("Evidence:");
+    expect(collapsed).toContain("/advisor fix · /advisor dismiss");
+    const expanded = renderAdvisorReviewCard(card, true, theme)!.render(120).join("\n");
+    expect(expanded).toContain("Evidence: The test reports a mismatch.");
+    expect(expanded).toContain("Suggested fix: Correct the implementation.");
+    expect(expanded).not.toMatch(/blocker|correctness|confidence|provider|model|af_/i);
+  });
+
+  test("restores the latest untombstoned card from the active branch", () => {
+    const first = makeAdvisorReviewCard("arc_first", review)!;
+    const second = makeAdvisorReviewCard("arc_second", review)!;
+    const branch = [
+      { id: "1", type: "custom", customType: ADVISOR_REVIEW_CARD_TYPE, data: first },
       {
-        action: "perspective",
-        provider: "openai",
-        model: "reviewer",
-        review: {
-          verdict: "suggest",
-          summary: "A simpler route may exist.",
-          suggestions: [
-            {
-              fingerprint: "derive-state",
-              kind: "simplification",
-              suggestion: "Derive state from the queue.",
-              rationale: "This avoids a second source of truth.",
-              relevance: "likely",
-            },
-          ],
-          findings: [],
-        },
+        id: "2",
+        type: "custom",
+        customType: ADVISOR_REVIEW_ACTION_TYPE,
+        data: { version: 1, cardId: first.cardId, action: "dismiss" },
       },
-      { expanded: true },
-    );
-
-    expect(output).toContain("Advisor offered a possible angle");
-    expect(output).toContain("Possible angles:");
-    expect(output).toContain("Derive state from the queue");
-    expect(output).not.toContain("Findings:");
+      { id: "3", type: "custom", customType: ADVISOR_REVIEW_CARD_TYPE, data: second },
+    ];
+    const ctx = { sessionManager: { getBranch: () => branch } } as never;
+    expect(latestOpenAdvisorReviewCardAtHostBoundary(ctx)).toEqual(second);
+    branch.push({
+      id: "4",
+      type: "custom",
+      customType: ADVISOR_REVIEW_ACTION_TYPE,
+      data: { version: 1, cardId: second.cardId, action: "fix" },
+    });
+    expect(latestOpenAdvisorReviewCardAtHostBoundary(ctx)).toBeUndefined();
   });
 
-  test("redacts historical reviews and configured model labels before rendering", () => {
-    const output = captureRenderer().render(
-      {
-        action: "advice",
-        provider: "openai-api-key=sk-abcdefghijklmnop",
-        model: "reviewer-token=secret-value",
-        review: {
-          verdict: "revise",
-          summary: "Authorization: Bearer abc.def.ghi",
-          findings: [
-            {
-              severity: "concern",
-              issue: "api_key=sk-secondsecretvalue",
-              evidence: "password=hunter2",
-              recommendation: "token=another-secret-value",
-            },
-          ],
-        },
-      },
-      { expanded: true },
-      120,
+  test("registers an entry renderer, never a message renderer", () => {
+    const pi = { registerEntryRenderer: vi.fn(), registerMessageRenderer: vi.fn() };
+    registerAdvisorReviewCardRendererAtHostBoundary(pi as never);
+    expect(pi.registerEntryRenderer).toHaveBeenCalledWith(
+      ADVISOR_REVIEW_CARD_TYPE,
+      expect.any(Function),
     );
-
-    expect(output).toContain("Advisor provided advice");
-    expect(output).toContain("REDACTED");
-    expect(output).not.toMatch(
-      /sk-abcdefghijklmnop|secret-value|abc\.def\.ghi|sk-secondsecretvalue|hunter2|another-secret-value/,
-    );
-  });
-
-  test("clips oversized historical reviews before rendering", () => {
-    const output = captureRenderer().render(
-      {
-        action: "advice",
-        provider: `provider-${"p".repeat(1_000)}`,
-        model: `model-${"m".repeat(1_000)}`,
-        review: {
-          verdict: "revise",
-          summary: "s".repeat(10_000),
-          findings: Array.from({ length: 20 }, (_, index) => ({
-            severity: "concern",
-            issue: `issue-${index}-${"i".repeat(10_000)}`,
-            evidence: `evidence-${index}-${"e".repeat(10_000)}`,
-            recommendation: `recommendation-${index}-${"r".repeat(10_000)}`,
-          })),
-        },
-      },
-      { expanded: true },
-      120,
-    );
-
-    expect(output).toContain("[... truncated]");
-    expect(output.match(/\[CONCERN\]/g)).toHaveLength(5);
-    expect(output.length).toBeLessThan(80_000);
-  });
-
-  test("expands historical findings that predate category and evidence fields", () => {
-    const output = captureRenderer().render(
-      {
-        action: "revision",
-        provider: "legacy",
-        model: "reviewer",
-        review: {
-          verdict: "revise",
-          summary: "A historical review.",
-          findings: [
-            {
-              severity: "blocker",
-              issue: "A legacy issue.",
-              recommendation: "Fix the legacy issue.",
-            },
-          ],
-        },
-      },
-      { expanded: true },
-    );
-
-    expect(output).toContain("[CORRECTNESS] A legacy issue.");
-    expect(output).toContain("Not recorded by this earlier advisor review.");
-  });
-
-  test("falls back to the default custom-message display for invalid details", () => {
-    const { raw } = captureRenderer();
-    expect(raw({ details: undefined })).toBeUndefined();
-    expect(raw({ details: { provider: "openai", model: "reviewer", review: {} } })).toBeUndefined();
+    expect(pi.registerMessageRenderer).not.toHaveBeenCalled();
+    expect(ADVISOR_REVIEW_ACTION_TYPE).toBe("pi-advisor-review-action-v1");
   });
 });

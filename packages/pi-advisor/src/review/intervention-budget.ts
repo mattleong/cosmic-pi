@@ -30,8 +30,7 @@ export const canDeliverAdvisorIntervention = (
   state: AdvisorInterventionBudgetSnapshot,
   severity: AdvisorSeverity,
 ): boolean => {
-  if (severity === "nit" || state.delivered >= MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST)
-    return false;
+  if (state.delivered >= MAX_AUTOMATIC_INTERVENTIONS_PER_REQUEST) return false;
   return (
     state.highestSeverity === undefined ||
     advisorSeverityRank(severity) > advisorSeverityRank(state.highestSeverity)
@@ -46,7 +45,6 @@ export const commitAdvisorIntervention = (
   severity: AdvisorSeverity,
   correction: boolean,
 ): AdvisorInterventionBudgetSnapshot => {
-  if (severity === "nit") return state;
   const highestSeverity =
     !state.highestSeverity ||
     advisorSeverityRank(severity) > advisorSeverityRank(state.highestSeverity)

@@ -33,10 +33,7 @@ export const makeLifecycleApplicationState = (options: {
       hasLastCandidate: state.hasLastCandidate,
       findingLifecycle: advisorFindingLifecycleCounts(state.findingLifecycle),
       interventionBudget: state.interventionBudget,
-      paused: state.paused,
-      reviewNext: state.reviewNext,
     },
-    paused: state.paused,
     started: state.started,
   });
   const refreshResourceSummary = (): AdvisorApplicationState =>
@@ -78,7 +75,6 @@ export const makeLifecycleApplicationState = (options: {
     });
   };
   const currentConfig = (): ResolvedAdvisorConfig => store.get().config;
-  const isPaused = (): boolean => store.get().paused;
   const isStarted = (): boolean => store.get().started;
   const mutateTrajectory = (
     id: number,
@@ -124,7 +120,6 @@ export const makeLifecycleApplicationState = (options: {
         findingLifecycle: resetLifecycle ? emptyAdvisorFindingLifecycle() : state.findingLifecycle,
       };
     });
-    refs.perspectiveCheckpointUsed = false;
   };
 
   return {
@@ -133,7 +128,6 @@ export const makeLifecycleApplicationState = (options: {
     updateApplicationState,
     mutateMetrics,
     currentConfig,
-    isPaused,
     isStarted,
     mutateTrajectory,
     setDomainCounter,

@@ -25,7 +25,7 @@ export const STATUS_SPINNER_INTERVAL_MS = 120;
 export const STATUS_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 export const UNREADABLE_PARENT_ANCHOR = Symbol("pi-advisor/unreadable-parent-anchor");
 export type ParentAnchor = string | null | typeof UNREADABLE_PARENT_ANCHOR;
-export const ADVISOR_CATCH_UP_TIMEOUT_MS = 30_000;
+export const ADVISOR_CATCH_UP_TIMEOUT_MS = 10_000;
 export type ReviewPhase = "final" | "progress";
 export type CheckpointSettlement = "completed" | "discarded" | "failed";
 export type AdvisorCatchUpOutcome = CheckpointSettlement | "timeout" | "cancelled";
@@ -50,21 +50,9 @@ export interface AdvisorCheckpointHandle {
   cancelEffect: Effect.Effect<void>;
   settlement: Effect.Effect<CheckpointSettlement>;
 }
-export type ReviewSource =
-  | "automatic-final"
-  | "automatic-progress"
-  | "automatic-perspective"
-  | "automatic-catch-up"
-  | "next"
-  | "last"
-  | "verify";
+export type ReviewSource = "automatic-final" | "automatic-progress" | "last";
 
-export type AdvisorSkipReason =
-  | "disabled"
-  | "empty"
-  | "incomplete"
-  | "session-paused"
-  | "unconfigured";
+export type AdvisorSkipReason = "disabled" | "empty" | "incomplete" | "unconfigured";
 
 export interface LastCandidate {
   candidate: string;

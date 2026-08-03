@@ -108,11 +108,7 @@ function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisor
     enabled: true,
     provider: "p",
     model: "m",
-    fastMode: false,
-    thinkingLevel: "medium",
-    reviewPolicy: "guardrail",
-    timeoutMs: 30_000,
-    maxContextChars: 48_000,
+    setupDismissed: true,
     configured: true,
     ...overrides,
   };
@@ -271,10 +267,10 @@ describe("AdvisorRuntime", () => {
     expect(session.sessionFile).toBeUndefined();
   });
 
-  test("honors the configured re-prime context cap above the old 48k ceiling", async () => {
+  test("uses the fixed re-prime context cap above the old 48k ceiling", async () => {
     const value = harness();
     const seed = `START-${"x".repeat(99_000)}-END`;
-    await start(value.runtime, { maxContextChars: 120_000 }, { seed });
+    await start(value.runtime, {}, { seed });
 
     await value.runtime.checkpoint({
       checkpointId: "cp-large-seed",
@@ -288,20 +284,6 @@ describe("AdvisorRuntime", () => {
     );
     expect(firstPrompt).toContain("START-");
     expect(firstPrompt).toContain("-END");
-  });
-
-  test("uses an evidence-specific rule for verification checkpoints", async () => {
-    const value = harness();
-    await start(value.runtime);
-    await value.runtime.checkpoint({
-      checkpointId: "verify",
-      processedThrough: 1,
-      observations: "completed response",
-      focus: "verification",
-    });
-    expect(String(value.session.prompt.mock.calls[0]?.[0])).toContain(
-      "Evidence verification: check factual support, cited evidence, and validation claims",
-    );
   });
 
   test("ignores prompt, config, provider registry, and extension registry capability injection", async () => {
