@@ -60,10 +60,30 @@ const resolvePiModel = (
   InvalidSubagentRequestError
 > =>
   Effect.gen(function* () {
-    const resolution = resolvePiModelSelector(
-      selector,
-      ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
-    );
+    const extensionProviders =
+      host === "herdr"
+        ? yield* Effect.try({
+            try: () => new Set(ctx.modelRegistry.getRegisteredProviderIds()),
+            catch: () =>
+              new InvalidSubagentRequestError({
+                code: "herdr_pi_provider_provenance_unavailable",
+                message:
+                  "Unable to verify Pi provider provenance for sterile Herdr launch; choose another candidate or retry after the model registry is available.",
+              }),
+          })
+        : undefined;
+    const selectorSlash = selector.indexOf("/");
+    const selectorProvider = selectorSlash > 0 ? selector.slice(0, selectorSlash) : undefined;
+    if (selectorProvider && extensionProviders?.has(selectorProvider))
+      return yield* new InvalidSubagentRequestError({
+        code: "herdr_pi_extension_provider_unavailable",
+        message: `Herdr Pi disables extension discovery, so extension-registered provider "${selectorProvider}" cannot be loaded. Choose a non-extension Pi provider or use local Pi.`,
+      });
+    const availableModels = ctx.modelRegistry
+      .getAvailable()
+      .filter((model) => !extensionProviders?.has(model.provider))
+      .map((model) => ({ provider: model.provider, id: model.id }));
+    const resolution = resolvePiModelSelector(selector, availableModels);
     if (resolution.kind === "ambiguous")
       return yield* new InvalidSubagentRequestError({
         code: "pi_model_ambiguous",

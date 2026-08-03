@@ -222,6 +222,7 @@ const context = {
     hasConfiguredAuth: () => true,
     getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
     getApiKeyAndHeaders: () => Promise.resolve({ ok: true, apiKey: "stored-key" }),
+    getRegisteredProviderIds: () => [],
     getAvailable: () => [
       {
         provider: "openai-codex",
@@ -253,6 +254,7 @@ const registryContext = (
     readonly reasoning: boolean;
     readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
   }>,
+  registeredProviderIds: ReadonlyArray<string> = [],
 ): ExtensionContext =>
   ({
     ...(context as unknown as Record<string, unknown>),
@@ -263,6 +265,7 @@ const registryContext = (
       hasConfiguredAuth: () => true,
       getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
       getApiKeyAndHeaders: () => Promise.resolve({ ok: true, apiKey: "stored-key" }),
+      getRegisteredProviderIds: () => [...registeredProviderIds],
     },
   }) as unknown as ExtensionContext;
 
@@ -1989,6 +1992,161 @@ describe("subagent tool", () => {
     await expect(
       reject({ task: "Probe", backend: "claude-cli" } as SubagentProfileStartSpec),
     ).rejects.toMatchObject({ code: "legacy_launch_override" });
+  });
+
+  it("skips extension-registered providers for Herdr Pi but permits the same @ model locally", async () => {
+    const requests: StartSubagentRequest[] = [];
+    const model = {
+      provider: "cursor",
+      id: "gpt-5.5@1m",
+      name: "Cursor GPT 5.5 1M",
+      reasoning: true,
+      thinkingLevelMap: { high: "high" },
+    };
+    const profiles = profileServiceFor({
+      profiles: {
+        reviewer: [
+          {
+            host: "herdr",
+            runtime: "pi",
+            model: "cursor/gpt-5.5@1m",
+            effort: "high",
+            context: "fresh",
+            writeIntent: "read-only",
+            closeOnReport: true,
+          },
+          {
+            host: "local",
+            runtime: "pi",
+            model: "cursor/gpt-5.5@1m",
+            effort: "high",
+            context: "fresh",
+            writeIntent: "read-only",
+            closeOnReport: true,
+          },
+        ],
+      },
+    });
+    const result = await captureSubagentTools(startCapturingService(requests), ["read"], profiles)
+      .get("subagent_start")
+      ?.execute(
+        "call",
+        { agents: [{ profile: "reviewer", task: "Review with Cursor" }] },
+        undefined,
+        undefined,
+        registryContext([model], ["cursor"]),
+      );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      host: "local",
+      model: "cursor/gpt-5.5@1m",
+      selection: {
+        candidateIndex: 1,
+        skippedCandidates: [
+          expect.objectContaining({ code: "herdr_pi_extension_provider_unavailable" }),
+        ],
+      },
+    });
+    expect(result?.content[0]?.text).toContain("cursor/gpt-5.5@1m");
+  });
+
+  it("rejects a Herdr extension provider before auth or backend preflight", async () => {
+    const model = {
+      provider: "cursor",
+      id: "gpt-5.5@1m",
+      name: "Cursor GPT 5.5 1M",
+      reasoning: true,
+      thinkingLevelMap: { high: "high" },
+    };
+    const profiles = profileServiceFor({
+      profiles: {
+        reviewer: {
+          host: "herdr",
+          runtime: "pi",
+          model: "cursor/gpt-5.5@1m",
+          effort: "high",
+          context: "fresh",
+          writeIntent: "read-only",
+          closeOnReport: true,
+        },
+      },
+    });
+    const baseContext = registryContext([model], ["cursor"]);
+    const getAvailable = vi.fn(
+      baseContext.modelRegistry.getAvailable.bind(baseContext.modelRegistry),
+    );
+    const getProviderAuthStatus = vi.fn();
+    const getApiKeyAndHeaders = vi.fn();
+    const extensionContext = {
+      ...baseContext,
+      modelRegistry: {
+        ...baseContext.modelRegistry,
+        getAvailable,
+        getProviderAuthStatus,
+        getApiKeyAndHeaders,
+      },
+    } as unknown as ExtensionContext;
+    const result = await captureSubagentTools(startCapturingService([]), ["read"], profiles, {
+      resolve: () => Effect.succeed({ ...testBackendDriver, host: "herdr" }),
+      preflight: () => Effect.die("preflight must not run"),
+    })
+      .get("subagent_start")
+      ?.execute(
+        "call",
+        { agents: [{ profile: "reviewer", task: "Review extension provider" }] },
+        undefined,
+        undefined,
+        extensionContext,
+      );
+
+    expect(getAvailable).toHaveBeenCalledTimes(1);
+    expect(getProviderAuthStatus).not.toHaveBeenCalled();
+    expect(getApiKeyAndHeaders).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).toContain("herdr_pi_extension_provider_unavailable");
+  });
+
+  it("fails Herdr Pi closed when registered-provider provenance cannot be inspected", async () => {
+    const profiles = profileServiceFor({
+      profiles: {
+        reviewer: {
+          host: "herdr",
+          runtime: "pi",
+          model: "openai-codex/gpt-5.6-sol",
+          effort: "high",
+          context: "fresh",
+          writeIntent: "read-only",
+          closeOnReport: true,
+        },
+      },
+    });
+    const unavailableContext = {
+      ...context,
+      modelRegistry: {
+        ...context.modelRegistry,
+        getRegisteredProviderIds: () => {
+          throw new Error("secret provenance failure");
+        },
+      },
+    } as unknown as ExtensionContext;
+    const result = await captureSubagentTools(startCapturingService([]), ["read"], profiles, {
+      resolve: () => Effect.succeed({ ...testBackendDriver, host: "herdr" }),
+      preflight: () => Effect.die("preflight must not run"),
+    })
+      .get("subagent_start")
+      ?.execute(
+        "call",
+        { agents: [{ profile: "reviewer", task: "Review provenance" }] },
+        undefined,
+        undefined,
+        unavailableContext,
+      );
+
+    expect(result?.details).toMatchObject({
+      startFailures: [{ code: "profile_no_eligible_model" }],
+    });
+    expect(JSON.stringify(result)).toContain("herdr_pi_provider_provenance_unavailable");
+    expect(JSON.stringify(result)).not.toContain("secret provenance failure");
   });
 
   it("transfers runtime-only authentication without exposing it in the model id", async () => {

@@ -98,6 +98,8 @@ const baseContext = (ui: Record<string, unknown>, trusted = true) =>
     isProjectTrusted: () => trusted,
     model: { provider: "openai", id: "parent" },
     modelRegistry: {
+      refresh: vi.fn().mockResolvedValue(undefined),
+      getError: () => undefined,
       getAvailable: () => [
         { provider: "openai", id: "parent", name: "Parent", reasoning: true },
         { provider: "zai", id: "plain", name: "Plain", reasoning: false },
@@ -106,6 +108,7 @@ const baseContext = (ui: Record<string, unknown>, trusted = true) =>
         provider === "openai" && id === "parent"
           ? { provider, id, name: "Parent", reasoning: true }
           : undefined,
+      getRegisteredProviderIds: () => [],
     },
     reload: vi.fn().mockResolvedValue(undefined),
   }) as unknown as ExtensionCommandContext;
@@ -200,6 +203,120 @@ describe("/subagents profile workspace", () => {
       overlay: true,
       overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
     });
+  });
+
+  it("refreshes Pi models before constructing the profile workspace", async () => {
+    const custom = vi.fn().mockResolvedValue(false);
+    const ctx = baseContext({ custom, notify: vi.fn() });
+    const refresh = ctx.modelRegistry.refresh as ReturnType<typeof vi.fn>;
+
+    await register(actions())("profiles", ctx);
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh.mock.invocationCallOrder[0]).toBeLessThan(custom.mock.invocationCallOrder[0]!);
+  });
+
+  it("uses refreshed non-extension models when switching a candidate to Herdr Pi", async () => {
+    const managerActions = actions();
+    let models = [{ provider: "cursor", id: "cached@1m", name: "Cached Cursor", reasoning: true }];
+    const refresh = vi.fn(async () => {
+      models = [
+        { provider: "cursor", id: "fresh@1m", name: "Fresh Cursor", reasoning: true },
+        { provider: "openai", id: "fresh", name: "Fresh OpenAI", reasoning: true },
+      ];
+    });
+    const custom = vi.fn(async (factory) =>
+      exerciseWorkspace(factory, async (component) => {
+        component.handleInput?.("\r");
+        component.handleInput?.("\r");
+        component.handleInput?.("\r");
+        expect(component.render(120).join("\n")).toContain("Choose host");
+        component.handleInput?.("\u001b[B");
+        component.handleInput?.("\r");
+        await vi.waitFor(() => expect(managerActions.patchProfile).toHaveBeenCalledTimes(1));
+      }),
+    );
+    const ctx = {
+      ...baseContext({ custom, notify: vi.fn() }),
+      model: { provider: "cursor", id: "cached@1m", name: "Cached Cursor", reasoning: true },
+      modelRegistry: {
+        refresh,
+        getError: () => undefined,
+        getAvailable: () => models,
+        find: (provider: string, id: string) =>
+          models.find((model) => model.provider === provider && model.id === id),
+        getRegisteredProviderIds: () => ["cursor"],
+      },
+    } as unknown as ExtensionCommandContext;
+
+    await register(managerActions)("profiles", ctx);
+
+    expect(managerActions.patchProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: "generalist",
+        route: expect.objectContaining({ host: "herdr", model: "openai/fresh" }),
+      }),
+    );
+  });
+
+  it("uses the cached snapshot when Pi records a refresh error without rejecting", async () => {
+    const managerActions = actions();
+    let models = [{ provider: "openai", id: "cached", name: "Cached OpenAI", reasoning: true }];
+    const notify = vi.fn();
+    const custom = vi.fn(async (factory) =>
+      exerciseWorkspace(factory, async (component) => {
+        component.handleInput?.("\r");
+        component.handleInput?.("\r");
+        component.handleInput?.("\r");
+        component.handleInput?.("\u001b[B");
+        component.handleInput?.("\r");
+        await vi.waitFor(() => expect(managerActions.patchProfile).toHaveBeenCalledTimes(1));
+      }),
+    );
+    const ctx = {
+      ...baseContext({ custom, notify }),
+      model: undefined,
+      modelRegistry: {
+        refresh: vi.fn(async () => {
+          models = [{ provider: "openai", id: "partial", name: "Partial OpenAI", reasoning: true }];
+        }),
+        getError: () => "secret recorded availability error",
+        getAvailable: () => models,
+        find: () => undefined,
+        getRegisteredProviderIds: () => [],
+      },
+    } as unknown as ExtensionCommandContext;
+
+    await register(managerActions)("profiles", ctx);
+
+    expect(managerActions.patchProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining({ host: "herdr", model: "openai/cached" }),
+      }),
+    );
+    expect(notify).toHaveBeenCalledWith(
+      "Could not refresh Pi model catalogs; showing the last authenticated snapshot.",
+      "warning",
+    );
+    expect(JSON.stringify(notify.mock.calls)).not.toContain("secret recorded availability error");
+  });
+
+  it("uses the cached model snapshot with a bounded warning when refresh fails", async () => {
+    const custom = vi.fn().mockResolvedValue(false);
+    const notify = vi.fn();
+    const ctx = baseContext({ custom, notify });
+    (ctx.modelRegistry.refresh as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("secret refresh failure"),
+    );
+
+    await register(actions())("profiles", ctx);
+
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      "Could not refresh Pi model catalogs; showing the last authenticated snapshot.",
+      "warning",
+    );
+    expect(JSON.stringify(notify.mock.calls)).not.toContain("secret refresh failure");
   });
 
   it("keeps model search on a new page inside the single profile workspace", async () => {

@@ -1,5 +1,6 @@
 // Settings model discovery is a Promise-shaped Pi host boundary.
 // @effect-diagnostics effect/asyncFunction:off
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { LocalCliRuntime } from "../../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
@@ -32,6 +33,10 @@ export interface CandidateModelEditorInput {
     runtime: LocalCliRuntime,
     signal?: AbortSignal,
   ) => Promise<ReadonlyArray<NativeRuntimeModel>>;
+  readonly piModels?: ReadonlyArray<Model<Api>> | undefined;
+  readonly piParentModel?: Model<Api> | undefined;
+  readonly registeredPiProviderIds?: ReadonlyArray<string> | undefined;
+  readonly piProviderInspectionFailed?: boolean | undefined;
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -119,10 +124,32 @@ export async function loadCandidateModelPicker(
   const candidate = input.candidate;
   if (candidate.runtime !== "pi") return loadNativeModels(input);
 
-  const availableModels = ctx.modelRegistry.getAvailable();
-  const parentModel = ctx.model
-    ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
-    : undefined;
+  const registryModels = input.piModels ?? ctx.modelRegistry.getAvailable();
+  let extensionProviders = new Set<string>();
+  let providerInspectionFailed =
+    candidate.host === "herdr" && input.piProviderInspectionFailed === true;
+  if (candidate.host === "herdr" && !providerInspectionFailed) {
+    if (input.registeredPiProviderIds) extensionProviders = new Set(input.registeredPiProviderIds);
+    else
+      try {
+        extensionProviders = new Set(ctx.modelRegistry.getRegisteredProviderIds());
+      } catch {
+        providerInspectionFailed = true;
+      }
+  }
+  const unavailableToHerdr =
+    candidate.host === "herdr" && !providerInspectionFailed
+      ? registryModels.filter((model) => extensionProviders.has(model.provider))
+      : [];
+  const availableModels =
+    candidate.host === "herdr"
+      ? providerInspectionFailed
+        ? []
+        : registryModels.filter((model) => !extensionProviders.has(model.provider))
+      : registryModels;
+  const parentModel =
+    input.piParentModel ??
+    (ctx.model ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id) : undefined);
   const advertisedChoices = createProfileModelChoices({
     models: availableModels,
     parentModel,
@@ -134,6 +161,12 @@ export async function loadCandidateModelPicker(
       ? choice.choice.kind === "parent"
       : choice.choice.kind === "model" && choice.choice.selector === candidate.model,
   );
+  const currentSlash = candidate.model.indexOf("/");
+  const currentProvider = currentSlash > 0 ? candidate.model.slice(0, currentSlash) : undefined;
+  const currentUnavailableToHerdr =
+    candidate.host === "herdr" &&
+    currentProvider !== undefined &&
+    extensionProviders.has(currentProvider);
   const unavailableCurrent: ProfileModelPickerChoice | undefined = currentAvailable
     ? undefined
     : {
@@ -144,10 +177,17 @@ export async function loadCandidateModelPicker(
         item: {
           value: candidate.model,
           label: `${candidate.model} (current · unavailable)`,
-          description: "Keep the configured value or choose an authenticated replacement",
+          description: providerInspectionFailed
+            ? "Keep the configured value or reopen after provider provenance is available"
+            : currentUnavailableToHerdr
+              ? "Herdr Pi disables extension providers; choose a compatible replacement"
+              : "Keep the configured value or choose an authenticated replacement",
         },
         searchText: `${candidate.model} current unavailable configured`,
-        fastModeAvailable: supportsSubagentFastMode("pi", candidate.model),
+        fastModeAvailable:
+          !providerInspectionFailed &&
+          !currentUnavailableToHerdr &&
+          supportsSubagentFastMode("pi", candidate.model),
       };
   const choices = unavailableCurrent
     ? [unavailableCurrent, ...advertisedChoices]
@@ -156,8 +196,15 @@ export async function loadCandidateModelPicker(
     (model) => !isSafeNativeModelSelector(`${model.provider}/${model.id}`),
   ).length;
   const warnings = [
-    unavailableCurrent
-      ? "The configured model is not currently authenticated. Keeping it makes no change; choose another model to replace it."
+    providerInspectionFailed
+      ? "Pi provider provenance is unavailable, so Herdr Pi model choices are hidden fail-closed."
+      : unavailableCurrent
+        ? currentUnavailableToHerdr
+          ? "The configured model uses an extension-registered provider that sterile Herdr Pi cannot load. Keeping it makes no change; choose a compatible replacement."
+          : "The configured model is not currently authenticated. Keeping it makes no change; choose another model to replace it."
+        : undefined,
+    unavailableToHerdr.length > 0
+      ? `${unavailableToHerdr.length} authenticated model${unavailableToHerdr.length === 1 ? " was" : "s were"} omitted because Herdr Pi disables extension discovery.`
       : undefined,
     unsafeModels > 0
       ? `${unsafeModels} authenticated model${unsafeModels === 1 ? " was" : "s were"} omitted because the canonical selector is unsafe.`

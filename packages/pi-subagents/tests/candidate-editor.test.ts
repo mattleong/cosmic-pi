@@ -50,7 +50,11 @@ const claudeModels: ReadonlyArray<NativeRuntimeModel> = [
 
 const context = () =>
   ({
-    modelRegistry: { getAvailable: () => [], find: () => undefined },
+    modelRegistry: {
+      getAvailable: () => [],
+      find: () => undefined,
+      getRegisteredProviderIds: () => [],
+    },
   }) as unknown as ExtensionCommandContext;
 
 describe("inline candidate model editor", () => {
@@ -169,6 +173,7 @@ describe("inline candidate model editor", () => {
       modelRegistry: {
         getAvailable: () => [{ provider: "unsafe provider", id: "model" }],
         find: () => undefined,
+        getRegisteredProviderIds: () => [],
       },
     } as unknown as ExtensionCommandContext;
     const picker = await loadCandidateModelPicker(unsafeContext, {
@@ -181,6 +186,123 @@ describe("inline candidate model editor", () => {
       "unsafe provider/model",
     );
     expect(picker.warning).toContain("canonical selector is unsafe");
+  });
+
+  it("keeps authenticated Cursor context variants with @ in Pi choices", async () => {
+    const cursorContext = {
+      modelRegistry: {
+        getAvailable: () => [
+          {
+            provider: "cursor",
+            id: "gpt-5.5@1m",
+            name: "Cursor GPT 5.5 1M",
+            reasoning: true,
+          },
+        ],
+        find: () => undefined,
+        getRegisteredProviderIds: () => ["cursor"],
+      },
+    } as unknown as ExtensionCommandContext;
+    const picker = await loadCandidateModelPicker(cursorContext, {
+      profile: "reviewer",
+      candidateIndex: 0,
+      candidate: candidate({ runtime: "pi", model: "cursor/gpt-5.5@1m" }),
+      listNativeModels: vi.fn(),
+    });
+
+    expect(picker.choices.map((choice) => choice.item.value)).toContain("cursor/gpt-5.5@1m");
+    expect(picker.warning ?? "").not.toContain("canonical selector is unsafe");
+  });
+
+  it("omits extension providers for Herdr Pi but keeps them for local Pi", async () => {
+    const registryModels = [
+      { provider: "openai", id: "gpt-safe", name: "Safe", reasoning: true },
+      {
+        provider: "cursor",
+        id: "gpt-5.5@1m",
+        name: "Cursor GPT 5.5 1M",
+        reasoning: true,
+      },
+    ];
+    const providerContext = {
+      modelRegistry: {
+        getAvailable: () => registryModels,
+        find: () => undefined,
+        getRegisteredProviderIds: () => ["cursor"],
+      },
+    } as unknown as ExtensionCommandContext;
+    const base = {
+      profile: "reviewer" as const,
+      candidateIndex: 0,
+      listNativeModels: vi.fn(),
+    };
+    const herdr = await loadCandidateModelPicker(providerContext, {
+      ...base,
+      candidate: candidate({ host: "herdr", runtime: "pi", model: "openai/gpt-safe" }),
+    });
+    const local = await loadCandidateModelPicker(providerContext, {
+      ...base,
+      candidate: candidate({ host: "local", runtime: "pi", model: "openai/gpt-safe" }),
+    });
+
+    expect(herdr.choices.map((choice) => choice.item.value)).toEqual(["openai/gpt-safe"]);
+    expect(herdr.warning).toContain("Herdr Pi disables extension discovery");
+    expect(local.choices.map((choice) => choice.item.value)).toContain("cursor/gpt-5.5@1m");
+  });
+
+  it("does not offer fast mode for a current Herdr model from an extension override", async () => {
+    const overrideContext = {
+      modelRegistry: {
+        getAvailable: () => [
+          {
+            provider: "openai-codex",
+            id: "gpt-5.6-sol",
+            name: "GPT 5.6 Sol Override",
+            reasoning: true,
+          },
+        ],
+        find: () => undefined,
+        getRegisteredProviderIds: () => ["openai-codex"],
+      },
+    } as unknown as ExtensionCommandContext;
+    const picker = await loadCandidateModelPicker(overrideContext, {
+      profile: "reviewer",
+      candidateIndex: 0,
+      candidate: candidate({
+        host: "herdr",
+        runtime: "pi",
+        model: "openai-codex/gpt-5.6-sol",
+        fastMode: true,
+      }),
+      listNativeModels: vi.fn(),
+    });
+
+    expect(picker.choices).toHaveLength(1);
+    expect(picker.choices[0]?.fastModeAvailable).toBe(false);
+    expect(picker.warning).toContain("sterile Herdr Pi cannot load");
+  });
+
+  it("fails Herdr Pi choices closed when provider provenance is unavailable", async () => {
+    const unavailableContext = {
+      modelRegistry: {
+        getAvailable: () => [{ provider: "openai", id: "gpt-safe", name: "Safe", reasoning: true }],
+        find: () => undefined,
+        getRegisteredProviderIds: () => {
+          throw new Error("secret registry failure");
+        },
+      },
+    } as unknown as ExtensionCommandContext;
+    const picker = await loadCandidateModelPicker(unavailableContext, {
+      profile: "reviewer",
+      candidateIndex: 0,
+      candidate: candidate({ host: "herdr", runtime: "pi", model: "openai/gpt-safe" }),
+      listNativeModels: vi.fn(),
+    });
+
+    expect(picker.warning).toContain("hidden fail-closed");
+    expect(picker.warning).not.toContain("secret registry failure");
+    expect(picker.choices).toHaveLength(1);
+    expect(picker.choices[0]?.item.label).toContain("current · unavailable");
   });
 
   it("preserves an unavailable configured Pi model instead of selecting a replacement", async () => {

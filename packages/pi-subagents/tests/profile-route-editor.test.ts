@@ -336,6 +336,19 @@ describe("profile candidate normalization and validation", () => {
   });
 
   it("rejects unsafe native selectors with the same bounded config rules", () => {
+    expect(isNativeProfileModelSelector("pi", "cursor/gpt-5.5@1m")).toBe(true);
+    expect(isNativeProfileModelSelector("pi", "cursor/gpt-5.5@272k:fast")).toBe(true);
+    expect(isNativeProfileModelSelector("pi", "cursor@team/gpt-5.5@1m")).toBe(true);
+    expect(
+      decodeSubagentConfig(
+        {
+          version: 4,
+          profiles: { reviewer: candidate("cursor/gpt-5.5@1m") },
+        },
+        "global",
+      ).invalidProfileRoutes,
+    ).not.toContain("reviewer");
+    expect(isNativeProfileModelSelector("pi", "cursor/@1m")).toBe(false);
     expect(isNativeProfileModelSelector("claude", "claude-opus-5")).toBe(true);
     expect(isNativeProfileModelSelector("claude", "opus[1m]")).toBe(true);
     expect(isNativeProfileModelSelector("claude", "claude-fable-5[200k]")).toBe(true);

@@ -292,6 +292,23 @@ describe("Herdr native harness security", () => {
     expect(await fs.readdir(join(root, entries[0]!))).toContain("claude-settings.json");
   });
 
+  it("preserves Pi registry @ context variants as one Herdr model argument", async () => {
+    const test = await setup();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const prepared = yield* test.harness.prepare(
+            "pi",
+            { ...launch("pi"), model: "openai/gpt-5.5@1m" },
+            test.supervisor,
+          );
+          expect(valueAfter(prepared.argv, "--model")).toBe("openai/gpt-5.5@1m");
+          prepared.authorizeCleanup();
+        }),
+      ),
+    );
+  });
+
   it("loads only fixed Pi resources, fresh session state, child marker, and bridge tools", async () => {
     const test = await setup();
     await Effect.runPromise(

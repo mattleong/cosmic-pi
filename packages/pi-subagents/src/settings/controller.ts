@@ -1,5 +1,6 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 // @effect-diagnostics effect/asyncFunction:off
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { isProjectTrusted } from "pi-cosmic-core";
 import { synchronousNow } from "../boundary/native-clock.ts";
@@ -134,16 +135,26 @@ async function openFleetManager(
   );
 }
 
+const availablePiModelsForHost = (
+  models: ReadonlyArray<Model<Api>>,
+  host: ProfileCandidate["host"],
+  extensionProviders: ReadonlySet<string> | undefined,
+) =>
+  host === "local"
+    ? models
+    : extensionProviders
+      ? models.filter((model) => !extensionProviders.has(model.provider))
+      : [];
+
 const supportedPiEfforts = (
-  ctx: ExtensionCommandContext,
   candidate: ProfileCandidate,
+  models: ReadonlyArray<Model<Api>>,
+  parentModel: Model<Api> | undefined,
+  extensionProviders: ReadonlySet<string> | undefined,
 ): ReadonlyArray<SubagentEffort> | undefined => {
   if (candidate.runtime !== "pi") return undefined;
-  const parentModel = ctx.model
-    ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
-    : undefined;
   const choices = createProfileModelChoices({
-    models: ctx.modelRegistry.getAvailable(),
+    models: availablePiModelsForHost(models, candidate.host, extensionProviders),
     parentModel,
     currentSelector: candidate.model,
     allowParent: candidate.host === "local",
@@ -155,7 +166,16 @@ const supportedPiEfforts = (
   )?.supportedEfforts;
 };
 
-const fastModeAvailable = (ctx: ExtensionCommandContext, candidate: ProfileCandidate): boolean => {
+const fastModeAvailable = (
+  ctx: ExtensionCommandContext,
+  candidate: ProfileCandidate,
+  extensionProviders: ReadonlySet<string> | undefined,
+): boolean => {
+  if (candidate.runtime === "pi" && candidate.host === "herdr") {
+    const slash = candidate.model.indexOf("/");
+    const provider = slash > 0 ? candidate.model.slice(0, slash) : undefined;
+    if (!provider || !extensionProviders || extensionProviders.has(provider)) return false;
+  }
   if (candidate.runtime === "pi" && candidate.model === "parent")
     return ctx.model
       ? supportsSubagentFastMode("pi", `${ctx.model.provider}/${ctx.model.id}`)
@@ -214,7 +234,41 @@ async function openProfileSettings(
     return;
   }
 
-  const availableModels = ctx.modelRegistry.getAvailable();
+  const cachedAvailableModels = ctx.modelRegistry.getAvailable();
+  const cachedParentCatalogModel = ctx.model
+    ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
+    : undefined;
+  let availableModels = cachedAvailableModels;
+  let parentCatalogModel = cachedParentCatalogModel;
+  let modelRefreshFailed = false;
+  try {
+    await ctx.modelRegistry.refresh();
+    if (ctx.modelRegistry.getError()) modelRefreshFailed = true;
+    else {
+      const refreshedModels = ctx.modelRegistry.getAvailable();
+      const refreshedParentModel = ctx.model
+        ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
+        : undefined;
+      availableModels = refreshedModels;
+      parentCatalogModel = refreshedParentModel;
+    }
+  } catch {
+    modelRefreshFailed = true;
+  }
+  if (modelRefreshFailed)
+    ctx.ui.notify(
+      "Could not refresh Pi model catalogs; showing the last authenticated snapshot.",
+      "warning",
+    );
+  let extensionProviders: ReadonlySet<string> | undefined;
+  try {
+    extensionProviders = new Set(ctx.modelRegistry.getRegisteredProviderIds());
+  } catch {
+    ctx.ui.notify(
+      "Could not inspect Pi provider provenance; Herdr Pi model choices are unavailable.",
+      "warning",
+    );
+  }
   let parentEffort: SubagentEffort = "high";
   if (ctx.model) {
     try {
@@ -224,11 +278,14 @@ async function openProfileSettings(
     }
   }
   const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-  const preferredPiModel = parentModel
-    ? parentModel
-    : availableModels[0]
-      ? `${availableModels[0].provider}/${availableModels[0].id}`
-      : undefined;
+  const herdrModelSelectors = createProfileModelChoices({
+    models: extensionProviders
+      ? availableModels.filter((model) => !extensionProviders.has(model.provider))
+      : [],
+    allowParent: false,
+  }).flatMap((choice) => (choice.choice.kind === "model" ? [choice.choice.selector] : []));
+  const preferredPiModel =
+    parentModel && herdrModelSelectors.includes(parentModel) ? parentModel : herdrModelSelectors[0];
   const refreshInspection = async (
     conflictMessage?: string,
   ): Promise<ProfileWorkspaceSaveResult> => {
@@ -328,10 +385,16 @@ async function openProfileSettings(
             candidateIndex,
             candidate,
             listNativeModels: actions.listNativeModels,
+            piModels: availableModels,
+            ...(parentCatalogModel ? { piParentModel: parentCatalogModel } : {}),
+            ...(extensionProviders
+              ? { registeredPiProviderIds: [...extensionProviders] }
+              : { piProviderInspectionFailed: true }),
             ...(signal ? { signal } : {}),
           }),
-        supportedPiEfforts: (candidate) => supportedPiEfforts(ctx, candidate),
-        fastModeAvailable: (candidate) => fastModeAvailable(ctx, candidate),
+        supportedPiEfforts: (candidate) =>
+          supportedPiEfforts(candidate, availableModels, parentCatalogModel, extensionProviders),
+        fastModeAvailable: (candidate) => fastModeAvailable(ctx, candidate, extensionProviders),
         reload: () => requestProfileReload(ctx, bridge),
       }),
     { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } },

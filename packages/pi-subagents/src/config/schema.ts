@@ -108,8 +108,8 @@ export const isNativeProfileModelSelector = (runtime: string, selector: string):
   const provider = value.slice(0, slash);
   const model = value.slice(slash + 1);
   return (
-    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(provider) &&
-    /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model) &&
+    /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/.test(provider) &&
+    /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(model) &&
     model.split("/").every((segment) => segment !== "." && segment !== ".." && segment.length > 0)
   );
 };
