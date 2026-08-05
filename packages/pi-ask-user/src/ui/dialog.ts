@@ -1,0 +1,349 @@
+import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
+import {
+  Editor,
+  type EditorTheme,
+  type Focusable,
+  Key,
+  matchesKey,
+  type OverlayHandle,
+  type TUI,
+} from "@earendil-works/pi-tui";
+import {
+  cancelQuestionnaire,
+  createQuestionnaireState,
+  reduceQuestionnaire,
+  submitQuestionnaire,
+} from "../questionnaire/reducer.ts";
+import type { AskUserOutcome, QuestionnaireState } from "../questionnaire/model.ts";
+import {
+  MAX_CUSTOM_ANSWER_LENGTH,
+  MAX_NOTE_LENGTH,
+  type AskUserQuestion,
+  type AskUserRequest,
+} from "../tools/schema.ts";
+import { PreviewPane } from "./components/preview-pane.ts";
+import { type DialogInputMode, renderQuestionnaireView } from "./dialog-render.ts";
+
+export interface AskUserDialogOptions {
+  readonly tui: TUI;
+  readonly theme: Theme;
+  readonly keybindings: KeybindingsManager;
+  readonly request: AskUserRequest;
+  readonly done: (outcome: AskUserOutcome) => void;
+  readonly editExternally: (value: string) => Promise<string | undefined>;
+  readonly onCollapse: () => void;
+}
+
+const editorTheme = (theme: Theme): EditorTheme => ({
+  borderColor: (value) => theme.fg("accent", value),
+  selectList: {
+    selectedPrefix: (value) => theme.fg("accent", value),
+    selectedText: (value) => theme.fg("accent", value),
+    description: (value) => theme.fg("muted", value),
+    scrollInfo: (value) => theme.fg("dim", value),
+    noMatch: (value) => theme.fg("warning", value),
+  },
+});
+
+export class AskUserDialog implements Focusable {
+  private readonly options: AskUserDialogOptions;
+  private state: QuestionnaireState;
+  private input: DialogInputMode | undefined;
+  private inputError: string | undefined;
+  private externalEditorBusy = false;
+  private readonly editor: Editor;
+  private readonly preview: PreviewPane;
+  private _focused = false;
+  private overlayHandle: OverlayHandle | undefined;
+
+  constructor(options: AskUserDialogOptions) {
+    this.options = options;
+    this.state = createQuestionnaireState(options.request);
+    this.editor = new Editor(options.tui, editorTheme(options.theme), { paddingX: 1 });
+    this.preview = new PreviewPane(options.theme);
+    this.editor.onSubmit = (value) => this.commitInput(value);
+  }
+
+  get focused(): boolean {
+    return this._focused;
+  }
+
+  set focused(value: boolean) {
+    this._focused = value;
+    this.editor.focused = value && this.input !== undefined;
+  }
+
+  setOverlayHandle(handle: OverlayHandle): void {
+    this.overlayHandle = handle;
+  }
+
+  resume(): void {
+    this.overlayHandle?.setHidden(false);
+    this.overlayHandle?.focus();
+    this.options.tui.requestRender(true);
+  }
+
+  collapse(): void {
+    this.overlayHandle?.setHidden(true);
+    this.overlayHandle?.unfocus();
+    this.options.onCollapse();
+  }
+
+  private refresh(): void {
+    this.options.tui.requestRender();
+  }
+
+  private currentQuestion(): AskUserQuestion | undefined {
+    return this.options.request.questions[this.state.currentTab];
+  }
+
+  private cursorLimit(question: AskUserQuestion): number {
+    return question.choices.length + (question.mode === "multiple" ? 1 : 0);
+  }
+
+  private setCursor(cursor: number): void {
+    const question = this.currentQuestion();
+    if (!question) return;
+    this.state = reduceQuestionnaire(this.state, {
+      type: "set-cursor",
+      question: this.state.currentTab,
+      cursor: Math.max(0, Math.min(this.cursorLimit(question), cursor)),
+    });
+    this.inputError = undefined;
+    this.refresh();
+  }
+
+  private advance(): void {
+    this.state = reduceQuestionnaire(this.state, {
+      type: "set-tab",
+      tab: Math.min(this.options.request.questions.length, this.state.currentTab + 1),
+    });
+    this.inputError = undefined;
+    this.refresh();
+  }
+
+  private openInput(kind: DialogInputMode["kind"]): void {
+    const question = this.state.currentTab;
+    const draft = this.state.drafts[question];
+    const value =
+      kind === "note"
+        ? (draft?.note ?? "")
+        : draft?.answer?.kind === "custom"
+          ? draft.answer.text
+          : "";
+    this.input = { kind, question };
+    this.inputError = undefined;
+    this.editor.setText(value);
+    this.editor.focused = this._focused;
+    this.refresh();
+  }
+
+  private closeInput(): void {
+    this.input = undefined;
+    this.inputError = undefined;
+    this.editor.focused = false;
+    this.refresh();
+  }
+
+  private commitInput(value: string): void {
+    const input = this.input;
+    if (!input) return;
+    const trimmed = value.trim();
+    const maximum = input.kind === "note" ? MAX_NOTE_LENGTH : MAX_CUSTOM_ANSWER_LENGTH;
+    if (input.kind === "custom" && trimmed.length === 0) {
+      this.inputError = "A custom answer cannot be empty.";
+      this.refresh();
+      return;
+    }
+    if (trimmed.length > maximum) {
+      this.inputError = `Keep this ${input.kind === "note" ? "note" : "answer"} under ${maximum} characters.`;
+      this.refresh();
+      return;
+    }
+    this.state =
+      input.kind === "note"
+        ? reduceQuestionnaire(this.state, {
+            type: "set-note",
+            question: input.question,
+            note: trimmed,
+          })
+        : reduceQuestionnaire(this.state, {
+            type: "set-custom",
+            question: input.question,
+            text: trimmed,
+          });
+    this.input = undefined;
+    this.editor.focused = false;
+    if (input.kind === "custom") this.advance();
+    else this.refresh();
+  }
+
+  private openExternalEditor(): void {
+    if (this.externalEditorBusy) return;
+    this.externalEditorBusy = true;
+    this.inputError = undefined;
+    const active = this.input;
+    const settle = () => {
+      this.externalEditorBusy = false;
+      try {
+        this.refresh();
+      } catch {
+        // The dialog may have been disposed while the external editor was open.
+      }
+    };
+    void this.options.editExternally(this.editor.getExpandedText()).then(
+      (value) => {
+        if (active && this.input === active && value !== undefined) this.editor.setText(value);
+        settle();
+      },
+      () => {
+        if (active && this.input === active)
+          this.inputError = "The external editor failed; your draft is unchanged.";
+        settle();
+      },
+    );
+  }
+
+  handleInput(data: string): void {
+    if (this.input) {
+      if (this.options.keybindings.matches(data, "tui.select.cancel")) {
+        this.closeInput();
+        return;
+      }
+      if (this.options.keybindings.matches(data, "app.editor.external")) {
+        this.openExternalEditor();
+        return;
+      }
+      this.editor.handleInput(data);
+      this.refresh();
+      return;
+    }
+
+    if (data.toLocaleLowerCase() === "b") {
+      this.collapse();
+      return;
+    }
+    if (this.options.keybindings.matches(data, "tui.select.cancel")) {
+      this.options.done(cancelQuestionnaire());
+      return;
+    }
+    if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) {
+      this.state = reduceQuestionnaire(this.state, { type: "move-tab", delta: 1 });
+      this.refresh();
+      return;
+    }
+    if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left)) {
+      this.state = reduceQuestionnaire(this.state, { type: "move-tab", delta: -1 });
+      this.refresh();
+      return;
+    }
+
+    if (this.state.currentTab === this.options.request.questions.length) {
+      this.handleReviewInput(data);
+      return;
+    }
+    this.handleQuestionInput(data);
+  }
+
+  private handleReviewInput(data: string): void {
+    if (
+      this.options.keybindings.matches(data, "tui.select.up") ||
+      this.options.keybindings.matches(data, "tui.select.down")
+    ) {
+      this.state = reduceQuestionnaire(this.state, {
+        type: "set-review-cursor",
+        cursor: this.state.reviewCursor === 0 ? 1 : 0,
+      });
+      this.refresh();
+      return;
+    }
+    if (!this.options.keybindings.matches(data, "tui.select.confirm")) return;
+    if (this.state.reviewCursor === 1) {
+      this.options.done(cancelQuestionnaire());
+      return;
+    }
+    const outcome = submitQuestionnaire(this.state);
+    if (outcome) this.options.done(outcome);
+    else {
+      this.inputError = "Answer every question before submitting.";
+      this.refresh();
+    }
+  }
+
+  private handleQuestionInput(data: string): void {
+    const question = this.currentQuestion();
+    const draft = this.state.drafts[this.state.currentTab];
+    if (!question || !draft) return;
+    if (data.toLocaleLowerCase() === "n") {
+      this.openInput("note");
+      return;
+    }
+    if (this.options.keybindings.matches(data, "tui.select.up")) {
+      this.setCursor(draft.cursor - 1);
+      return;
+    }
+    if (this.options.keybindings.matches(data, "tui.select.down")) {
+      this.setCursor(draft.cursor + 1);
+      return;
+    }
+    if (
+      matchesKey(data, Key.space) &&
+      question.mode === "multiple" &&
+      draft.cursor < question.choices.length
+    ) {
+      this.toggleMultiple(draft.cursor);
+      return;
+    }
+    if (!this.options.keybindings.matches(data, "tui.select.confirm")) return;
+    if (draft.cursor < question.choices.length) {
+      if (question.mode === "single") {
+        this.state = reduceQuestionnaire(this.state, {
+          type: "select-one",
+          question: this.state.currentTab,
+          choice: draft.cursor,
+        });
+        this.advance();
+      } else this.toggleMultiple(draft.cursor);
+      return;
+    }
+    if (draft.cursor === question.choices.length) {
+      this.openInput("custom");
+      return;
+    }
+    if (draft.answer) this.advance();
+    else {
+      this.inputError = "Select at least one choice or write a custom answer.";
+      this.refresh();
+    }
+  }
+
+  private toggleMultiple(choice: number): void {
+    this.state = reduceQuestionnaire(this.state, {
+      type: "toggle-many",
+      question: this.state.currentTab,
+      choice,
+    });
+    this.refresh();
+  }
+
+  render(width: number): string[] {
+    return renderQuestionnaireView(
+      {
+        theme: this.options.theme,
+        request: this.options.request,
+        state: this.state,
+        ...(this.input ? { input: this.input } : {}),
+        ...(this.inputError ? { inputError: this.inputError } : {}),
+        externalEditorBusy: this.externalEditorBusy,
+        editor: this.editor,
+        preview: this.preview,
+      },
+      width,
+    );
+  }
+
+  invalidate(): void {
+    this.editor.invalidate();
+    this.preview.invalidate();
+  }
+}

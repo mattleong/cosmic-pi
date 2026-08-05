@@ -5,6 +5,7 @@ A pnpm workspace for pi extensions.
 ## Packages
 
 - [`pi-advisor`](packages/pi-advisor) — active second-model advice with bounded interventions and local review cards.
+- [`pi-ask-user`](packages/pi-ask-user) — structured, responsive questionnaires for decisions the agent should not guess.
 - [`pi-better-openai`](packages/pi-better-openai) — fast mode, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
 - [`pi-better-xai`](packages/pi-better-xai) — xAI/Grok subscription usage visibility and Cosmic UI footer polish.
 - [`pi-background-terminals`](packages/pi-background-terminals) — session-scoped background jobs with an agent tool and full-screen `/ps` manager.
@@ -24,6 +25,7 @@ A pnpm workspace for pi extensions.
 Install the published extensions with pi:
 
 ```bash
+pi install npm:pi-ask-user
 pi install npm:pi-better-openai
 pi install npm:pi-better-xai
 pi install npm:pi-background-terminals
@@ -56,6 +58,7 @@ Run a command for one package with a filter:
 
 ```bash
 pnpm --filter pi-advisor test
+pnpm --filter pi-ask-user test
 pnpm --filter pi-better-openai test
 pnpm --filter pi-code-previews build
 pnpm --filter pi-cosmic-ui test
@@ -67,6 +70,7 @@ pnpm --filter pi-subagents test
 
 ```bash
 pi -e ./packages/pi-advisor
+pi -e ./packages/pi-ask-user
 pi -e ./packages/pi-better-openai
 pi -e ./packages/pi-code-previews
 pi -e ./packages/pi-cosmic-ui

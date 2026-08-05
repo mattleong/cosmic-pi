@@ -1,6 +1,6 @@
 # Releasing cosmic-pi
 
-All workspace packages use the same version. The public `pi-background-terminals`, `pi-better-openai`, `pi-better-xai`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-advisor` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm.
+All workspace packages use the same version. The public `pi-ask-user`, `pi-background-terminals`, `pi-better-openai`, `pi-better-xai`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-advisor` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm.
 
 ## One-time setup
 
@@ -8,6 +8,7 @@ Before the first release:
 
 1. Create and push the `mattleong/cosmic-pi` GitHub repository.
 2. On npm, configure trusted publishing for every public package:
+   - `pi-ask-user`
    - `pi-background-terminals`
    - `pi-better-openai`
    - `pi-better-xai`
@@ -85,6 +86,7 @@ Publishing the GitHub Release triggers the npm workflow. Creating only a Git tag
 Watch the **Publish npm packages** workflow in GitHub Actions. After it succeeds, verify every public package version:
 
 ```bash
+npm view pi-ask-user version
 npm view pi-background-terminals version
 npm view pi-better-openai version
 npm view pi-better-xai version
@@ -95,7 +97,7 @@ npm view pi-directory-models version
 npm view pi-subagents version
 ```
 
-All eight commands should report the release version. npm provenance should also appear on each package version page.
+All nine commands should report the release version. npm provenance should also appear on each package version page.
 
 ## Retry a failed release
 

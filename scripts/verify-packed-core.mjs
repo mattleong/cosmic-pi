@@ -8,6 +8,7 @@ const workspace = await readFile(join(root, "pnpm-workspace.yaml"), "utf8");
 const expectedEffectVersion = /\n  effect: ([^\n]+)/.exec(workspace)?.[1];
 if (!expectedEffectVersion) throw new Error("Missing Effect version from the pnpm catalog.");
 const extensionPackages = [
+  "pi-ask-user",
   "pi-better-xai",
   "pi-better-openai",
   "pi-cosmic-ui",
@@ -71,7 +72,7 @@ try {
   );
   if (tarballs.length !== packageNames.length || [...tarballNames.values()].some((name) => !name)) {
     throw new Error(
-      `Expected core, xAI, OpenAI, Cosmic UI, code-preview, directory-model, advisor, background terminal, and subagent tarballs, found: ${tarballs.join(", ")}.`,
+      `Expected core, ask-user, xAI, OpenAI, Cosmic UI, code-preview, directory-model, advisor, background terminal, and subagent tarballs, found: ${tarballs.join(", ")}.`,
     );
   }
   const tarballPath = (packageName) => join(temporaryDirectory, tarballNames.get(packageName));
@@ -86,6 +87,7 @@ try {
           "@earendil-works/pi-coding-agent": piVersion,
           "@earendil-works/pi-tui": tuiVersion,
           jiti: "2.7.0",
+          "pi-ask-user": `file:${tarballPath("pi-ask-user")}`,
           "pi-better-openai": `file:${tarballPath("pi-better-openai")}`,
           "pi-better-xai": `file:${tarballPath("pi-better-xai")}`,
           "pi-cosmic-core": `file:${tarballPath("pi-cosmic-core")}`,
@@ -98,6 +100,7 @@ try {
         },
         pnpm: {
           overrides: {
+            "pi-ask-user": `file:${tarballPath("pi-ask-user")}`,
             "pi-cosmic-core": `file:${tarballPath("pi-cosmic-core")}`,
             "pi-cosmic-ui": `file:${tarballPath("pi-cosmic-ui")}`,
             "pi-better-openai": `file:${tarballPath("pi-better-openai")}`,
@@ -134,7 +137,7 @@ try {
     [
       "--input-type=module",
       "--eval",
-      "import { createJiti } from 'jiti'; const jiti = createJiti(import.meta.url); const xai = await jiti.import('pi-better-xai'); const openai = await jiti.import('pi-better-openai'); const cosmicUi = await jiti.import('pi-cosmic-ui'); const directoryModels = await jiti.import('pi-directory-models'); const advisor = await jiti.import('pi-advisor'); const terminals = await jiti.import('pi-background-terminals'); const subagents = await jiti.import('pi-subagents'); const protocol = await jiti.import('pi-cosmic-ui/protocol'); const client = await jiti.import('pi-cosmic-ui/client'); const manager = await jiti.import('pi-cosmic-ui/manager'); const fastModels = await jiti.import('pi-better-openai/fast-models'); const previews = await import('pi-code-previews'); if (typeof xai.default !== 'function') throw new Error('missing xAI extension export'); if (typeof openai.default !== 'function') throw new Error('missing OpenAI extension export'); if (typeof cosmicUi.default !== 'function') throw new Error('missing Cosmic UI extension export'); if (typeof directoryModels.default !== 'function') throw new Error('missing directory-model extension export'); if (typeof advisor.default !== 'function') throw new Error('missing advisor extension export'); if (typeof terminals.default !== 'function') throw new Error('missing background terminals extension export'); if (typeof subagents.default !== 'function') throw new Error('missing subagents extension export'); if (typeof previews.default !== 'function' || typeof previews.loadCodePreviewSettings !== 'function' || typeof previews.withCodePreviewShell !== 'function') throw new Error('missing code-preview public exports'); if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== 'function') throw new Error('missing Cosmic UI protocol exports'); if (typeof client.createCosmicFooterClient !== 'function') throw new Error('missing Cosmic UI client export'); if (typeof manager.renderResponsiveManagerFooter !== 'function') throw new Error('missing Cosmic UI manager export'); if (typeof fastModels.supportsFastModel !== 'function') throw new Error('missing OpenAI fast-model export');",
+      "import { createJiti } from 'jiti'; const jiti = createJiti(import.meta.url); const askUser = await jiti.import('pi-ask-user'); const xai = await jiti.import('pi-better-xai'); const openai = await jiti.import('pi-better-openai'); const cosmicUi = await jiti.import('pi-cosmic-ui'); const directoryModels = await jiti.import('pi-directory-models'); const advisor = await jiti.import('pi-advisor'); const terminals = await jiti.import('pi-background-terminals'); const subagents = await jiti.import('pi-subagents'); const protocol = await jiti.import('pi-cosmic-ui/protocol'); const client = await jiti.import('pi-cosmic-ui/client'); const manager = await jiti.import('pi-cosmic-ui/manager'); const fastModels = await jiti.import('pi-better-openai/fast-models'); const previews = await import('pi-code-previews'); if (typeof askUser.default !== 'function') throw new Error('missing ask-user extension export'); if (typeof xai.default !== 'function') throw new Error('missing xAI extension export'); if (typeof openai.default !== 'function') throw new Error('missing OpenAI extension export'); if (typeof cosmicUi.default !== 'function') throw new Error('missing Cosmic UI extension export'); if (typeof directoryModels.default !== 'function') throw new Error('missing directory-model extension export'); if (typeof advisor.default !== 'function') throw new Error('missing advisor extension export'); if (typeof terminals.default !== 'function') throw new Error('missing background terminals extension export'); if (typeof subagents.default !== 'function') throw new Error('missing subagents extension export'); if (typeof previews.default !== 'function' || typeof previews.loadCodePreviewSettings !== 'function' || typeof previews.withCodePreviewShell !== 'function') throw new Error('missing code-preview public exports'); if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== 'function') throw new Error('missing Cosmic UI protocol exports'); if (typeof client.createCosmicFooterClient !== 'function') throw new Error('missing Cosmic UI client export'); if (typeof manager.renderResponsiveManagerFooter !== 'function') throw new Error('missing Cosmic UI manager export'); if (typeof fastModels.supportsFastModel !== 'function') throw new Error('missing OpenAI fast-model export');",
     ],
     temporaryDirectory,
   );
@@ -165,7 +168,7 @@ try {
   }
 
   console.log(
-    "Packed core, xAI, OpenAI, Cosmic UI, code-preview, directory-model, advisor, background terminal, and subagent packages install and import in a clean consumer.",
+    "Packed core, ask-user, xAI, OpenAI, Cosmic UI, code-preview, directory-model, advisor, background terminal, and subagent packages install and import in a clean consumer.",
   );
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });

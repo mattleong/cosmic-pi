@@ -1,0 +1,48 @@
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Semaphore from "effect/Semaphore";
+import { HostDialogs } from "../boundary/host-dialogs.ts";
+import type { AskUserRequest } from "../tools/schema.ts";
+import { AskUserRuntimeClosedError, type AskUserError } from "./errors.ts";
+import type { AskUserOutcome } from "./model.ts";
+import { normalizeAskUserRequest, validateAskUserRequest } from "./validation.ts";
+
+export interface AskUserServiceShape {
+  readonly ask: (request: AskUserRequest) => Effect.Effect<AskUserOutcome, AskUserError>;
+}
+
+const makeService = Effect.fn("AskUserService.make")(function* () {
+  const host = yield* HostDialogs;
+  const lock = yield* Semaphore.make(1);
+  let closed = false;
+  const ask: AskUserServiceShape["ask"] = (request) =>
+    lock.withPermits(1)(
+      Effect.gen(function* () {
+        if (closed) {
+          return yield* new AskUserRuntimeClosedError({
+            message: "The ask-user session runtime is closed.",
+          });
+        }
+        const normalized = normalizeAskUserRequest(request);
+        const validation = validateAskUserRequest(normalized);
+        if (validation) return yield* validation;
+        return yield* host.ask(normalized);
+      }),
+    );
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      closed = true;
+    }),
+  );
+  return { ask } satisfies AskUserServiceShape;
+});
+
+export class AskUserService extends Context.Service<AskUserService, AskUserServiceShape>()(
+  "pi-ask-user/questionnaire/service/AskUserService",
+) {
+  static readonly layer = Layer.effect(this, makeService());
+
+  static override readonly use = <A, E>(f: (service: AskUserServiceShape) => Effect.Effect<A, E>) =>
+    Effect.flatMap(this, f);
+}

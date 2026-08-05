@@ -3,6 +3,7 @@
 ## Repository layout
 
 - `packages/pi-advisor/` contains the automatic advisor and revision extension.
+- `packages/pi-ask-user/` contains the structured user-questionnaire extension.
 - `packages/pi-better-openai/` contains the Better OpenAI pi extension.
 - `packages/pi-better-xai/` contains the Better xAI subscription usage extension.
 - `packages/pi-background-terminals/` contains the session-scoped background process extension.
