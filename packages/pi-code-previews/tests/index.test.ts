@@ -182,9 +182,10 @@ test("settings command updates, saves, and notifies", async () => {
       notify: (message: string) => notifications.push(message),
       custom: async (factory: CustomFactory) =>
         new Promise<void>((resolve) => {
-          const list = factory(undefined, testTheme(), undefined, () => resolve());
-          (list as unknown as SettingsListInternals).onChange("readCollapsedLines", "20");
-          (list as unknown as SettingsListInternals).onCancel();
+          const component = factory(undefined, testTheme(), undefined, () => resolve());
+          const list = (component as unknown as VimSettingsAdapterInternals).child;
+          list.onChange("readCollapsedLines", "20");
+          list.onCancel();
         }),
     },
   });
@@ -198,9 +199,10 @@ test("settings command updates, saves, and notifies", async () => {
       notify: (message: string) => notifications.push(message),
       custom: async (factory: CustomFactory) =>
         new Promise<void>((resolve) => {
-          const list = factory(undefined, testTheme(), undefined, () => resolve());
-          (list as unknown as SettingsListInternals).onChange("resetToDefaults", "reset now");
-          (list as unknown as SettingsListInternals).onCancel();
+          const component = factory(undefined, testTheme(), undefined, () => resolve());
+          const list = (component as unknown as VimSettingsAdapterInternals).child;
+          list.onChange("resetToDefaults", "reset now");
+          list.onCancel();
         }),
     },
   });
@@ -217,6 +219,10 @@ type CustomFactory = (
 interface SettingsListInternals {
   onChange(id: string, value: string): void;
   onCancel(): void;
+}
+
+interface VimSettingsAdapterInternals {
+  child: SettingsListInternals;
 }
 
 function restoreEnv(name: string, value: string | undefined): void {

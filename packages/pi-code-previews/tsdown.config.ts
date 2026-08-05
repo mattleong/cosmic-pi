@@ -6,4 +6,5 @@ export default defineConfig({
   fixedExtension: false,
   sourcemap: false,
   dts: true,
+  deps: { alwaysBundle: [/^pi-cosmic-ui(?:\/|$)/] },
 });

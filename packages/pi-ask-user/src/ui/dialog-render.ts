@@ -205,7 +205,7 @@ export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: 
       " ",
       model.theme.fg(
         "dim",
-        "Tab/←→ questions • ↑↓ move • Enter choose • Space toggle • n note • b hide • Esc cancel",
+        "h/l or Tab/←→ questions • j/k or ↑↓ move • Enter choose • Space toggle • n note • b hide • Esc cancel",
       ),
       renderWidth,
     );

@@ -53,6 +53,7 @@
     "effect": "catalog:",
     "pi-code-previews": "workspace:*",
     "pi-cosmic-core": "workspace:*",
+    "pi-cosmic-ui": "workspace:*",
     "typebox": "catalog:"
   },
   "devDependencies": {

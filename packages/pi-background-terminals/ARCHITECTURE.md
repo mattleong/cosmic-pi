@@ -13,7 +13,7 @@
 - `src/boundary/native-clock.ts` — synchronous clock adapter for Pi render callbacks.
 - `src/job/` — job model, typed errors, bounded logs with shared UTF-8 byte accounting (`utf8.ts`), projection, and scoped service owner.
 - `src/tools/` — `background_terminal` registration and pure rendering, decorated through the public `pi-code-previews` cooperative shell.
-- `src/ui/` — pure full-screen `/ps` presentation, interaction, terminal-text line normalization over `pi-cosmic-core`'s `stripTerminalControls`, and collapsed/expanded tool log previews. Manager state frames and responsive grouped footer fitting come from `pi-cosmic-ui/manager`, shared with `/subagents`.
+- `src/ui/` — pure full-screen `/ps` presentation, interaction, terminal-text line normalization over `pi-cosmic-core`'s `stripTerminalControls`, and collapsed/expanded tool log previews. Manager state frames and responsive grouped footer fitting come from `pi-cosmic-ui/manager`; mode-aware Vim navigation and configured-key labels come from `pi-cosmic-ui/manager/keybindings`, shared with `/subagents`.
 
 ## Ownership
 

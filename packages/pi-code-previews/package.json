@@ -72,6 +72,7 @@
     "diff": "^8.0.4",
     "effect": "catalog:",
     "pi-cosmic-core": "workspace:*",
+    "pi-cosmic-ui": "workspace:*",
     "shiki": "^4.0.2"
   },
   "devDependencies": {

@@ -9,6 +9,10 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import {
+  FullScreenKeymap,
+  type FullScreenSelectionKeybindingId,
+} from "pi-cosmic-ui/manager/keybindings";
+import {
   cancelQuestionnaire,
   createQuestionnaireState,
   reduceQuestionnaire,
@@ -53,6 +57,7 @@ export class AskUserDialog implements Focusable {
   private externalEditorBusy = false;
   private readonly editor: Editor;
   private readonly preview: PreviewPane;
+  private readonly keymap = new FullScreenKeymap();
   private _focused = false;
   private overlayHandle: OverlayHandle | undefined;
 
@@ -205,8 +210,15 @@ export class AskUserDialog implements Focusable {
   }
 
   handleInput(data: string): void {
+    const matchesKeybinding = (input: string, id: FullScreenSelectionKeybindingId) =>
+      this.options.keybindings.matches(input, id);
+
     if (this.input) {
-      if (this.options.keybindings.matches(data, "tui.select.cancel")) {
+      const resolution = this.keymap.resolve(data, {
+        mode: "text-input",
+        matchesKeybinding,
+      });
+      if (resolution?._tag === "Action" && resolution.action === "cancel") {
         this.closeInput();
         return;
       }
@@ -219,23 +231,49 @@ export class AskUserDialog implements Focusable {
       return;
     }
 
-    if (data.toLocaleLowerCase() === "b") {
-      this.collapse();
+    const resolution = this.keymap.resolve(data, {
+      mode: "navigation",
+      matchesKeybinding,
+      reservedKeys: new Set(["b", "n"]),
+    });
+    if (resolution?._tag === "Shortcut") {
+      if (resolution.key === "b") this.collapse();
+      else if (
+        resolution.key === "n" &&
+        this.state.currentTab < this.options.request.questions.length
+      )
+        this.openInput("note");
       return;
     }
-    if (this.options.keybindings.matches(data, "tui.select.cancel")) {
-      this.options.done(cancelQuestionnaire());
-      return;
-    }
-    if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) {
-      this.state = reduceQuestionnaire(this.state, { type: "move-tab", delta: 1 });
-      this.refresh();
-      return;
-    }
-    if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left)) {
-      this.state = reduceQuestionnaire(this.state, { type: "move-tab", delta: -1 });
-      this.refresh();
-      return;
+    if (resolution?._tag === "Action") {
+      if (resolution.action === "cancel") {
+        this.options.done(cancelQuestionnaire());
+        return;
+      }
+      if (resolution.action === "forward" || resolution.action === "next-pane") {
+        this.state = reduceQuestionnaire(this.state, { type: "move-tab", delta: 1 });
+        this.refresh();
+        return;
+      }
+      if (resolution.action === "back" || resolution.action === "previous-pane") {
+        this.state = reduceQuestionnaire(this.state, { type: "move-tab", delta: -1 });
+        this.refresh();
+        return;
+      }
+      if (resolution.action === "up" || resolution.action === "down") {
+        if (this.state.currentTab === this.options.request.questions.length) {
+          this.state = reduceQuestionnaire(this.state, {
+            type: "set-review-cursor",
+            cursor: this.state.reviewCursor === 0 ? 1 : 0,
+          });
+          this.refresh();
+          return;
+        }
+        const draft = this.state.drafts[this.state.currentTab];
+        if (draft) this.setCursor(draft.cursor + (resolution.action === "up" ? -1 : 1));
+        return;
+      }
+      if (resolution.action === "quit") return;
     }
 
     if (this.state.currentTab === this.options.request.questions.length) {
@@ -274,10 +312,6 @@ export class AskUserDialog implements Focusable {
     const question = this.currentQuestion();
     const draft = this.state.drafts[this.state.currentTab];
     if (!question || !draft) return;
-    if (data.toLocaleLowerCase() === "n") {
-      this.openInput("note");
-      return;
-    }
     if (this.options.keybindings.matches(data, "tui.select.up")) {
       this.setCursor(draft.cursor - 1);
       return;

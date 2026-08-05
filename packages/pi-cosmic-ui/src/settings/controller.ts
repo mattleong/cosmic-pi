@@ -20,6 +20,7 @@ import {
   type HostCallbackBoundaryShape,
 } from "../boundary/host-callback.ts";
 import { CosmicUiService } from "../protocol/service.ts";
+import { VimSettingsAdapter } from "../manager/keybindings.ts";
 
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
 const VisibilityIdSchema = Schema.Literals(DEFAULT_FOOTER_ORDER);
@@ -131,13 +132,14 @@ export function registerSettingsCommand(
         })),
       ];
       const inertComponent = () => ({
+        focused: false,
         render: () => [] as string[],
         invalidate: () => undefined,
         handleInput: () => undefined,
       });
       let opened: Promise<unknown> | undefined;
       const invoked = hostQuery(() => {
-        opened = ctx.ui.custom((tui, theme, _keybindings, done) =>
+        opened = ctx.ui.custom((tui, theme, keybindings, done) =>
           hostQuery(() => {
             const container = new Container();
             container.addChild(new Text(theme.fg("accent", theme.bold("Cosmic UI")), 1, 1));
@@ -181,11 +183,32 @@ export function registerSettingsCommand(
               () => hostQuery(() => done(undefined), undefined),
               { enableSearch: true },
             );
-            container.addChild(list);
+            const vimList = new VimSettingsAdapter(list, {
+              search: true,
+              matchesKeybinding:
+                typeof keybindings?.matches === "function"
+                  ? (data, id) => keybindings.matches(data, id)
+                  : undefined,
+              requestRender: () => tui.requestRender(),
+              renderHint: (mode) =>
+                theme.fg(
+                  "dim",
+                  mode === "search"
+                    ? " SEARCH · type to filter · Esc returns to NORMAL "
+                    : " NORMAL · j/k move · l select · h/q back · / search ",
+                ),
+            });
+            container.addChild(vimList);
             return {
+              get focused(): boolean {
+                return vimList.focused;
+              },
+              set focused(value: boolean) {
+                vimList.focused = value;
+              },
               render: (width: number) => hostQuery(() => container.render(width), []),
               invalidate: () => hostQuery(() => container.invalidate(), undefined),
-              handleInput: (data: string) => hostQuery(() => list.handleInput?.(data), undefined),
+              handleInput: (data: string) => hostQuery(() => vimList.handleInput(data), undefined),
             };
           }, inertComponent()),
         );

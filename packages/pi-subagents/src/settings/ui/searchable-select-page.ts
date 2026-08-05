@@ -2,10 +2,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   fuzzyFilter,
   Input,
-  Key,
-  matchesKey,
   type Component,
-  type KeyId,
+  type Focusable,
   type SelectItem,
   SelectList,
   truncateToWidth,
@@ -13,6 +11,10 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import {
+  FullScreenKeymap,
+  type FullScreenSelectionKeybindingId,
+} from "pi-cosmic-ui/manager/keybindings";
 
 export interface SearchableSelectPageChoice<A> {
   readonly value: string;
@@ -21,13 +23,7 @@ export interface SearchableSelectPageChoice<A> {
   readonly payload: A;
 }
 
-export type SettingsSelectKeybindingId =
-  | "tui.select.up"
-  | "tui.select.down"
-  | "tui.select.pageUp"
-  | "tui.select.pageDown"
-  | "tui.select.confirm"
-  | "tui.select.cancel";
+export type SettingsSelectKeybindingId = FullScreenSelectionKeybindingId;
 
 export interface SearchableSelectPageOptions<A> {
   readonly theme: Theme;
@@ -39,6 +35,7 @@ export interface SearchableSelectPageOptions<A> {
   readonly notice?: string | undefined;
   readonly emptyText?: string | undefined;
   readonly initialQuery?: string | undefined;
+  readonly initialSearchMode?: boolean | undefined;
   readonly getHeight: () => number;
   readonly requestRender: () => void;
   readonly matchesKeybinding?:
@@ -58,7 +55,7 @@ const padToWidth = (text: string, width: number): string => {
 };
 
 /** Responsive full-page fuzzy-search input and dropdown shared by settings selectors. */
-export class SearchableSelectPage<A> implements Component {
+export class SearchableSelectPage<A> implements Component, Focusable {
   private readonly input = new Input();
   private readonly options: SearchableSelectPageOptions<A>;
   private query: string;
@@ -66,23 +63,28 @@ export class SearchableSelectPage<A> implements Component {
   private list: SelectList;
   private listHeight: number;
   private feedback: string | undefined;
+  private searchMode: boolean;
+  private _focused = false;
+  private readonly keymap = new FullScreenKeymap();
 
   constructor(options: SearchableSelectPageOptions<A>) {
     this.options = options;
     this.query = options.initialQuery ?? "";
     this.filtered = options.choices;
     this.listHeight = this.resolveListHeight();
+    this.searchMode = options.initialSearchMode ?? Boolean(options.initialQuery);
     if (this.query) this.input.setValue(this.query);
     this.list = this.buildList();
-    this.input.focused = true;
+    this.input.focused = false;
   }
 
   get focused(): boolean {
-    return this.input.focused;
+    return this._focused;
   }
 
   set focused(value: boolean) {
-    this.input.focused = value;
+    this._focused = value;
+    this.input.focused = value && this.searchMode;
   }
 
   private resolveListHeight(extraReservedRows = 0): number {
@@ -131,49 +133,71 @@ export class SearchableSelectPage<A> implements Component {
     return list;
   }
 
-  private matches(data: string, key: KeyId, id: SettingsSelectKeybindingId): boolean {
-    return this.options.matchesKeybinding
-      ? this.options.matchesKeybinding(data, id)
-      : matchesKey(data, key);
-  }
-
   handleInput(data: string): void {
-    if (this.matches(data, Key.escape, "tui.select.cancel")) this.options.cancel();
-    else if (this.matches(data, Key.enter, "tui.select.confirm")) {
-      const choice = this.selectedChoice();
-      if (choice) this.options.select(choice.payload);
-      else
-        this.feedback = `${this.options.emptyText ?? "No matching options"}; change the search or go back.`;
-    } else {
-      const up = this.matches(data, Key.up, "tui.select.up");
-      const down = this.matches(data, Key.down, "tui.select.down");
-      const pageUp = this.matches(data, Key.pageUp, "tui.select.pageUp");
-      const pageDown = this.matches(data, Key.pageDown, "tui.select.pageDown");
-      const home = matchesKey(data, Key.home);
-      const end = matchesKey(data, Key.end);
-      if (up || down || pageUp || pageDown || home || end) {
-        const currentChoice = this.selectedChoice();
-        const current = currentChoice ? this.filtered.indexOf(currentChoice) : 0;
-        const length = this.filtered.length;
-        if (length > 0) {
-          const step = pageUp || pageDown ? Math.max(1, this.listHeight - 1) : 1;
-          const next = home
-            ? 0
-            : end
-              ? length - 1
-              : pageUp
-                ? Math.max(0, current - step)
-                : pageDown
-                  ? Math.min(length - 1, current + step)
-                  : up
-                    ? (current - 1 + length) % length
-                    : (current + 1) % length;
-          this.list.setSelectedIndex(next);
+    const resolution = this.keymap.resolve(data, {
+      mode: this.searchMode ? "search" : "navigation",
+      matchesKeybinding: this.options.matchesKeybinding,
+    });
+    if (resolution?._tag === "Action") {
+      const currentChoice = this.selectedChoice();
+      const current = currentChoice ? this.filtered.indexOf(currentChoice) : 0;
+      const length = this.filtered.length;
+      switch (resolution.action) {
+        case "cancel":
+          if (this.searchMode) this.setSearchMode(false);
+          else this.options.cancel();
+          break;
+        case "quit":
+        case "back":
+          this.options.cancel();
+          break;
+        case "confirm":
+        case "forward": {
+          const choice = this.selectedChoice();
+          if (choice) this.options.select(choice.payload);
+          else
+            this.feedback = `${this.options.emptyText ?? "No matching options"}; change the search or go back.`;
+          break;
         }
-        this.feedback = undefined;
-        this.options.requestRender();
-        return;
+        case "search":
+          this.setSearchMode(true);
+          break;
+        case "up":
+        case "down":
+        case "half-page-up":
+        case "half-page-down":
+        case "first":
+        case "last":
+          if (length > 0) {
+            const pageStep = Math.max(1, this.listHeight - 1);
+            const halfStep = Math.max(1, Math.floor(pageStep / 2));
+            const next =
+              resolution.action === "first"
+                ? 0
+                : resolution.action === "last"
+                  ? length - 1
+                  : resolution.action === "half-page-up"
+                    ? Math.max(0, current - halfStep)
+                    : resolution.action === "half-page-down"
+                      ? Math.min(length - 1, current + halfStep)
+                      : resolution.action === "up"
+                        ? (current - 1 + length) % length
+                        : (current + 1) % length;
+            this.list.setSelectedIndex(next);
+          }
+          this.feedback = undefined;
+          break;
+        case "help":
+        case "pending-first":
+        case "previous-pane":
+        case "next-pane":
+          break;
       }
+      this.options.requestRender();
+      return;
+    }
+
+    if (this.searchMode) {
       const selected = this.selectedChoice();
       this.input.handleInput(data);
       const next = this.input.getValue();
@@ -182,8 +206,16 @@ export class SearchableSelectPage<A> implements Component {
         this.feedback = undefined;
         this.list = this.buildList(selected);
       }
+      this.options.requestRender();
     }
-    this.options.requestRender();
+  }
+
+  private setSearchMode(active: boolean): void {
+    if (this.searchMode === active) return;
+    this.searchMode = active;
+    this.keymap.resetChord();
+    this.input.focused = this._focused && active;
+    this.feedback = undefined;
   }
 
   render(width: number): string[] {
@@ -251,7 +283,7 @@ export class SearchableSelectPage<A> implements Component {
         theme.fg("accent", theme.bold(this.options.title)),
         ...subtitleLines,
         ...noticeLines,
-        theme.fg("dim", "Search:"),
+        theme.fg("dim", this.searchMode ? "Search: INSERT" : "Search: NORMAL · press / to edit"),
         ...inputLines,
         "",
       ];
@@ -281,21 +313,28 @@ export class SearchableSelectPage<A> implements Component {
 
     const key = (id: SettingsSelectKeybindingId, fallback: string): string =>
       this.options.keybindingLabel?.(id, fallback) || fallback;
-    const navigation = this.options.keybindingLabel
-      ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
-      : "↑↓";
-    const pages = `${key("tui.select.pageUp", "PgUp")}/${key("tui.select.pageDown", "PgDn")}`;
     const confirm = key("tui.select.confirm", "Enter");
     const cancel = key("tui.select.cancel", "Esc");
-    const footer = renderResponsiveManagerFooter(inner, [
-      [
-        "Type to search",
-        `${navigation} Navigate · ${pages} Page · Home/End`,
-        `${confirm} Select · ${cancel} Back`,
-      ],
-      [`${navigation} Navigate · ${pages}`, `${confirm} Select`, `${cancel} Back`],
-      [`${cancel} Back`, `${confirm} Select`],
-    ]);
+    const configuredNavigation = this.options.keybindingLabel
+      ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
+      : undefined;
+    const normalNavigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
+    const footer = this.searchMode
+      ? renderResponsiveManagerFooter(inner, [
+          ["INSERT · type to search", "↑/↓ Navigate", "Enter Select · Esc Normal"],
+          ["INSERT · ↑/↓", "Enter Select", "Esc Normal"],
+          ["Enter Select", "Esc Normal"],
+        ])
+      : renderResponsiveManagerFooter(inner, [
+          [
+            `${normalNavigation} Navigate · C-u/d · gg/G`,
+            "/ Search",
+            `l/${confirm} Select · h/q/${cancel} Back`,
+          ],
+          [`${normalNavigation} · C-u/d · gg/G`, "/ Search", `${confirm} Select · q Back`],
+          ["q Back", "l Select"],
+          ["q Back"],
+        ]);
     const bottom = `${theme.fg("borderAccent", "╰")}${theme.fg(
       "borderAccent",
       "─".repeat(Math.max(0, inner - visibleWidth(footer))),

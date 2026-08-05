@@ -132,6 +132,7 @@ export const makeProfileSearchSelector = (
       payload: profile,
     })),
     current: options.current,
+    initialSearchMode: true,
     ...(options.initialQuery ? { initialQuery: options.initialQuery } : {}),
     emptyText: "No matching profiles",
     getHeight: options.getHeight,

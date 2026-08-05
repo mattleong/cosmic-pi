@@ -77,6 +77,24 @@ const selectProfile = (component: ProfileWorkspaceComponent, profile: ProfileId)
     component.handleInput(key);
 };
 
+const selectScope = (
+  component: ProfileWorkspaceComponent,
+  scope: "session" | "global" | "project",
+  projectTrusted = true,
+): void => {
+  const presses =
+    scope === "global"
+      ? 0
+      : scope === "project"
+        ? projectTrusted
+          ? 1
+          : 0
+        : projectTrusted
+          ? 2
+          : 1;
+  for (let index = 0; index < presses; index += 1) component.handleInput("s");
+};
+
 const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
@@ -239,7 +257,7 @@ describe("profile settings workspace", () => {
     const { component, close } = makeComponent();
     const rendered = component.render(120).join("\n");
     expect(rendered).toContain("· ready");
-    expect(rendered).toContain("[g Global]");
+    expect(rendered).toContain("[Global]");
     expect(rendered).toContain("Sources  [S] Session > [P] Project > [G] Global > [B] Built-in");
     expect(rendered).toContain("generalist  implicit fallback");
     expect(rendered).not.toContain("★");
@@ -322,7 +340,7 @@ describe("profile settings workspace", () => {
     );
     const { component } = makeComponent(value, { getHeight: () => 12 });
     selectProfile(component, "reviewer");
-    component.handleInput("p");
+    selectScope(component, "project");
     expect(component.render(70).join("\n")).toContain("↑ more");
     component.handleInput(input.enter);
     expect(component.render(70).join("\n")).toContain("1–1 of 8 · ↓ more");
@@ -335,7 +353,7 @@ describe("profile settings workspace", () => {
 
     const wide = makeComponent(value).component;
     selectProfile(wide, "reviewer");
-    wide.handleInput("p");
+    selectScope(wide, "project");
     wide.handleInput(input.enter);
     expect(wide.render(140).join("\n")).toContain("01 Primary");
     expect(wide.render(140).join("\n")).toContain("02 Fallback");
@@ -352,21 +370,21 @@ describe("profile settings workspace", () => {
     );
     const { component } = makeComponent(value);
     selectProfile(component, "reviewer");
-    component.handleInput("g");
+    selectScope(component, "global");
     const rendered = component.render(100).join("\n");
     expect(rendered).toContain("Project override active for reviewer");
     expect(rendered).toContain("global edits are saved but remain shadowed");
-    expect(rendered).toContain("Press p to");
-    expect(rendered).toContain("edit or reset the project override");
+    expect(rendered).toContain("Use s to cycle");
+    expect(rendered).toContain("edit or reset it");
     component.handleInput(input.enter);
     component.handleInput("d");
     expect(component.render(100).join("\n")).toContain("project override remains effective");
 
     const compact = makeComponent(value, { getHeight: () => 8 }).component;
     selectProfile(compact, "reviewer");
-    compact.handleInput("g");
+    selectScope(compact, "global");
     const compactRendered = compact.render(100).join("\n");
-    expect(compactRendered).toContain("Global scope overrides built-in");
+    expect(compactRendered).toContain("[P] project");
     expect(compactRendered).toContain("Project override active");
   });
 
@@ -387,7 +405,7 @@ describe("profile settings workspace", () => {
       saveDraft: () => pendingSave,
     });
     selectProfile(component, "reviewer");
-    component.handleInput("p");
+    selectScope(component, "project");
     component.handleInput(input.enter);
     component.handleInput("J");
     expect(component.render(100).join("\n")).toContain("Preview    2 candidates");
@@ -405,7 +423,7 @@ describe("profile settings workspace", () => {
 
   it("describes session remove and disable actions as immediate for future launches", () => {
     const removal = makeComponent().component;
-    removal.handleInput("s");
+    selectScope(removal, "session");
     removal.handleInput(input.enter);
     removal.handleInput("x");
     const removalText = removal.render(120).join("\n");
@@ -414,7 +432,7 @@ describe("profile settings workspace", () => {
     expect(removalText).not.toContain("after reload");
 
     const disable = makeComponent().component;
-    disable.handleInput("s");
+    selectScope(disable, "session");
     disable.handleInput(input.enter);
     disable.handleInput("d");
     const disableText = disable.render(120).join("\n");
@@ -425,7 +443,7 @@ describe("profile settings workspace", () => {
 
   it("hides no-op route actions and marks narrow fixed fields", () => {
     const { component } = makeComponent();
-    component.handleInput("g");
+    selectScope(component, "global");
     component.handleInput(input.enter);
     const route = component.render(100).join("\n");
     expect(route).not.toContain("i      Reset");
@@ -433,6 +451,23 @@ describe("profile settings workspace", () => {
     expect(route).not.toContain("K      Move");
     component.handleInput(input.enter);
     expect(component.render(40).join("\n")).toContain("· fixed");
+  });
+
+  it("cycles scopes with s and navigates endpoints with gg/G", () => {
+    const { component } = makeComponent();
+    expect(component.render(120).join("\n")).toContain("[Global]");
+    component.handleInput("s");
+    expect(component.render(120).join("\n")).toContain("[Project]");
+    component.handleInput("s");
+    expect(component.render(120).join("\n")).toContain("[Session]");
+    component.handleInput("s");
+    expect(component.render(120).join("\n")).toContain("[Global]");
+
+    component.handleInput("g");
+    component.handleInput("g");
+    expect(component.render(120).join("\n")).toContain("> scout");
+    component.handleInput("G");
+    expect(component.render(120).join("\n")).toContain("> generalist");
   });
 
   it("accepts Kitty CSI-u printable action shortcuts", () => {
@@ -454,7 +489,7 @@ describe("profile settings workspace", () => {
     selectProfile(component, "reviewer");
     component.handleInput(input.enter);
     component.handleInput(input.enter);
-    component.handleInput("g");
+    selectScope(component, "global");
     const rendered = component.render(100).join("\n");
     expect(rendered).toContain("reviewer route");
     expect(rendered).toContain("No candidates · route is disabled");
@@ -493,8 +528,8 @@ describe("profile settings workspace", () => {
           }) as Readonly<Record<string, string>>
         )[id] ?? fallback,
     });
-    expect(component.render(120).at(-1)).toContain("P/N Select");
-    expect(component.render(120).at(-1)).toContain("Y Route");
+    expect(component.render(120).at(-1)).toContain("j/k · P/N Select");
+    expect(component.render(120).at(-1)).toContain("Y/l Route");
     expect(component.render(120).at(-1)).toContain("Q Close");
     expect(component.render(120).join("\n")).toContain("Y      Open generalist route");
     component.handleInput(input.enter);
@@ -522,11 +557,11 @@ describe("profile settings workspace", () => {
     selectProfile(component, "reviewer");
     const profiles = component.render(140).join("\n");
     expect(profiles).toContain("Profiles");
-    expect(profiles).toContain("[g Global]");
+    expect(profiles).toContain("[Global]");
     expect(profiles).toContain("[P] project");
 
-    component.handleInput("p");
-    expect(component.render(140).join("\n")).toContain("[p Project]");
+    selectScope(component, "project");
+    expect(component.render(140).join("\n")).toContain("[Project]");
     component.handleInput(input.enter);
     const route = component.render(140).join("\n");
     expect(route).toContain("reviewer route");
@@ -558,7 +593,7 @@ describe("profile settings workspace", () => {
       { version: 4, defaultProfile: "generalist", profiles: { generalist: "disabled" } },
     );
     const { component } = makeComponent(value);
-    component.handleInput("p");
+    selectScope(component, "project");
     component.handleInput("d");
     expect(component.render(120).join("\n")).not.toContain("Confirm · Disable");
     component.handleInput(input.enter);
@@ -715,7 +750,7 @@ describe("profile settings workspace", () => {
     } satisfies CandidateModelPickerData);
     const { component, saveDraft } = makeComponent(value, { loadModelPicker });
     selectProfile(component, "reviewer");
-    component.handleInput("p");
+    selectScope(component, "project");
     component.handleInput(input.enter);
     component.handleInput(input.enter);
     for (let index = 0; index < 3; index += 1) component.handleInput(input.down);
@@ -753,6 +788,7 @@ describe("profile settings workspace", () => {
     expect(page).toContain("Search:");
     expect(page).toContain("Claude Opus");
     expect(page).toContain("Claude Sonnet");
+    component.handleInput("/");
     for (const character of "sonnet") component.handleInput(character);
     const filtered = component.render(130).join("\n");
     expect(filtered).not.toContain("Claude Opus");
@@ -807,7 +843,7 @@ describe("profile settings workspace", () => {
       .mockResolvedValueOnce({ inspection: addedValue });
     const { component } = makeComponent(value, { saveDraft });
     selectProfile(component, "worker");
-    component.handleInput("p");
+    selectScope(component, "project");
     component.handleInput(input.enter);
     component.handleInput("a");
     await vi.waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
@@ -842,7 +878,7 @@ describe("profile settings workspace", () => {
         { version: 4, profiles: { generalist: candidate("openai/project") } },
       ),
     );
-    project.component.handleInput("p");
+    selectScope(project.component, "project");
     expect(project.component.render(140).join("\n")).toContain("Reset generalist");
     project.component.handleInput("i");
     expect(project.component.render(140).join("\n")).toContain("Confirm · Reset generalist?");
@@ -863,7 +899,7 @@ describe("profile settings workspace", () => {
         profiles: { generalist: candidate("openai/global") },
       }),
     );
-    global.component.handleInput("g");
+    selectScope(global.component, "global");
     expect(global.component.render(140).join("\n")).toContain("Reset generalist to built-in");
     global.component.handleInput("i");
     expect(global.component.render(140).join("\n")).toContain("Current  explicit");
@@ -872,7 +908,7 @@ describe("profile settings workspace", () => {
     expect(global.saveDraft.mock.calls[0]?.[2]).toMatchObject({ kind: "reset" });
   });
 
-  it("restores scope defaults immediately and blocks project scope while untrusted", () => {
+  it("restores scope defaults immediately and skips project scope while untrusted", () => {
     const trustedValue = inspection(
       { version: 4, profiles: { generalist: candidate("openai/global") } },
       {
@@ -882,7 +918,7 @@ describe("profile settings workspace", () => {
       },
     );
     const trusted = makeComponent(trustedValue);
-    trusted.component.handleInput("p");
+    selectScope(trusted.component, "project");
     trusted.component.handleInput("i");
     trusted.component.handleInput("i");
     expect(trusted.saveDraft.mock.calls[0]?.[2]).toMatchObject({ kind: "inherit" });
@@ -893,10 +929,11 @@ describe("profile settings workspace", () => {
       false,
     );
     const untrusted = makeComponent(untrustedValue);
-    untrusted.component.handleInput("p");
-    expect(untrusted.component.render(120).join("\n")).toContain(
-      "Project profile settings require a trusted",
-    );
+    untrusted.component.handleInput("s");
+    expect(untrusted.component.render(120).join("\n")).toContain("[Session]");
+    untrusted.component.handleInput("s");
+    expect(untrusted.component.render(120).join("\n")).toContain("[Global]");
+    expect(untrusted.component.render(120).join("\n")).toContain("Session ↔ Global");
     expect(untrusted.saveDraft).not.toHaveBeenCalled();
   });
 

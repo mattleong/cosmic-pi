@@ -1,15 +1,18 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import {
-  decodeKittyPrintable,
   Input,
-  Key,
-  matchesKey,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
   type Component,
+  type Focusable,
 } from "@earendil-works/pi-tui";
+import {
+  decodeFullScreenPrintable,
+  FullScreenKeymap,
+  type FullScreenSelectionKeybindingId,
+} from "pi-cosmic-ui/manager/keybindings";
 import {
   hasSubagentCapability,
   isActiveRunState,
@@ -30,13 +33,7 @@ export interface FleetActions {
   readonly rename: (id: string, name: string) => Promise<void>;
 }
 
-export type FleetKeybindingId =
-  | "tui.select.up"
-  | "tui.select.down"
-  | "tui.select.pageUp"
-  | "tui.select.pageDown"
-  | "tui.select.confirm"
-  | "tui.select.cancel";
+export type FleetKeybindingId = FullScreenSelectionKeybindingId;
 
 export interface FleetOptions {
   readonly theme: Theme;
@@ -82,7 +79,10 @@ const canStop = (run: SubagentRunView | undefined): boolean =>
   Boolean(run && isActiveRunState(run.state) && run.state !== "stopping");
 
 type FleetLayout = "wide" | "stacked" | "narrow";
+type FleetPane = "list" | "detail";
 type FleetPromptKind = "guidance" | "reply" | "next-assignment" | "resume" | "rename";
+
+const FLEET_SHORTCUTS = new Set(["i", "m", "n", "r", "t", "x"]);
 type FleetNotice = { readonly kind: "info" | "success" | "error"; readonly text: string };
 type FleetPrompt = {
   readonly kind: FleetPromptKind;
@@ -98,7 +98,7 @@ const pad = (text: string, width: number): string => {
   return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
 };
 
-export class SubagentFleetComponent implements Component {
+export class SubagentFleetComponent implements Component, Focusable {
   private selected = 0;
   private selectedId: string | undefined;
   private details = false;
@@ -113,10 +113,22 @@ export class SubagentFleetComponent implements Component {
   private notice: FleetNotice | undefined;
   private busyAction: string | undefined;
   private layout: FleetLayout = "narrow";
+  private pane: FleetPane = "list";
+  private _focused = false;
+  private readonly keymap = new FullScreenKeymap();
   private readonly options: FleetOptions;
 
   constructor(options: FleetOptions) {
     this.options = options;
+  }
+
+  get focused(): boolean {
+    return this._focused;
+  }
+
+  set focused(value: boolean) {
+    this._focused = value;
+    if (this.prompt) this.prompt.input.focused = value;
   }
 
   private select(index: number, runs: ReadonlyArray<SubagentRunView>): void {
@@ -138,13 +150,9 @@ export class SubagentFleetComponent implements Component {
     if (this.prompt && this.prompt.runId !== selected?.id) this.prompt = undefined;
   }
 
-  private printableKey(data: string): string | undefined {
-    return data.length === 1 ? data : decodeKittyPrintable(data);
-  }
-
   private openPrompt(run: SubagentRunView, kind: FleetPromptKind): void {
     const input = new Input();
-    input.focused = true;
+    input.focused = this._focused;
     this.prompt = {
       kind,
       runId: run.id,
@@ -231,39 +239,16 @@ export class SubagentFleetComponent implements Component {
     const runs = this.options.getProjection().runs;
     this.reconcile(runs);
     const selected = runs[this.selected];
-    const configured = (
-      id: FleetKeybindingId,
-      fallback: Parameters<typeof matchesKey>[1],
-    ): boolean =>
-      this.options.matchesKeybinding
-        ? this.options.matchesKeybinding(data, id)
-        : matchesKey(data, fallback);
-    const cancel = configured("tui.select.cancel", Key.escape);
-    if (cancel) {
-      if (this.prompt) {
+    const matchesKeybinding = this.options.matchesKeybinding;
+
+    if (this.prompt) {
+      const resolution = this.keymap.resolve(data, { mode: "text-input", matchesKeybinding });
+      if (resolution?._tag === "Action" && resolution.action === "cancel") {
         this.prompt = undefined;
         this.notice = { kind: "info", text: "Input canceled." };
         this.options.requestRender();
-        return;
-      }
-      if (this.pendingStop) {
-        this.pendingStop = undefined;
-        this.notice = { kind: "info", text: "Stop canceled." };
-        this.options.requestRender();
-        return;
-      }
-      if (this.layout === "narrow" && this.details) {
-        this.details = false;
-        this.detailScroll = 0;
-        this.options.requestRender();
-        return;
-      }
-      this.options.close();
-      return;
-    }
-    if (this.busyAction) return;
-    if (this.prompt) {
-      if (configured("tui.select.confirm", Key.enter)) this.submitPrompt();
+      } else if (resolution?._tag === "Action" && resolution.action === "confirm")
+        this.submitPrompt();
       else {
         this.prompt.feedback = undefined;
         this.prompt.input.handleInput(data);
@@ -272,11 +257,24 @@ export class SubagentFleetComponent implements Component {
       return;
     }
 
-    const printable = this.printableKey(data);
     if (this.pendingStop) {
+      const resolution = this.keymap.resolve(data, {
+        mode: "confirmation",
+        matchesKeybinding,
+        reservedKeys: new Set(["x"]),
+      });
       const run = selected && this.pendingStop === selected.id ? selected : undefined;
       this.pendingStop = undefined;
-      if (printable === "x" && run && canStop(run))
+      if (resolution?._tag === "Action" && resolution.action === "cancel") {
+        this.notice = { kind: "info", text: "Stop canceled." };
+        this.options.requestRender();
+      } else if (
+        resolution?._tag === "Shortcut" &&
+        resolution.key === "x" &&
+        decodeFullScreenPrintable(data) === "x" &&
+        run &&
+        canStop(run)
+      )
         this.performAction(
           `Stopping ${sanitizeTerminalLine(run.name)}…`,
           `Stopped ${sanitizeTerminalLine(run.name)}.`,
@@ -288,69 +286,156 @@ export class SubagentFleetComponent implements Component {
       }
       return;
     }
-    this.notice = undefined;
 
-    const halfPage = Math.max(1, Math.floor(this.detailPageSize / 2));
-    const pageUp = configured("tui.select.pageUp", Key.pageUp);
-    const pageDown = configured("tui.select.pageDown", Key.pageDown);
-    const halfUp = matchesKey(data, Key.ctrl("u"));
-    const halfDown = matchesKey(data, Key.ctrl("d"));
-    const browsingNarrowList = this.layout === "narrow" && !this.details;
-    if (halfUp || pageUp) {
-      const step = pageUp ? this.detailPageSize : halfPage;
-      if (browsingNarrowList)
-        this.select(this.selected - Math.max(1, this.options.getHeight() - 3), runs);
-      else this.detailScroll = Math.min(this.detailMaxScroll, this.detailScroll + step);
-    } else if (halfDown || pageDown) {
-      const step = pageDown ? this.detailPageSize : halfPage;
-      if (browsingNarrowList)
-        this.select(this.selected + Math.max(1, this.options.getHeight() - 3), runs);
-      else this.detailScroll = Math.max(0, this.detailScroll - step);
-    } else if (browsingNarrowList && matchesKey(data, Key.home)) this.select(0, runs);
-    else if (browsingNarrowList && matchesKey(data, Key.end)) this.select(runs.length - 1, runs);
-    else if (configured("tui.select.up", Key.up) || printable === "k")
-      this.select(this.selected - 1, runs);
-    else if (configured("tui.select.down", Key.down) || printable === "j")
-      this.select(this.selected + 1, runs);
-    else if (configured("tui.select.confirm", Key.enter) && this.layout === "narrow") {
-      this.details = !this.details;
-      this.detailScroll = 0;
-    } else if (printable === "t") {
-      this.showTechnicalDetails = !this.showTechnicalDetails;
-      this.detailScroll = 0;
-    } else if (printable === "?") this.alternateHelp = !this.alternateHelp;
-    else if (printable === "x" && selected && canStop(selected)) this.pendingStop = selected.id;
-    else if (printable === "i" && selected && canInterrupt(selected))
-      this.performAction(
-        `Interrupting ${sanitizeTerminalLine(selected.name)}…`,
-        `Interrupted ${sanitizeTerminalLine(selected.name)}.`,
-        () => this.options.actions.interrupt(selected.id),
-      );
-    else if (printable === "r" && selected && canResume(selected))
-      this.openPrompt(selected, "resume");
-    else if (printable === "m" && selected && canMessage(selected))
-      this.openPrompt(
-        selected,
-        selected.state === "waiting_for_parent"
-          ? "reply"
-          : selected.state === "reported"
-            ? "next-assignment"
-            : "guidance",
-      );
-    else if (printable === "n" && selected && canRename(selected))
-      this.openPrompt(selected, "rename");
+    if (this.busyAction) {
+      const resolution = this.keymap.resolve(data, { mode: "busy", matchesKeybinding });
+      if (resolution?._tag === "Action" && resolution.action === "cancel") this.options.close();
+      return;
+    }
+
+    this.notice = undefined;
+    const resolution = this.keymap.resolve(data, {
+      mode: "navigation",
+      matchesKeybinding,
+      reservedKeys: FLEET_SHORTCUTS,
+    });
+    if (!resolution) return;
+
+    if (resolution._tag === "Shortcut") {
+      if (resolution.key === "t") {
+        this.showTechnicalDetails = !this.showTechnicalDetails;
+        this.detailScroll = 0;
+      } else if (resolution.key === "x" && selected && canStop(selected))
+        this.pendingStop = selected.id;
+      else if (resolution.key === "i" && selected && canInterrupt(selected))
+        this.performAction(
+          `Interrupting ${sanitizeTerminalLine(selected.name)}…`,
+          `Interrupted ${sanitizeTerminalLine(selected.name)}.`,
+          () => this.options.actions.interrupt(selected.id),
+        );
+      else if (resolution.key === "r" && selected && canResume(selected))
+        this.openPrompt(selected, "resume");
+      else if (resolution.key === "m" && selected && canMessage(selected))
+        this.openPrompt(
+          selected,
+          selected.state === "waiting_for_parent"
+            ? "reply"
+            : selected.state === "reported"
+              ? "next-assignment"
+              : "guidance",
+        );
+      else if (resolution.key === "n" && selected && canRename(selected))
+        this.openPrompt(selected, "rename");
+      this.options.requestRender();
+      return;
+    }
+
+    const browsingDetail = this.pane === "detail" || (this.layout === "narrow" && this.details);
+    const pageSize = Math.max(1, this.detailPageSize);
+    switch (resolution.action) {
+      case "cancel":
+        if (browsingDetail) {
+          this.pane = "list";
+          this.details = false;
+          this.detailScroll = 0;
+          this.options.requestRender();
+        } else this.options.close();
+        return;
+      case "quit":
+        this.options.close();
+        return;
+      case "back":
+        if (browsingDetail) {
+          this.pane = "list";
+          this.details = false;
+          this.detailScroll = 0;
+          this.keymap.resetChord();
+        }
+        break;
+      case "forward":
+        if (selected) {
+          this.pane = "detail";
+          if (this.layout === "narrow") this.details = true;
+          this.keymap.resetChord();
+        }
+        break;
+      case "confirm":
+        if (this.layout === "narrow" && selected) {
+          this.details = !this.details;
+          this.pane = this.details ? "detail" : "list";
+          this.detailScroll = 0;
+          this.keymap.resetChord();
+        }
+        break;
+      case "up":
+        if (browsingDetail) this.scrollDetail(1);
+        else this.select(this.selected - 1, runs);
+        break;
+      case "down":
+        if (browsingDetail) this.scrollDetail(-1);
+        else this.select(this.selected + 1, runs);
+        break;
+      case "half-page-up": {
+        const step = Math.max(1, Math.floor(pageSize / 2));
+        if (browsingDetail) this.scrollDetail(step);
+        else
+          this.select(
+            this.selected - Math.max(1, Math.floor((this.options.getHeight() - 3) / 2)),
+            runs,
+          );
+        break;
+      }
+      case "half-page-down": {
+        const step = Math.max(1, Math.floor(pageSize / 2));
+        if (browsingDetail) this.scrollDetail(-step);
+        else
+          this.select(
+            this.selected + Math.max(1, Math.floor((this.options.getHeight() - 3) / 2)),
+            runs,
+          );
+        break;
+      }
+      case "first":
+        if (browsingDetail) this.scrollDetail(this.detailMaxScroll);
+        else this.select(0, runs);
+        break;
+      case "last":
+        if (browsingDetail) this.scrollDetail(-this.detailMaxScroll);
+        else this.select(runs.length - 1, runs);
+        break;
+      case "help":
+        this.alternateHelp = !this.alternateHelp;
+        break;
+      case "pending-first":
+      case "search":
+        break;
+    }
     this.options.requestRender();
+  }
+
+  private scrollDetail(delta: number): void {
+    this.detailScroll = Math.max(0, Math.min(this.detailMaxScroll, this.detailScroll + delta));
   }
 
   render(width: number): string[] {
     const safeWidth = Math.max(0, Math.floor(width));
     const height = Math.max(0, Math.floor(this.options.getHeight()));
     if (safeWidth === 0 || height === 0) return [];
-    this.layout = safeWidth >= 100 ? "wide" : safeWidth >= 60 ? "stacked" : "narrow";
+    const nextLayout = safeWidth >= 100 ? "wide" : safeWidth >= 60 ? "stacked" : "narrow";
+    if (nextLayout !== this.layout) {
+      this.layout = nextLayout;
+      this.keymap.resetChord();
+      if (this.layout === "narrow") this.details = this.pane === "detail";
+    }
     const projection = this.options.getProjection();
     const runs = projection.runs;
     this.reconcile(runs);
     const selected = runs[this.selected];
+    if (!selected && this.pane === "detail") {
+      this.pane = "list";
+      this.details = false;
+      this.keymap.resetChord();
+    }
     const working = runs.filter(
       (run) => run.state === "starting" || run.state === "running" || run.state === "stopping",
     ).length;
@@ -519,12 +604,12 @@ export class SubagentFleetComponent implements Component {
     const contentWidth = Math.max(0, width - 2);
     const key = (id: FleetKeybindingId, fallback: string): string =>
       this.options.keybindingLabel?.(id, fallback) || fallback;
-    const navigation = this.options.keybindingLabel
+    const configuredNavigation = this.options.keybindingLabel
       ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
-      : "↑↓";
+      : undefined;
+    const navigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
     const enter = key("tui.select.confirm", "Enter");
     const escape = key("tui.select.cancel", "Esc");
-    const pages = `${key("tui.select.pageUp", "PgUp")}/${key("tui.select.pageDown", "PgDn")}`;
     if (this.prompt)
       return renderResponsiveManagerFooter(contentWidth, [[`${enter} Submit`, `${escape} Cancel`]]);
     if (this.busyAction)
@@ -533,7 +618,7 @@ export class SubagentFleetComponent implements Component {
       return renderResponsiveManagerFooter(contentWidth, [
         [
           `x Confirm stop ${sanitizeTerminalLine(selected?.name ?? "selected subagent")}`,
-          `${escape} Cancel`,
+          `${escape}/q Cancel`,
         ],
       ]);
     const messageAction = !canMessage(selected)
@@ -544,7 +629,7 @@ export class SubagentFleetComponent implements Component {
           ? "m New task"
           : "m Guide";
     if (!selected)
-      return renderResponsiveManagerFooter(contentWidth, [[`No runs · ? More`, `${escape} Close`]]);
+      return renderResponsiveManagerFooter(contentWidth, [["No runs · ? More", "q Close"]]);
     const actions = [
       messageAction,
       canInterrupt(selected) ? "i Interrupt" : undefined,
@@ -559,45 +644,42 @@ export class SubagentFleetComponent implements Component {
       canRename(selected) ? "n Name" : undefined,
       canStop(selected) ? "x Stop" : undefined,
     ].filter((item): item is string => item !== undefined);
-    const scrollHelp =
-      this.layout === "narrow" && !this.details
-        ? `${pages} Page list · Home/End`
-        : `C-u/d Half-page · ${pages} Page detail`;
+    const scrollHelp = this.pane === "list" ? "C-u/d Half-page · gg/G Ends" : "C-u/d Detail · gg/G";
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [
         [
-          `${navigation} Select · ${enter} Details (narrow) · ${scrollHelp}`,
+          `${navigation} Move · h/l Panes · ${scrollHelp}`,
           compactActions.length > 0 ? compactActions.join(" · ") : "No run actions",
-          `t Technical · ? Back · ${escape} Close`,
+          `t Technical · ? Back · ${escape}/q Close`,
         ],
         [
-          `${navigation} · ${enter} Details · ${scrollHelp}`,
+          `${navigation} · h/l · ${scrollHelp}`,
           compactActions.length > 0 ? compactActions.join(" · ") : "No actions",
-          `t Technical · ? Back · ${escape}`,
+          `? Back · ${escape}/q`,
         ],
         [
           compactActions.length > 0 ? compactActions.join(" · ") : "No actions",
-          `? Back · ${escape}`,
+          `? Back · ${escape}/q`,
         ],
       ]);
     return renderResponsiveManagerFooter(contentWidth, [
       [
-        `${navigation} Select · ${scrollHelp}`,
+        `${navigation} Move · h/l Panes · ${scrollHelp}`,
         actions.length > 0 ? actions.join(" · ") : undefined,
-        `t Technical · ? More · ${escape} Close`,
+        `t Technical · ? More · ${escape}/q Close`,
       ],
       [
-        `${navigation} · ${scrollHelp}`,
+        `${navigation} · h/l · ${scrollHelp}`,
         compactActions.length > 0 ? compactActions.join(" · ") : undefined,
-        `t Technical · ? More · ${escape}`,
+        `? More · ${escape}/q`,
       ],
       width >= 60
         ? [
-            `${navigation} · ${pages}`,
+            `${navigation} · h/l · gg/G`,
             compactActions.length > 0 ? compactActions.join(" · ") : undefined,
-            `? More · ${escape}`,
+            `? · ${escape}/q`,
           ]
-        : [`${navigation} · ${enter}`, `? More · ${escape}`],
+        : [`${navigation} · h/l`, "gg/G", `? More · ${escape}/q`],
     ]);
   }
 
@@ -628,11 +710,9 @@ export class SubagentFleetComponent implements Component {
     const visible = lines.slice(start, start + bodyHeight);
     if (!hasOverflow) return visible;
     const end = Math.min(lines.length, start + bodyHeight);
-    const pageUp = this.options.keybindingLabel?.("tui.select.pageUp", "PgUp") || "PgUp";
-    const pageDown = this.options.keybindingLabel?.("tui.select.pageDown", "PgDn") || "PgDn";
     const position = this.options.theme.fg(
       "dim",
-      ` ${start + 1}–${end} of ${lines.length} · C-u/d half-page · ${pageUp}/${pageDown} page `,
+      ` ${start + 1}–${end} of ${lines.length} · C-u/d half-page `,
     );
     return [pad(position, width), ...visible];
   }
@@ -648,7 +728,10 @@ export class SubagentFleetComponent implements Component {
     const rightWidth = inner - leftWidth - 1;
     const visible = this.visibleRuns(runs, Math.max(1, height - 1));
     const left = [
-      this.options.theme.fg("accent", this.listHeading(runs, visible)),
+      this.options.theme.fg(
+        this.pane === "list" ? "accent" : "muted",
+        `${this.pane === "list" ? "› " : ""}${this.listHeading(runs, visible)}`,
+      ),
       ...visible.map(({ run, index }) => this.runLine(run, index, leftWidth, runs)),
     ];
     const detail = this.detailWindow(this.detailLines(selected, rightWidth), height, rightWidth);
@@ -671,7 +754,10 @@ export class SubagentFleetComponent implements Component {
     const listHeight = Math.max(3, Math.min(runs.length + 1, Math.floor(height * 0.4)));
     const visible = this.visibleRuns(runs, listHeight - 1);
     const list = [
-      this.options.theme.fg("accent", this.listHeading(runs, visible)),
+      this.options.theme.fg(
+        this.pane === "list" ? "accent" : "muted",
+        `${this.pane === "list" ? "› " : ""}${this.listHeading(runs, visible)}`,
+      ),
       ...visible.map(({ run, index }) => this.runLine(run, index, inner, runs)),
     ];
     const divider = `${this.outerBorder("├")}${this.innerBorder("─".repeat(inner))}${this.outerBorder("┤")}`;

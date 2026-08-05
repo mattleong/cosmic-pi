@@ -1,16 +1,15 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import {
-  Key,
-  matchesKey,
-  truncateToWidth,
-  visibleWidth,
-  type Component,
-} from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import {
   brailleSpinnerFrame,
   renderResponsiveManagerFooter,
   startingSpinnerFrame,
 } from "pi-cosmic-ui/manager";
+import {
+  decodeFullScreenPrintable,
+  FullScreenKeymap,
+  type FullScreenSelectionKeybindingId,
+} from "pi-cosmic-ui/manager/keybindings";
 import type { BackgroundJobView, BackgroundTerminalProjection } from "../job/model.ts";
 import { isActiveJobState } from "../job/model.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "./sanitize.ts";
@@ -20,6 +19,12 @@ export interface ProcessManagerOptions {
   readonly getProjection: () => BackgroundTerminalProjection;
   readonly getHeight: () => number;
   readonly getNow: () => number;
+  readonly matchesKeybinding?:
+    | ((data: string, id: FullScreenSelectionKeybindingId) => boolean)
+    | undefined;
+  readonly keybindingLabel?:
+    | ((id: FullScreenSelectionKeybindingId, fallback: string) => string)
+    | undefined;
   readonly requestRender: () => void;
   readonly close: () => void;
   readonly stop: (id: string) => void;
@@ -27,6 +32,9 @@ export interface ProcessManagerOptions {
 }
 
 type ProcessManagerLayout = "wide" | "stacked" | "narrow";
+type ProcessManagerPane = "list" | "detail";
+
+const PROCESS_MANAGER_SHORTCUTS = new Set(["c", "f", "t", "x"]);
 
 const stateGlyph = (job: BackgroundJobView, frame: number): string => {
   switch (job.state) {
@@ -111,8 +119,11 @@ export class ProcessManagerComponent implements Component {
   private detailScroll = 0;
   private detailMaxScroll = 0;
   private detailLineCount = 0;
+  private detailPageSize = 1;
   private pendingStop: string | undefined;
   private layout: ProcessManagerLayout = "narrow";
+  private pane: ProcessManagerPane = "list";
+  private readonly keymap = new FullScreenKeymap();
   private readonly options: ProcessManagerOptions;
 
   constructor(options: ProcessManagerOptions) {
@@ -145,60 +156,153 @@ export class ProcessManagerComponent implements Component {
     const jobs = this.options.getProjection().jobs;
     this.reconcileSelection(jobs);
     const selected = jobs[this.selected];
-    if (matchesKey(data, Key.escape)) {
-      if (this.pendingStop) {
+    const matchesKeybinding = this.options.matchesKeybinding;
+
+    if (this.pendingStop) {
+      const resolution = this.keymap.resolve(data, {
+        mode: "confirmation",
+        matchesKeybinding,
+        reservedKeys: new Set(["x"]),
+      });
+      const printable = decodeFullScreenPrintable(data);
+      if (resolution?._tag === "Action" && resolution.action === "cancel") {
         this.pendingStop = undefined;
-        this.options.requestRender();
-        return;
-      }
-      this.options.close();
-      return;
-    }
-    if (matchesKey(data, Key.ctrl("u"))) {
-      this.follow = false;
-      this.detailScroll = Math.min(this.detailMaxScroll, this.detailScroll + 1);
-    } else if (matchesKey(data, Key.ctrl("d"))) {
-      this.detailScroll = Math.max(0, this.detailScroll - 1);
-      this.follow = this.detailScroll === 0;
-    } else if (matchesKey(data, Key.up) || data === "k") {
-      this.select(this.selected - 1, jobs);
-    } else if (matchesKey(data, Key.down) || data === "j") {
-      this.select(this.selected + 1, jobs);
-    } else if (matchesKey(data, Key.enter) && this.layout === "narrow") {
-      this.details = !this.details;
-      this.detailScroll = 0;
-      this.follow = true;
-    } else if (data === "t") {
-      this.showTechnicalDetails = !this.showTechnicalDetails;
-      this.detailScroll = 0;
-      this.follow = true;
-    } else if (data === "?") {
-      this.alternateHelp = !this.alternateHelp;
-    } else if (data === "f" && selected && isActiveJobState(selected.state)) {
-      this.follow = !this.follow;
-      this.detailScroll = this.follow ? 0 : Math.min(this.detailMaxScroll, 1);
-      this.pendingStop = undefined;
-    } else if (data === "x" && selected && isActiveJobState(selected.state)) {
-      if (this.pendingStop === selected.id) {
+      } else if (
+        resolution?._tag === "Shortcut" &&
+        resolution.key === "x" &&
+        printable === "x" &&
+        selected?.id === this.pendingStop
+      ) {
         this.pendingStop = undefined;
         this.options.stop(selected.id);
-      } else this.pendingStop = selected.id;
-    } else if (data === "c" && jobs.some((job) => !isActiveJobState(job.state))) {
-      this.pendingStop = undefined;
-      this.options.clear();
+      } else this.pendingStop = undefined;
+      this.options.requestRender();
+      return;
+    }
+
+    const resolution = this.keymap.resolve(data, {
+      mode: "navigation",
+      matchesKeybinding,
+      reservedKeys: PROCESS_MANAGER_SHORTCUTS,
+    });
+    if (!resolution) return;
+    if (resolution._tag === "Shortcut") {
+      if (resolution.key === "t") {
+        this.showTechnicalDetails = !this.showTechnicalDetails;
+        this.detailScroll = 0;
+        this.follow = true;
+      } else if (resolution.key === "f" && selected && isActiveJobState(selected.state)) {
+        this.follow = !this.follow;
+        this.detailScroll = this.follow ? 0 : Math.min(this.detailMaxScroll, 1);
+      } else if (resolution.key === "x" && selected && isActiveJobState(selected.state)) {
+        this.pendingStop = selected.id;
+      } else if (resolution.key === "c" && jobs.some((job) => !isActiveJobState(job.state)))
+        this.options.clear();
+      this.options.requestRender();
+      return;
+    }
+
+    const browsingDetail = this.pane === "detail" || (this.layout === "narrow" && this.details);
+    const pageSize = Math.max(1, this.detailPageSize);
+    switch (resolution.action) {
+      case "cancel":
+      case "quit":
+        this.options.close();
+        return;
+      case "back":
+        if (browsingDetail) {
+          this.pane = "list";
+          this.details = false;
+          this.keymap.resetChord();
+        }
+        break;
+      case "forward":
+        if (selected) {
+          this.pane = "detail";
+          if (this.layout === "narrow") this.details = true;
+          this.keymap.resetChord();
+        }
+        break;
+      case "confirm":
+        if (this.layout === "narrow" && selected) {
+          this.details = !this.details;
+          this.pane = this.details ? "detail" : "list";
+          this.detailScroll = 0;
+          this.follow = true;
+          this.keymap.resetChord();
+        }
+        break;
+      case "up":
+        if (browsingDetail) this.scrollDetail(1);
+        else this.select(this.selected - 1, jobs);
+        break;
+      case "down":
+        if (browsingDetail) this.scrollDetail(-1);
+        else this.select(this.selected + 1, jobs);
+        break;
+      case "half-page-up": {
+        const step = Math.max(1, Math.floor(pageSize / 2));
+        if (browsingDetail) this.scrollDetail(step);
+        else
+          this.select(
+            this.selected - Math.max(1, Math.floor((this.options.getHeight() - 3) / 2)),
+            jobs,
+          );
+        break;
+      }
+      case "half-page-down": {
+        const step = Math.max(1, Math.floor(pageSize / 2));
+        if (browsingDetail) this.scrollDetail(-step);
+        else
+          this.select(
+            this.selected + Math.max(1, Math.floor((this.options.getHeight() - 3) / 2)),
+            jobs,
+          );
+        break;
+      }
+      case "first":
+        if (browsingDetail) this.scrollDetail(this.detailMaxScroll);
+        else this.select(0, jobs);
+        break;
+      case "last":
+        if (browsingDetail) this.scrollDetail(-this.detailMaxScroll);
+        else this.select(jobs.length - 1, jobs);
+        break;
+      case "help":
+        this.alternateHelp = !this.alternateHelp;
+        break;
+      case "pending-first":
+      case "search":
+        break;
     }
     this.options.requestRender();
+  }
+
+  private scrollDetail(delta: number): void {
+    this.follow = false;
+    this.detailScroll = Math.max(0, Math.min(this.detailMaxScroll, this.detailScroll + delta));
+    this.follow = this.detailScroll === 0;
   }
 
   render(width: number): string[] {
     const safeWidth = Math.max(0, Math.floor(width));
     const height = Math.max(0, Math.floor(this.options.getHeight()));
     if (safeWidth === 0 || height === 0) return [];
-    this.layout = safeWidth >= 100 ? "wide" : safeWidth >= 60 ? "stacked" : "narrow";
+    const nextLayout = safeWidth >= 100 ? "wide" : safeWidth >= 60 ? "stacked" : "narrow";
+    if (nextLayout !== this.layout) {
+      this.layout = nextLayout;
+      this.keymap.resetChord();
+      if (this.layout === "narrow") this.details = this.pane === "detail";
+    }
     const projection = this.options.getProjection();
     const jobs = projection.jobs;
     this.reconcileSelection(jobs);
     const selected = jobs[this.selected];
+    if (!selected && this.pane === "detail") {
+      this.pane = "list";
+      this.details = false;
+      this.keymap.resetChord();
+    }
     const active = jobs.filter((job) => isActiveJobState(job.state)).length;
     const failed = jobs.filter((job) => job.state === "failed" || job.state === "timed_out").length;
     const title = ` /ps · ${active} active${failed ? ` · ${failed} failed` : ""} `;
@@ -236,9 +340,16 @@ export class ProcessManagerComponent implements Component {
     selected: BackgroundJobView | undefined,
   ): string {
     const contentWidth = Math.max(0, width - 2);
+    const key = (id: FullScreenSelectionKeybindingId, fallback: string): string =>
+      this.options.keybindingLabel?.(id, fallback) || fallback;
+    const configuredNavigation = this.options.keybindingLabel
+      ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
+      : undefined;
+    const navigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
+    const escape = key("tui.select.cancel", "Esc");
     if (this.pendingStop)
       return renderResponsiveManagerFooter(contentWidth, [
-        [`x Confirm stop ${this.pendingStop}`, "Esc Cancel"],
+        [`x Confirm stop ${this.pendingStop}`, `${escape}/q Cancel`],
       ]);
     const actions = [
       selected && isActiveJobState(selected.state)
@@ -249,18 +360,31 @@ export class ProcessManagerComponent implements Component {
     ].filter((item): item is string => item !== undefined);
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [
-        [actions.length > 0 ? actions.join(" · ") : "No actions", "? Keys"],
+        [
+          `${navigation} Move · h/l Panes · gg/G Ends`,
+          actions.length > 0 ? actions.join(" · ") : "No actions",
+          "? Back · q Close",
+        ],
+        [
+          `${navigation} · h/l · gg/G`,
+          actions.length > 0 ? actions.join(" · ") : "No actions",
+          "? · q",
+        ],
       ]);
     return renderResponsiveManagerFooter(contentWidth, [
       [
-        "↑↓ Select · C-u/d Scroll",
+        `${navigation} Move · C-u/d Scroll · h/l Panes`,
         actions.length > 0 ? actions.join(" · ") : undefined,
-        "t Technical · ? Help · Esc Close",
+        "t Technical · ? More · q Close",
       ],
-      ["↑↓ · C-u/d", actions.length > 0 ? actions.join(" · ") : undefined, "t Tech · ? Help · Esc"],
+      [
+        `${navigation} · C-u/d · h/l`,
+        actions.length > 0 ? actions.join(" · ") : undefined,
+        "t Tech · ? · q",
+      ],
       width >= 60
-        ? ["↑↓ Select · C-u/d", "t Details · ? Actions · Esc"]
-        : ["↑↓ · Enter", "t", "? Actions · Esc"],
+        ? [`${navigation} Select · h/l Panes`, "C-u/d · gg/G", `? More · ${escape}/q`]
+        : [`${navigation} · l Details`, "gg/G", `? More · ${escape}/q`],
     ]);
   }
 
@@ -327,11 +451,13 @@ export class ProcessManagerComponent implements Component {
   private detailWindow(lines: string[], height: number, width: number): string[] {
     if (height <= 0) {
       this.detailMaxScroll = 0;
+      this.detailPageSize = 1;
       return [];
     }
     if (this.follow) this.detailScroll = 0;
     const hasOverflow = lines.length > height;
     const bodyHeight = hasOverflow && height > 1 ? height - 1 : height;
+    this.detailPageSize = Math.max(1, bodyHeight);
     if (!this.follow && this.detailScroll > 0 && lines.length > this.detailLineCount)
       this.detailScroll += lines.length - this.detailLineCount;
     this.detailLineCount = lines.length;
@@ -357,7 +483,10 @@ export class ProcessManagerComponent implements Component {
     const leftWidth = Math.max(34, Math.floor(inner * 0.4));
     const rightWidth = inner - leftWidth - 1;
     const left = [
-      this.options.theme.fg("accent", "Background jobs"),
+      this.options.theme.fg(
+        this.pane === "list" ? "accent" : "muted",
+        `${this.pane === "list" ? "› " : ""}Background jobs`,
+      ),
       ...this.visibleJobs(jobs, Math.max(1, height - 1)).map(({ job, index }) =>
         this.jobLine(job, index, leftWidth),
       ),
@@ -381,7 +510,10 @@ export class ProcessManagerComponent implements Component {
     const inner = width - 2;
     const listHeight = Math.max(3, Math.min(jobs.length + 1, Math.floor(height * 0.4)));
     const list = [
-      this.options.theme.fg("accent", "Background jobs"),
+      this.options.theme.fg(
+        this.pane === "list" ? "accent" : "muted",
+        `${this.pane === "list" ? "› " : ""}Background jobs`,
+      ),
       ...this.visibleJobs(jobs, Math.max(1, listHeight - 1)).map(({ job, index }) =>
         this.jobLine(job, index, inner),
       ),

@@ -3,6 +3,10 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { isProjectTrusted } from "pi-cosmic-core";
+import {
+  fullScreenKeybindingLabel,
+  type FullScreenSelectionKeybindingId,
+} from "pi-cosmic-ui/manager/keybindings";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { startHostUiTicker, type SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
@@ -48,25 +52,6 @@ export interface FleetManagerActions {
   ) => Promise<ReadonlyArray<NativeRuntimeModel>>;
 }
 
-const formatKeyId = (value: string): string => {
-  const labels: Readonly<Record<string, string>> = {
-    up: "↑",
-    down: "↓",
-    enter: "Enter",
-    escape: "Esc",
-    pageUp: "PgUp",
-    pageDown: "PgDn",
-    tab: "Tab",
-  };
-  const parts = value.split("+");
-  const base = parts.pop() ?? value;
-  const modifiers = parts
-    .map((part) => (part === "ctrl" ? "C-" : part === "shift" ? "⇧" : part === "alt" ? "A-" : "⌘"))
-    .join("");
-  const key = labels[base] ?? (base.length === 1 ? base.toUpperCase() : base);
-  return `${modifiers}${key}`;
-};
-
 async function openFleetManager(
   ctx: ExtensionCommandContext,
   bridge: SubagentProjectionBridge,
@@ -90,9 +75,13 @@ async function openFleetManager(
         getNow: synchronousNow,
         matchesKeybinding: (data, id) => keybindings.matches(data, id),
         keybindingLabel: (id, fallback) =>
-          typeof keybindings.getKeys === "function"
-            ? keybindings.getKeys(id).map(formatKeyId).join("/") || fallback
-            : fallback,
+          fullScreenKeybindingLabel(
+            id,
+            fallback,
+            typeof keybindings.getKeys === "function"
+              ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
+              : undefined,
+          ),
         requestRender: () => tui.requestRender(),
         close: () => done(undefined),
         actions: {
@@ -122,6 +111,12 @@ async function openFleetManager(
         tui.requestRender();
       });
       return {
+        get focused() {
+          return manager.focused;
+        },
+        set focused(value: boolean) {
+          manager.focused = value;
+        },
         render: (width) => manager.render(width),
         handleInput: (data) => manager.handleInput(data),
         invalidate: () => manager.invalidate(),
@@ -373,9 +368,13 @@ async function openProfileSettings(
         requestRender: () => tui.requestRender(),
         matchesKeybinding: (data, id) => keybindings.matches(data, id),
         keybindingLabel: (id, fallback) =>
-          typeof keybindings.getKeys === "function"
-            ? keybindings.getKeys(id).map(formatKeyId).join("/") || fallback
-            : fallback,
+          fullScreenKeybindingLabel(
+            id,
+            fallback,
+            typeof keybindings.getKeys === "function"
+              ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
+              : undefined,
+          ),
         close: done,
         saveDraft,
         clearSessionOverrides,

@@ -85,9 +85,9 @@ describe("/ps process manager", () => {
 
   it("uses the same grouped responsive footer as the subagent fleet", () => {
     const footer = renderAt(120, 24).at(-1) ?? "";
-    expect(footer).toContain("↑↓ Select · C-u/d Scroll");
+    expect(footer).toContain("j/k Move · C-u/d Scroll · h/l Panes");
     expect(footer).toContain("f Unfollow · x Stop");
-    expect(footer).toContain("t Technical · ? Help · Esc Close");
+    expect(footer).toContain("t Technical · ? More · q Close");
     expect(footer).not.toContain("c Clear");
   });
 
@@ -178,6 +178,49 @@ describe("/ps process manager", () => {
     expect(component.render(42).join("\n")).toBe(tail);
   });
 
+  it("supports gg/G endpoints, h/l panes, and q close", () => {
+    const logs = Array.from({ length: 30 }, (_, index) => ({
+      cursor: index + 1,
+      stream: "stdout" as const,
+      text: `line-${index}\n`,
+      timestamp: index,
+      bytes: 8,
+    }));
+    const current: BackgroundTerminalProjection = {
+      jobs: [
+        { ...projection.jobs[0]!, logs, logCursor: 30 },
+        { ...projection.jobs[0]!, id: "term-2", name: "second" },
+      ],
+    };
+    const close = vi.fn();
+    const component = new ProcessManagerComponent({
+      theme,
+      getProjection: () => current,
+      getHeight: () => 12,
+      getNow: () => 0,
+      requestRender: vi.fn(),
+      close,
+      stop: vi.fn(),
+      clear: vi.fn(),
+    });
+    component.render(42);
+    component.handleInput("G");
+    component.handleInput("x");
+    expect(component.render(42).at(-1)).toContain("term-2");
+    component.handleInput("\u001b");
+    component.handleInput("g");
+    component.handleInput("g");
+    component.handleInput("l");
+    component.render(42);
+    component.handleInput("g");
+    component.handleInput("g");
+    expect(component.render(42).join("\n")).toContain("line-0");
+    component.handleInput("G");
+    expect(component.render(42).join("\n")).toContain("line-29");
+    component.handleInput("q");
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it("uses in-manager stop confirmation and Enter details", () => {
     const stop = vi.fn();
     const requestRender = vi.fn();
@@ -193,6 +236,9 @@ describe("/ps process manager", () => {
     });
     component.handleInput("x");
     expect(stop).not.toHaveBeenCalled();
+    component.handleInput("\u001b[120;1:2u");
+    expect(stop).not.toHaveBeenCalled();
+    component.handleInput("x");
     component.handleInput("x");
     expect(stop).toHaveBeenCalledWith("term-1");
     component.handleInput("\r");

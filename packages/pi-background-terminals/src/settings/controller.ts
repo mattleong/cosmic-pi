@@ -1,6 +1,10 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 // @effect-diagnostics effect/asyncFunction:off
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+  fullScreenKeybindingLabel,
+  type FullScreenSelectionKeybindingId,
+} from "pi-cosmic-ui/manager/keybindings";
 import { startHostUiTicker, type BackgroundTerminalProjectionBridge } from "../boundary/host-ui.ts";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { ProcessManagerComponent } from "../ui/manager.ts";
@@ -20,12 +24,21 @@ async function openProcessManager(
     return;
   }
   await ctx.ui.custom<void>(
-    (tui, theme, _keybindings, done) => {
+    (tui, theme, keybindings, done) => {
       const manager = new ProcessManagerComponent({
         theme,
         getProjection: bridge.get,
         getHeight: () => tui.terminal.rows,
         getNow: synchronousNow,
+        matchesKeybinding: (data, id) => keybindings.matches(data, id),
+        keybindingLabel: (id, fallback) =>
+          fullScreenKeybindingLabel(
+            id,
+            fallback,
+            typeof keybindings.getKeys === "function"
+              ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
+              : undefined,
+          ),
         requestRender: () => tui.requestRender(),
         close: () => done(undefined),
         stop: (id) => void actions.stop(id).catch(() => undefined),

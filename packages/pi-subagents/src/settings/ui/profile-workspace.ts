@@ -1,13 +1,8 @@
 // Profile settings are a Promise-shaped Pi host UI boundary.
 // @effect-diagnostics effect/asyncFunction:off
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import {
-  decodeKittyPrintable,
-  Key,
-  matchesKey,
-  type Component,
-  type KeyId,
-} from "@earendil-works/pi-tui";
+import { type Component, type Focusable } from "@earendil-works/pi-tui";
+import { decodeFullScreenPrintable, FullScreenKeymap } from "pi-cosmic-ui/manager/keybindings";
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../run/model.ts";
@@ -99,6 +94,19 @@ type WorkspaceMessage = {
 };
 
 const paneOrder: ReadonlyArray<ProfileWorkspacePane> = ["profiles", "candidates", "fields"];
+const PROFILE_WORKSPACE_SHORTCUTS = new Set([
+  "/",
+  "J",
+  "K",
+  "X",
+  "a",
+  "c",
+  "d",
+  "i",
+  "r",
+  "s",
+  "x",
+]);
 const confirmationKey = (action: PendingAction): string =>
   action === "remove" ? "x" : action === "disable" ? "d" : action === "reset" ? "i" : "X";
 const saveScopeLabel = (scope: ProfileSettingsScope): string =>
@@ -114,7 +122,7 @@ const sameCandidate = (left: ProfileCandidate, right: ProfileCandidate): boolean
   left.fastMode === right.fastMode &&
   left.closeOnReport === right.closeOnReport;
 
-export class ProfileWorkspaceComponent implements Component {
+export class ProfileWorkspaceComponent implements Component, Focusable {
   private inspection: ProfileSettingsInspection;
   private scope: ProfileSettingsScope;
   private pane: ProfileWorkspacePane = "profiles";
@@ -132,6 +140,8 @@ export class ProfileWorkspaceComponent implements Component {
   private catalogLoad: AbortController | undefined;
   private modelPicker: ProfileModelPickerPage | undefined;
   private selectPage: SearchableSelectPage<string> | undefined;
+  private _focused = false;
+  private readonly keymap = new FullScreenKeymap();
   private readonly options: ProfileWorkspaceOptions;
 
   constructor(options: ProfileWorkspaceOptions) {
@@ -140,6 +150,16 @@ export class ProfileWorkspaceComponent implements Component {
     this.scope = options.initialScope ?? "global";
     this.profileIndex = PROFILE_IDS.indexOf("generalist");
     this.reconcile();
+  }
+
+  get focused(): boolean {
+    return this._focused;
+  }
+
+  set focused(value: boolean) {
+    this._focused = value;
+    if (this.modelPicker) this.modelPicker.focused = value;
+    if (this.selectPage) this.selectPage.focused = value;
   }
 
   private profile(): ProfileId {
@@ -176,10 +196,6 @@ export class ProfileWorkspaceComponent implements Component {
 
   private clearMessage(): void {
     this.message = undefined;
-  }
-
-  private printableKey(data: string): string | undefined {
-    return data.length === 1 ? data : decodeKittyPrintable(data);
   }
 
   private projectOverrideActive(profile = this.profile()): boolean {
@@ -225,6 +241,7 @@ export class ProfileWorkspaceComponent implements Component {
     const next = Math.max(0, Math.min(paneOrder.length - 1, current + direction));
     this.pane = paneOrder[next] ?? "profiles";
     this.pendingAction = undefined;
+    this.keymap.resetChord();
     this.clearMessage();
   }
 
@@ -237,6 +254,7 @@ export class ProfileWorkspaceComponent implements Component {
     this.candidateIndex = 0;
     this.fieldIndex = 0;
     this.pendingAction = undefined;
+    this.keymap.resetChord();
     if (this.pane === "fields" && this.draft().candidates.length === 0) this.pane = "candidates";
     this.setMessage(
       "info",
@@ -246,6 +264,14 @@ export class ProfileWorkspaceComponent implements Component {
           ? "Global scope overrides built-in profile defaults after reload."
           : "Project scope overrides global profile settings after reload.",
     );
+  }
+
+  private cycleScope(): void {
+    const scopes: ReadonlyArray<ProfileSettingsScope> = this.options.projectTrusted
+      ? ["session", "global", "project"]
+      : ["session", "global"];
+    const current = scopes.indexOf(this.scope);
+    this.changeScope(scopes[(current + 1 + scopes.length) % scopes.length] ?? "session");
   }
 
   private persist(
@@ -452,6 +478,7 @@ export class ProfileWorkspaceComponent implements Component {
         this.renderSoon();
       },
     });
+    this.selectPage.focused = this._focused;
     this.renderSoon();
   }
 
@@ -592,6 +619,7 @@ export class ProfileWorkspaceComponent implements Component {
             this.renderSoon();
           },
         });
+        this.modelPicker.focused = this._focused;
         this.renderSoon();
       })
       .catch((error: unknown) => {
@@ -628,6 +656,7 @@ export class ProfileWorkspaceComponent implements Component {
         this.renderSoon();
       },
     });
+    this.selectPage.focused = this._focused;
     this.renderSoon();
   }
 
@@ -715,6 +744,7 @@ export class ProfileWorkspaceComponent implements Component {
       this.clearMessage();
     } else this.options.close(this.reloadRequired);
     this.pendingAction = undefined;
+    this.keymap.resetChord();
   }
 
   private forward(): void {
@@ -727,12 +757,7 @@ export class ProfileWorkspaceComponent implements Component {
         this.clearMessage();
       } else this.setMessage("info", "Add a candidate before opening candidate details.");
     } else this.openFieldPicker();
-  }
-
-  private matches(data: string, key: KeyId, id: SettingsSelectKeybindingId): boolean {
-    return this.options.matchesKeybinding
-      ? this.options.matchesKeybinding(data, id)
-      : matchesKey(data, key);
+    this.keymap.resetChord();
   }
 
   handleInput(data: string): void {
@@ -745,28 +770,25 @@ export class ProfileWorkspaceComponent implements Component {
       return;
     }
 
-    if (this.matches(data, Key.escape, "tui.select.cancel")) {
-      if (this.pendingAction) {
-        this.pendingAction = undefined;
-        this.renderSoon();
-      } else if (this.catalogLoad) this.cancelCatalogLoad();
-      else if (this.busy) {
-        this.setMessage("warning", "Wait for the current settings operation to finish.");
-        this.renderSoon();
-      } else this.back();
-      return;
-    }
-
-    if (this.busy) {
-      this.setMessage("warning", "Wait for the current settings operation to finish.");
-      this.renderSoon();
-      return;
-    }
-
-    const printable = this.printableKey(data);
+    const matchesKeybinding = this.options.matchesKeybinding;
+    const printable = decodeFullScreenPrintable(data);
 
     if (this.pendingAction) {
-      if (printable === confirmationKey(this.pendingAction)) this.confirmPending();
+      const resolution = this.keymap.resolve(data, {
+        mode: "confirmation",
+        matchesKeybinding,
+        reservedKeys: new Set([confirmationKey(this.pendingAction)]),
+      });
+      if (resolution?._tag === "Action" && resolution.action === "cancel") {
+        this.pendingAction = undefined;
+        this.setMessage("info", "Confirmation canceled.");
+        this.renderSoon();
+      } else if (
+        resolution?._tag === "Shortcut" &&
+        resolution.key === confirmationKey(this.pendingAction) &&
+        printable === confirmationKey(this.pendingAction)
+      )
+        this.confirmPending();
       else {
         this.pendingAction = undefined;
         this.setMessage("info", "Confirmation canceled.");
@@ -775,74 +797,117 @@ export class ProfileWorkspaceComponent implements Component {
       return;
     }
 
-    if (matchesKey(data, Key.tab)) this.navigate(1);
-    else if (matchesKey(data, Key.shift("tab"))) this.navigate(-1);
-    else if (
-      this.matches(data, Key.pageUp, "tui.select.pageUp") ||
-      this.matches(data, Key.pageDown, "tui.select.pageDown")
-    ) {
-      const direction = this.matches(data, Key.pageUp, "tui.select.pageUp") ? -1 : 1;
-      const step = Math.max(1, this.options.getHeight() - 10);
-      if (this.pane === "profiles") this.selectProfile(direction * step);
-      else if (this.pane === "candidates") this.selectCandidate(direction * step);
-      else this.selectField(direction * step);
-    } else if (matchesKey(data, Key.home)) {
-      if (this.pane === "profiles") this.profileIndex = 0;
-      else if (this.pane === "candidates") this.candidateIndex = 0;
-      else this.fieldIndex = 0;
-      this.pendingAction = undefined;
-      this.clearMessage();
-    } else if (matchesKey(data, Key.end)) {
-      if (this.pane === "profiles") this.profileIndex = PROFILE_IDS.length - 1;
-      else if (this.pane === "candidates")
-        this.candidateIndex = Math.max(0, this.draft().candidates.length - 1);
-      else this.fieldIndex = PROFILE_WORKSPACE_FIELDS.length - 1;
-      this.pendingAction = undefined;
-      this.clearMessage();
-    } else if (this.matches(data, Key.up, "tui.select.up") || printable === "k") {
-      if (this.pane === "profiles") this.selectProfile(-1);
-      else if (this.pane === "candidates") this.selectCandidate(-1);
-      else this.selectField(-1);
-    } else if (this.matches(data, Key.down, "tui.select.down") || printable === "j") {
-      if (this.pane === "profiles") this.selectProfile(1);
-      else if (this.pane === "candidates") this.selectCandidate(1);
-      else this.selectField(1);
-    } else if (matchesKey(data, Key.left)) {
-      if (this.pane !== "profiles") this.back();
-    } else if (matchesKey(data, Key.right) || this.matches(data, Key.enter, "tui.select.confirm"))
-      this.forward();
-    else if (printable === "/" && this.pane === "profiles") this.openProfileSearch();
-    else if (printable === "s") this.changeScope("session");
-    else if (printable === "g") this.changeScope("global");
-    else if (printable === "p") this.changeScope("project");
-    else if (
-      printable === "a" &&
-      this.pane === "candidates" &&
-      this.draft().candidates.length < MAX_PROFILE_CANDIDATES
-    )
-      this.performDraftAction("add");
-    else if (
-      printable === "c" &&
-      this.pane === "candidates" &&
-      this.draft().candidates.length > 0 &&
-      this.draft().candidates.length < MAX_PROFILE_CANDIDATES
-    )
-      this.performDraftAction("clone");
-    else if (printable === "K" && this.pane === "candidates" && this.candidateIndex > 0)
-      this.performDraftAction("move-up");
-    else if (
-      printable === "J" &&
-      this.pane === "candidates" &&
-      this.candidateIndex < this.draft().candidates.length - 1
-    )
-      this.performDraftAction("move-down");
-    else if (printable === "x" && this.pane === "candidates" && this.draft().candidates.length > 0)
-      this.arm("remove");
-    else if (printable === "d" && this.pane === "candidates") this.arm("disable");
-    else if (printable === "i" && this.pane !== "fields") this.arm("reset");
-    else if (printable === "X" && this.scope === "session" && this.pane === "profiles")
-      this.arm("clear-session");
-    else if (printable === "r") this.requestReload();
+    if (this.busy) {
+      const resolution = this.keymap.resolve(data, { mode: "busy", matchesKeybinding });
+      if (this.catalogLoad && resolution?._tag === "Action" && resolution.action === "cancel")
+        this.cancelCatalogLoad();
+      else {
+        this.setMessage("warning", "Wait for the current settings operation to finish.");
+        this.renderSoon();
+      }
+      return;
+    }
+
+    const resolution = this.keymap.resolve(data, {
+      mode: "navigation",
+      matchesKeybinding,
+      reservedKeys: PROFILE_WORKSPACE_SHORTCUTS,
+    });
+    if (!resolution) return;
+    if (resolution._tag === "Shortcut") {
+      const shortcut = resolution.key;
+      if (shortcut === "/" && this.pane === "profiles") this.openProfileSearch();
+      else if (shortcut === "s") this.cycleScope();
+      else if (
+        shortcut === "a" &&
+        this.pane === "candidates" &&
+        this.draft().candidates.length < MAX_PROFILE_CANDIDATES
+      )
+        this.performDraftAction("add");
+      else if (
+        shortcut === "c" &&
+        this.pane === "candidates" &&
+        this.draft().candidates.length > 0 &&
+        this.draft().candidates.length < MAX_PROFILE_CANDIDATES
+      )
+        this.performDraftAction("clone");
+      else if (shortcut === "K" && this.pane === "candidates" && this.candidateIndex > 0)
+        this.performDraftAction("move-up");
+      else if (
+        shortcut === "J" &&
+        this.pane === "candidates" &&
+        this.candidateIndex < this.draft().candidates.length - 1
+      )
+        this.performDraftAction("move-down");
+      else if (shortcut === "x" && this.pane === "candidates" && this.draft().candidates.length > 0)
+        this.arm("remove");
+      else if (shortcut === "d" && this.pane === "candidates") this.arm("disable");
+      else if (shortcut === "i" && this.pane !== "fields") this.arm("reset");
+      else if (shortcut === "X" && this.scope === "session" && this.pane === "profiles")
+        this.arm("clear-session");
+      else if (shortcut === "r") this.requestReload();
+      this.renderSoon();
+      return;
+    }
+
+    const pageStep = Math.max(1, this.options.getHeight() - 10);
+    const halfStep = Math.max(1, Math.floor(pageStep / 2));
+    const moveSelection = (offset: number) => {
+      if (this.pane === "profiles") this.selectProfile(offset);
+      else if (this.pane === "candidates") this.selectCandidate(offset);
+      else this.selectField(offset);
+    };
+    switch (resolution.action) {
+      case "cancel":
+      case "quit":
+        this.back();
+        return;
+      case "back":
+        if (this.pane !== "profiles") this.back();
+        else this.renderSoon();
+        return;
+      case "confirm":
+      case "forward":
+        this.forward();
+        return;
+      case "next-pane":
+        this.navigate(1);
+        break;
+      case "previous-pane":
+        this.navigate(-1);
+        break;
+      case "up":
+        moveSelection(-1);
+        break;
+      case "down":
+        moveSelection(1);
+        break;
+      case "half-page-up":
+        moveSelection(-halfStep);
+        break;
+      case "half-page-down":
+        moveSelection(halfStep);
+        break;
+      case "first":
+        if (this.pane === "profiles") this.profileIndex = 0;
+        else if (this.pane === "candidates") this.candidateIndex = 0;
+        else this.fieldIndex = 0;
+        this.clearMessage();
+        break;
+      case "last":
+        if (this.pane === "profiles") this.profileIndex = PROFILE_IDS.length - 1;
+        else if (this.pane === "candidates")
+          this.candidateIndex = Math.max(0, this.draft().candidates.length - 1);
+        else this.fieldIndex = PROFILE_WORKSPACE_FIELDS.length - 1;
+        this.clearMessage();
+        break;
+      case "search":
+        if (this.pane === "profiles") this.openProfileSearch();
+        return;
+      case "help":
+      case "pending-first":
+        break;
+    }
     this.renderSoon();
   }
 

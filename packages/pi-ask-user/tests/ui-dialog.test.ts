@@ -45,13 +45,13 @@ const keybindings = {
   },
 } as unknown as KeybindingsManager;
 
-const make = () => {
+const make = (dialogKeybindings: KeybindingsManager = keybindings) => {
   const done = vi.fn();
   const requestRender = vi.fn();
   const dialog = new AskUserDialog({
-    tui: { requestRender } as unknown as TUI,
+    tui: { requestRender, terminal: { rows: 24, columns: 80 } } as unknown as TUI,
     theme,
-    keybindings,
+    keybindings: dialogKeybindings,
     request,
     done,
     editExternally: () => Promise.resolve(undefined),
@@ -76,6 +76,35 @@ describe("ask-user TUI", () => {
     });
   });
 
+  it("uses Vim aliases only while the editor is inactive", () => {
+    const { dialog, done } = make();
+    dialog.handleInput("j");
+    expect(dialog.render(80).join("\n")).toContain("> ( ) 2. Rewrite");
+    dialog.handleInput("q");
+    expect(done).not.toHaveBeenCalled();
+    dialog.handleInput("\u001b[106u");
+    expect(dialog.render(80).join("\n")).toContain("> ✎ Write a custom answer");
+    dialog.handleInput("\r");
+    for (const character of "hjklqgGs") dialog.handleInput(character);
+    expect(dialog.render(80).join("\n")).toContain("hjklqgGs");
+    expect(done).not.toHaveBeenCalled();
+  });
+
+  it("keeps printable configured cancel keys typeable and reserves the note shortcut", () => {
+    const printableCancel = {
+      matches: (data: string, id: Parameters<KeybindingsManager["matches"]>[1]) =>
+        id === "tui.select.cancel"
+          ? data === "q" || data === "n" || matchesKey(data, Key.escape)
+          : keybindings.matches(data, id),
+    } as unknown as KeybindingsManager;
+    const { dialog, done } = make(printableCancel);
+    dialog.handleInput("\u001b[110u");
+    expect(dialog.render(80).join("\n")).toContain("Note");
+    dialog.handleInput("q");
+    expect(dialog.render(80).join("\n")).toContain("q");
+    expect(done).not.toHaveBeenCalled();
+  });
+
   it("collapses through the mounted overlay without a terminal input listener", () => {
     const { dialog } = make();
     const handle = {
@@ -93,5 +122,8 @@ describe("ask-user TUI", () => {
     dialog.resume();
     expect(handle.setHidden).toHaveBeenCalledWith(false);
     expect(handle.focus).toHaveBeenCalledOnce();
+    dialog.handleInput("\u001b[98u");
+    expect(handle.setHidden).toHaveBeenCalledTimes(3);
+    expect(handle.setHidden).toHaveBeenLastCalledWith(true);
   });
 });

@@ -67,20 +67,21 @@ const selectedProfile = (state: ProfileWorkspaceRenderState) =>
   PROFILE_IDS[state.profileIndex] ?? PROFILE_IDS[0];
 
 const scopeLine = (state: ProfileWorkspaceRenderState, theme: Theme): string => {
-  const session =
-    state.scope === "session" ? theme.fg("accent", theme.bold("[s Session]")) : "s Session";
-  const global =
-    state.scope === "global" ? theme.fg("accent", theme.bold("[g Global]")) : "g Global";
-  const projectLabel = state.projectTrusted ? "p Project" : "p Project unavailable";
-  const project =
-    state.scope === "project" ? theme.fg("accent", theme.bold(`[${projectLabel}]`)) : projectLabel;
+  const scopeLabel = (scope: ProfileSettingsScope, label: string): string =>
+    state.scope === scope ? theme.fg("accent", theme.bold(`[${label}]`)) : label;
+  const session = scopeLabel("session", "Session");
+  const global = scopeLabel("global", "Global");
+  const project = state.projectTrusted
+    ? scopeLabel("project", "Project")
+    : theme.fg("dim", "Project unavailable");
   const effect =
     state.scope === "session"
       ? "temporary · applies now"
       : state.scope === "global"
         ? "overrides built-in defaults after reload"
         : "overrides global settings after reload";
-  return `Scope  ${session}   ${global}   ${project}  · ${effect}`;
+  const cycle = state.projectTrusted ? "Session → Global → Project" : "Session ↔ Global";
+  return `Scope  ${session}   ${global}   ${project}  · s Next (${cycle}) · ${effect}`;
 };
 
 const wrapped = (value: string, width: number): ReadonlyArray<string> =>
@@ -137,7 +138,7 @@ const commonNotices = (
       ...wrapped(
         theme.fg(
           "warning",
-          `! Session override active for ${selectedProfile(state)}; persistent edits are saved but remain shadowed. Press s to edit or clear it.`,
+          `! Session override active for ${selectedProfile(state)}; persistent edits are saved but remain shadowed. Use s to cycle to Session and edit or clear it.`,
         ),
         width,
       ),
@@ -149,7 +150,7 @@ const commonNotices = (
       ...wrapped(
         theme.fg(
           "warning",
-          `! Project override active for ${selectedProfile(state)}; global edits are saved but remain shadowed. Press p to edit or reset the project override.`,
+          `! Project override active for ${selectedProfile(state)}; global edits are saved but remain shadowed. Use s to cycle to Project and edit or reset it.`,
         ),
         width,
       ),
@@ -442,12 +443,12 @@ const helpText = (
 ): string => {
   const key = (id: SettingsSelectKeybindingId, fallback: string): string =>
     keybindingLabel?.(id, fallback) || fallback;
-  const navigation = keybindingLabel
+  const configuredNavigation = keybindingLabel
     ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
-    : "↑↓";
+    : undefined;
+  const navigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
   const enter = key("tui.select.confirm", "Enter");
   const escape = key("tui.select.cancel", "Esc");
-  const pages = `${key("tui.select.pageUp", "PgUp")}/${key("tui.select.pageDown", "PgDn")}`;
   if (state.pendingConfirmation)
     return renderResponsiveManagerFooter(Math.max(0, width), [
       [`${state.pendingConfirmation.key} Confirm`, `${escape} Cancel`],
@@ -463,14 +464,14 @@ const helpText = (
     const canReset = routeActions(state).reset;
     return renderResponsiveManagerFooter(Math.max(0, width), [
       [
-        `${navigation} Select · ${pages} Page · Home/End`,
-        `${enter} Route · / Search · s Session · g Global · ${state.projectTrusted ? "p Project" : "p Project unavailable"}`,
+        `${navigation} Select · C-u/d · gg/G`,
+        `${enter}/l Route · / Search · s Next scope`,
         `${canReset ? "i Reset · " : ""}Tab Next`,
         state.reloadRequired ? `r Reload · ${escape} Close` : `${escape} Close`,
       ],
       [
-        `${navigation} · ${pages} · ${enter} · / Search`,
-        `${state.projectTrusted ? "s/g/p Scope" : "s/g Scope"}${canReset ? " · i Reset" : ""} · Tab`,
+        `${navigation} · C-u/d · gg/G · ${enter}/l · / Search`,
+        `s Scope${canReset ? " · i Reset" : ""} · Tab`,
         state.reloadRequired ? `r Reload · ${escape}` : `${escape} Close`,
       ],
     ]);
@@ -488,13 +489,13 @@ const helpText = (
     ].filter((label): label is string => label !== undefined);
     return renderResponsiveManagerFooter(Math.max(0, width), [
       [
-        `${navigation} Select · ${pages} Page · Home/End · ${enter} Candidate`,
+        `${navigation} Select · C-u/d · gg/G · ${enter}/l Candidate`,
         actionLabels.join(" · ") || "No route changes available",
         `${escape} Profiles · Tab/⇧Tab Pages`,
         state.reloadRequired ? "r Reload" : "",
       ],
       [
-        `${navigation} · ${pages} · ${enter}`,
+        `${navigation} · C-u/d · gg/G · ${enter}/l`,
         actionLabels.join(" · ") || "No changes",
         `${escape} · Tab/⇧Tab${state.reloadRequired ? " · r Reload" : ""}`,
       ],
@@ -502,8 +503,8 @@ const helpText = (
   }
   return renderResponsiveManagerFooter(Math.max(0, width), [
     [
-      `${navigation} Field · ${pages} Page · Home/End · ${enter} Choose`,
-      `${state.projectTrusted ? "s/g/p Scope" : "s/g Scope"} · ${escape} Route · ⇧Tab Back`,
+      `${navigation} Field · C-u/d · gg/G · ${enter}/l Choose`,
+      `s Scope · h/${escape} Route · ⇧Tab Back`,
       state.reloadRequired ? "r Reload" : "",
     ],
   ]);
@@ -551,7 +552,7 @@ const compactWorkspacePage = (
           : "No candidate · return to route";
   const actions =
     state.pane === "profiles"
-      ? `${confirmKey} route · / search · s/g/p scope${routeActions(state).reset ? " · i reset" : ""}`
+      ? `${confirmKey}/l route · / search · s scope${routeActions(state).reset ? " · i reset" : ""}`
       : state.pane === "candidates"
         ? state.draft.candidates.length > 0
           ? `${confirmKey} edit · a add · x remove · ${cancelKey} profiles`
@@ -578,15 +579,15 @@ const compactWorkspacePage = (
             ? "success"
             : "muted";
     const shadow = sessionOverrideActive(state)
-      ? " · Session override active; press s to edit/reset"
+      ? " · Session override active; use s to cycle and edit/reset"
       : projectOverrideActive(state)
-        ? " · Project override active; press p to edit/reset"
+        ? " · Project override active; use s to cycle and edit/reset"
         : "";
     status.push(theme.fg(color, `${state.message.text}${shadow}`));
   } else if (sessionOverrideActive(state)) {
-    status.push(theme.fg("warning", "Session override active · press s to edit/reset"));
+    status.push(theme.fg("warning", "Session override active · use s to cycle and edit/reset"));
   } else if (projectOverrideActive(state)) {
-    status.push(theme.fg("warning", "Project override active · press p to edit/reset"));
+    status.push(theme.fg("warning", "Project override active · use s to cycle and edit/reset"));
   }
   if (height <= 1) return [theme.fg("accent", selected)];
   if (height === 2) return [theme.fg("accent", selected), theme.fg("dim", actions)];

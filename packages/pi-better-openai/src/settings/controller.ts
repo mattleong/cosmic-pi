@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Predicate from "effect/Predicate";
 import { redactDiagnosticValue } from "pi-cosmic-core";
+import { VimSettingsAdapter } from "pi-cosmic-ui/manager/keybindings";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
 import {
   COMPACTION_SETTING_DESCRIPTORS,
@@ -156,7 +157,7 @@ export function registerSettingsController(
       .then((initialRedactedConfig) => {
         let redactedConfig = initialRedactedConfig;
         return ctx.ui
-          .custom((tui, theme, _keyboard, done) => {
+          .custom((tui, theme, keyboard, done) => {
             const writeSetting = (writeContext: ExtensionContext, id: string, value: string) => {
               void applySetting(writeContext, id, value).then(() =>
                 readRedactedConfig(writeContext)
@@ -319,12 +320,33 @@ export function registerSettingsController(
               () => done(undefined),
               { enableSearch: true },
             );
-            container.addChild(settings);
+            const vimSettings = new VimSettingsAdapter(settings, {
+              search: true,
+              matchesKeybinding:
+                typeof keyboard?.matches === "function"
+                  ? (data, id) => keyboard.matches(data, id)
+                  : undefined,
+              requestRender: () => safeHostUi(() => tui.requestRender()),
+              renderHint: (mode) =>
+                theme.fg(
+                  "dim",
+                  mode === "search"
+                    ? " SEARCH · type to filter · Esc returns to NORMAL "
+                    : " NORMAL · j/k move · l select · h/q back · / search ",
+                ),
+            });
+            container.addChild(vimSettings);
             return {
+              get focused(): boolean {
+                return vimSettings.focused;
+              },
+              set focused(value: boolean) {
+                vimSettings.focused = value;
+              },
               render: (width: number) => container.render(width),
               invalidate: () => container.invalidate(),
               handleInput(data: string) {
-                settings.handleInput(data);
+                vimSettings.handleInput(data);
                 safeHostUi(() => tui.requestRender());
               },
             };

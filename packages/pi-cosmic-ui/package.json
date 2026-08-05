@@ -31,6 +31,7 @@
     ".": "./index.ts",
     "./client": "./src/footer/client.ts",
     "./manager": "./src/manager/chrome.ts",
+    "./manager/keybindings": "./src/manager/keybindings.ts",
     "./protocol": "./src/protocol/protocol.ts"
   },
   "publishConfig": {

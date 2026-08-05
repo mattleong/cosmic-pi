@@ -152,10 +152,11 @@ describe("/subagents fleet UI", () => {
 
   it("groups navigation, available actions, and global footer controls", () => {
     const footer = makeComponent(120, 18).lines.at(-1) ?? "";
-    expect(footer).toContain("↑↓");
-    expect(footer).toContain("PgUp/PgDn");
+    expect(footer).toContain("j/k");
+    expect(footer).toContain("C-u/d");
+    expect(footer).not.toContain("PgUp/PgDn");
     expect(footer).toContain("m Reply · i Int");
-    expect(footer).toContain("t Technical · ? More · Esc");
+    expect(footer).toContain("? More · Esc/q");
     expect(footer).not.toContain("r Resume");
   });
 
@@ -225,6 +226,27 @@ describe("/subagents fleet UI", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it("supports gg/G endpoints, h/l panes, and q close", () => {
+    const twoRuns: SubagentProjection = {
+      revision: 4,
+      runs: [projection.runs[0]!, { ...projection.runs[0]!, id: "agent-2", name: "second-reader" }],
+    };
+    const { close, component } = makeComponent(80, 18, twoRuns);
+    component.handleInput("G");
+    component.handleInput("x");
+    expect(component.render(80).at(-1)).toContain("Confirm stop second-reader");
+    component.handleInput("\u001b");
+    component.handleInput("g");
+    component.handleInput("g");
+    component.handleInput("x");
+    expect(component.render(80).at(-1)).toContain("Confirm stop auth-reader");
+    component.handleInput("\u001b");
+    component.handleInput("l");
+    component.handleInput("h");
+    component.handleInput("q");
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it("honors configured selection and cancel keybindings", () => {
     const bindings: Record<string, string> = {
       "tui.select.confirm": "o",
@@ -271,14 +293,15 @@ describe("/subagents fleet UI", () => {
     expect(bottom).toContain("Final report");
 
     component.handleInput("\u001b[5~");
-    const top = component.render(42).join("\n");
-    expect(top).toContain("Task");
-    expect(top).not.toBe(bottom);
-
-    component.handleInput("\u001b[6~");
     expect(component.render(42).join("\n")).toBe(bottom);
+
     component.handleInput("\u0015");
-    expect(component.render(42).join("\n")).not.toBe(bottom);
+    const top = component.render(42).join("\n");
+    expect(top).not.toBe(bottom);
+    component.handleInput("\u001b[6~");
+    expect(component.render(42).join("\n")).toBe(top);
+    component.handleInput("\u0004");
+    expect(component.render(42).join("\n")).toBe(bottom);
   });
 
   it("hides fleet run IDs until technical mode is enabled", () => {
@@ -411,7 +434,7 @@ describe("/subagents fleet UI", () => {
     expect(component.render(80).join("\n")).toContain("Interrupt channel unavailable");
   });
 
-  it("pages a narrow run list and shows list position cues", () => {
+  it("half-pages a narrow run list and shows list position cues", () => {
     const runs = Array.from({ length: 20 }, (_, index) => ({
       ...projection.runs[0]!,
       id: `agent-${index}`,
@@ -419,9 +442,10 @@ describe("/subagents fleet UI", () => {
     }));
     const { component } = makeComponent(42, 8, { revision: 8, runs });
     expect(component.render(42).join("\n")).toContain("↓ more");
-    component.handleInput("\u001b[6~");
+    component.handleInput("\u0004");
+    component.handleInput("\u0004");
     const rendered = component.render(42).join("\n");
-    expect(rendered).toContain("reader-5");
+    expect(rendered).toContain("reader-4");
     expect(rendered).toContain("↑ more");
   });
 
@@ -453,6 +477,9 @@ describe("/subagents fleet UI", () => {
     await Promise.resolve();
     component.handleInput("x");
     expect(actions.stop).not.toHaveBeenCalled();
+    component.handleInput("\u001b[120;1:2u");
+    expect(actions.stop).not.toHaveBeenCalled();
+    component.handleInput("x");
     component.handleInput("x");
     expect(actions.stop).toHaveBeenCalledWith("agent-1");
   });

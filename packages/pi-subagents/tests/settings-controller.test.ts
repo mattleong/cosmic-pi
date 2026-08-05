@@ -334,6 +334,7 @@ describe("/subagents profile workspace", () => {
         await vi.waitFor(() =>
           expect(component.render(120).join("\n")).toContain("reviewer › candidate 1 › Model"),
         );
+        component.handleInput?.("/");
         for (const character of "zai") component.handleInput?.(character);
         expect(component.render(120).join("\n")).toContain("zai/plain");
         component.handleInput?.("\r");
@@ -359,7 +360,7 @@ describe("/subagents profile workspace", () => {
       const custom = vi.fn(async (factory) =>
         exerciseWorkspace(factory, (component, done) => {
           const rendered = component.render(120).join("\n");
-          expect(rendered).toContain("[g Global]");
+          expect(rendered).toContain("[Global]");
           expect(rendered).toContain("Profiles");
           done(false);
         }),

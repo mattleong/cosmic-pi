@@ -19,6 +19,7 @@ const page = (
   options: {
     current?: string;
     initialQuery?: string;
+    initialSearchMode?: boolean;
     notice?: string;
     select?: (payload: string) => void;
     cancel?: () => void;
@@ -35,6 +36,7 @@ const page = (
     choices,
     current: options.current,
     initialQuery: options.initialQuery,
+    initialSearchMode: options.initialSearchMode,
     notice: options.notice,
     getHeight: () => options.height ?? 20,
     requestRender: vi.fn(),
@@ -66,6 +68,7 @@ describe("searchable settings selector", () => {
       { current: "b", select },
     );
     selector.handleInput("\u001b[B");
+    selector.handleInput("/");
     for (const character of "model") selector.handleInput(character);
     selector.handleInput("\r");
     expect(select).toHaveBeenCalledWith("gamma");
@@ -73,6 +76,7 @@ describe("searchable settings selector", () => {
 
   it("shows feedback when Enter has no matching selection", () => {
     const selector = page([choice("a", "Model alpha", "alpha")]);
+    selector.handleInput("/");
     for (const character of "zzz") selector.handleInput(character);
     selector.handleInput("\r");
     expect(selector.render(80).join("\n")).toContain("change the search or go back");
@@ -96,30 +100,32 @@ describe("searchable settings selector", () => {
     const rendered = wrapped.render(34).join("\n");
     expect(rendered).toContain("configured model");
     expect(rendered).toContain("fallback choices");
-    expect(wrapped.render(34).at(-1)).toContain("Back");
-    expect(wrapped.render(20).at(-1)).toContain("Esc Back");
+    expect(wrapped.render(34).at(-1)).toContain("q Back");
+    expect(wrapped.render(20).at(-1)).toContain("q Back");
 
     const oneRow = page([choice("a", "Model alpha", "alpha")], { height: 1, notice });
     expect(oneRow.render(30)).toHaveLength(1);
   });
 
-  it("supports Home, End, PageUp, and PageDown list navigation", () => {
+  it("supports Home, End, and half-page navigation while ignoring PageUp and PageDown", () => {
     const select = vi.fn();
     const choices = Array.from({ length: 20 }, (_, index) =>
       choice(String(index), `Model ${index}`, String(index)),
     );
     const selector = page(choices, { select });
-    selector.handleInput("\u001b[F");
-    selector.handleInput("\r");
-    expect(select).toHaveBeenLastCalledWith("19");
-
     selector.handleInput("\u001b[H");
     selector.handleInput("\u001b[6~");
     selector.handleInput("\r");
-    expect(select).toHaveBeenLastCalledWith("9");
+    expect(select).toHaveBeenLastCalledWith("0");
+
+    selector.handleInput("\u0004");
+    selector.handleInput("\r");
+    expect(select).toHaveBeenLastCalledWith("4");
+
+    selector.handleInput("\u001b[F");
     selector.handleInput("\u001b[5~");
     selector.handleInput("\r");
-    expect(select).toHaveBeenLastCalledWith("0");
+    expect(select).toHaveBeenLastCalledWith("19");
   });
 
   it("renders configured keybinding labels instead of fixed defaults", () => {
@@ -133,8 +139,31 @@ describe("searchable settings selector", () => {
         })[id] ?? fallback,
     });
     const footer = selector.render(100).at(-1) ?? "";
-    expect(footer).toContain("P/N Navigate");
-    expect(footer).toContain("Y Select · Q Back");
+    expect(footer).toContain("j/k · P/N Navigate");
+    expect(footer).toContain("l/Y Select · h/q/Q Back");
+  });
+
+  it("keeps Vim keys typeable in search mode and supports gg/G in navigation", () => {
+    const select = vi.fn();
+    const selector = page(
+      [
+        choice("a", "Model alpha", "alpha"),
+        choice("b", "Model beta", "beta"),
+        choice("c", "Model gamma", "gamma"),
+      ],
+      { select },
+    );
+    selector.handleInput("G");
+    selector.handleInput("\r");
+    expect(select).toHaveBeenLastCalledWith("gamma");
+    selector.handleInput("g");
+    selector.handleInput("g");
+    selector.handleInput("\r");
+    expect(select).toHaveBeenLastCalledWith("alpha");
+
+    selector.handleInput("/");
+    for (const character of "hjklqgGs") selector.handleInput(character);
+    expect(selector.render(100).join("\n")).toContain("hjklqgGs");
   });
 
   it("preselects the current filtered choice and honors configured keybindings", () => {
@@ -145,6 +174,7 @@ describe("searchable settings selector", () => {
       {
         current: "b",
         initialQuery: "model",
+        initialSearchMode: false,
         select,
         cancel,
         matchesKeybinding: (data, id) =>
