@@ -60,7 +60,7 @@ const launch = (id: string): BackendLaunchRequest => ({
   effort: "xhigh",
   activeTools: [],
   projectTrusted: false,
-  parentSessionId: "parent-session",
+  parentSessionId: "019fd858-60cc-7d70-87fb-a88d44bbf8e6",
   systemPrompt: "fixed",
 });
 
@@ -76,28 +76,44 @@ const fakeTopology = () => {
   let failStartAfterApply = false;
   let failRollbackSnapshot = false;
   let startApplied = false;
-  const snapshot = (): HerdrSnapshot => ({
-    version: "0.7.5",
-    protocol: 17,
-    workspaces: workLive
-      ? [{ workspaceId: "w", label: workspaceLabel, focused: false, activeTabId: "w:t" }]
-      : [],
-    tabs: tabLive
-      ? [{ tabId: "w:t", workspaceId: "w", label: "1", paneCount: panes.size, focused: false }]
-      : [],
-    panes: [...panes].map(([paneId, pane]) => ({
-      paneId,
-      terminalId: pane.terminalId,
-      workspaceId: "w",
-      tabId: "w:t",
-      cwd: "/project",
-      foregroundCwd: "/project",
-      ...(pane.label ? { label: pane.label } : {}),
-      focused: false,
-      agentStatus: agents.get(paneId)?.agentStatus ?? "unknown",
-    })),
-    agents: [...agents.values()].map((agent) => ({ ...agent })),
-  });
+  let omitAgentSession = false;
+  let focusedTabId = "user:t";
+  let failFocusRestoration = false;
+  let invalidSecretAttestation = false;
+  const snapshot = (): HerdrSnapshot => {
+    return {
+      version: "0.8.0",
+      protocol: 19,
+      focusedTabId,
+      workspaces: workLive
+        ? [{ workspaceId: "w", label: workspaceLabel, focused: false, activeTabId: "w:t" }]
+        : [],
+      tabs: [
+        ...(tabLive
+          ? [{ tabId: "w:t", workspaceId: "w", label: "1", paneCount: panes.size, focused: false }]
+          : []),
+        {
+          tabId: "user:t",
+          workspaceId: "user",
+          label: "user",
+          paneCount: 0,
+          focused: focusedTabId === "user:t",
+        },
+      ],
+      panes: [...panes].map(([paneId, pane]) => ({
+        paneId,
+        terminalId: pane.terminalId,
+        workspaceId: "w",
+        tabId: "w:t",
+        cwd: "/project",
+        foregroundCwd: "/project",
+        ...(pane.label ? { label: pane.label } : {}),
+        focused: false,
+        agentStatus: agents.get(paneId)?.agentStatus ?? "unknown",
+      })),
+      agents: [...agents.values()].map((agent) => ({ ...agent })),
+    };
+  };
   const cli: HerdrCliShape = {
     sessionIdentity: "inherited",
     preflight: () => Effect.void,
@@ -140,6 +156,7 @@ const fakeTopology = () => {
         panes.set(paneId, { ...pane, label });
       }),
     runPaneCommand: () => Effect.void,
+    waitPaneOutput: () => Effect.void,
     startAgent: ({ runtime, paneId, agentName }) =>
       Effect.suspend(() => {
         const pane = snapshot().panes.find((candidate) => candidate.paneId === paneId)!;
@@ -150,16 +167,21 @@ const fakeTopology = () => {
           runtime,
           stateChangeSequence: 1,
           interactiveReady: true,
-          agentSession: {
-            source: "fixture",
-            agent: runtime,
-            kind: "id",
-            value: `native-${paneId}`,
-          },
-          nativeSession: `native-${paneId}`,
+          ...(omitAgentSession
+            ? {}
+            : {
+                agentSession: {
+                  source: "fixture",
+                  agent: runtime,
+                  kind: "id" as const,
+                  value: `native-${paneId}`,
+                },
+                nativeSession: `native-${paneId}`,
+              }),
         };
         agents.set(paneId, agent);
         startApplied = true;
+        if (failFocusRestoration) focusedTabId = "w:t";
         return failStartAfterApply
           ? Effect.fail(
               new SubagentProcessError({
@@ -185,7 +207,18 @@ const fakeTopology = () => {
         tabLive = false;
         workLive = false;
       }),
-    focusTab: () => Effect.void,
+    focusTab: (tabId) =>
+      failFocusRestoration
+        ? Effect.fail(
+            new SubagentProcessError({
+              operation: "restore focus",
+              code: "herdr_restore_focus_outcome_uncertain",
+              message: "Fixture focus restoration failed.",
+            }),
+          )
+        : Effect.sync(() => {
+            focusedTabId = tabId;
+          }),
   };
   let cleanupAuthorizations = 0;
   const harness: HerdrHarnessShape = {
@@ -196,6 +229,8 @@ const fakeTopology = () => {
         runtime,
         argv: [],
         environmentCommand: () => "fixed-env",
+        environmentReadyMarker: "fixture-env-ready",
+        ...(invalidSecretAttestation ? { secretCommand: "load-secret" } : {}),
         authorizeCleanup: () => {
           cleanupAuthorizations += 1;
         },
@@ -211,6 +246,15 @@ const fakeTopology = () => {
     failAppliedStartAndRollbackSnapshot: () => {
       failStartAfterApply = true;
       failRollbackSnapshot = true;
+    },
+    omitNativeSession: () => {
+      omitAgentSession = true;
+    },
+    invalidateSecretAttestation: () => {
+      invalidSecretAttestation = true;
+    },
+    failRestoreFocus: () => {
+      failFocusRestoration = true;
     },
   };
 };
@@ -234,6 +278,9 @@ describe("session-owned Herdr topology", () => {
         });
         expect(first.workspaceId).toBe(second.workspaceId);
         expect(first.paneId).not.toBe(second.paneId);
+        expect(first.agentName).toMatch(/^[a-z][a-z0-9_-]{0,31}$/u);
+        expect(second.agentName).toMatch(/^[a-z][a-z0-9_-]{0,31}$/u);
+        expect(first.agentName).not.toBe(second.agentName);
 
         const exact = fake.agents.get(first.paneId)!;
         fake.agents.set(first.paneId, {
@@ -258,6 +305,111 @@ describe("session-owned Herdr topology", () => {
         yield* second.close;
         expect(fake.closedWorkspaces()).toBe(1);
         expect(fake.cleanupAuthorizations()).toBe(2);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.live("generates distinct Herdr 0.8-safe names for every hosted runtime", () => {
+    const fake = fakeTopology();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const names: string[] = [];
+      for (const runtime of ["pi", "claude", "codex"] as const) {
+        const runId = `agent-${runtime}-with-a-long-ownership-identifier`;
+        const hosted = yield* host.launch(runtime, launch(runId), {
+          ...supervisor,
+          runId,
+        });
+        expect(hosted.agentName).toMatch(/^[a-z][a-z0-9_-]{0,31}$/u);
+        names.push(hosted.agentName);
+        yield* hosted.close;
+      }
+      expect(new Set(names).size).toBe(3);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.live("rolls back before committing a run when focus restoration fails", () => {
+    const fake = fakeTopology();
+    fake.failRestoreFocus();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const result = yield* Effect.result(
+        host.launch("pi", launch("agent-focus-failure"), {
+          ...supervisor,
+          runId: "agent-focus-failure",
+        }),
+      );
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { code: "herdr_restore_focus_outcome_uncertain" },
+      });
+      expect(fake.closedWorkspaces()).toBe(1);
+      expect(fake.cleanupAuthorizations()).toBe(1);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.live("quarantines startup when native-session identity is not returned atomically", () => {
+    const fake = fakeTopology();
+    fake.omitNativeSession();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const runScope = yield* Scope.make();
+      const failure = yield* host
+        .launch("pi", launch("agent-session-unconfirmed"), {
+          ...supervisor,
+          runId: "agent-session-unconfirmed",
+        })
+        .pipe(Effect.provideService(Scope.Scope, runScope), Effect.flip);
+      expect(failure).toMatchObject({
+        code: "herdr_cleanup_unconfirmed",
+        message: expect.stringContaining("protocol 19 exposes no launch token"),
+      });
+      const closed = yield* Scope.close(runScope, Exit.void).pipe(Effect.exit);
+      expect(Exit.isFailure(closed)).toBe(true);
+      expect(fake.cleanupAuthorizations()).toBe(0);
+      expect(fake.closedPanes).toEqual([]);
+      expect(fake.closedWorkspaces()).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.live(
+    "rejects a secret bootstrap without matching attestation before topology mutation",
+    () => {
+      const fake = fakeTopology();
+      fake.invalidateSecretAttestation();
+      const layer = HerdrHost.layer.pipe(
+        Layer.provide(
+          Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+        ),
+      );
+      return Effect.gen(function* () {
+        const host = yield* HerdrHost;
+        const failure = yield* host
+          .launch("pi", launch("agent-invalid-secret"), {
+            ...supervisor,
+            runId: "agent-invalid-secret",
+          })
+          .pipe(Effect.flip);
+        expect(failure).toMatchObject({
+          code: "herdr_secret_attestation_invalid",
+        });
+        expect(fake.closedWorkspaces()).toBe(0);
+        expect(fake.cleanupAuthorizations()).toBe(1);
       }).pipe(Effect.scoped, Effect.provide(layer));
     },
   );

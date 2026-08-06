@@ -10,7 +10,7 @@ Session-scoped, profile-routed background subagents for Pi.
 - Version-4 profile routes own host, runtime, model, effort, context, write intent, OpenAI fast mode, and report-close behavior. Native selectors use one fail-closed 256-character grammar across config, settings, and all six adapter preflights: a leading alphanumeric followed by alphanumerics or `._:/@-`, including Pi registry context variants such as `cursor/gpt-5.5@1m`, plus Claude's optional exact long-context suffix such as `[1m]`.
 - Ordered candidates receive bounded readiness preflight before run, lease, supervisor, or process ownership. Unavailable executables, unauthenticated CLIs, unsupported fresh/context/effort/write-policy combinations, and missing private-harness prerequisites become typed skips, allowing fallback to a later candidate.
 - Once `SubagentService.start` begins, routing never falls through to another candidate; spawn or later outcome uncertainty is surfaced on that selected run and is never retried arbitrarily.
-- A single shared backend registry implements all six `local|herdr` × `pi|claude|codex` adapters. Herdr selection uses only Pi's inherited Herdr socket/session environment, otherwise Herdr's default.
+- A single shared backend registry implements all six `local|herdr` × `pi|claude|codex` adapters. Herdr 0.8 selection is pinned to Pi's inherited `HERDR_SOCKET_PATH`; a missing live inherited socket fails readiness before private harness or topology ownership.
 - Local Pi children support fresh context and native fork context, conservative read-only tools or writer tools, parent contact, guidance, interruption, resume, rename, stop, and bounded completion delivery.
 - Local Claude Code uses the current print/SDK stream protocol: official `initialize` control, a zero-inference `shouldQuery:false` native-init probe, validated native model/session/cwd, mandatory connected supervisor MCP inventory, replay-confirmed input, and a correlated interrupt lifecycle. Interruption waits for the exact control response, replayed `[Request interrupted by user]`, and `error_during_execution`/`aborted_streaming` result in either order; unrelated failures remain failures. Its actual capabilities are steer, interrupt, and parent contact.
 - Local Codex uses the generated 0.145 app-server v2 stdio JSON-RPC subset (`initialize`, `thread/start`, `turn/start`, `turn/steer`, and `turn/interrupt`) rather than terminal scraping. It uses a private `CODEX_HOME`, copies bounded validated auth from a safe custom source `CODEX_HOME` or the default source without forwarding that source path, otherwise uses the fixed API-key fallback, and enforces approval `never`, disabled web/tool-sandbox network, read-only/workspace-write sandbox policy, and fresh context only. Its actual capabilities are steer, interrupt, and parent contact.
@@ -150,17 +150,17 @@ Claude's OS sandbox directly confines Bash and is the stronger boundary. Edit is
 
 ## Herdr host ownership and harnesses
 
-Herdr candidates accept only the profile's native model/effort/context/write values. The CLI executable is fixed to `herdr`; no profile/config/session selector, executable, argv, or environment is accepted. Commands inherit only bounded `HERDR_SOCKET_PATH`/`HERDR_SESSION` selection from the parent environment (plus minimal CLI process environment), otherwise Herdr chooses its default session. Herdr Pi starts with extension discovery disabled, so models from extension-registered providers are omitted from its picker and rejected again before auth or topology ownership; local Pi remains eligible because its child loads discovered extensions. Protocol 17, current marker-validated runtime integrations, canonical executables, auth, effort/model syntax, write policy, and private bridge files are checked before topology is created. A readiness failure may skip to the next candidate. Any mutation timeout, launch uncertainty, or cleanup uncertainty after ownership begins is fail-closed and never falls through.
+Herdr candidates accept only the profile's native model/effort/context/write values. The CLI executable is fixed to `herdr`; no profile/config/session selector, executable, argv, or environment is accepted. Composition captures one bounded immutable parent environment for both CLI and harness services. Commands require that snapshot's `HERDR_SOCKET_PATH`, which is also preserved into the sterile native harness so lifecycle hooks report to the same live server; custom native config homes come from the same snapshot. Herdr Pi starts with extension discovery disabled, so models from extension-registered providers are omitted from its picker and rejected again before auth or topology ownership; local Pi remains eligible because its child loads discovered extensions. Herdr 0.8 protocol 19, a matching live-server snapshot, current Pi/Claude/Codex integration markers (8/7/7), canonical executables, auth, effort/model syntax, write policy, and private bridge files are checked before topology is created. A readiness failure may skip to the next candidate. Any mutation timeout, launch uncertainty, or cleanup uncertainty after ownership begins is fail-closed and never falls through.
 
-The parent session lazily creates one non-focusing project workspace/tab and records workspace, tab, pane, terminal, name/runtime, cwd evidence, and every available native `agent_session` field (`source`, `agent`, `kind`, and `value`). One comparator revalidates that full tuple for prompt, inspect, rollback, and close; an incompletely proven provisional occupant is quarantined rather than closed. Changed/restored topology is not adopted or closed. Automatic operations restore prior tab focus when practical. Confirmed report with `closeOnReport:true`, explicit stop, session replacement/tree navigation/reload, and shutdown close exact owned topology. Retained read-only panes remain only until that same parent session ends.
+The parent session lazily creates one non-focusing project workspace/tab and records workspace, tab, pane, terminal, name/runtime, cwd evidence, and every available native `agent_session` field (`source`, `agent`, `kind`, and `value`). Generated agent names satisfy Herdr 0.8's strict `[a-z][a-z0-9_-]{0,31}` contract and include a bounded ownership digest so long parent/run IDs remain distinct. Protocol 19 exposes no launch token that can bind delayed session evidence to the process started originally, so launch requires the full native-session tuple atomically in the `agent start` result; missing identity quarantines the provisional occupant instead of adopting a possible replacement. One comparator revalidates the final full tuple for prompt, inspect, rollback, and close; an incompletely proven provisional occupant is quarantined rather than closed. Changed/restored topology is not adopted or closed. Automatic operations restore prior tab focus when practical. Confirmed report with `closeOnReport:true`, explicit stop, session replacement/tree navigation/reload, and shutdown close exact owned topology. Retained read-only panes remain only until that same parent session ends.
 
-All native harnesses replace the pane shell with a fixed `env -i` environment before startup. The sole Herdr lifecycle integration is marker-validated and explicitly installed into generated private state:
+All native harnesses replace the pane shell with a fixed `env -i` environment before startup. Random bounded output markers are matched against bounded recent PTY history and causally confirm both that transition and any private secret bootstrap before `agent start`; secret commands and markers are an atomic pair, and fixed sleeps are not treated as execution evidence. Multiline supervisor prompts are written to 0600 private files so Herdr 0.8's control-free native-argument contract is preserved. The sole Herdr lifecycle integration is marker- and version-validated and explicitly installed into generated private state. The POSIX harness fails every Windows Herdr candidate during topology-free readiness until a native PowerShell/Job Object owner exists:
 
 - **Claude:** fixed model/effort, empty normal setting sources, `--no-session-persistence`, disabled nonessential traffic in generated settings, strict supervisor MCP, delegation/integration denylist, current strict subprocess sandbox, and cwd-scoped writer Edit policy. Writer cwd characters that cannot be represented safely in the comma-delimited allowed-tool/scoped-Edit grammar are rejected before lease or topology ownership. This disables Claude's resumable conversation transcript/history for the delegated session and the package writes no report/history file in the project. Exact limit: the inherited authenticated Claude installation may still maintain implementation-defined account, cache, diagnostic, or provider-side records outside the project; this is not an offline or zero-retention guarantee. Read-only retention is supported; writers always close.
 - **Codex:** isolated private `CODEX_HOME`, bounded recursive `auth.json` copy or API-key fallback loaded from a 0600 private script (never secret argv/diagnostics), strict supervisor-only config, approvals `never`, optional `service_tier = "priority"` with only Codex's `fast_mode` feature enabled for that candidate, read-only/workspace-write sandbox, and web/apps/plugins/multi-agent/network extras disabled. Only read-only runs may be retained.
 - **Pi:** fresh private session directory, fixed model/thinking, `PI_SUBAGENT_CHILD=1`, optional private fast-mode request injection of `service_tier: "priority"`, no discovered extensions/skills/prompts/themes/context, fixed read-only/writer built-ins, orchestration denylist, marker-validated Herdr lifecycle extension, and one packaged supervisor bridge extension. Environment-sourced model API keys are resolved before ownership and cross only through the 0600 private bootstrap consumed by that bridge; provider environment is never forwarded wholesale. Its four bridge tools use `withCodePreviewShell`, strict bounded inputs, concurrent correlated helper calls, and exact question replies.
 
-Herdr protocol 17 confirms prompt submission but exposes no safe interrupt/resume/rename operation for this ownership model. Herdr drivers therefore advertise only `steer` and `parent-contact`; stop and await remain parent service operations. A missing/mismatched agent or native idle/done without an accepted supervisor report fails the run. Pi/Claude read-only remains a capability policy rather than an OS sandbox; Codex adds its native sandbox. None is a confidentiality/offline boundary.
+A successful Herdr 0.8 `agent prompt` response proves only ownership-checked text queueing and delayed-Enter scheduling—not submission or execution. Initial and retained follow-up assignments emit `run_started` only after a causal accepted epoch report or bounded post-response lifecycle/state change; absent evidence fails closed. Because active-turn guidance has no equally confirmable application outcome, Herdr drivers advertise only `parent-contact`; `subagent_send` on an already `reported` retained run still begins a new assignment through the separately reconciled start path. Stop and await remain parent service operations. A missing/mismatched agent or native idle/done without an accepted supervisor report fails the run. Pi/Claude read-only remains a capability policy rather than an OS sandbox; Codex adds its native sandbox. None is a confidentiality/offline boundary.
 
 ## Installed CLI smoke tests
 
@@ -174,17 +174,56 @@ Normal tests use fixture processes and never spend model tokens. The optional in
 PI_SUBAGENTS_REAL_CLI_SMOKE=1 pnpm --filter pi-subagents exec vitest run tests/local-cli-smoke.test.ts
 ```
 
-The separately gated Herdr smoke creates session-owned topology and starts each native interactive runtime, waits only for private helper readiness, then immediately closes it **without submitting a prompt**. It can still trigger native startup network/auth activity and must not be run against valuable Herdr topology. Supply all three native model selectors:
+Every real Herdr smoke requires inherited socket evidence, canonicalizes filesystem aliases, and refuses the inherited socket, Herdr's normal config path (including `XDG_CONFIG_HOME`), and any server whose initial snapshot is non-empty. Provision a separate protocol-19 server with isolated `XDG_CONFIG_HOME` and `XDG_STATE_HOME` (a custom `HERDR_CONFIG_PATH` alone does **not** isolate `session.json`), then pass its socket/config paths explicitly. For example, generate the config and run `herdr server` in a separate terminal with all four environment values pointed under one disposable directory:
+
+```bash
+root=/tmp/disposable-herdr
+mkdir -p "$root/xdg-config/herdr" "$root/xdg-state"
+XDG_CONFIG_HOME="$root/xdg-config" XDG_STATE_HOME="$root/xdg-state" \
+HERDR_CONFIG_PATH="$root/xdg-config/herdr/config.toml" \
+HERDR_SOCKET_PATH="$root/server.sock" herdr --default-config > "$root/xdg-config/herdr/config.toml"
+XDG_CONFIG_HOME="$root/xdg-config" XDG_STATE_HOME="$root/xdg-state" \
+HERDR_CONFIG_PATH="$root/xdg-config/herdr/config.toml" \
+HERDR_SOCKET_PATH="$root/server.sock" herdr server
+```
+
+The no-inference smoke creates session-owned topology, starts each native interactive runtime, waits only for private helper readiness, then immediately closes it **without submitting a prompt**; it can still trigger native startup network/auth activity:
 
 ```bash
 PI_SUBAGENTS_REAL_HERDR_SMOKE=1 \
+PI_SUBAGENTS_REAL_HERDR_SOCKET_PATH=/tmp/disposable-herdr/server.sock \
+PI_SUBAGENTS_REAL_HERDR_CONFIG_PATH=/tmp/disposable-herdr/xdg-config/herdr/config.toml \
 PI_SUBAGENTS_HERDR_PI_MODEL=openai-codex/gpt-5.6-sol \
 PI_SUBAGENTS_HERDR_CLAUDE_MODEL=claude-opus-5 \
 PI_SUBAGENTS_HERDR_CODEX_MODEL=gpt-5.6-codex \
 pnpm --filter pi-subagents exec vitest run tests/herdr-real-smoke.test.ts
 ```
 
-Paid six-adapter inference is a separate manual gate and is never part of normal CI. The design runs one self-reporting read-only task through `local|herdr × pi|claude|codex`, verifies a supervisor-owned report, then closes every run. It requires explicit cost acknowledgement and a disposable project/Herdr session:
+The same file has a no-inference real-shell gate that compares `recent` and `recent-unwrapped` with the same long marker on independent disposable workspaces and revalidates exact empty workspace/tab/pane/terminal ownership before cleanup. Both sources passed on an isolated Herdr 0.8 server, so production retains Herdr's default `recent` source rather than treating the stateful #2449 observations as a source-selection result:
+
+```bash
+PI_SUBAGENTS_REAL_HERDR_SHELL_SMOKE=1 \
+PI_SUBAGENTS_REAL_HERDR_SOCKET_PATH=/tmp/disposable-herdr/server.sock \
+PI_SUBAGENTS_REAL_HERDR_CONFIG_PATH=/tmp/disposable-herdr/xdg-config/herdr/config.toml \
+pnpm --filter pi-subagents exec vitest run tests/herdr-real-smoke.test.ts
+```
+
+A separate paid Herdr assignment gate submits one immediate-report task through Pi, Claude, and Codex, requires an exact cost/destructive acknowledgement, and verifies both `run_started` and a supervisor-owned epoch report before terminating each runtime:
+
+```bash
+PI_SUBAGENTS_REAL_HERDR_ASSIGNMENT_SMOKE=1 \
+PI_SUBAGENTS_REAL_HERDR_ASSIGNMENT_ACK=paid-and-destructive \
+PI_SUBAGENTS_REAL_HERDR_SOCKET_PATH=/tmp/disposable-herdr/server.sock \
+PI_SUBAGENTS_REAL_HERDR_CONFIG_PATH=/tmp/disposable-herdr/xdg-config/herdr/config.toml \
+PI_SUBAGENTS_HERDR_PI_MODEL=openai-codex/gpt-5.6-sol \
+PI_SUBAGENTS_HERDR_CLAUDE_MODEL=claude-opus-5 \
+PI_SUBAGENTS_HERDR_CODEX_MODEL=gpt-5.6-codex \
+pnpm --filter pi-subagents exec vitest run tests/herdr-real-smoke.test.ts
+```
+
+Herdr v0.8 can currently accept pane input without executing it in a fresh no-focus workspace after session restore; marker attestation intentionally leaves affected launches blocked rather than reverting to sleeps. Track [herdrdev/herdr#2449](https://github.com/herdrdev/herdr/issues/2449).
+
+Paid six-adapter inference is a separate manual design gate and is never part of normal CI. Assertions must remain backend-specific: Herdr and local Claude/Codex use supervisor-owned reports, while local Pi retains its native settled/final-assistant completion contract. It requires explicit cost acknowledgement and disposable project/Herdr state:
 
 ```bash
 PI_SUBAGENTS_REAL_INFERENCE_SMOKE=1 PI_SUBAGENTS_REAL_INFERENCE_ACK=paid-and-destructive \
@@ -193,7 +232,7 @@ pnpm --filter pi-subagents exec vitest run tests/six-adapter-inference-smoke.tes
 
 ## Cross-process writer safety
 
-Writer cwd is resolved with `realpath` for launch and diagnostics, then identified by the directory's stable local filesystem device plus inode/file ID. The bounded SHA-256 identity digest keys both the in-memory guard and `<agent-dir>/subagents/writer-leases-v2/`; a directory rename therefore cannot evade ownership. Project files receive no lock, receipt, or report artifact. Windows writer starts fail with typed `unsupported_safe_writer_ownership` before canonicalization, lease acquisition, or spawn because safe descendant ownership requires a Job Object implementation. Read-only starts remain available.
+Writer cwd is resolved with `realpath` for launch and diagnostics, then identified by the directory's stable local filesystem device plus inode/file ID. The bounded SHA-256 identity digest keys both the in-memory guard and `<agent-dir>/subagents/writer-leases-v2/`; a directory rename therefore cannot evade ownership. Project files receive no lock, receipt, or report artifact. Local Windows writer starts fail with typed `unsupported_safe_writer_ownership` before canonicalization, lease acquisition, or spawn because safe descendant ownership requires a Job Object implementation. All Herdr-hosted candidates currently fail earlier with `herdr_platform_unsupported` because their sterile harness is POSIX-only; local read-only starts remain available.
 
 A newly acquired lease is `reserved`. Before every initial or respawn driver call, the service must token-check it and durably commit atomic `spawn-started` evidence. Mark failure or ambiguity means the driver is not invoked. Bounded schema-decoded evidence includes the phase, unguessable token, filesystem-identity digest, parent PID, process/session nonce and start evidence, session/run identity, version, and timestamps.
 

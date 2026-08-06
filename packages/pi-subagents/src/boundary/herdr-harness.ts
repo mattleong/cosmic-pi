@@ -42,10 +42,20 @@ const SAFE_ENVIRONMENT_KEYS = [
   "COLORTERM",
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
+  "XDG_CONFIG_HOME",
+  "XDG_STATE_HOME",
   "HERDR_CONFIG_PATH",
   "HERDR_SOCKET_PATH",
   "HERDR_SESSION",
+  "PI_CODING_AGENT_DIR",
+  "PI_CONFIG_DIR",
+  "CLAUDE_CONFIG_DIR",
 ] as const;
+const HERDR_080_INTEGRATION_VERSIONS: Readonly<Record<SubagentRuntime, number>> = {
+  pi: 8,
+  claude: 7,
+  codex: 7,
+};
 const SUPERVISOR_NATIVE_TOOLS = [
   "mcp__pi_subagents_supervisor__supervisor_progress",
   "mcp__pi_subagents_supervisor__supervisor_warning",
@@ -119,8 +129,10 @@ export interface HerdrPreparedHarness {
     readonly tabId: string;
     readonly workspaceId: string;
   }) => string;
-  /** Optional fixed command containing only a private script path, never secret bytes. */
+  readonly environmentReadyMarker: string;
+  /** Optional fixed command containing only a private script path and readiness marker. */
   readonly secretCommand?: string | undefined;
+  readonly secretReadyMarker?: string | undefined;
   /** Authorize removal only after exact hosted topology/process cleanup has been confirmed. */
   readonly authorizeCleanup: () => void;
 }
@@ -149,17 +161,32 @@ export interface HerdrHarnessLayerOptions {
   readonly integrationPaths?: Partial<Record<SubagentRuntime, string>> | undefined;
   readonly harnessFault?: "after-claude-settings" | "after-codex-auth" | undefined;
   readonly harnessCleanupFault?: boolean | undefined;
+  /** Test seam only. Production uses the current Node platform. */
+  readonly platform?: NodeJS.Platform | undefined;
 }
 
 const processError = (operation: string, code: string, message: string) =>
   new SubagentProcessError({ operation, code, message });
 const readinessError = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });
+const hasControlCharacter = (value: string): boolean =>
+  [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+  });
 const nodeCode = (error: unknown): string | undefined =>
   error && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : undefined;
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+const printMarkerCommand = (marker: string): string => {
+  const pivot = Math.max(1, Math.floor(marker.length / 2));
+  return `printf '%s%s\\n' ${shellQuote(marker.slice(0, pivot))} ${shellQuote(marker.slice(pivot))}`;
+};
+const controlFreeArgv = (argv: ReadonlyArray<string>): ReadonlyArray<string> => {
+  if (argv.some(hasControlCharacter)) throw new Error("herdr-agent-argument-invalid");
+  return argv;
+};
 const tomlString = (value: string): string => JSON.stringify(value);
 
 const harnessEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
@@ -184,7 +211,12 @@ const isHarnessCleanupUnconfirmed = (
   error instanceof Error && "cleanupUnconfirmed" in error && error.cleanupUnconfirmed === true;
 
 const safeAgentDirectory = async (path: string): Promise<string> => {
-  if (!isAbsolute(path) || path.length < 1 || path.length > MAX_PATH_CHARS || path.includes("\0"))
+  if (
+    !isAbsolute(path) ||
+    path.length < 1 ||
+    path.length > MAX_PATH_CHARS ||
+    hasControlCharacter(path)
+  )
     throw new Error("invalid-agent-directory");
   const requested = resolve(path);
   const requestedStat = await fs.lstat(requested);
@@ -295,7 +327,11 @@ const integrationPath = (
     case "pi":
       return join(agentDirectory, "extensions", "herdr-agent-state.ts");
     case "claude":
-      return join(environment.HOME || homedir(), ".claude", "hooks", "herdr-agent-state.sh");
+      return join(
+        environment.CLAUDE_CONFIG_DIR ?? join(environment.HOME || homedir(), ".claude"),
+        "hooks",
+        "herdr-agent-state.sh",
+      );
     case "codex":
       return join(
         environment.CODEX_HOME ?? join(environment.HOME || homedir(), ".codex"),
@@ -305,19 +341,29 @@ const integrationPath = (
 };
 
 const validateIntegration = async (path: string, runtime: SubagentRuntime): Promise<void> => {
-  if (!isAbsolute(path) || path.length > MAX_PATH_CHARS || path.includes("\0"))
+  if (!isAbsolute(path) || path.length > MAX_PATH_CHARS || hasControlCharacter(path))
     throw new Error("invalid-integration-path");
   const stat = await fs.lstat(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > MAX_INTEGRATION_BYTES)
     throw new Error("invalid-integration-file");
   const source = await fs.readFile(path, "utf8");
-  if (!source.includes("installed by herdr") || !source.includes(`HERDR_INTEGRATION_ID=${runtime}`))
+  const markers = source
+    .split(/\r?\n/u)
+    .map((line) => line.replace(/^\s*(?:\/\/|#)\s*/u, "").trim());
+  if (
+    !source.includes("installed by herdr") ||
+    !markers.includes(`HERDR_INTEGRATION_ID=${runtime}`) ||
+    !markers.includes(
+      `HERDR_INTEGRATION_VERSION=${HERDR_080_INTEGRATION_VERSIONS[runtime].toString()}`,
+    )
+  )
     throw new Error("integration-marker-mismatch");
 };
 
 const fixedEnvironmentCommand = (
   environment: NodeJS.ProcessEnv,
   topology: { readonly paneId: string; readonly tabId: string; readonly workspaceId: string },
+  readyMarker: string,
 ): string => {
   const fixed = {
     ...Object.fromEntries(
@@ -335,14 +381,17 @@ const fixedEnvironmentCommand = (
     .filter(([, value]) => value !== undefined)
     .map(([key, value]) => `${key}=${shellQuote(value as string)}`)
     .join(" ");
-  // /bin/sh receives no user startup files, so the pane cannot reintroduce ambient integrations.
-  return `exec /usr/bin/env -i ${assignments} /bin/sh`;
+  // The first shell receives no user startup files. Its marker proves the env -i transition ran
+  // before it replaces itself with the interactive shell used by `agent start`.
+  const bootstrap = `${printMarkerCommand(readyMarker)}; exec /bin/sh`;
+  return `exec /usr/bin/env -i ${assignments} /bin/sh -c ${shellQuote(bootstrap)}`;
 };
 
 const claudeArgv = (
   request: BackendLaunchRequest,
   settingsPath: string,
   mcpPath: string,
+  promptPath: string,
 ): ReadonlyArray<string> => {
   const tools = request.writeIntent === "writer" ? CLAUDE_WRITE_TOOLS : CLAUDE_READ_TOOLS;
   const writerPolicy = claudeWriterCwdPolicy(request.cwd);
@@ -375,8 +424,8 @@ const claudeArgv = (
     allowed.join(","),
     "--disallowedTools",
     CLAUDE_DENIED_TOOLS.join(","),
-    "--append-system-prompt",
-    request.systemPrompt,
+    "--system-prompt-file",
+    promptPath,
   ];
 };
 
@@ -385,6 +434,7 @@ const piArgv = (
   sessionDirectory: string,
   integration: string,
   supervisorConfig: string,
+  promptPath: string,
 ): ReadonlyArray<string> => {
   const tools = [
     "read",
@@ -419,7 +469,7 @@ const piArgv = (
     "--exclude-tools",
     "subagent_models,subagent_start,subagent_list,subagent_status,subagent_await,subagent_send,subagent_reply,subagent_lifecycle,subagent_rename,herdr_agent_start,herdr_agent_list,herdr_agent_status,herdr_agent_await,herdr_agent_read,herdr_agent_send,herdr_agent_stop",
     "--system-prompt",
-    request.systemPrompt,
+    promptPath,
     "--pi-subagents-supervisor-config",
     supervisorConfig,
   ];
@@ -484,12 +534,17 @@ const prepareHarness = async (
   supervisor: SupervisorConnectionMetadata,
 ): Promise<PreparedHarnessResource> => {
   const environment = options.environment ?? process.env;
+  if (Object.values(environment).some((value) => value && hasControlCharacter(value)))
+    throw new Error("herdr-environment-invalid");
+  if ((options.platform ?? process.platform) === "win32")
+    throw new Error("herdr-platform-unsupported");
   const agentDirectory = await safeAgentDirectory(options.agentDirectory);
   const packageRoot = join(agentDirectory, "subagents");
   const root = join(packageRoot, HARNESS_ROOT);
   await ensurePrivateDirectory(packageRoot);
   await ensurePrivateDirectory(root);
-  const directory = join(root, `${runtime}-${request.runId}-${randomBytes(12).toString("hex")}`);
+  const nonce = randomBytes(12).toString("hex");
+  const directory = join(root, `${runtime}-${request.runId}-${nonce}`);
   await fs.mkdir(directory, { mode: 0o700 });
   try {
     let cleanupAuthorized = false;
@@ -504,11 +559,15 @@ const prepareHarness = async (
     });
     const integration = integrationPath(options, runtime, agentDirectory, environment);
     await validateIntegration(integration, runtime);
+    const environmentReadyMarker = `pi-subagents-env-${nonce}`;
+    const secretReadyMarker = `pi-subagents-secret-${nonce}`;
     const environmentCommand = (topology: {
       readonly paneId: string;
       readonly tabId: string;
       readonly workspaceId: string;
-    }) => fixedEnvironmentCommand(environment, topology);
+    }) => fixedEnvironmentCommand(environment, topology, environmentReadyMarker);
+    const promptPath = join(directory, "system-prompt.md");
+    await writeExclusive(promptPath, request.systemPrompt);
 
     if (runtime === "claude") {
       const settingsPath = join(directory, "claude-settings.json");
@@ -541,8 +600,9 @@ const prepareHarness = async (
       return resource({
         directory,
         runtime,
-        argv: claudeArgv(request, settingsPath, mcpPath),
+        argv: controlFreeArgv(claudeArgv(request, settingsPath, mcpPath, promptPath)),
         environmentCommand,
+        environmentReadyMarker,
       });
     }
 
@@ -564,9 +624,19 @@ const prepareHarness = async (
       return resource({
         directory,
         runtime,
-        argv: piArgv(request, sessionDirectory, integration, supervisor.connectionConfigPath),
+        argv: controlFreeArgv(
+          piArgv(
+            request,
+            sessionDirectory,
+            integration,
+            supervisor.connectionConfigPath,
+            promptPath,
+          ),
+        ),
         environmentCommand,
-        secretCommand: `. ${shellQuote(secretPath)}`,
+        environmentReadyMarker,
+        secretCommand: `. ${shellQuote(secretPath)} && ${printMarkerCommand(secretReadyMarker)}`,
+        secretReadyMarker,
       });
     }
 
@@ -601,9 +671,11 @@ const prepareHarness = async (
     return resource({
       directory,
       runtime,
-      argv: codexArgv(request),
+      argv: controlFreeArgv(codexArgv(request)),
       environmentCommand,
-      secretCommand: `. ${shellQuote(secretPath)}`,
+      environmentReadyMarker,
+      secretCommand: `. ${shellQuote(secretPath)} && ${printMarkerCommand(secretReadyMarker)}`,
+      secretReadyMarker,
     });
   } catch (error) {
     try {
@@ -636,6 +708,20 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
   return {
     preflight: (runtime, request) =>
       Effect.gen(function* () {
+        if (
+          Object.values(fixedOptions.environment ?? {}).some(
+            (value) => value && hasControlCharacter(value),
+          )
+        )
+          return yield* readinessError(
+            "herdr_environment_invalid",
+            "The bounded inherited Herdr harness environment contains unsupported control characters.",
+          );
+        if ((fixedOptions.platform ?? process.platform) === "win32")
+          return yield* readinessError(
+            "herdr_platform_unsupported",
+            "The private Herdr subagent harness currently requires POSIX env, shell, and lifecycle-integration semantics; Windows candidates are rejected before topology ownership.",
+          );
         if (!isSafeNativeModelSelector(request.model))
           return yield* readinessError(
             `${runtime}_model_unsupported`,
@@ -655,11 +741,6 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
           return yield* readinessError(
             "claude_writer_confinement_unsupported",
             "Herdr Claude writer confinement requires a canonical absolute cwd representable by current noninteractive sandbox and comma-delimited scoped Edit policies.",
-          );
-        if (request.writeIntent === "writer" && process.platform === "win32")
-          return yield* readinessError(
-            "unsupported_safe_writer_ownership",
-            "Herdr writers are unavailable on Windows until native Job Object ownership is implemented.",
           );
         const environment = fixedOptions.environment ?? {};
         const agentDirectory = yield* Effect.tryPromise({

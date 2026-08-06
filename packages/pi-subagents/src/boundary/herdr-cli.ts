@@ -15,12 +15,24 @@ import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors
 import type { SubagentRuntime } from "../run/model.ts";
 
 const HERDR_EXECUTABLE = "herdr";
-const MINIMUM_PROTOCOL = 17;
+const SUPPORTED_PROTOCOL = 19;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT_BYTES = 128 * 1024;
 const MAX_DIAGNOSTIC_BYTES = 8 * 1024;
 const COMMAND_TIMEOUT_MILLIS = 15_000;
 const START_TIMEOUT_MILLIS = 70_000;
+const CONFIRMED_AGENT_START_REJECTION_CODES = new Set([
+  "invalid_agent_name",
+  "unsupported_agent_kind",
+  "invalid_agent_argument",
+  "invalid_agent_timeout",
+  "agent_pane_not_found",
+  "agent_pane_busy",
+  // `agent_pane_unavailable` is intentionally absent: Herdr 0.8 can emit it
+  // after runtime input dispatch when post-send agent evidence disappears.
+  "agent_start_input_failed",
+  "agent_name_taken",
+]);
 const MUTATING_OPERATIONS = new Set([
   "create workspace",
   "split pane",
@@ -159,7 +171,7 @@ export interface HerdrCreatedWorkspace {
 }
 
 export interface HerdrCliShape {
-  /** The inherited Herdr socket/session, or the default selection. Never a configured selector. */
+  /** The inherited Herdr socket identity used by launch-ready candidates. Never configured publicly. */
   readonly sessionIdentity: string;
   readonly preflight: (
     runtime: SubagentRuntime,
@@ -178,6 +190,11 @@ export interface HerdrCliShape {
     paneId: string,
     command: string,
     operation: "prepare pane environment" | "load pane secrets",
+  ) => Effect.Effect<void, SubagentProcessError>;
+  readonly waitPaneOutput: (
+    paneId: string,
+    marker: string,
+    operation: "confirm pane environment" | "confirm pane secrets",
   ) => Effect.Effect<void, SubagentProcessError>;
   readonly startAgent: (input: {
     readonly runtime: SubagentRuntime;
@@ -200,6 +217,8 @@ export interface HerdrCliLayerOptions {
   /** Test seam only. Production inherits only the bounded Herdr session environment. */
   readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly commandTimeoutMillis?: number | undefined;
+  /** Diagnostic seam only. Production uses the source selected by the real-shell regression. */
+  readonly paneOutputSource?: "recent" | "recent-unwrapped" | undefined;
   /** Test seam only. Production uses the canonical runtime executable names. */
   readonly runtimeExecutables?: Partial<Record<SubagentRuntime, string>> | undefined;
 }
@@ -213,6 +232,12 @@ interface CommandResult {
   readonly cleanupUnconfirmed: boolean;
   readonly dispatched: boolean;
 }
+
+const hasControlCharacter = (value: string): boolean =>
+  [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+  });
 
 const inheritedEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
   Object.freeze(
@@ -229,9 +254,15 @@ const inheritedEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
         "LANG",
         "LC_ALL",
         "LC_CTYPE",
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
         "HERDR_CONFIG_PATH",
         "HERDR_SOCKET_PATH",
         "HERDR_SESSION",
+        "PI_CODING_AGENT_DIR",
+        "PI_CONFIG_DIR",
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
       ].flatMap((key) => (source[key] === undefined ? [] : ([[key, source[key]]] as const))),
     ),
   );
@@ -260,10 +291,8 @@ const protocolError = (operation: string, code: string, message: string) =>
     ? outcomeUncertain(operation, message)
     : processError(operation, code, message);
 
-const boundedAppend = (current: string, chunk: Buffer, maximum: number): string => {
-  const next = Buffer.concat([Buffer.from(current, "utf8"), chunk]);
-  return next.subarray(0, maximum).toString("utf8");
-};
+const boundedAppend = (current: Buffer, chunk: Buffer, maximum: number): Buffer =>
+  Buffer.concat([current, chunk]).subarray(0, maximum);
 
 const terminateProbe = (child: NodeChildProcess): Promise<boolean> =>
   new Promise((resolve) => {
@@ -288,9 +317,10 @@ const run = (
   maximumBytes: number,
 ): Promise<CommandResult> =>
   new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
+    let stdout: Buffer = Buffer.alloc(0);
+    let stderr: Buffer = Buffer.alloc(0);
     let overflowed = false;
+    let observedBytes = 0;
     let timedOut = false;
     let cleanupUnconfirmed = false;
     let dispatched = false;
@@ -301,7 +331,15 @@ const run = (
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      resolve({ code, stdout, stderr, overflowed, timedOut, cleanupUnconfirmed, dispatched });
+      resolve({
+        code,
+        stdout: stdout.toString("utf8"),
+        stderr: stderr.toString("utf8"),
+        overflowed,
+        timedOut,
+        cleanupUnconfirmed,
+        dispatched,
+      });
     };
     try {
       child = spawn(executable, [...args], {
@@ -314,8 +352,8 @@ const run = (
       return;
     }
     const append = (target: "stdout" | "stderr", chunk: Buffer) => {
-      const total = Buffer.byteLength(stdout, "utf8") + Buffer.byteLength(stderr, "utf8");
-      if (total + chunk.byteLength > maximumBytes) {
+      observedBytes += chunk.byteLength;
+      if (observedBytes > maximumBytes) {
         overflowed = true;
         child.kill();
         return;
@@ -346,6 +384,7 @@ const runCommand = (
   operation: string,
   timeoutMillis = options.commandTimeoutMillis ?? COMMAND_TIMEOUT_MILLIS,
   maximumBytes = MAX_JSON_BYTES,
+  confirmedRejectionCodes?: ReadonlySet<string>,
 ): Effect.Effect<string, SubagentProcessError> => {
   const command = Effect.tryPromise({
     try: () =>
@@ -379,18 +418,20 @@ const runCommand = (
       if (result.code !== 0) {
         let code = result.code === null ? "herdr_executable_unavailable" : "herdr_cli_failed";
         let message = `Herdr command failed during ${operation}.`;
+        let confirmedRejection = false;
         try {
           const value = JSON.parse(result.stderr) as unknown;
           const decoded = Schema.decodeUnknownOption(ErrorEnvelopeSchema)(value);
           if (Option.isSome(decoded)) {
             code = decoded.value.error.code.slice(0, 128);
             message = decoded.value.error.message.slice(0, 1_024);
+            confirmedRejection = confirmedRejectionCodes?.has(code) === true;
           }
         } catch {
           // Herdr usage/process failures are not guaranteed to be JSON. Never retain raw stderr.
         }
         return Effect.fail(
-          MUTATING_OPERATIONS.has(operation) && result.dispatched
+          MUTATING_OPERATIONS.has(operation) && result.dispatched && !confirmedRejection
             ? outcomeUncertain(
                 operation,
                 "the dispatched command failed without proof of non-application",
@@ -545,6 +586,16 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliShape 
 
   const preflight: HerdrCliShape["preflight"] = (runtime) =>
     Effect.gen(function* () {
+      if (!environment.HERDR_SOCKET_PATH)
+        return yield* readinessError(
+          "herdr_socket_required",
+          "Herdr subagents require the inherited HERDR_SOCKET_PATH so sterile native harnesses can report lifecycle and session identity to the same server.",
+        );
+      if (Object.values(environment).some((value) => value && hasControlCharacter(value)))
+        return yield* readinessError(
+          "herdr_environment_invalid",
+          "The bounded inherited Herdr CLI environment contains unsupported control characters.",
+        );
       const schemaSource = yield* runCommand(
         fixedOptions,
         ["api", "schema", "--json"],
@@ -560,10 +611,27 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliShape 
           readinessError("herdr_schema_invalid", "Herdr returned an invalid protocol schema."),
         ),
       );
-      if (document.protocol < MINIMUM_PROTOCOL)
+      if (document.protocol !== SUPPORTED_PROTOCOL)
         return yield* readinessError(
-          "herdr_upgrade_required",
-          `Herdr protocol ${MINIMUM_PROTOCOL} or newer is required; found ${document.protocol}.`,
+          document.protocol < SUPPORTED_PROTOCOL
+            ? "herdr_upgrade_required"
+            : "herdr_protocol_unsupported",
+          `Herdr protocol ${SUPPORTED_PROTOCOL} is required; found ${document.protocol}.`,
+        );
+      const liveSnapshot = yield* runCommand(
+        fixedOptions,
+        ["api", "snapshot"],
+        "inspect live Herdr session",
+      ).pipe(
+        Effect.flatMap(decodeSnapshot),
+        Effect.mapError((error) =>
+          readinessError(error.code ?? "herdr_unavailable", error.message),
+        ),
+      );
+      if (liveSnapshot.protocol !== document.protocol)
+        return yield* readinessError(
+          "herdr_protocol_mismatch",
+          `Herdr CLI protocol ${document.protocol} does not match the selected live server protocol ${liveSnapshot.protocol}.`,
         );
       const integrations = yield* runCommand(
         fixedOptions,
@@ -696,6 +764,35 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliShape 
         undefined,
         MAX_TEXT_BYTES,
       ).pipe(
+        // Herdr 0.8 intentionally emits no JSON for a successful `pane run`; the
+        // subsequent marker wait is the causal application attestation. Preserve
+        // envelope validation if a compatible server does emit a response.
+        Effect.flatMap((source) =>
+          source.trim().length === 0
+            ? Effect.void
+            : decodeEnvelope(operation, source).pipe(Effect.asVoid),
+        ),
+      ),
+    waitPaneOutput: (paneId, marker, operation) =>
+      runCommand(
+        fixedOptions,
+        [
+          "pane",
+          "wait-output",
+          paneId,
+          "--match",
+          marker,
+          "--source",
+          fixedOptions.paneOutputSource ?? "recent",
+          "--lines",
+          "40",
+          "--timeout",
+          "5000",
+        ],
+        operation,
+        7_000,
+        MAX_TEXT_BYTES,
+      ).pipe(
         Effect.flatMap((source) => decodeEnvelope(operation, source)),
         Effect.asVoid,
       ),
@@ -717,6 +814,8 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliShape 
         ],
         "start agent",
         START_TIMEOUT_MILLIS,
+        MAX_JSON_BYTES,
+        CONFIRMED_AGENT_START_REJECTION_CODES,
       ).pipe(Effect.flatMap((source) => decodeAgentResponse("start agent", source))),
     prompt: (agentName, text) =>
       runCommand(fixedOptions, ["agent", "prompt", agentName, text], "prompt agent").pipe(

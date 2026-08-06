@@ -441,13 +441,14 @@ interface FakeRetainedControl {
 function fakeRetainedBackendLayer(
   options: {
     readonly initialStartGate?: Deferred.Deferred<void, never> | undefined;
+    readonly capabilities?: BackendDriver["capabilities"] | undefined;
   } = {},
 ) {
   const controls: FakeRetainedControl[] = [];
   const driver: BackendDriver = {
     host: "herdr",
     runtime: "claude",
-    capabilities: ["steer", "rename-display"],
+    capabilities: options.capabilities ?? ["steer", "rename-display"],
     supportsContext: (context) => context === "fresh",
     spawn: () =>
       Effect.acquireRelease(
@@ -878,6 +879,46 @@ describe("SubagentService", () => {
         { type: "tool", toolName: "read", target: "src/auth.ts", state: "completed" },
         { type: "assistant", text: "Review complete." },
       ]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("starts retained follow-ups without advertising unconfirmable active steering", () => {
+    const backend = fakeRetainedBackendLayer({ capabilities: ["rename-display"] });
+    const projections: SubagentProjection[] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => projections.push(projection),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      const activeGuidanceFailure = yield* service
+        .send(run.id, "Unconfirmed active guidance")
+        .pipe(Effect.flip);
+      expect(activeGuidanceFailure).toMatchObject({
+        _tag: "UnsupportedSubagentCapabilityError",
+        capability: "steer",
+      });
+
+      backend.controls[0]?.offer({
+        type: "report",
+        runId: run.id,
+        sequence: 1,
+        deliveryId: "retained-without-steer",
+        text: "First retained report.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
+
+      const followUp = yield* service.send(run.id, "Begin a new retained assignment.");
+      expect(followUp).toMatchObject({ state: "running", reportGeneration: 1 });
+      expect(backend.controls[0]?.prompts.at(-1)).toBe("Begin a new retained assignment.");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

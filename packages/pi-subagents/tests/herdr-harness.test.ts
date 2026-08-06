@@ -17,6 +17,11 @@ const valueAfter = (args: ReadonlyArray<string>, flag: string): string | undefin
   const index = args.indexOf(flag);
   return index < 0 ? undefined : args[index + 1];
 };
+const hasControlCharacter = (value: string): boolean =>
+  [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+  });
 
 const setup = async () => {
   const directory = await fs.mkdtemp(join(tmpdir(), "pi-subagents-herdr-harness-"));
@@ -30,10 +35,13 @@ const setup = async () => {
     claude: join(directory, "claude-integration.sh"),
     codex: join(directory, "codex-integration.sh"),
   } as const;
+  const integrationVersions = { pi: 8, claude: 7, codex: 7 } as const;
   for (const [runtime, path] of Object.entries(integrations))
-    await fs.writeFile(path, `# installed by herdr\nHERDR_INTEGRATION_ID=${runtime}\n`, {
-      mode: 0o600,
-    });
+    await fs.writeFile(
+      path,
+      `# installed by herdr\nHERDR_INTEGRATION_ID=${runtime}\nHERDR_INTEGRATION_VERSION=${integrationVersions[runtime as keyof typeof integrationVersions]}\n`,
+      { mode: 0o600 },
+    );
   const codexSource = join(home, ".codex");
   await fs.mkdir(codexSource, { recursive: true, mode: 0o700 });
   await fs.writeFile(
@@ -104,7 +112,7 @@ const launch = (
   activeTools: [],
   projectTrusted: false,
   parentSessionId: "parent-session",
-  systemPrompt: "Fixed supervisor policy.",
+  systemPrompt: "Fixed supervisor policy.\n\nReport only through the private supervisor.",
 });
 
 afterEach(async () => {
@@ -146,6 +154,42 @@ describe("Herdr native harness security", () => {
       }
   });
 
+  it("requires the current Herdr 0.8 integration marker versions", async () => {
+    const test = await setup();
+    await fs.writeFile(
+      test.integrations.pi,
+      "// installed by herdr\n// HERDR_INTEGRATION_ID=pi\n// HERDR_INTEGRATION_VERSION=6\n",
+    );
+    await expect(
+      Effect.runPromise(test.harness.preflight("pi", launch("pi"))),
+    ).rejects.toMatchObject({ code: "pi_herdr_integration_unavailable" });
+  });
+
+  it("rejects control-bearing inherited harness values before topology ownership", async () => {
+    const test = await setup();
+    const harness = makeHerdrHarness({
+      agentDirectory: test.agentDirectory,
+      environment: { ...test.environment, PATH: "bad\u0085path" },
+      integrationPaths: test.integrations,
+    });
+    await expect(Effect.runPromise(harness.preflight("pi", launch("pi")))).rejects.toMatchObject({
+      code: "herdr_environment_invalid",
+    });
+  });
+
+  it("rejects every Windows Herdr harness before topology ownership", async () => {
+    const test = await setup();
+    const harness = makeHerdrHarness({
+      agentDirectory: test.agentDirectory,
+      environment: test.environment,
+      integrationPaths: test.integrations,
+      platform: "win32",
+    });
+    await expect(Effect.runPromise(harness.preflight("pi", launch("pi")))).rejects.toMatchObject({
+      code: "herdr_platform_unsupported",
+    });
+  });
+
   it("fixes Claude args and reuses strict cwd-scoped writer policy", async () => {
     const test = await setup();
     await Effect.runPromise(
@@ -161,15 +205,24 @@ describe("Herdr native harness security", () => {
           expect(prepared.argv).toContain("--strict-mcp-config");
           expect(prepared.argv).toContain("--no-session-persistence");
           expect(valueAfter(prepared.argv, "--setting-sources")).toBe("");
+          const promptPath = valueAfter(prepared.argv, "--system-prompt-file")!;
+          expect(yield* Effect.promise(() => fs.readFile(promptPath, "utf8"))).toBe(
+            launch("claude", "writer").systemPrompt,
+          );
+          expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
           expect(valueAfter(prepared.argv, "--tools")).toContain("Bash");
           expect(valueAfter(prepared.argv, "--tools")).toContain("Edit");
           expect(valueAfter(prepared.argv, "--tools")).not.toContain("Write,");
           expect(valueAfter(prepared.argv, "--allowedTools")).toContain(
             `Edit(/${process.cwd()}/**)`,
           );
-          expect(
-            prepared.environmentCommand({ paneId: "w:p", tabId: "w:t", workspaceId: "w" }),
-          ).toContain("exec /usr/bin/env -i");
+          const environmentCommand = prepared.environmentCommand({
+            paneId: "w:p",
+            tabId: "w:t",
+            workspaceId: "w",
+          });
+          expect(environmentCommand).toContain("exec /usr/bin/env -i");
+          expect(environmentCommand).not.toContain(prepared.environmentReadyMarker);
           const settings = JSON.parse(
             yield* Effect.promise(() =>
               fs.readFile(valueAfter(prepared.argv, "--settings")!, "utf8"),
@@ -226,6 +279,7 @@ describe("Herdr native harness security", () => {
           expect(valueAfter(prepared.argv, "--sandbox")).toBe("read-only");
           expect(valueAfter(prepared.argv, "--ask-for-approval")).toBe("never");
           expect(prepared.argv.join(" ")).not.toContain("must-never-appear-in-argv");
+          expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
           expect(prepared.secretCommand).not.toContain("must-never-appear-in-argv");
           const codexHome = join(prepared.directory, "codex-home");
           const config = yield* Effect.promise(() =>
@@ -329,7 +383,13 @@ describe("Herdr native harness security", () => {
           expect(prepared.argv.filter((value) => value === "--extension")).toHaveLength(2);
           expect(valueAfter(prepared.argv, "--tools")).toContain("supervisor_submit_report");
           expect(valueAfter(prepared.argv, "--exclude-tools")).toContain("subagent_start");
+          const promptPath = valueAfter(prepared.argv, "--system-prompt")!;
+          expect(yield* Effect.promise(() => fs.readFile(promptPath, "utf8"))).toBe(
+            launch("pi", "writer").systemPrompt,
+          );
+          expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
           expect(prepared.secretCommand).not.toContain("pi-runtime-secret");
+          expect(prepared.secretCommand).not.toContain(prepared.secretReadyMarker);
           const bootstrapPath = join(prepared.directory, "pi-environment.sh");
           const bootstrap = yield* Effect.promise(() => fs.readFile(bootstrapPath, "utf8"));
           expect(bootstrap).toContain("PI_SUBAGENT_RUNTIME_API_KEY='pi-runtime-secret'");

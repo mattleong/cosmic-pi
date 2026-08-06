@@ -1,3 +1,6 @@
+// Herdr-safe agent names use a bounded digest of parent/run ownership identity.
+// @effect-diagnostics effect/nodeBuiltinImport:off
+import { createHash } from "node:crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -17,6 +20,8 @@ import { HerdrHarness, type HerdrPreparedHarness } from "./herdr-harness.ts";
 import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
 
 const MAX_LABEL_CHARS = 80;
+const MAX_AGENT_NAME_CHARS = 32;
+const AGENT_NAME_DIGEST_CHARS = 8;
 
 export interface HerdrHostedAgent {
   readonly runId: string;
@@ -102,11 +107,23 @@ const safeIdentityPart = (value: string): string =>
     .replaceAll(/[^A-Za-z0-9_-]/gu, "-")
     .replaceAll(/-+/gu, "-")
     .slice(0, 30) || "session";
-const ownedAgentName = (request: BackendLaunchRequest, runtime: SubagentRuntime): string =>
-  `psa-${runtime}-${safeIdentityPart(request.parentSessionId)}-${safeIdentityPart(request.runId)}`.slice(
-    0,
-    MAX_LABEL_CHARS,
-  );
+const ownedAgentName = (request: BackendLaunchRequest, runtime: SubagentRuntime): string => {
+  const prefix = `psa-${runtime}-`;
+  const digest = createHash("sha256")
+    .update(request.parentSessionId)
+    .update("\0")
+    .update(request.runId)
+    .digest("hex")
+    .slice(0, AGENT_NAME_DIGEST_CHARS);
+  const readableLimit = MAX_AGENT_NAME_CHARS - prefix.length - digest.length - 1;
+  const readable = request.runId
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9_-]/gu, "-")
+    .replaceAll(/-+/gu, "-")
+    .replaceAll(/^[-_]+|[-_]+$/gu, "")
+    .slice(0, readableLimit);
+  return `${prefix}${readable || "run"}-${digest}`;
+};
 const paneLabel = (request: BackendLaunchRequest, runtime: SubagentRuntime): string =>
   `Subagent ${runtime} · ${request.name}`.slice(0, MAX_LABEL_CHARS);
 const projectLabel = (request: BackendLaunchRequest): string =>
@@ -126,6 +143,22 @@ const agentOwnershipEvidence = (agent: HerdrAgent): AgentOwnershipEvidence | und
         ...(agent.foregroundCwd === undefined ? {} : { foregroundCwd: agent.foregroundCwd }),
       }
     : undefined;
+
+const sameStartedAgent = (
+  pane: HerdrPane,
+  agentName: string,
+  runtime: SubagentRuntime,
+  cwd: string,
+  agent: HerdrAgent,
+): boolean =>
+  agent.paneId === pane.paneId &&
+  agent.terminalId === pane.terminalId &&
+  agent.workspaceId === pane.workspaceId &&
+  agent.tabId === pane.tabId &&
+  agent.name === agentName &&
+  agent.runtime === runtime &&
+  (agent.cwd === cwd || agent.foregroundCwd === cwd) &&
+  (agent.agentSession === undefined || agent.agentSession.agent === runtime);
 
 /** One comparator is used for prompt, inspect, rollback, and close ownership decisions. */
 const sameAgentOwnership = (expected: AgentOwnershipEvidence, agent: HerdrAgent): boolean => {
@@ -397,6 +430,20 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           { ...request, name: agentName },
           supervisor,
         );
+        const hasSecretCommand = harness.secretCommand !== undefined;
+        const hasSecretMarker = harness.secretReadyMarker !== undefined;
+        if (
+          hasSecretCommand !== hasSecretMarker ||
+          harness.secretCommand === "" ||
+          harness.secretReadyMarker === ""
+        ) {
+          harness.authorizeCleanup();
+          return yield* processError(
+            "validate Herdr harness",
+            "herdr_secret_attestation_invalid",
+            "Private Herdr secret bootstrap command and readiness marker must be present together and non-empty.",
+          );
+        }
         const before = yield* cli.snapshot.pipe(
           Effect.tapError(() => Effect.sync(() => harness.authorizeCleanup())),
         );
@@ -497,32 +544,37 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             }),
             "prepare pane environment",
           );
-          yield* Effect.sleep("500 millis");
-          if (harness.secretCommand) {
+          yield* cli.waitPaneOutput(
+            pane.paneId,
+            harness.environmentReadyMarker,
+            "confirm pane environment",
+          );
+          if (harness.secretCommand && harness.secretReadyMarker) {
             yield* cli.runPaneCommand(pane.paneId, harness.secretCommand, "load pane secrets");
-            yield* Effect.sleep("250 millis");
+            yield* cli.waitPaneOutput(
+              pane.paneId,
+              harness.secretReadyMarker,
+              "confirm pane secrets",
+            );
           }
+          yield* Effect.sleep("100 millis");
           const remote = yield* cli.startAgent({
             runtime,
             paneId: pane.paneId,
             agentName,
             argv: harness.argv,
           });
-          const identity = agentOwnershipEvidence(remote);
-          if (
-            !identity ||
-            identity.paneId !== pane.paneId ||
-            identity.terminalId !== pane.terminalId ||
-            identity.workspaceId !== pane.workspaceId ||
-            identity.tabId !== pane.tabId ||
-            identity.name !== agentName ||
-            identity.runtime !== runtime ||
-            identity.agentSession.agent !== runtime ||
-            (identity.cwd !== request.cwd && identity.foregroundCwd !== request.cwd)
-          )
+          if (!sameStartedAgent(pane, agentName, runtime, request.cwd, remote))
             return yield* ownershipMismatch(
               "launch Herdr agent",
-              "Herdr returned mismatched pane/terminal/agent/native-session ownership evidence.",
+              "Herdr returned mismatched pane/terminal/agent startup evidence.",
+            );
+          const identity = agentOwnershipEvidence(remote);
+          if (!identity)
+            return yield* processError(
+              "confirm Herdr agent session",
+              "herdr_agent_session_unconfirmed",
+              "Herdr confirmed interactive startup without atomically returning bounded native session ownership evidence; protocol 19 exposes no launch token for safe delayed adoption.",
             );
           provisional.startedIdentity = identity;
           const run: OwnedRun = {
@@ -540,9 +592,9 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
             harness,
             closed: false,
           };
+          yield* restoreFocus(before, managed.tabId);
           records.set(run.runId, run);
           managed.anchorPaneId = run.paneId;
-          yield* restoreFocus(before, managed.tabId);
           const hosted: HerdrHostedAgent = {
             runId: run.runId,
             runtime,

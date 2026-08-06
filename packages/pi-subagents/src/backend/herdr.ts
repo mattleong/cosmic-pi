@@ -21,7 +21,7 @@ import type { BackendDriver, BackendEvent, BackendLaunchRequest } from "./model.
 const EVENT_CAPACITY = 256;
 const RECONCILE_INTERVAL = "500 millis";
 const MISSING_REPORT_POLLS = 10;
-const UNCERTAIN_PROMPT_POLLS = 10;
+const PROMPT_EVIDENCE_POLLS = 10;
 
 const processError = (operation: string, code: string, message: string) =>
   new SubagentProcessError({ operation, code, message });
@@ -29,7 +29,7 @@ const unsupported = (runtime: SubagentRuntime, capability: string) =>
   new UnsupportedSubagentCapabilityError({
     backend: `herdr/${runtime}`,
     capability,
-    message: `Herdr protocol 17 does not provide a confirmable ${capability} outcome for ${runtime}.`,
+    message: `The supported Herdr CLI contract does not provide a confirmable ${capability} outcome for ${runtime}.`,
   });
 
 /** Fixed supervisor/report contract shared by all three Herdr native harnesses. */
@@ -58,13 +58,6 @@ const assignmentPrompt = (runtime: SubagentRuntime, message: string, epoch: numb
     "When complete, call supervisor_submit_report exactly once with a fresh delivery_id. Do not treat native final text as delivery.",
   ].join("\n\n");
 
-const guidancePrompt = (message: string): string =>
-  [
-    "Confirmed additional guidance from the parent for the current assignment:",
-    message,
-    "Continue the same assignment and retain its current supervisor epoch. Report only through supervisor_submit_report.",
-  ].join("\n\n");
-
 const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
   runtime: SubagentRuntime,
   request: BackendLaunchRequest,
@@ -79,7 +72,7 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
   let preparedEpoch = 0;
   let promptIssuingEpoch = 0;
   let confirmedStartedEpoch = 0;
-  let uncertainEvidenceEpoch = 0;
+  let reconcilingEpoch = 0;
   let missingReportPolls = 0;
   let closed = false;
 
@@ -192,21 +185,17 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
       preparedEpoch = epoch;
       promptIssuingEpoch = 0;
       confirmedStartedEpoch = epoch;
-      uncertainEvidenceEpoch = 0;
+      reconcilingEpoch = 0;
       missingReportPolls = 0;
     }).pipe(Effect.andThen(offer({ type: "run_started", assignmentEpoch: epoch })));
 
-  const reconcileUncertainPrompt = (
+  const reconcilePromptEvidence = (
     epoch: number,
     baseline: HerdrAgent,
-    remaining = UNCERTAIN_PROMPT_POLLS,
+    remaining = PROMPT_EVIDENCE_POLLS,
   ): Effect.Effect<void, SubagentProcessError> =>
     Effect.suspend(() => {
-      if (
-        preparedEpoch !== epoch ||
-        promptIssuingEpoch !== epoch ||
-        uncertainEvidenceEpoch !== epoch
-      )
+      if (preparedEpoch !== epoch || promptIssuingEpoch !== epoch || reconcilingEpoch !== epoch)
         return Effect.fail(
           processError(
             "start",
@@ -241,7 +230,7 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
                   ),
                 );
               return Effect.sleep(RECONCILE_INTERVAL).pipe(
-                Effect.andThen(reconcileUncertainPrompt(epoch, baseline, remaining - 1)),
+                Effect.andThen(reconcilePromptEvidence(epoch, baseline, remaining - 1)),
               );
             }),
           );
@@ -267,7 +256,10 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
             .prompt(assignmentPrompt(runtime, message, epoch))
             .pipe(Effect.exit);
           if (prompt._tag === "Success") {
-            yield* confirmStarted(epoch);
+            // Herdr 0.8 responds after queueing text and scheduling delayed Enter. The
+            // response is dispatch evidence, not proof that the assignment executed.
+            reconcilingEpoch = epoch;
+            yield* reconcilePromptEvidence(epoch, prompt.value);
             return;
           }
           const error = Cause.squash(prompt.cause);
@@ -279,18 +271,18 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
               ? (error as SubagentProcessError)
               : undefined;
           if (processFailure?.code?.endsWith("_outcome_uncertain")) {
-            uncertainEvidenceEpoch = epoch;
-            yield* reconcileUncertainPrompt(epoch, baseline);
+            reconcilingEpoch = epoch;
+            yield* reconcilePromptEvidence(epoch, baseline);
             return;
           }
           promptIssuingEpoch = 0;
-          uncertainEvidenceEpoch = 0;
+          reconcilingEpoch = 0;
           return yield* (
             processFailure ??
               processError("start", "herdr_prompt_failed", "Herdr prompt delivery failed.")
           );
         }),
-      steer: (message: string) => hosted.prompt(guidancePrompt(message)).pipe(Effect.asVoid),
+      steer: (_message: string) => Effect.fail(unsupported(runtime, "steer")),
       interrupt: Effect.fail(unsupported(runtime, "interrupt")),
       renameDisplay: () => Effect.fail(unsupported(runtime, "rename-display")),
       reply: (requestId: string, message: string) =>
@@ -312,7 +304,7 @@ export const makeHerdrBackendDriver = (
 ): BackendDriver => ({
   host: "herdr",
   runtime,
-  capabilities: ["steer", "parent-contact"],
+  capabilities: ["parent-contact"],
   supportsContext: (context) => context === "fresh",
   preflight: (request) => host.preflight({ runtime, ...request }),
   spawn: (request) =>

@@ -3,6 +3,7 @@ import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { subagentBackendRegistryLayer } from "./backend/local.ts";
 import { ChildProcess } from "./boundary/child-process.ts";
 import { HerdrCli } from "./boundary/herdr-cli.ts";
+import { captureHerdrEnvironment } from "./boundary/herdr-environment.ts";
 import { HerdrHarness } from "./boundary/herdr-harness.ts";
 import { HerdrHost } from "./boundary/herdr-host.ts";
 import { LocalCliProcess } from "./boundary/local-cli-process.ts";
@@ -42,9 +43,13 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
       ? { publishBaseConfig: options.publishSessionBaseConfig }
       : {}),
   }).pipe(Layer.provide(configStore));
+  const herdrEnvironment = captureHerdrEnvironment();
   const herdrBoundaries = Layer.merge(
-    HerdrCli.layer(),
-    HerdrHarness.layer({ agentDirectory: options.agentDirectory }),
+    HerdrCli.layer({ environment: herdrEnvironment }),
+    HerdrHarness.layer({
+      agentDirectory: options.agentDirectory,
+      environment: herdrEnvironment,
+    }),
   );
   const herdrHost = HerdrHost.layer.pipe(Layer.provide(herdrBoundaries));
   const backendBoundaries = Layer.mergeAll(

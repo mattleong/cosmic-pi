@@ -83,7 +83,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
       const selected = yield* withLock(
         Effect.gen(function* () {
           const selected = yield* requireRecord(id);
-          yield* requireCapability(selected, "steer");
           if (selected.view.state === "waiting_for_parent")
             return yield* new InvalidSubagentRequestError({
               code: "run_waiting_for_parent",
@@ -141,6 +140,9 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               attemptToken,
             };
           }
+          // A retained report starts a new assignment through `controls.start`; it is not
+          // active-turn steering and does not rely on the backend's `steer` capability.
+          yield* requireCapability(selected, "steer");
           if (selected.view.state === "paused" || selected.view.state === "completed") {
             const recovery = hasSubagentCapability(selected.view, "resume")
               ? `resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance`

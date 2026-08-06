@@ -73,7 +73,14 @@ const fixture = Effect.gen(function* () {
   const replies: Array<readonly [string, string]> = [];
   const prompts: string[] = [];
   let remoteStatus: HerdrAgent["agentStatus"] = "working";
-  let promptMode: "success" | "uncertain-report" | "uncertain-no-evidence" = "success";
+  let remoteStateChangeSequence = 1;
+  let pendingPromptLifecycleEvidence = false;
+  let promptMode:
+    | "success-transition"
+    | "success-report"
+    | "success-no-evidence"
+    | "uncertain-report"
+    | "uncertain-no-evidence" = "success-transition";
   const acceptedEpochs = new Set<number>();
   let currentEpoch = 0;
   let closed = 0;
@@ -87,7 +94,7 @@ const fixture = Effect.gen(function* () {
     agentStatus: remoteStatus,
     name: "owned-agent",
     runtime: "pi",
-    stateChangeSequence: 1,
+    stateChangeSequence: remoteStateChangeSequence,
     interactiveReady: true,
     agentSession: { source: "fixture", agent: "pi", kind: "id", value: "native-session" },
     nativeSession: "native-session",
@@ -108,22 +115,29 @@ const fixture = Effect.gen(function* () {
       value: "native-session",
     },
     sessionIdentity: "inherited",
-    inspect: Effect.sync(() => ({ ...remote(), runtime })),
+    inspect: Effect.sync(() => {
+      if (pendingPromptLifecycleEvidence) {
+        pendingPromptLifecycleEvidence = false;
+        remoteStateChangeSequence += 1;
+      }
+      return { ...remote(), runtime };
+    }),
     prompt: (text) =>
       Effect.suspend(() => {
         prompts.push(text);
-        if (promptMode === "uncertain-report") {
+        if (promptMode === "success-transition") pendingPromptLifecycleEvidence = true;
+        if (promptMode === "uncertain-report" || promptMode === "success-report") {
           acceptedEpochs.add(currentEpoch);
           Queue.offerUnsafe(supervisorEvents, {
             type: "report",
             runId: `agent-${runtime}`,
             assignmentEpoch: currentEpoch,
             sequence: 1,
-            deliveryId: `uncertain-${currentEpoch}`,
-            text: "Report accepted during uncertain prompt delivery.",
+            deliveryId: `${promptMode}-${currentEpoch}`,
+            text: "Report accepted as causal prompt evidence.",
           });
         }
-        return promptMode === "success"
+        return promptMode.startsWith("success-")
           ? Effect.succeed({ ...remote(), runtime })
           : Effect.fail(
               new SubagentProcessError({
@@ -197,7 +211,7 @@ describe("Herdr Phase One backend drivers", () => {
         Effect.gen(function* () {
           const test = yield* fixture;
           const driver = makeHerdrBackendDriver(runtime, test.host, test.supervisors);
-          expect(driver.capabilities).toEqual(["steer", "parent-contact"]);
+          expect(driver.capabilities).toEqual(["parent-contact"]);
           expect(driver.supportsContext("fork")).toBe(false);
           const handle = yield* driver.spawn(launch(runtime));
           expect(yield* handle.controls.initialize).toMatchObject({
@@ -248,6 +262,42 @@ describe("Herdr Phase One backend drivers", () => {
     Effect.gen(function* () {
       const test = yield* fixture;
       test.setPromptMode("uncertain-report");
+      const handle = yield* makeHerdrBackendDriver("pi", test.host, test.supervisors).spawn(
+        launch("pi"),
+      );
+      yield* handle.controls.initialize;
+      yield* handle.controls.start("Task", 1);
+      const observed = [yield* take(handle.events), yield* take(handle.events)];
+      expect(observed).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "report", assignmentEpoch: 1 }),
+          expect.objectContaining({ type: "run_started", assignmentEpoch: 1 }),
+        ]),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("requires causal evidence after a successful prompt dispatch response", () =>
+    Effect.gen(function* () {
+      const test = yield* fixture;
+      test.setPromptMode("success-no-evidence");
+      const handle = yield* makeHerdrBackendDriver("pi", test.host, test.supervisors).spawn(
+        launch("pi"),
+      );
+      yield* handle.controls.initialize;
+      const starting = yield* handle.controls.start("Task", 1).pipe(Effect.forkScoped);
+      yield* TestClock.adjust("5 seconds");
+      const failure = yield* Fiber.join(starting).pipe(Effect.flip);
+      expect(failure).toMatchObject({ code: "herdr_prompt_outcome_uncertain" });
+      const pending = yield* Queue.poll(handle.events);
+      expect(pending._tag).toBe("None");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("accepts an epoch report as causal evidence after successful prompt dispatch", () =>
+    Effect.gen(function* () {
+      const test = yield* fixture;
+      test.setPromptMode("success-report");
       const handle = yield* makeHerdrBackendDriver("pi", test.host, test.supervisors).spawn(
         launch("pi"),
       );
