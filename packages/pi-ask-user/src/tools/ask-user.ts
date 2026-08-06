@@ -32,6 +32,7 @@ export function registerAskUserTool(pi: ExtensionAPI, runner: AskUserToolRunner)
       "Do not use ask_user for rhetorical questions, routine confirmations, information already present in context, or decisions that can be reversed cheaply.",
       "Batch related decisions into one ask_user invocation and do not call ask_user repeatedly after the user cancels.",
       "Every ask_user choice needs a stable value, concise label, and useful trade-off description. Use previews only for concrete artifacts that benefit from visual comparison.",
+      "When ask_user offers alternatives and one choice is the main agent's recommendation, place it first, append (Recommended) to its label, and explain why in its description; do not force a recommendation for preference-only choices.",
       "Never ask users to enter passwords, API keys, tokens, private keys, or other credentials through ask_user.",
     ],
     parameters: AskUserParameters,
