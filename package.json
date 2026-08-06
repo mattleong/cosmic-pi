@@ -2,7 +2,7 @@
   "name": "cosmic-pi",
   "version": "0.2.0",
   "private": true,
-  "description": "A pnpm workspace for pi extensions.",
+  "description": "A pnpm workspace for Pi extensions.",
   "homepage": "https://github.com/mattleong/cosmic-pi#readme",
   "bugs": {
     "url": "https://github.com/mattleong/cosmic-pi/issues"

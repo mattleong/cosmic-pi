@@ -1,6 +1,6 @@
 # Releasing cosmic-pi
 
-All workspace packages use the same version. The public `pi-ask-user`, `pi-background-terminals`, `pi-better-openai`, `pi-better-xai`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-advisor` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm.
+All workspace packages use the same version. The public `pi-ask-user`, `pi-background-terminals`, `pi-better-openai`, `pi-better-xai`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-advisor` and `pi-herdr-fork` remain local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm.
 
 ## One-time setup
 
@@ -110,7 +110,7 @@ Do not create a new version solely because one package published before another 
 ## Important constraints
 
 - Keep the root and every package version synchronized.
-- Keep `pi-advisor` private and local-only; do not publish it to npm.
+- Keep `pi-advisor` and `pi-herdr-fork` private and local-only; do not publish them to npm.
 - Use stable `vMAJOR.MINOR.PATCH` release tags, such as `v0.2.1`.
 - Publish through the GitHub Release workflow rather than running `npm publish` locally.
 - Never reuse or move a tag after npm publication.

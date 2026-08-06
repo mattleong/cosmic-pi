@@ -1,6 +1,6 @@
 # cosmic-pi
 
-A pnpm workspace for pi extensions.
+A pnpm workspace for Pi extensions.
 
 ## Packages
 
@@ -12,6 +12,7 @@ A pnpm workspace for pi extensions.
 - [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted previews for pi's built-in tool calls.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-directory-models`](packages/pi-directory-models) — per-directory model and thinking-level preferences for fresh Pi sessions.
+- [`pi-herdr-fork`](packages/pi-herdr-fork) — a deterministic `/herdr-fork` command that opens a user-owned native Pi fork in the current Herdr tab.
 - [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements, beginning with the footer and information area.
 - [`pi-subagents`](packages/pi-subagents) — session-scoped background subagents with supervisor communication and a `/subagents` fleet UI.
 
@@ -35,13 +36,14 @@ pi install npm:pi-directory-models
 pi install npm:pi-subagents
 ```
 
-pi-advisor is local-only. Clone this repository, install the workspace dependencies, and register its local path for persistent use:
+`pi-advisor` and `pi-herdr-fork` are local-only. Clone this repository, install the workspace dependencies, and register their local paths for persistent use:
 
 ```bash
 git clone https://github.com/mattleong/cosmic-pi.git
 cd cosmic-pi
 pnpm install
 pi install "$PWD/packages/pi-advisor"
+pi install "$PWD/packages/pi-herdr-fork"
 ```
 
 ## Development
@@ -63,6 +65,7 @@ pnpm --filter pi-better-openai test
 pnpm --filter pi-code-previews build
 pnpm --filter pi-cosmic-ui test
 pnpm --filter pi-directory-models test
+pnpm --filter pi-herdr-fork test
 pnpm --filter pi-subagents test
 ```
 
@@ -75,14 +78,15 @@ pi -e ./packages/pi-better-openai
 pi -e ./packages/pi-code-previews
 pi -e ./packages/pi-cosmic-ui
 pi -e ./packages/pi-directory-models
+pi -e ./packages/pi-herdr-fork
 pi -e ./packages/pi-subagents
 ```
 
-To add a package to project-local pi settings, use `pi install -l` with its local path instead.
+To add a package to project-local Pi settings, use `pi install -l` with its local path instead.
 
 ## Releases
 
-All workspace packages use the same version. The public packages are published together; private pi-advisor remains local-only. Set the next version from the repository root:
+All workspace packages use the same version. The public packages are published together; private `pi-advisor` and `pi-herdr-fork` remain local-only. Set the next version from the repository root:
 
 ```bash
 pnpm version:set 0.2.1
