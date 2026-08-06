@@ -79,7 +79,7 @@ describe("ask-user TUI", () => {
   it("uses Vim aliases only while the editor is inactive", () => {
     const { dialog, done } = make();
     dialog.handleInput("j");
-    expect(dialog.render(80).join("\n")).toContain("> ( ) 2. Rewrite");
+    expect(dialog.render(80).join("\n")).toContain("> [ ] 2. Rewrite");
     dialog.handleInput("q");
     expect(done).not.toHaveBeenCalled();
     dialog.handleInput("\u001b[106u");

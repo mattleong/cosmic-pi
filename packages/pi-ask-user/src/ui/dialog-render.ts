@@ -55,7 +55,7 @@ function renderQuestion(
     const focused = draft.cursor === index;
     const selected = draft.answer?.kind === "choices" && draft.answer.values.includes(choice.value);
     const marker =
-      question.mode === "multiple" ? `[${selected ? "x" : " "}]` : selected ? "(●)" : "( )";
+      question.mode === "multiple" ? `[${selected ? "x" : " "}]` : selected ? "[●]" : "[ ]";
     appendWrapped(
       lines,
       focused ? model.theme.fg("accent", "> ") : "  ",
