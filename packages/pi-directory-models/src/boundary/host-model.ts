@@ -67,23 +67,10 @@ export const captureCurrentPreference = Effect.fn("DirectoryModelHost.captureCur
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   canonicalCwd: string,
-  thinkingOverride?: ThinkingLevel,
 ) {
-  const current = yield* Effect.try({
-    try: () => captureSelectedModel(ctx.model),
-    catch: hostError("read", "Unable to read Pi's current model."),
-  });
+  const current = captureContextModel(ctx);
   if (!current) return yield* hostError("read", "Pi has no active model to remember.")();
-  const thinkingLevel = yield* Effect.try({
-    try: () => {
-      if (thinkingOverride) return thinkingOverride;
-      const fromApi = pi.getThinkingLevel();
-      if (isThinkingLevel(fromApi)) return fromApi;
-      throw new Error("invalid thinking level");
-    },
-    catch: hostError("read", "Unable to read Pi's current thinking level."),
-  });
-  return makeDirectoryModelPreference(canonicalCwd, current.provider, current.id, thinkingLevel);
+  return yield* preferenceFromSelectedModel(pi, canonicalCwd, current);
 });
 
 const readThinkingLevel = (pi: ExtensionAPI) =>

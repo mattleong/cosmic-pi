@@ -14,15 +14,14 @@ import type {
   AdvisorRuntimeServiceShape,
 } from "../src/runtime/runtime.ts";
 import {
-  AdvisorReviewQueue,
-  AdvisorQueueBacklogExceededError,
   AdvisorQueueBatchDroppedError,
   AdvisorQueueCancelledError,
   AdvisorQueueCorrelationMismatchError,
   AdvisorQueueDisposedError,
-  AdvisorQueueError,
   AdvisorQueueResetRequiredError,
-  AdvisorQueueStaleEpochError,
+} from "../src/queue/errors.ts";
+import {
+  AdvisorReviewQueue,
   AdvisorReviewQueueService,
   MAX_PENDING_CHECKPOINTS,
   advisorReviewQueueServiceLayer,
@@ -610,7 +609,6 @@ describe("AdvisorReviewQueue", () => {
       expect(failure._tag).toBe("Some");
       if (failure._tag === "Some") {
         expect(failure.value).toBeInstanceOf(AdvisorQueueCorrelationMismatchError);
-        expect(failure.value).toBeInstanceOf(AdvisorQueueError);
         expect(failure.value._tag).toBe("CorrelationMismatch");
       }
       expect(Cause.hasDies(exit.cause)).toBe(false);
@@ -934,15 +932,6 @@ describe("AdvisorReviewQueue", () => {
     expect(failure).toBeInstanceOf(AdvisorQueueResetRequiredError);
     expect((failure as AdvisorQueueResetRequiredError)._tag).toBe("ResetRequired");
     await queue.dispose();
-  });
-
-  test.each([
-    ["BacklogExceeded", AdvisorQueueBacklogExceededError],
-    ["StaleEpoch", AdvisorQueueStaleEpochError],
-  ] as const)("keeps the %s compatibility tag schema-backed", (tag, ErrorClass) => {
-    const error = new ErrorClass({ message: "characterized" });
-    expect(error._tag).toBe(tag);
-    expect(error).toBeInstanceOf(AdvisorQueueError);
   });
 
   test("maps post-disposal synchronous ingestion to the Disposed queue tag", async () => {

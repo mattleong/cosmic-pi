@@ -5,6 +5,9 @@ import { isUsingOAuthAtHostBoundary } from "../boundary/model-registry-auth.ts";
 import type { ResolvedConfig } from "../config/index.ts";
 import type { UsageSnapshot } from "./format.ts";
 
+export const HIDDEN_USAGE_STATUS_TEXT =
+  "Usage hidden: current model is not an xAI subscription model.";
+
 export interface XaiProjection {
   readonly config: ResolvedConfig | undefined;
   readonly eligible: boolean;
@@ -66,7 +69,7 @@ export function synchronizeProjectionContext(
     projection,
     freezeSnapshot(
       withUsageEligibility(state, eligible, options.clearUsage ?? false, {
-        hiddenStatusText: "Usage hidden: current model is not an xAI subscription model.",
+        hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT,
       }),
     ),
   );

@@ -231,12 +231,12 @@ const fetchBilling = Effect.fn("XaiUsage.fetchBilling")(function* <A, R>(
  * The metadata is carried out of the single credential resolution so callers never re-read the
  * auth file: registry-only credentials must not be reported as missing auth.
  */
-export interface XaiUsageResult {
+interface XaiUsageResult {
   readonly snapshot: UsageSnapshot;
   readonly teamId?: string;
 }
 
-const requestXaiUsageEffect = Effect.fn("XaiUsage.requestXaiUsage")(function* (authPath: string) {
+export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (authPath: string) {
   const credentials = yield* getXaiCredentials(authPath);
   if (!credentials) return undefined;
   const [monthly, weekly] = yield* Effect.all(
@@ -274,5 +274,3 @@ const requestXaiUsageEffect = Effect.fn("XaiUsage.requestXaiUsage")(function* (a
     ...(credentials.teamId ? { teamId: credentials.teamId } : {}),
   } satisfies XaiUsageResult;
 });
-
-export const requestXaiUsage = requestXaiUsageEffect;

@@ -21,17 +21,6 @@ export {
   type AdvisorReprimeState,
   type AdvisorReviewQueueOptions,
 } from "./review-queue.ts";
-export {
-  AdvisorQueueBacklogExceededError,
-  AdvisorQueueBatchDroppedError,
-  AdvisorQueueCancelledError,
-  AdvisorQueueCorrelationMismatchError,
-  AdvisorQueueDisposedError,
-  AdvisorQueueError,
-  AdvisorQueueResetRequiredError,
-  AdvisorQueueStaleEpochError,
-} from "./errors.ts";
-
 export interface AdvisorReviewQueueServiceShape {
   readonly make: (
     runtime: AdvisorRuntimeServiceShape,

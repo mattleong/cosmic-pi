@@ -182,8 +182,7 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
     closeOutput();
     cleanup();
   };
-  const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-    terminateLingeringGroup(child);
+  const settleExit = (code: number | null, signal: NodeJS.Signals | null) =>
     Deferred.doneUnsafe(
       exited,
       Effect.succeed({
@@ -192,17 +191,13 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
         ...(spawnError ? { error: spawnError } : {}),
       }),
     );
+  const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    terminateLingeringGroup(child);
+    settleExit(code, signal);
   };
   const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
     closeOutput();
-    Deferred.doneUnsafe(
-      exited,
-      Effect.succeed({
-        exitCode: code,
-        ...(signal ? { signal } : {}),
-        ...(spawnError ? { error: spawnError } : {}),
-      }),
-    );
+    settleExit(code, signal);
   };
   const cleanup = () => {
     if (cleaned) return;

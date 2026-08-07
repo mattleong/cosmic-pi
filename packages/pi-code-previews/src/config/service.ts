@@ -12,7 +12,7 @@ import {
   type JsonDocumentError,
   type ProjectionError,
 } from "pi-cosmic-core";
-import { CodePreviewEnvironmentService } from "./environment-service";
+import { CodePreviewEnvironmentService } from "./env";
 import { cloneCodePreviewSettings, setCodePreviewSettings } from "./state";
 import {
   CodePreviewSettingsLoadError,

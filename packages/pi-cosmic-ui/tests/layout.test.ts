@@ -4,8 +4,7 @@ import {
   combineSurface,
   renderContextLine,
   renderContributionLine,
-  renderOpenAIUsageLine,
-  renderXaiUsageLine,
+  renderProviderUsageLine,
 } from "../src/footer/layout.ts";
 
 const theme = { fg: (_color: string, text: string) => `\x1b[2m${text}\x1b[0m` };
@@ -52,8 +51,8 @@ describe("responsive footer layout", () => {
       theme,
       false,
     );
-    const usage = renderOpenAIUsageLine("Usage: 5h: 90% | 7d: 51%", 80, theme, false);
-    const xaiUsage = renderXaiUsageLine("Usage: 7d: 82% | mo: 83%", 80, theme, false);
+    const usage = renderProviderUsageLine("OpenAI", "Usage: 5h: 90% | 7d: 51%", 80, theme, false);
+    const xaiUsage = renderProviderUsageLine("xAI", "Usage: 7d: 82% | mo: 83%", 80, theme, false);
 
     expect(visibleWidth(context)).toBeLessThanOrEqual(80);
     expect(context).toContain("Ctx");
@@ -82,10 +81,10 @@ describe("responsive footer layout", () => {
         false,
       ),
     ).toBe("Ctx     ━━━━━━╸─── 62% · 62k/100k");
-    expect(renderOpenAIUsageLine("Usage: 5h: 72% | 7d: 31%", 80, plainTheme, false)).toBe(
-      "OpenAI  5h ━━━━━━━╸── 72% | 7d ━━━╸────── 31%",
-    );
-    expect(renderXaiUsageLine("Usage: 7d: 84% | mo: 53%", 80, plainTheme, false)).toBe(
+    expect(
+      renderProviderUsageLine("OpenAI", "Usage: 5h: 72% | 7d: 31%", 80, plainTheme, false),
+    ).toBe("OpenAI  5h ━━━━━━━╸── 72% | 7d ━━━╸────── 31%");
+    expect(renderProviderUsageLine("xAI", "Usage: 7d: 84% | mo: 53%", 80, plainTheme, false)).toBe(
       "xAI     7d ━━━━━━━━╸─ 84% | mo ━━━━━╸──── 53%",
     );
   });
@@ -102,8 +101,8 @@ describe("responsive footer layout", () => {
         thresholdTheme,
         false,
       );
-    renderOpenAIUsageLine("Usage: 5h: 75% | 7d: 25%", 80, thresholdTheme, false);
-    renderXaiUsageLine("Usage: 7d: 75% | mo: 25%", 80, thresholdTheme, false);
+    renderProviderUsageLine("OpenAI", "Usage: 5h: 75% | 7d: 25%", 80, thresholdTheme, false);
+    renderProviderUsageLine("xAI", "Usage: 7d: 75% | mo: 25%", 80, thresholdTheme, false);
 
     expect(fg.mock.calls).toContainEqual(["error", " 76% · 76k/100k"]);
     expect(fg.mock.calls).toContainEqual(["warning", " 75% · 75k/100k"]);
@@ -147,7 +146,7 @@ describe("responsive footer layout", () => {
       fullColorTheme,
       false,
     );
-    renderOpenAIUsageLine("Usage: 5h: 90% | 7d: 51%", 80, fullColorTheme, false);
+    renderProviderUsageLine("OpenAI", "Usage: 5h: 90% | 7d: 51%", 80, fullColorTheme, false);
 
     const colors = fg.mock.calls.map(([color]) => color);
     expect(colors).toEqual(

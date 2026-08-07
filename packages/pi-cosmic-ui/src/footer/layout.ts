@@ -6,8 +6,6 @@ import type {
   CosmicFooterTheme,
 } from "../protocol/protocol.ts";
 
-export { formatTokens };
-
 function clampPercent(percent: number): number {
   return Math.max(0, Math.min(100, percent));
 }
@@ -125,20 +123,6 @@ export function renderProviderUsageLine(
   if (cursor < body.length) pieces.push(theme.fg("syntaxOperator", body.slice(cursor)));
   return truncateToWidth(pieces.join(""), width, "");
 }
-
-export const renderOpenAIUsageLine = (
-  text: string,
-  width: number,
-  theme: CosmicFooterTheme,
-  compact: boolean,
-): string => renderProviderUsageLine("OpenAI", text, width, theme, compact);
-
-export const renderXaiUsageLine = (
-  text: string,
-  width: number,
-  theme: CosmicFooterTheme,
-  compact: boolean,
-): string => renderProviderUsageLine("xAI", text, width, theme, compact);
 
 const CONTRIBUTION_COLORS: Readonly<Record<string, string>> = {
   model: "mdLink",

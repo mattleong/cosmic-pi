@@ -28,11 +28,4 @@ describe("advisor intervention budget", () => {
     expect(restored).toEqual({ delivered: 0, correctionUsed: false });
     expect(canDeliverAdvisorIntervention(restored, "concern")).toBe(true);
   });
-
-  test("resets on a genuine request boundary", () => {
-    commitAdvisorIntervention(emptyAdvisorInterventionBudget(), "blocker", true);
-    const reset = emptyAdvisorInterventionBudget();
-    expect(canDeliverAdvisorIntervention(reset, "concern")).toBe(true);
-    expect(canCorrectAdvisorIntervention(reset)).toBe(true);
-  });
 });

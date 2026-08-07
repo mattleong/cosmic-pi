@@ -50,7 +50,7 @@ export class OpenAIBoundaryError extends Schema.TaggedErrorClass<OpenAIBoundaryE
   "OpenAIBoundaryError",
   { operation: Schema.String, message: Schema.String },
 ) {}
-export interface RefreshOptions extends RefreshRequest {}
+export type RefreshOptions = RefreshRequest;
 export interface OpenAIUsageServiceShape {
   readonly refresh: (options?: RefreshOptions) => Effect.Effect<void>;
   readonly contextChanged: (clearUsage?: boolean) => Effect.Effect<void>;

@@ -10,7 +10,6 @@ import {
   decodeJson,
   makeHerdrCommandRunner,
   paneCommand,
-  type HerdrAgent,
   type HerdrCommandRunner,
   type HerdrPane,
   type HerdrPaneProcessInfo,
@@ -29,6 +28,12 @@ const MAX_PROMPT_BYTES = 32 * 1024;
 const SHELL_READINESS_ATTEMPTS = 31;
 const SHELL_READINESS_DELAY_MILLIS = 200;
 const REQUIRED_STABLE_SHELL_READINGS = 6;
+const retainPane = (failure: HerdrForkError, paneId: string, guidance: string) =>
+  new HerdrForkError({
+    ...failure,
+    paneId,
+    message: `${failure.message} ${guidance}`,
+  });
 const HERDR_SHELL_PROCESS_NAMES = new Set([
   "sh",
   "bash",
@@ -164,7 +169,7 @@ const waitForAvailableShell = (
   });
 
 const validateStartedAgent = (
-  agent: HerdrAgent,
+  agent: HerdrPane,
   pane: HerdrPane,
   agentName: string,
   parentSessionFile: string,
@@ -318,13 +323,12 @@ export const makeHerdrForkService = (
         START_TIMEOUT_MILLIS,
         ["agent_pane_busy"],
       ).pipe(
-        Effect.mapError(
-          (failure) =>
-            new HerdrForkError({
-              ...failure,
-              paneId: forkPane.pane_id,
-              message: `${failure.message} Pane ${forkPane.pane_id} was retained for manual inspection.`,
-            }),
+        Effect.mapError((failure) =>
+          retainPane(
+            failure,
+            forkPane.pane_id,
+            `Pane ${forkPane.pane_id} was retained for manual inspection.`,
+          ),
         ),
       );
       const { result: startedResult } = yield* decodeJson(
@@ -333,13 +337,12 @@ export const makeHerdrForkService = (
         "start forked Pi",
         true,
       ).pipe(
-        Effect.mapError(
-          (failure) =>
-            new HerdrForkError({
-              ...failure,
-              paneId: forkPane.pane_id,
-              message: `${failure.message} Pane ${forkPane.pane_id} was retained for manual inspection.`,
-            }),
+        Effect.mapError((failure) =>
+          retainPane(
+            failure,
+            forkPane.pane_id,
+            `Pane ${forkPane.pane_id} was retained for manual inspection.`,
+          ),
         ),
       );
       const childSession = yield* validateStartedAgent(
@@ -366,17 +369,17 @@ export const makeHerdrForkService = (
       );
 
       if (promptFailure)
-        return yield* new HerdrForkError({
-          ...promptFailure,
-          paneId: forkPane.pane_id,
-          message: `${promptFailure.message} The fork is running in pane ${forkPane.pane_id}; enter the prompt there manually.`,
-        });
+        return yield* retainPane(
+          promptFailure,
+          forkPane.pane_id,
+          `The fork is running in pane ${forkPane.pane_id}; enter the prompt there manually.`,
+        );
       if (focusResult._tag === "Failure")
-        return yield* new HerdrForkError({
-          ...focusResult.failure,
-          paneId: forkPane.pane_id,
-          message: `${focusResult.failure.message} The fork is running in pane ${forkPane.pane_id}; focus it manually.`,
-        });
+        return yield* retainPane(
+          focusResult.failure,
+          forkPane.pane_id,
+          `The fork is running in pane ${forkPane.pane_id}; focus it manually.`,
+        );
 
       return {
         agentName,

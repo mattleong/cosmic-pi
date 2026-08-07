@@ -6,7 +6,6 @@ import * as Schema from "effect/Schema";
 import {
   clampPercent,
   formatPercent,
-  formatResetCountdown,
   formatWindowedUsageLine,
   JsonHttpClient,
 } from "pi-cosmic-core";
@@ -61,8 +60,6 @@ export class CodexUsageError extends Schema.TaggedErrorClass<CodexUsageError>()(
 
 const usedToLeftPercent = (value: number | null | undefined): number | null =>
   typeof value === "number" && Number.isFinite(value) ? clampPercent(100 - value) : null;
-
-export { formatResetCountdown };
 
 const normalizeBucket = (value: unknown): RateLimitBucket | null =>
   Option.getOrUndefined(Schema.decodeUnknownOption(RateLimitBucketSchema)(value)) ?? null;
@@ -131,8 +128,6 @@ export function parseUsageSnapshot(
     isLimited: bucket?.limit_reached === true || bucket?.allowed === false,
   };
 }
-
-export { formatPercent };
 
 export function formatUsageSnapshot(
   snapshot: UsageSnapshot,

@@ -35,7 +35,6 @@ Visible results are strict version-1 custom entries, not messages. Review cards 
 - `src/boundary/host-onboarding.ts` — authenticated-model discovery and first-run setup UI.
 - Other `src/boundary/host-*` modules — guarded Pi command, context, notifier, status, and event adapters.
 - `src/ui/review-card.ts` — pure strict card/action decode, sanitization, compact projection, and renderer.
-- `src/ui/renderer.ts` — pure review-card presentation exports only.
 - `src/settings/controller.ts` — exact `/advisor` parser.
 - `src/settings/panels.ts` — contextual dashboard, setup, internal state summary, and usage report.
 - `src/config/schema.ts`, `options.ts`, `store.ts` — strict shape/defaults, path/options, and sole persistence door.

@@ -36,14 +36,19 @@ import {
   formatUsageSnapshot,
   requestXaiUsage,
 } from "./format.ts";
-import { initialXaiProjection, type XaiProjection } from "./projection.ts";
+import {
+  HIDDEN_USAGE_STATUS_TEXT,
+  initialXaiProjection,
+  isXaiSubscriptionModel,
+  type XaiProjection,
+} from "./projection.ts";
 
 export class XaiBoundaryError extends Schema.TaggedErrorClass<XaiBoundaryError>()(
   "XaiBoundaryError",
   { operation: Schema.String, message: Schema.String },
 ) {}
 
-export interface RefreshOptions extends RefreshRequest {}
+export type RefreshOptions = RefreshRequest;
 
 export interface XaiUsageServiceShape {
   readonly refresh: (options?: RefreshOptions) => Effect.Effect<void>;
@@ -140,16 +145,16 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
         const subscriptionEligibility = (ctx: ExtensionContext, cfg: ResolvedConfig) => {
           const model = ctx.model;
           if (!model || model.provider !== "xai") return Effect.succeed(false);
-          if (!cfg.usage.showOnlyOnSubscriptionModels) return Effect.succeed(true);
-          return registryAuth
-            .isUsingOAuth(model)
-            .pipe(
-              Effect.catch(() =>
-                Effect.logWarning(
-                  "Better xAI authentication recovery: oauth_status_unavailable.",
-                ).pipe(Effect.as(false)),
-              ),
-            );
+          if (!cfg.usage.showOnlyOnSubscriptionModels)
+            return Effect.succeed(isXaiSubscriptionModel(ctx, cfg));
+          return registryAuth.isUsingOAuth(model).pipe(
+            Effect.map((isUsingOAuth) => isXaiSubscriptionModel(ctx, cfg, isUsingOAuth)),
+            Effect.catch(() =>
+              Effect.logWarning(
+                "Better xAI authentication recovery: oauth_status_unavailable.",
+              ).pipe(Effect.as(false)),
+            ),
+          );
         };
         const synchronize = (clearUsage = false) =>
           state
@@ -164,8 +169,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                     [
                       undefined,
                       withUsageEligibility(current, eligible, clearUsage, {
-                        hiddenStatusText:
-                          "Usage hidden: current model is not an xAI subscription model.",
+                        hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT,
                       }),
                     ] as const,
                 ),
@@ -260,7 +264,7 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                     statusText:
                       value._tag === "Disabled"
                         ? "Usage display is disabled."
-                        : "Usage hidden: current model is not an xAI subscription model.",
+                        : HIDDEN_USAGE_STATUS_TEXT,
                   };
                 if (value._tag === "Failure" || value._tag === "Missing") {
                   const missing = value._tag === "Missing";

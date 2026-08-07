@@ -6,8 +6,6 @@ import type {
 } from "./model.ts";
 import { utf8ByteLength, utf8Tail } from "./utf8.ts";
 
-export { utf8ByteLength } from "./utf8.ts";
-
 export interface LogBuffer {
   readonly events: ReadonlyArray<BackgroundLogEvent>;
   readonly bytes: number;

@@ -1,7 +1,7 @@
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/processEnv:off
 import { describe, expect, test } from "vitest";
-import { formatPercent, formatUsageSnapshot, parseUsageSnapshot } from "../src/usage/index.ts";
+import { formatUsageSnapshot, parseUsageSnapshot } from "../src/usage/index.ts";
 
 const NOW = 1_752_883_200_000;
 const payload = () => ({
@@ -13,14 +13,6 @@ const payload = () => ({
 });
 
 describe("usage helpers", () => {
-  test.each([
-    [99.4, "99%"],
-    [0, "0%"],
-    [null, "--"],
-  ])("formats percentage %s", (value, expected) => {
-    expect(formatPercent(value)).toBe(expected);
-  });
-
   test("treats a lone primary window as weekly-only", () => {
     const usage = parseUsageSnapshot(
       {

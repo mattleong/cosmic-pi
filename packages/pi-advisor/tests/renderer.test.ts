@@ -6,7 +6,7 @@ import {
   decodeAdvisorReviewCard,
   makeAdvisorReviewCard,
   renderAdvisorReviewCard,
-} from "../src/ui/renderer.ts";
+} from "../src/ui/review-card.ts";
 import {
   latestOpenAdvisorReviewCardAtHostBoundary,
   registerAdvisorReviewCardRendererAtHostBoundary,

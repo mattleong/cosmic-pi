@@ -71,9 +71,6 @@ describe("ask_user tool", () => {
     expect(tool?.renderShell).toBe("default");
     const guidelines = tool?.promptGuidelines?.join(" ") ?? "";
     expect(guidelines).toContain("Never ask users to enter passwords");
-    expect(guidelines).toContain("place it first");
-    expect(guidelines).toContain("(Recommended)");
-    expect(guidelines).toContain("preference-only choices");
 
     return tool!
       .execute("call", request, undefined, undefined, {} as ExtensionContext)

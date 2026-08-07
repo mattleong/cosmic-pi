@@ -3,8 +3,6 @@ import * as Predicate from "effect/Predicate";
 import { freezeSnapshot } from "pi-cosmic-core";
 import { fastModelKey, SUPPORTED_FAST_MODELS, supportsFastModel } from "./models.ts";
 
-export { SUPPORTED_FAST_MODELS } from "./models.ts";
-
 export interface FastSnapshot {
   readonly desiredActive: boolean;
   readonly active: boolean;

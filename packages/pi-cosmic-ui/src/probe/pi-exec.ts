@@ -12,7 +12,6 @@ export interface PiExecResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly code: number;
-  readonly killed: boolean;
 }
 export interface PiExecShape {
   readonly exec: (

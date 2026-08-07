@@ -1,4 +1,4 @@
-import type { AskUserQuestion, AskUserRequest } from "../tools/schema.ts";
+import type { AskUserRequest } from "../tools/schema.ts";
 
 export interface ChoiceAnswer {
   readonly key: string;
@@ -56,6 +56,3 @@ export type QuestionnaireAction =
   | { readonly type: "set-custom"; readonly question: number; readonly text: string }
   | { readonly type: "set-note"; readonly question: number; readonly note: string }
   | { readonly type: "set-review-cursor"; readonly cursor: 0 | 1 };
-
-export const questionAt = (state: QuestionnaireState, index: number): AskUserQuestion =>
-  state.request.questions[index]!;

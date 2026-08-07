@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserAnswer, AskUserOutcome } from "../questionnaire/model.ts";
+import { cancelQuestionnaire } from "../questionnaire/reducer.ts";
 import {
   MAX_CUSTOM_ANSWER_LENGTH,
   type AskUserQuestion,
@@ -21,8 +22,6 @@ export interface HostDialogsShape {
 
 const hostError = (operation: string) =>
   new AskUserHostError({ operation, message: `Unable to ${operation} the user questionnaire.` });
-
-const cancelled = (): AskUserOutcome => ({ outcome: "cancelled", answers: [] });
 
 async function boundedInput(
   ui: ExtensionUIContext,
@@ -132,7 +131,7 @@ async function runRpc(
   const answers: AskUserAnswer[] = [];
   for (const question of request.questions) {
     const answer = await askRpcQuestion(ctx.ui, question, signal);
-    if (!answer) return cancelled();
+    if (!answer) return cancelQuestionnaire();
     answers.push(answer);
   }
   return { outcome: "submitted", answers };
@@ -149,7 +148,7 @@ async function runTui(
   let close: ((outcome: AskUserOutcome) => void) | undefined;
   let bridgeToken: number | undefined;
   let dialog: import("../ui/dialog.ts").AskUserDialog | undefined;
-  const abort = () => close?.(cancelled());
+  const abort = () => close?.(cancelQuestionnaire());
   signal.addEventListener("abort", abort, { once: true });
   try {
     return await ctx.ui.custom<AskUserOutcome>(
@@ -167,7 +166,7 @@ async function runTui(
           },
         });
         bridgeToken = bridge.activate({ resume: () => dialog?.resume() });
-        if (signal.aborted) done(cancelled());
+        if (signal.aborted) done(cancelQuestionnaire());
         return dialog;
       },
       {

@@ -10,7 +10,7 @@ import {
 } from "pi-cosmic-core";
 import { currentWorkingDirectory } from "../boundary/environment";
 import { CODE_PREVIEW_SETTING_KEYS } from "./definitions";
-import { CodePreviewEnvironmentService } from "./environment-service";
+import { CodePreviewEnvironmentService } from "./env";
 import { CodePreviewSettingsSchema } from "./schema";
 import { cloneCodePreviewSettings } from "./state";
 import type { CodePreviewSettings } from "./schema";

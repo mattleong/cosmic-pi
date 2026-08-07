@@ -1,5 +1,4 @@
 import { bundledLanguages } from "shiki";
-import { isValidJsonSyntax } from "../boundary/json";
 import { nodeBasename, nodeExtname } from "../boundary/node";
 import { codePreviewPerformanceConfig } from "../config/env";
 
@@ -130,5 +129,10 @@ function firstSupported(...languages: Array<string | undefined>): string | undef
 }
 
 function isJson(text: string): boolean {
-  return isValidJsonSyntax(text);
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
 }

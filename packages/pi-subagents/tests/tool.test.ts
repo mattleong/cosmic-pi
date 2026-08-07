@@ -43,14 +43,13 @@ import {
 } from "../src/run/service.ts";
 import { subagentServiceDouble } from "./subagent-service-double.ts";
 import { makeCompactToolDetails, makeStartAwaitCardDetails } from "../src/tools/details.ts";
+import { renderAwaitProgressComponent } from "../src/tools/render-await.ts";
 import {
   awaitResultBanner,
-  registerSubagentTools,
-  renderAwaitProgressComponent,
   renderExpandedStartAwaitResult,
   renderStartAwaitOverviewComponent,
-  type SubagentToolRuntime,
-} from "../src/tools/subagent.ts";
+} from "../src/tools/render.ts";
+import { registerSubagentTools, type SubagentToolRuntime } from "../src/tools/subagent.ts";
 
 interface CapturedTool {
   readonly name: string;

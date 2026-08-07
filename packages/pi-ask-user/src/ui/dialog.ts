@@ -287,17 +287,6 @@ export class AskUserDialog implements Focusable {
   }
 
   private handleReviewInput(data: string): void {
-    if (
-      this.options.keybindings.matches(data, "tui.select.up") ||
-      this.options.keybindings.matches(data, "tui.select.down")
-    ) {
-      this.state = reduceQuestionnaire(this.state, {
-        type: "set-review-cursor",
-        cursor: this.state.reviewCursor === 0 ? 1 : 0,
-      });
-      this.refresh();
-      return;
-    }
     if (!this.options.keybindings.matches(data, "tui.select.confirm")) return;
     if (this.state.reviewCursor === 1) {
       this.options.done(cancelQuestionnaire());
@@ -324,14 +313,6 @@ export class AskUserDialog implements Focusable {
         if (!isKeyRepeat(data)) this.activateChoice(question, index);
         return;
       }
-    }
-    if (this.options.keybindings.matches(data, "tui.select.up")) {
-      this.setCursor(draft.cursor - 1);
-      return;
-    }
-    if (this.options.keybindings.matches(data, "tui.select.down")) {
-      this.setCursor(draft.cursor + 1);
-      return;
     }
     if (
       matchesKey(data, Key.space) &&

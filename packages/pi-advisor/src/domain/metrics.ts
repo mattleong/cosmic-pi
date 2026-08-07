@@ -50,7 +50,7 @@ export interface AdvisorSessionMetrics {
   failure: number;
   discarded: number;
   skippedReviews?: Record<string, number>;
-  backgroundState?: "idle" | "queued" | "reviewing" | "revision-pending";
+  backgroundState?: "idle" | "queued" | "reviewing";
   cacheReadTokens?: number;
   cards?: number;
   cacheWriteTokens?: number;

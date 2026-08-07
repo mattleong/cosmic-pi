@@ -57,17 +57,6 @@ export interface ReviewQueueCheckpointRequest {
   targetSequence?: number | undefined;
   verificationReview?: AdvisorReview | undefined;
 }
-export {
-  AdvisorQueueBacklogExceededError,
-  AdvisorQueueBatchDroppedError,
-  AdvisorQueueCancelledError,
-  AdvisorQueueCorrelationMismatchError,
-  AdvisorQueueDisposedError,
-  AdvisorQueueError,
-  AdvisorQueueResetRequiredError,
-  AdvisorQueueStaleEpochError,
-} from "./errors.ts";
-
 export interface QueuedCheckpoint {
   readonly request: ReviewQueueCheckpointRequest;
   readonly target: number;

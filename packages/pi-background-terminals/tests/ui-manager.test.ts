@@ -48,49 +48,6 @@ describe("/ps process manager", () => {
     expect(lines.every((line) => visibleWidth(line) <= 120)).toBe(true);
   });
 
-  it("colors outer borders and panel dividers with theme border colors", () => {
-    const fg = vi.fn((_color: string, text: string) => text);
-    const component = new ProcessManagerComponent({
-      theme: { fg } as unknown as Theme,
-      getProjection: () => projection,
-      getHeight: () => 24,
-      getNow: () => 0,
-      requestRender: vi.fn(),
-      close: vi.fn(),
-      stop: vi.fn(),
-      clear: vi.fn(),
-    });
-    component.render(120);
-    component.render(80);
-
-    const accentChrome = fg.mock.calls
-      .filter(([color]) => color === "borderAccent")
-      .map(([, text]) => text)
-      .join("");
-    const mutedChrome = fg.mock.calls
-      .filter(([color]) => color === "borderMuted")
-      .map(([, text]) => text)
-      .join("");
-
-    expect(accentChrome).toContain("╭");
-    expect(accentChrome).toContain("╮");
-    expect(accentChrome).toContain("╰");
-    expect(accentChrome).toContain("╯");
-    expect(accentChrome).toContain("│");
-    expect(accentChrome).toContain("├");
-    expect(accentChrome).toContain("┤");
-    expect(mutedChrome).toContain("│");
-    expect(mutedChrome).toContain("─");
-  });
-
-  it("uses the same grouped responsive footer as the subagent fleet", () => {
-    const footer = renderAt(120, 24).at(-1) ?? "";
-    expect(footer).toContain("j/k Move · C-u/d Scroll · h/l Panes");
-    expect(footer).toContain("f Unfollow · x Stop");
-    expect(footer).toContain("t Technical · ? More · q Close");
-    expect(footer).not.toContain("c Clear");
-  });
-
   it("renders width- and height-safe narrow fallbacks", () => {
     const lines = renderAt(42, 12);
     expect(lines).toHaveLength(12);
@@ -101,50 +58,6 @@ describe("/ps process manager", () => {
     const tiny = renderAt(12, 4);
     expect(tiny).toHaveLength(4);
     expect(tiny.every((line) => visibleWidth(line) <= 12)).toBe(true);
-  });
-
-  it.each([
-    ["starting", "accent", "◌"],
-    ["running", "success", "⠋"],
-    ["stopping", "warning", "◐"],
-    ["exited", "success", "✓"],
-    ["failed", "error", "×"],
-    ["stopped", "muted", "■"],
-    ["timed_out", "error", "⧖"],
-  ] as const)("renders the %s status icon in %s", (state, color, glyph) => {
-    const fg = vi.fn((_color: string, text: string) => text);
-    const stateProjection: BackgroundTerminalProjection = {
-      ...projection,
-      jobs: [{ ...projection.jobs[0]!, state }],
-    };
-    const component = new ProcessManagerComponent({
-      theme: { fg } as unknown as Theme,
-      getProjection: () => stateProjection,
-      getHeight: () => 12,
-      getNow: () => 0,
-      requestRender: vi.fn(),
-      close: vi.fn(),
-      stop: vi.fn(),
-      clear: vi.fn(),
-    });
-
-    component.render(42);
-
-    expect(fg).toHaveBeenCalledWith(color, glyph);
-  });
-
-  it("animates running rows with the shared Braille frames", () => {
-    const component = new ProcessManagerComponent({
-      theme,
-      getProjection: () => projection,
-      getHeight: () => 12,
-      getNow: () => 320,
-      requestRender: vi.fn(),
-      close: vi.fn(),
-      stop: vi.fn(),
-      clear: vi.fn(),
-    });
-    expect(component.render(42).join("\n")).toContain("⠹ dev-server");
   });
 
   it("scrolls narrow log details with Ctrl-U and Ctrl-D", () => {

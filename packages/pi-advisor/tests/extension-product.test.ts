@@ -11,7 +11,7 @@ import type {
   AdvisorCheckpointRequest,
   AdvisorRuntimeDriver,
 } from "../src/runtime/runtime.ts";
-import { ADVISOR_REVIEW_ACTION_TYPE, ADVISOR_REVIEW_CARD_TYPE } from "../src/ui/renderer.ts";
+import { ADVISOR_REVIEW_ACTION_TYPE, ADVISOR_REVIEW_CARD_TYPE } from "../src/ui/review-card.ts";
 
 type Handler = (event: never, ctx: ExtensionContext) => unknown;
 const deferred = <T>() => {

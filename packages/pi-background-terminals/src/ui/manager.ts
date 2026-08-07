@@ -36,58 +36,22 @@ type ProcessManagerPane = "list" | "detail";
 
 const PROCESS_MANAGER_SHORTCUTS = new Set(["c", "f", "t", "x"]);
 
-const stateGlyph = (job: BackgroundJobView, frame: number): string => {
+const statePresentation = (job: BackgroundJobView, frame: number) => {
   switch (job.state) {
     case "starting":
-      return startingSpinnerFrame(frame);
+      return { glyph: startingSpinnerFrame(frame), color: "accent", label: "starting…" } as const;
     case "running":
-      return brailleSpinnerFrame(frame);
+      return { glyph: brailleSpinnerFrame(frame), color: "success", label: "running" } as const;
     case "stopping":
-      return "◐";
+      return { glyph: "◐", color: "warning", label: "stopping…" } as const;
     case "exited":
-      return "✓";
+      return { glyph: "✓", color: "success", label: "finished" } as const;
     case "failed":
-      return "×";
+      return { glyph: "×", color: "error", label: "failed" } as const;
     case "stopped":
-      return "■";
+      return { glyph: "■", color: "muted", label: "stopped" } as const;
     case "timed_out":
-      return "⧖";
-  }
-};
-
-const stateColor = (job: BackgroundJobView) => {
-  switch (job.state) {
-    case "starting":
-      return "accent";
-    case "running":
-    case "exited":
-      return "success";
-    case "stopping":
-      return "warning";
-    case "failed":
-    case "timed_out":
-      return "error";
-    case "stopped":
-      return "muted";
-  }
-};
-
-const stateLabel = (job: BackgroundJobView): string => {
-  switch (job.state) {
-    case "starting":
-      return "starting…";
-    case "running":
-      return "running";
-    case "stopping":
-      return "stopping…";
-    case "exited":
-      return "finished";
-    case "failed":
-      return "failed";
-    case "stopped":
-      return "stopped";
-    case "timed_out":
-      return "timed out";
+      return { glyph: "⧖", color: "error", label: "timed out" } as const;
   }
 };
 
@@ -392,9 +356,10 @@ export class ProcessManagerComponent implements Component {
     const selected = index === this.selected;
     const prefix = selected ? this.options.theme.fg("accent", ">") : " ";
     const frame = Math.floor(this.options.getNow() / 160);
-    const glyph = this.options.theme.fg(stateColor(job), stateGlyph(job, frame));
+    const presentation = statePresentation(job, frame);
+    const glyph = this.options.theme.fg(presentation.color, presentation.glyph);
     const label = sanitizeTerminalLine(
-      `${displayName(job)} · ${stateLabel(job)} · ${duration(job, this.options.getNow())}`,
+      `${displayName(job)} · ${presentation.label} · ${duration(job, this.options.getNow())}`,
     );
     const text = selected ? this.options.theme.fg("accent", label) : label;
     return padToWidth(`${prefix} ${glyph} ${text}`, width);
@@ -417,11 +382,12 @@ export class ProcessManagerComponent implements Component {
 
   private detailLines(job: BackgroundJobView | undefined): string[] {
     if (!job) return [this.options.theme.fg("dim", "No background jobs.")];
+    const presentation = statePresentation(job, Math.floor(this.options.getNow() / 160));
     const lines = [
       this.options.theme.fg("accent", displayName(job)),
       this.options.theme.fg(
-        stateColor(job),
-        `${stateLabel(job)} · ${duration(job, this.options.getNow())}`,
+        presentation.color,
+        `${presentation.label} · ${duration(job, this.options.getNow())}`,
       ),
     ];
     if (this.showTechnicalDetails) {

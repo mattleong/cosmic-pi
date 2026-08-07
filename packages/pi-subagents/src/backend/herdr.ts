@@ -4,11 +4,10 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import type { HerdrAgent } from "../boundary/herdr-cli.ts";
-import { HerdrHost, type HerdrHostShape, type HerdrHostedAgent } from "../boundary/herdr-host.ts";
-import {
-  SupervisorChannel,
-  type SupervisorChannelHandle,
-  type SupervisorChannelShape,
+import type { HerdrHostShape, HerdrHostedAgent } from "../boundary/herdr-host.ts";
+import type {
+  SupervisorChannelHandle,
+  SupervisorChannelShape,
 } from "../boundary/supervisor-channel.ts";
 import {
   SubagentProcessError,
@@ -323,12 +322,4 @@ export const makeHerdrBackendDriver = (
       const hosted = yield* host.launch(runtime, launch, supervisor.metadata);
       return yield* makeHandle(runtime, launch, hosted, supervisor);
     }),
-});
-
-export const herdrBackendDrivers = Effect.gen(function* () {
-  const host = yield* HerdrHost;
-  const supervisors = yield* SupervisorChannel;
-  return (["pi", "claude", "codex"] as const).map((runtime) =>
-    makeHerdrBackendDriver(runtime, host, supervisors),
-  );
 });

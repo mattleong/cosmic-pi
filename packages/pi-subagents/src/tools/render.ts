@@ -17,7 +17,11 @@ import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
 import type { SubagentRunCard, SubagentStartEntry } from "./details.ts";
 import { attentionRecoveryText, boundToolOutput, selectionSourceLabel } from "./format.ts";
-import { renderCompactResultComponent, renderProfileRoutesComponent } from "./render-management.ts";
+import {
+  renderCompactResultComponent,
+  renderProfileRoutesComponent,
+  type SemanticOutcomeBanner,
+} from "./render-management.ts";
 import { renderAwaitProgressComponent } from "./render-await.ts";
 import { aggregateRunUsage, renderResponsiveRunRows } from "./render-run-rows.ts";
 import { renderStartFailures, renderStartProgressComponent } from "./render-start.ts";
@@ -120,18 +124,13 @@ const reportPreviews = (
   ];
 };
 
-export interface OutcomeBanner {
-  readonly color: "warning" | "success" | "error" | "accent";
-  readonly text: string;
-}
-
 class RunOverviewComponent implements Component {
   private readonly runs: ReadonlyArray<SubagentRunCard>;
   private readonly failures: ReadonlyArray<SubagentStartFailure>;
   private readonly expanded: boolean;
   private readonly theme: Theme;
   private readonly reportSections: ReadonlyArray<RunReportSection>;
-  private readonly banner: OutcomeBanner | undefined;
+  private readonly banner: SemanticOutcomeBanner | undefined;
   private readonly showReportOutcomes: boolean;
 
   constructor(
@@ -140,7 +139,7 @@ class RunOverviewComponent implements Component {
     expanded: boolean,
     theme: Theme,
     reportSections: ReadonlyArray<RunReportSection>,
-    banner?: OutcomeBanner,
+    banner?: SemanticOutcomeBanner,
     showReportOutcomes = true,
   ) {
     this.runs = runs;
@@ -293,7 +292,7 @@ export const renderStartAwaitOverviewComponent = (
   runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
   failures: ReadonlyArray<SubagentStartFailure> = [],
-  banner?: OutcomeBanner,
+  banner?: SemanticOutcomeBanner,
 ): Component =>
   new RunOverviewComponent(runs, failures, false, theme, expandedRunReportSections(runs), banner);
 
@@ -301,7 +300,7 @@ export const renderExpandedStartAwaitResult = (
   runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
   failures: ReadonlyArray<SubagentStartFailure> = [],
-  banner?: OutcomeBanner,
+  banner?: SemanticOutcomeBanner,
   showReportOutcomes = true,
 ): Component => {
   const container = new Container();
@@ -341,7 +340,7 @@ export const awaitResultBanner = (details: {
   readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
   readonly cancelled?: boolean | undefined;
-}): OutcomeBanner | undefined => {
+}): SemanticOutcomeBanner | undefined => {
   const runs = details.runs ?? [];
   const unfinished = runs.filter((run) => !isAssignmentFinishedRunState(run.state));
   const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
@@ -391,7 +390,7 @@ const startResultBanner = (
   runs: ReadonlyArray<SubagentRunCard>,
   failures: ReadonlyArray<SubagentStartFailure>,
   entries: ReadonlyArray<SubagentStartEntry> | undefined,
-): OutcomeBanner => {
+): SemanticOutcomeBanner => {
   const requested = entries?.length ?? runs.length + failures.length;
   const text = `Started ${runs.length} of ${requested} subagent${requested === 1 ? "" : "s"}${failures.length > 0 ? ` · ${failures.length} failed` : ""}`;
   return {
@@ -401,9 +400,9 @@ const startResultBanner = (
 };
 
 const includeContentOmission = (
-  banner: OutcomeBanner | undefined,
+  banner: SemanticOutcomeBanner | undefined,
   omitted: boolean | undefined,
-): OutcomeBanner | undefined => {
+): SemanticOutcomeBanner | undefined => {
   if (!omitted) return banner;
   const warning =
     "Some report content was omitted from the persisted card; use subagent_status for individual runs";

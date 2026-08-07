@@ -1,12 +1,10 @@
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import {
-  ChildProcess,
   type ChildLaunchRequest,
   type ChildProcessHandle,
   type ChildProcessShape,
@@ -38,7 +36,6 @@ import type {
   BackendLaunchRequest,
   BackendResumeToken,
 } from "./model.ts";
-import { SubagentBackendRegistry, makeSubagentBackendRegistry } from "./service.ts";
 
 const RPC_TIMEOUT = "10 seconds";
 const EVENT_CAPACITY = 512;
@@ -480,10 +477,3 @@ export const makeLocalPiBackendDriver = (childProcesses: ChildProcessShape): Bac
     }),
   reclaimRunState: (request) => childProcesses.reclaimRunState(request),
 });
-
-export const localPiBackendRegistryLayer = Layer.effect(
-  SubagentBackendRegistry,
-  ChildProcess.use((childProcesses) =>
-    Effect.succeed(makeSubagentBackendRegistry([makeLocalPiBackendDriver(childProcesses)])),
-  ),
-);

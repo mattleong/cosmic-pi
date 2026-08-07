@@ -7,7 +7,7 @@ export class XaiHostUiError extends Schema.TaggedErrorClass<XaiHostUiError>()("X
 }) {}
 
 /** Isolates synchronous Pi UI callbacks from the Effect application error channel. */
-export const tryHostUi = <A>(operation: string, action: () => A) =>
+const tryHostUi = <A>(operation: string, action: () => A) =>
   Effect.try({
     try: action,
     catch: () =>

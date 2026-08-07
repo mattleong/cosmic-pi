@@ -1,7 +1,7 @@
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
+import { formatTokens } from "pi-cosmic-core";
 import type { CosmicFooterTextContribution } from "../protocol/protocol.ts";
 import { formatGitStatus, type FooterGitStatus } from "./git.ts";
-import { formatTokens } from "./layout.ts";
 import type { FooterHostProjection } from "../boundary/host-footer-projection.ts";
 
 export interface FooterTotals {

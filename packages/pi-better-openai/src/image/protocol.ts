@@ -9,7 +9,7 @@ const ImageGenerationItemFields = {
   result: Schema.optional(Schema.String),
   b64_json: Schema.optional(Schema.String),
 };
-export const ImageGenerationItemSchema = Schema.Struct(ImageGenerationItemFields);
+const ImageGenerationItemSchema = Schema.Struct(ImageGenerationItemFields);
 const CompletedEventSchema = Schema.Struct({
   type: Schema.Literal("response.output_item.done"),
   item: ImageGenerationItemSchema,

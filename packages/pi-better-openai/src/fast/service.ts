@@ -7,7 +7,7 @@ import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot, makeSynchronousIngress, ProjectionError } from "pi-cosmic-core";
 import type { OpenAIConfigError, ResolvedConfig } from "../config/index.ts";
-import { supportsFast, type FastSnapshot } from "./controller.ts";
+import { initialFastSnapshot, supportsFast, type FastSnapshot } from "./controller.ts";
 import { OpenAIUsageService } from "../usage/index.ts";
 
 export interface FastModeServiceShape {
@@ -37,7 +37,7 @@ export class FastModeService extends Context.Service<FastModeService, FastModeSe
       this,
       Effect.gen(function* () {
         const usage = yield* OpenAIUsageService;
-        const initialState: FastSnapshot = { desiredActive: false, active: false };
+        const initialState = initialFastSnapshot();
         const state = yield* Ref.make(initialState);
         const transitionLock = yield* Semaphore.make(1);
         const prepareSnapshot = (next: FastSnapshot) =>
@@ -53,8 +53,7 @@ export class FastModeService extends Context.Service<FastModeService, FastModeSe
           Ref.set(state, next).pipe(
             Effect.andThen(Effect.sync(() => MutableRef.set(options.projection, snapshot))),
           );
-        const initialSnapshot = yield* prepareSnapshot(initialState).pipe(Effect.orDie);
-        yield* Effect.sync(() => MutableRef.set(options.projection, initialSnapshot));
+        yield* Effect.sync(() => MutableRef.set(options.projection, initialState));
         const commitInMemory = (update: (current: FastSnapshot) => FastSnapshot) =>
           transitionLock.withPermit(
             Effect.gen(function* () {

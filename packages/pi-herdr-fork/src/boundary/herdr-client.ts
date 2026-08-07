@@ -31,8 +31,6 @@ const PaneSchema = Schema.Struct({
   terminal_id: BoundedId,
   workspace_id: BoundedId,
   tab_id: BoundedId,
-  cwd: Schema.optional(Schema.NullOr(BoundedPath)),
-  foreground_cwd: Schema.optional(Schema.NullOr(BoundedPath)),
   agent: Schema.optional(Schema.NullOr(Schema.String.check(Schema.isMaxLength(64)))),
   name: Schema.optional(Schema.NullOr(Schema.String.check(Schema.isMaxLength(128)))),
   agent_session: Schema.optional(Schema.NullOr(SessionInfoSchema)),
@@ -81,7 +79,6 @@ export const PaneProcessInfoEnvelopeSchema = Schema.Struct({
 });
 
 export type HerdrPane = typeof PaneSchema.Type;
-export type HerdrAgent = typeof PaneSchema.Type;
 export type HerdrPaneProcessInfo = typeof PaneProcessInfoEnvelopeSchema.Type.result.process_info;
 
 export interface HerdrCommandRequest {
@@ -101,7 +98,7 @@ export type HerdrCommandRunner = (
   request: HerdrCommandRequest,
 ) => Effect.Effect<HerdrCommandOutput, HerdrForkError>;
 
-export const safeDiagnostic = (value: string): string =>
+const safeDiagnostic = (value: string): string =>
   [...value]
     .filter((character) => {
       const codePoint = character.codePointAt(0) ?? 0;

@@ -1,6 +1,5 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import type { SubagentContextMode, SubagentHost, SubagentRuntime } from "../run/model.ts";
 import type { BackendDriver, BackendPreflightRequest } from "./model.ts";
@@ -61,7 +60,4 @@ export const makeSubagentBackendRegistry = (
 export class SubagentBackendRegistry extends Context.Service<
   SubagentBackendRegistry,
   SubagentBackendRegistryShape
->()("pi-subagents/backend/service/SubagentBackendRegistry") {
-  static readonly layer = (drivers: ReadonlyArray<BackendDriver>) =>
-    Layer.succeed(this, makeSubagentBackendRegistry(drivers));
-}
+>()("pi-subagents/backend/service/SubagentBackendRegistry") {}

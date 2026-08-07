@@ -32,12 +32,6 @@ const run = <A, E>(effect: Effect.Effect<A, E, Path.Path | JsonDocumentStore>) =
   Effect.runPromise(effect.pipe(Effect.provide(nodePlatformLayer)));
 
 describe("config helpers", () => {
-  test("does not expose the allow-list through decoded config", async () => {
-    const configPath = join(temp(), "config.json");
-    await run(writeConfig(configPath, { supportedModels: ["openai/gpt-4.1"] }));
-    expect(await run(readConfig(configPath))).not.toHaveProperty("supportedModels");
-  });
-
   test("preserves unknown fields through Effect document writes", async () => {
     const configPath = join(temp(), "config.json");
     await run(

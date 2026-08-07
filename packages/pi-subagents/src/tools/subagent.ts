@@ -21,12 +21,6 @@ import { executeSubagentAction } from "./execute.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
 
-export { renderAwaitProgressComponent } from "./render-await.ts";
-export {
-  awaitResultBanner,
-  renderExpandedStartAwaitResult,
-  renderStartAwaitOverviewComponent,
-} from "./render.ts";
 import {
   AwaitParameters,
   LifecycleParameters,

@@ -5,8 +5,3 @@ import { registerDirectoryModelsApplication } from "./application.ts";
 export default function directoryModels(pi: ExtensionAPI): void {
   registerDirectoryModelsApplication(pi);
 }
-
-export {
-  registerDirectoryModelsWithDependencies,
-  type DirectoryModelsApplicationDependencies,
-} from "./application.ts";

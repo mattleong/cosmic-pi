@@ -17,17 +17,10 @@ const isQueueErrorTag = (tag: unknown): boolean => {
   }
 };
 
-/** Compatibility fallback for unexpected runtime failures. */
 export class AdvisorQueueError extends Schema.TaggedErrorClass<AdvisorQueueError>()(
   "AdvisorQueueError",
   QueueErrorFields,
-) {
-  static override [Symbol.hasInstance](value: unknown): boolean {
-    return (
-      typeof value === "object" && value !== null && "_tag" in value && isQueueErrorTag(value._tag)
-    );
-  }
-}
+) {}
 
 export class AdvisorQueueDisposedError extends Schema.TaggedErrorClass<AdvisorQueueDisposedError>()(
   "Disposed",

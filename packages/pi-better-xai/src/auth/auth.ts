@@ -50,10 +50,6 @@ export interface XaiCredentials {
   readonly teamId?: string;
 }
 
-export interface XaiCredentialsWithSource extends XaiCredentials {
-  readonly source: "modelRegistry" | "authFile";
-}
-
 export const extractTeamIdFromJwt = Effect.fn("XaiAuth.extractTeamIdFromJwt")(function* (
   token: string,
 ) {

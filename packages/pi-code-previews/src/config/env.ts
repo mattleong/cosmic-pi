@@ -1,6 +1,11 @@
 import * as Config from "effect/Config";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import { defaultsFromEnvironment } from "./defaults";
+import type { CodePreviewSettings } from "./schema";
 
 export function parsePositiveInteger(value: string | undefined): number | undefined {
   const parsed = Number(value);
@@ -144,4 +149,36 @@ export function publishCodePreviewEnvironmentProjection(
 ): void {
   codePreviewPerformanceConfig = Object.freeze({ ...config });
   codePreviewToolsEnvironmentValue = tools;
+}
+
+export interface CodePreviewEnvironmentShape {
+  readonly values: CodePreviewEnvironment;
+  readonly defaults: CodePreviewSettings;
+  readonly performance: CodePreviewPerformanceConfig;
+}
+
+export class CodePreviewEnvironmentService extends Context.Service<
+  CodePreviewEnvironmentService,
+  CodePreviewEnvironmentShape
+>()("pi-code-previews/config/env/CodePreviewEnvironmentService") {
+  static readonly layer = Layer.effect(
+    this,
+    Effect.gen(function* () {
+      const values = yield* loadCodePreviewEnvironment;
+      const service = CodePreviewEnvironmentService.of({
+        values,
+        defaults: Object.freeze(defaultsFromEnvironment(values)),
+        performance: performanceConfigFromEnvironment(values),
+      });
+      publishCodePreviewEnvironmentProjection(service.performance, values.CODE_PREVIEW_TOOLS);
+      return service;
+    }),
+  );
+
+  static readonly layerFrom = (environment: Readonly<Record<string, string>>) =>
+    this.layer.pipe(
+      Layer.provide(
+        Layer.succeed(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv({ env: environment })),
+      ),
+    );
 }

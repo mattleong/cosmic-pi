@@ -17,7 +17,7 @@ import {
   type JsonObject,
 } from "pi-cosmic-core";
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
-import { CodePreviewEnvironmentService } from "../../src/config/environment-service";
+import { CodePreviewEnvironmentService } from "../../src/config/env";
 import { codePreviewSettings } from "../../src/config/state";
 import { CodePreviewSettingsService, settingsSaveContextProjection } from "../../src/config/store";
 

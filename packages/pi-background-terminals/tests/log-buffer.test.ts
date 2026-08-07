@@ -4,8 +4,8 @@ import {
   dropOldestLogEvent,
   emptyLogBuffer,
   readLogBuffer,
-  utf8ByteLength,
 } from "../src/job/log-buffer.ts";
+import { utf8ByteLength } from "../src/job/utf8.ts";
 
 describe("background log buffer", () => {
   it("counts UTF-8 bytes and retains a valid tail", () => {

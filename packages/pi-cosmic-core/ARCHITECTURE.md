@@ -54,5 +54,6 @@ sink can neither fail a session start nor widen the `Layer.Error` that Pi sessio
 facades carry. `agentDirectory` is a thunk for the same reason: the Pi host resolves it lazily
 and may throw, and that throw must land inside the fail-safe region.
 
-The sink has no size bound. Anything that logs per-turn or per-request needs rotation first —
-see `pi-advisor/src/logging/log.ts` for the coordinator-locked rotating pattern.
+The host log is rotated at session start after it reaches the 1 MB threshold; it has no
+in-session hard cap. High-volume feature logs still need their own bounded or rotating sink — see
+`pi-advisor/src/logging/log.ts` for the coordinator-locked rotating pattern.

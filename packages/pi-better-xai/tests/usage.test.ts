@@ -37,13 +37,12 @@ import {
 import {
   XaiUsageService,
   formatDebug,
-  isXaiSubscriptionModel,
   makeProjection,
   synchronizeProjectionContext,
   visibleStatusLine,
 } from "../src/usage/index.ts";
 import type { ResolvedConfig } from "../src/config/index.ts";
-import { xaiUsageUiState } from "../src/ui/primitives.ts";
+import { isXaiSubscriptionModel } from "../src/usage/projection.ts";
 import {
   formatUsageSnapshot,
   parseMonthlyBilling,
@@ -598,7 +597,6 @@ describe("xAI visibility", () => {
 
     expect(isXaiSubscriptionModel(apiKeyContext, config)).toBe(true);
     expect(visibleStatusLine(projection)).toBe("Usage: 7d: 82%");
-    expect(xaiUsageUiState(apiKeyContext, config, projection).visible).toBe(true);
 
     const otherModel = {
       ...apiKeyContext,
@@ -608,51 +606,6 @@ describe("xAI visibility", () => {
     expect(visibleStatusLine(projection)).toBeUndefined();
     expect(MutableRef.get(projection).snapshot).toBeUndefined();
     expect(MutableRef.get(projection).error).toBeUndefined();
-  });
-
-  it("honors public context and config visibility guards independently of projection", () => {
-    const projection = makeProjection();
-    const subscriptionContext = registryContext();
-    const subscriptionConfig = resolvedConfig(true);
-    MutableRef.set(projection, {
-      ...MutableRef.get(projection),
-      config: subscriptionConfig,
-      eligible: true,
-      statusLine: "Usage: 7d: 82%",
-    });
-
-    expect(xaiUsageUiState(subscriptionContext, subscriptionConfig, projection).visible).toBe(true);
-    expect(
-      xaiUsageUiState(
-        subscriptionContext,
-        {
-          ...subscriptionConfig,
-          usage: { ...subscriptionConfig.usage, enabled: false },
-        },
-        projection,
-      ).visible,
-    ).toBe(false);
-    expect(
-      xaiUsageUiState(
-        {
-          ...subscriptionContext,
-          model: { provider: "openai", id: "gpt" },
-        } as ExtensionContext,
-        subscriptionConfig,
-        projection,
-      ).visible,
-    ).toBe(false);
-
-    const apiKeyContext = registryContext();
-    apiKeyContext.modelRegistry.isUsingOAuth = () => false;
-    expect(xaiUsageUiState(apiKeyContext, subscriptionConfig, projection).visible).toBe(false);
-    expect(xaiUsageUiState(apiKeyContext, resolvedConfig(false), projection).visible).toBe(true);
-
-    const throwingContext = registryContext();
-    throwingContext.modelRegistry.isUsingOAuth = () => {
-      throw new Error("oauth-host-secret");
-    };
-    expect(xaiUsageUiState(throwingContext, subscriptionConfig, projection).visible).toBe(false);
   });
 
   it("fails closed when OAuth detection throws and renderers use only the projection", () => {
@@ -672,7 +625,6 @@ describe("xAI visibility", () => {
     expect(() => synchronizeProjectionContext(projection, ctx, { clearUsage: true })).not.toThrow();
     expect(MutableRef.get(projection).eligible).toBe(false);
     expect(visibleStatusLine(projection)).toBeUndefined();
-    expect(xaiUsageUiState(ctx, config, projection).visible).toBe(false);
     expect(() => formatDebug(projection, ctx)).not.toThrow();
   });
 });

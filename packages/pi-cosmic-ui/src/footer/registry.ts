@@ -329,7 +329,6 @@ export class FooterRegistryService extends Context.Service<
   }
 }
 
-export const footerContributions = (snapshot: FooterRegistrySnapshot) => snapshot.contributions;
 export const footerSurfaces = (snapshot: FooterRegistrySnapshot) =>
   snapshot.contributions.filter(
     (contribution): contribution is CosmicFooterSurfaceContribution =>

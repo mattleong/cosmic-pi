@@ -1,6 +1,6 @@
 import type { AppKeybinding, Theme } from "@earendil-works/pi-coding-agent";
 import { getKeybindings } from "@earendil-works/pi-tui";
-import { countPreviewTextLines, forEachPreviewTextLine } from "./line-counts";
+import { forEachPreviewTextLine } from "./line-counts";
 
 export type PreviewLineEntry<T> =
   | { kind: "line"; line: T; index: number }
@@ -68,14 +68,6 @@ export function selectPreviewTextLines(
   text: string,
   limit: number,
 ): { entries: Array<PreviewLineEntry<string>>; shown: number; hidden: number; total: number } {
-  if (!Number.isInteger(limit)) {
-    const total = countPreviewTextLines(text);
-    return {
-      ...collectPreviewEntries(total, limit, (push) => forEachPreviewTextLine(text, push)),
-      total,
-    };
-  }
-
   const entries: Array<PreviewLineEntry<string>> = [];
   const split = limit >= PREVIEW_SPLIT_MIN_LIMIT;
   const counts = split ? previewSplitCounts(limit) : undefined;

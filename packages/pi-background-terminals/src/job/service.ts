@@ -49,7 +49,6 @@ interface JobRecord {
   wake: Deferred.Deferred<void>;
   completion: Deferred.Deferred<BackgroundJobSnapshot>;
   handleReady: Deferred.Deferred<LocalProcessHandle, LocalProcessError>;
-  handle?: LocalProcessHandle;
   terminationStarted: boolean;
   terminalOutcome?: "stopped" | "timed_out";
   ingressDroppedObserved: number;
@@ -224,7 +223,6 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         });
         const terminateLateHandle = yield* withLock(
           Effect.sync(() => {
-            ownerRecord.handle = handle;
             Deferred.doneUnsafe(ownerRecord.handleReady, Effect.succeed(handle));
             const record = jobs.get(id);
             if (record !== ownerRecord || !isActiveJobState(ownerRecord.snapshot.state)) {

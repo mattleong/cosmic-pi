@@ -41,7 +41,7 @@ export const isValidParentSessionFile = (path: string): boolean => {
     return false;
   try {
     const stat = lstatSync(path);
-    return stat.isFile() && !stat.isSymbolicLink();
+    return stat.isFile();
   } catch {
     return false;
   }

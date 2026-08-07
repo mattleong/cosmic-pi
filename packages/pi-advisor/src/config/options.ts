@@ -7,7 +7,6 @@ import {
   ADVISOR_CONFIG_BASENAME,
 } from "./schema.ts";
 
-export { isRecord } from "../shared/utils.ts";
 export {
   ADVISOR_CONFIG_BASENAME,
   ADVISOR_FAST_MODE,

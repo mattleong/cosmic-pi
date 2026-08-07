@@ -23,8 +23,7 @@ import {
   renderContextLine,
   renderContributionLine,
   renderLabeledContributionLine,
-  renderOpenAIUsageLine,
-  renderXaiUsageLine,
+  renderProviderUsageLine,
 } from "./layout.ts";
 import {
   hostQuery,
@@ -34,7 +33,7 @@ import {
   type FooterContextUsage,
   type FooterModel,
 } from "../boundary/host-footer-projection.ts";
-import { footerContributions, footerSurfaces, type FooterRegistrySnapshot } from "./registry.ts";
+import { footerSurfaces, type FooterRegistrySnapshot } from "./registry.ts";
 
 export type { FooterTotals } from "./builtin-contributions.ts";
 
@@ -124,7 +123,7 @@ export function createFooterComponent(options: {
               options.pullRequestNumber(),
               options.homeDirectory(),
             ),
-            ...footerContributions(registrySnapshot),
+            ...registrySnapshot.contributions,
           ];
           const text = orderedContributions(
             contributions.filter(
@@ -162,17 +161,14 @@ export function createFooterComponent(options: {
           const contextVisible = metrics.some((entry) => entry.id === "context");
           const sessionInfo = metrics.filter((entry) => entry.id !== "context");
           const details = text.filter((entry) => entry.region === "details");
-          const providerUsageRenderers: Record<
-            string,
-            (text: string, width: number, theme: CosmicFooterTheme, compact: boolean) => string
-          > = {
-            "openai.usage": renderOpenAIUsageLine,
-            "xai.usage": renderXaiUsageLine,
+          const providerUsageLabels: Readonly<Record<string, string>> = {
+            "openai.usage": "OpenAI",
+            "xai.usage": "xAI",
           };
-          const providerUsage = details.filter((entry) => entry.id in providerUsageRenderers);
+          const providerUsage = details.filter((entry) => entry.id in providerUsageLabels);
           const extensionDetails = details.filter((entry) => entry.id.startsWith("extension."));
           const otherDetails = details.filter(
-            (entry) => !(entry.id in providerUsageRenderers) && !entry.id.startsWith("extension."),
+            (entry) => !(entry.id in providerUsageLabels) && !entry.id.startsWith("extension."),
           );
           let lines: string[] = [];
           if (modelIdentity.length)
@@ -190,10 +186,11 @@ export function createFooterComponent(options: {
                 : renderContributionLine(sessionInfo, width, theme, compact),
             );
           for (const usage of providerUsage) {
-            const render = providerUsageRenderers[usage.id];
-            if (!render) continue;
+            const label = providerUsageLabels[usage.id];
+            if (!label) continue;
             lines.push(
-              render(
+              renderProviderUsageLine(
+                label,
                 compact && usage.compactText ? usage.compactText : usage.text,
                 width,
                 theme,

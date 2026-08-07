@@ -11,7 +11,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
-import { localPiBackendRegistryLayer } from "../src/backend/local-pi.ts";
+import { makeLocalPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { BackendDriver, BackendEvent, BackendReport } from "../src/backend/model.ts";
 import { makeSubagentBackendRegistry, SubagentBackendRegistry } from "../src/backend/service.ts";
 import type { SubagentNotification } from "../src/boundary/host-notifier.ts";
@@ -427,6 +427,13 @@ function fakeWriterLeaseLayer(
     },
   });
 }
+
+const localPiBackendRegistryLayer = Layer.effect(
+  SubagentBackendRegistry,
+  ChildProcess.use((childProcesses) =>
+    Effect.succeed(makeSubagentBackendRegistry([makeLocalPiBackendDriver(childProcesses)])),
+  ),
+);
 
 const serviceLayer = (
   options: SubagentServiceOptions = {},

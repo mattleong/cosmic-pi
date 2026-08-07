@@ -3,7 +3,7 @@ import * as Layer from "effect/Layer";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { ShikiAdapter } from "./boundary/shiki";
 import { CodePreviewSession } from "./application/service";
-import { CodePreviewEnvironmentService } from "./config/environment-service";
+import { CodePreviewEnvironmentService } from "./config/env";
 import { CodePreviewSettingsService } from "./config/service";
 import { CodePreviewSyntaxService } from "./syntax/service";
 import { CodePreviewWriteService } from "./write/service";

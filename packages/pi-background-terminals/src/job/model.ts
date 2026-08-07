@@ -64,7 +64,7 @@ export interface ReadBackgroundLogs {
   readonly waitSeconds?: number;
 }
 
-export const ACTIVE_JOB_STATES: ReadonlySet<BackgroundJobState> = new Set([
+const ACTIVE_JOB_STATES: ReadonlySet<BackgroundJobState> = new Set([
   "starting",
   "running",
   "stopping",
