@@ -13,14 +13,10 @@ export const SUBAGENT_RUN_STATES = [
 ] as const;
 export type SubagentRunState = (typeof SUBAGENT_RUN_STATES)[number];
 
-export type SubagentExecution = "foreground" | "background";
 export type SubagentContextMode = "fresh" | "fork";
 export type SubagentWriteIntent = "writer" | "read-only";
 export type SubagentHost = "local" | "herdr";
 export type SubagentRuntime = "pi" | "claude" | "codex";
-/** Dormant local-service compatibility alias; public routing uses host + runtime. */
-export type SubagentBackend = "pi";
-
 export type SubagentCapability =
   | "steer"
   | "interrupt"
@@ -119,17 +115,14 @@ export interface SubagentRunView {
   readonly selection: SubagentSelectionProvenance;
   readonly cwd: string;
   readonly state: SubagentRunState;
-  readonly execution: SubagentExecution;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
   readonly fastMode: boolean;
-  readonly host?: SubagentHost | undefined;
-  readonly runtime?: SubagentRuntime | undefined;
-  readonly closeOnReport?: boolean | undefined;
+  readonly host: SubagentHost;
+  readonly runtime: SubagentRuntime;
+  readonly closeOnReport: boolean;
   /** Current assignment/report generation. Zero means no report has been accepted yet. */
   readonly reportGeneration: number;
-  /** Optional only for decoding/rendering persisted pre-v4 views. New runs always populate these. */
-  readonly backend: SubagentBackend;
   readonly capabilities: ReadonlyArray<SubagentCapability>;
   readonly model: string;
   readonly effort: SubagentEffort;
@@ -159,14 +152,11 @@ export interface StartSubagentRequest {
   readonly host: SubagentHost;
   readonly runtime: SubagentRuntime;
   readonly closeOnReport: boolean;
-  /** Compatibility input for the currently implemented local Pi service. */
-  readonly backend: SubagentBackend;
   readonly task: string;
   readonly profile?: ProfileId | undefined;
   readonly profileGuidance?: string | undefined;
   readonly selection?: SubagentSelectionProvenance | undefined;
   readonly cwd: string;
-  readonly execution: SubagentExecution;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
   readonly fastMode: boolean;

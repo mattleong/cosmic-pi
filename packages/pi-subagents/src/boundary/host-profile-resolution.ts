@@ -3,6 +3,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as Effect from "effect/Effect";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/coordination.ts";
+import {
+  disallowedLaunchOverrideMessage,
+  firstDisallowedLaunchOverride,
+} from "../run/launch-validation.ts";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
@@ -220,15 +224,6 @@ const dynamicCandidateSkip = (
   reason: error.message,
 });
 
-const LEGACY_LAUNCH_FIELDS = [
-  "execution",
-  "context",
-  "writeIntent",
-  "effort",
-  "backend",
-  "model",
-] as const;
-
 export const resolveProfileStart = (
   pi: ExtensionAPI,
   rawInput: SubagentProfileStartSpec,
@@ -249,13 +244,13 @@ export const resolveProfileStart = (
         code: "task_required",
         message: "subagent_start requires every agent to have a task.",
       });
-    const legacyField = LEGACY_LAUNCH_FIELDS.find((field) =>
-      Object.prototype.hasOwnProperty.call(rawInput, field),
+    const disallowedField = firstDisallowedLaunchOverride(
+      rawInput as unknown as Readonly<Record<string, unknown>>,
     );
-    if (legacyField)
+    if (disallowedField)
       return yield* new InvalidSubagentRequestError({
-        code: "legacy_launch_override",
-        message: `[legacy_launch_override] subagent_start does not accept ${legacyField}. Put host, runtime, model, effort, context, writeIntent, and closeOnReport in the selected version 4 profile route.`,
+        code: "launch_override_not_allowed",
+        message: disallowedLaunchOverrideMessage(disallowedField),
       });
 
     const requestedProfile = rawInput.profile?.trim();
@@ -343,13 +338,11 @@ export const resolveProfileStart = (
       runtime: concrete.runtime,
       closeOnReport: concrete.closeOnReport,
       fastMode: concrete.fastMode,
-      backend: "pi",
       task,
       profile: definition.id,
       profileGuidance: definition.guidance,
       selection: selected.selection,
       cwd: environment.cwd,
-      execution: "background",
       context: selected.attempt.effectiveContext,
       writeIntent: selected.attempt.writeIntent,
       model: concrete.model,

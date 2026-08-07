@@ -320,7 +320,7 @@ describe("/subagents profile workspace", () => {
   });
 
   it("keeps model search on a new page inside the single profile workspace", async () => {
-    const initial = inspection({ version: 4, defaultProfile: "reviewer" });
+    const initial = inspection({ version: 4 });
     const managerActions = actions(initial);
     const custom = vi.fn(async (factory) =>
       exerciseWorkspace(factory, async (component) => {

@@ -59,7 +59,7 @@ describe("SubagentConfigStore v4", () => {
         },
       }),
     );
-    await writeFile(paths.projectPath, JSON.stringify({ version: 4, defaultProfile: "worker" }));
+    await writeFile(paths.projectPath, JSON.stringify({ version: 4 }));
     const config = await withStore((store) => store.load(paths.cwd, paths.agentDirectory, true));
     expect(config.profiles.worker).toEqual({
       candidates: [
@@ -76,7 +76,7 @@ describe("SubagentConfigStore v4", () => {
       ],
     });
     expect(config.profileSources.worker).toBe("global");
-    expect(config.defaultProfile).toBe("generalist");
+    expect(config.fallbackProfile).toBe("generalist");
   });
 
   it("accepts only v4 documents and never reads an untrusted project", async () => {
@@ -98,7 +98,7 @@ describe("SubagentConfigStore v4", () => {
       withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
     ).rejects.toMatchObject({
       operation: "activate",
-      message: expect.stringContaining("remove denied/discouraged"),
+      message: expect.stringContaining("must declare version 4"),
     });
     await writeFile(paths.globalPath, JSON.stringify({ version: 4 }));
     await writeFile(paths.projectPath, "{ not json");
@@ -117,12 +117,10 @@ describe("SubagentConfigStore v4", () => {
     });
   });
 
-  it("atomically patches one profile while preserving unrelated fields and routes", async () => {
+  it("atomically patches one profile while preserving unrelated routes", async () => {
     const paths = await fixture();
     const initial = {
       version: 4,
-      defaultProfile: "planner",
-      customFutureField: { retained: true },
       profiles: {
         scout: {
           host: "local",
@@ -179,8 +177,6 @@ describe("SubagentConfigStore v4", () => {
       }),
     );
     const saved = JSON.parse(await readFile(paths.globalPath, "utf8"));
-    expect(saved.defaultProfile).toBeUndefined();
-    expect(saved.customFutureField).toEqual({ retained: true });
     expect(saved.profiles.reviewer).toEqual(initial.profiles.reviewer);
     expect(saved.profiles.scout).toEqual({
       host: "local",
@@ -198,48 +194,18 @@ describe("SubagentConfigStore v4", () => {
     expect(refreshed.config.profiles.scout.candidates[0]?.fastMode).toBe(true);
   });
 
-  it("rewrites the legacy delegate route key as canonical generalist on edit", async () => {
+  it("rejects unknown profile aliases and configuration fields", async () => {
     const paths = await fixture();
-    const legacy = {
-      version: 4,
-      defaultProfile: "delegate",
-      profiles: {
-        delegate: {
-          host: "local",
-          runtime: "pi",
-          model: "parent",
-          effort: "default",
-          context: "fresh",
-          writeIntent: "read-only",
-        },
-      },
-    };
-    await writeFile(paths.globalPath, JSON.stringify(legacy));
-    const inspection = await withStore((store) =>
-      store.inspect(paths.cwd, paths.agentDirectory, true),
-    );
-    expect(inspection.config.defaultProfile).toBe("generalist");
-    await withStore((store) =>
-      store.patchProfile(paths.cwd, paths.agentDirectory, {
-        scope: "global",
-        profile: "generalist",
-        route: {
-          host: "local",
-          runtime: "pi",
-          model: "openai/new-generalist",
-          effort: "high",
-          context: "fresh",
-          writeIntent: "read-only",
-        },
-        expectedExists: true,
-        expectedDocument: inspection.globalDocument,
-        projectTrusted: true,
-      }),
-    );
-    const saved = JSON.parse(await readFile(paths.globalPath, "utf8"));
-    expect(saved.defaultProfile).toBeUndefined();
-    expect(saved.profiles.delegate).toBeUndefined();
-    expect(saved.profiles.generalist).toMatchObject({ model: "openai/new-generalist" });
+    for (const document of [
+      { version: 4, defaultProfile: "generalist" },
+      { version: 4, profiles: { delegate: "disabled" } },
+      { version: 4, customFutureField: true },
+    ]) {
+      await writeFile(paths.globalPath, JSON.stringify(document));
+      await expect(
+        withStore((store) => store.load(paths.cwd, paths.agentDirectory, true)),
+      ).rejects.toMatchObject({ operation: "activate", path: paths.globalPath });
+    }
   });
 
   it("removes inherited routes and rejects untrusted project writes", async () => {
@@ -331,11 +297,41 @@ describe("SubagentConfigStore v4", () => {
 
   it("detects external edits instead of clobbering them", async () => {
     const paths = await fixture();
-    await writeFile(paths.globalPath, JSON.stringify({ version: 4, defaultProfile: "worker" }));
+    await writeFile(
+      paths.globalPath,
+      JSON.stringify({
+        version: 4,
+        profiles: {
+          scout: {
+            host: "local",
+            runtime: "pi",
+            model: "parent",
+            effort: "low",
+            context: "fresh",
+            writeIntent: "read-only",
+          },
+        },
+      }),
+    );
     const inspection = await withStore((store) =>
       store.inspect(paths.cwd, paths.agentDirectory, true),
     );
-    await writeFile(paths.globalPath, JSON.stringify({ version: 4, defaultProfile: "reviewer" }));
+    await writeFile(
+      paths.globalPath,
+      JSON.stringify({
+        version: 4,
+        profiles: {
+          scout: {
+            host: "local",
+            runtime: "pi",
+            model: "parent",
+            effort: "high",
+            context: "fresh",
+            writeIntent: "read-only",
+          },
+        },
+      }),
+    );
     await expect(
       withStore((store) =>
         store.patchProfile(paths.cwd, paths.agentDirectory, {
@@ -348,6 +344,6 @@ describe("SubagentConfigStore v4", () => {
         }),
       ),
     ).rejects.toMatchObject({ operation: "update", path: paths.globalPath });
-    expect(JSON.parse(await readFile(paths.globalPath, "utf8")).defaultProfile).toBe("reviewer");
+    expect(JSON.parse(await readFile(paths.globalPath, "utf8")).profiles.scout.effort).toBe("high");
   });
 });

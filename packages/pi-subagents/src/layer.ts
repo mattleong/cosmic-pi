@@ -53,7 +53,7 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
   );
   const herdrHost = HerdrHost.layer.pipe(Layer.provide(herdrBoundaries));
   const backendBoundaries = Layer.mergeAll(
-    ChildProcess.layer,
+    ChildProcess.layer({ agentDirectory: options.agentDirectory }),
     LocalCliProcess.layer({ agentDirectory: options.agentDirectory }),
     SupervisorChannel.layer({ agentDirectory: options.agentDirectory }),
     herdrHost,

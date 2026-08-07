@@ -381,7 +381,11 @@ describe("private supervisor channel", () => {
       text: "Bounded final report.",
     });
     expect(await Effect.runPromise(handle.hasAcceptedReport(2)).catch(() => false)).toBe(false);
-    const concurrentEvents = [await takeEvent(handle), await takeEvent(handle)];
+    const concurrentEvents = [
+      await takeEvent(handle),
+      await takeEvent(handle),
+      await takeEvent(handle),
+    ];
     expect(concurrentEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -395,6 +399,11 @@ describe("private supervisor channel", () => {
           sequence: 1,
           deliveryId: "delivery-main",
           text: "Bounded final report.",
+        }),
+        expect.objectContaining({
+          type: "supervisor_question_cancelled",
+          assignmentEpoch: 1,
+          requestId: question.requestId,
         }),
       ]),
     );
@@ -570,6 +579,33 @@ describe("private supervisor channel", () => {
     await Effect.runPromise(Scope.close(scope, Exit.void));
   });
 
+  it("fails epoch advancement immediately when every acknowledging helper disconnects", async () => {
+    const { handle, scope } = await openChannel("agent-supervisor-epoch-disconnect");
+    const config = await connectionConfig(handle);
+    const raw = await connectRawChannel(handle);
+    await raw.request({
+      version: 1,
+      runId: handle.runId,
+      token: config.token,
+      type: "hello",
+      id: "epoch-disconnect-hello",
+    });
+    await Effect.runPromise(handle.awaitReady);
+    const setting = Effect.runPromise(handle.setAssignmentEpoch(1));
+    await raw.next((value) =>
+      Boolean(
+        value && typeof value === "object" && "type" in value && value.type === "assignment_epoch",
+      ),
+    );
+    raw.socket.destroy();
+    await expect(withTimeout(setting, 500)).rejects.toMatchObject({
+      code: "assignment_epoch_outcome_uncertain",
+    });
+
+    await Effect.runPromise(handle.close);
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+  });
+
   it("requires a current live helper for each readiness generation and epoch", async () => {
     const opened = await openChannel("agent-supervisor-readiness");
     const { handle, scope } = opened;
@@ -593,6 +629,139 @@ describe("private supervisor channel", () => {
     await initialize(replacement.rpc);
     await Effect.runPromise(handle.awaitReady);
     await Effect.runPromise(handle.setAssignmentEpoch(2));
+    await Effect.runPromise(handle.close);
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+  }, 20_000);
+
+  it("queues a correlated cancellation when a helper disconnects with a pending question", async () => {
+    const { handle, scope } = await openChannel("agent-supervisor-disconnect");
+    const { child, rpc } = spawnHelper(handle);
+    await initialize(rpc);
+    await Effect.runPromise(handle.awaitReady);
+    await Effect.runPromise(handle.setAssignmentEpoch(1));
+
+    const pending = toolCall(rpc, "question-before-disconnect", "supervisor_question", {
+      message: "Should I continue?",
+    });
+    void pending.catch(() => undefined);
+    const questionEvent = await takeEvent(handle);
+    expect(questionEvent).toMatchObject({
+      type: "supervisor_contact",
+      kind: "question",
+      assignmentEpoch: 1,
+    });
+    if (questionEvent.type !== "supervisor_contact") throw new Error("expected question");
+
+    const exited = waitForExit(child);
+    child.kill("SIGKILL");
+    await exited;
+    expect(await takeEvent(handle)).toMatchObject({
+      type: "supervisor_question_cancelled",
+      assignmentEpoch: 1,
+      requestId: questionEvent.requestId,
+    });
+    await expect(
+      Effect.runPromise(handle.reply(questionEvent.requestId, "Continue.")),
+    ).rejects.toMatchObject({ code: "question_ownership_mismatch" });
+
+    await Effect.runPromise(handle.close);
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+  });
+
+  it("queues a correlated cancellation when the owning adapter cancels a question", async () => {
+    const { handle, scope } = await openChannel("agent-supervisor-close-question");
+    const { rpc } = spawnHelper(handle);
+    await initialize(rpc);
+    await Effect.runPromise(handle.awaitReady);
+    await Effect.runPromise(handle.setAssignmentEpoch(1));
+
+    const pending = toolCall(rpc, "question-before-close", "supervisor_question", {
+      message: "Will the channel close?",
+    });
+    const questionEvent = await takeEvent(handle);
+    if (questionEvent.type !== "supervisor_contact") throw new Error("expected question");
+    handle.cancelPending("Adapter is closing the assignment.");
+    expect(await pending).toMatchObject({ error: expect.anything() });
+    expect(await takeEvent(handle)).toMatchObject({
+      type: "supervisor_question_cancelled",
+      assignmentEpoch: 1,
+      requestId: questionEvent.requestId,
+    });
+    await Effect.runPromise(handle.close);
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+  });
+
+  it("reserves cancellation capacity for an accepted question under event saturation", async () => {
+    const { handle, scope } = await openChannel("agent-supervisor-saturated");
+    const config = await connectionConfig(handle);
+    const { rpc } = spawnHelper(handle);
+    await initialize(rpc);
+    await Effect.runPromise(handle.awaitReady);
+    await Effect.runPromise(handle.setAssignmentEpoch(1));
+    await Effect.runPromise(handle.setAssignmentEpoch(2));
+
+    const raw = await connectRawChannel(handle);
+    await raw.request({
+      version: 1,
+      runId: handle.runId,
+      token: config.token,
+      type: "hello",
+      id: "raw-saturation-hello",
+    });
+    for (let index = 0; index < 62; index += 1)
+      await raw.request({
+        version: 1,
+        runId: handle.runId,
+        token: config.token,
+        type: "progress",
+        id: `saturation-progress-${index}`,
+        assignmentEpoch: 2,
+        message: `Progress ${index}`,
+      });
+
+    const pending = toolCall(rpc, "saturated-question", "supervisor_question", {
+      message: "Question at the reserved boundary?",
+    });
+    await wait(10);
+    expect(
+      await raw.request({
+        version: 1,
+        runId: handle.runId,
+        token: config.token,
+        type: "report",
+        id: "older-report-at-saturation",
+        assignmentEpoch: 1,
+        deliveryId: "older-report-at-saturation",
+        text: "Older assignment report.",
+      }),
+    ).toMatchObject({ type: "error", code: "event_queue_full" });
+    rpc.send({
+      jsonrpc: "2.0",
+      method: "notifications/cancelled",
+      params: { requestId: "saturated-question" },
+    });
+    expect(await pending).toMatchObject({ error: { code: -32800 } });
+
+    const events: unknown[] = [];
+    for (let index = 0; index < 64; index += 1) events.push(await takeEvent(handle));
+    const saturatedQuestion = events.at(-2);
+    expect(saturatedQuestion).toMatchObject({
+      type: "supervisor_contact",
+      kind: "question",
+    });
+    if (
+      !saturatedQuestion ||
+      typeof saturatedQuestion !== "object" ||
+      !("requestId" in saturatedQuestion)
+    )
+      throw new Error("missing saturated question correlation");
+    expect(events.at(-1)).toMatchObject({
+      type: "supervisor_question_cancelled",
+      assignmentEpoch: 2,
+      requestId: saturatedQuestion.requestId,
+    });
+
+    raw.socket.destroy();
     await Effect.runPromise(handle.close);
     await Effect.runPromise(Scope.close(scope, Exit.void));
   }, 20_000);

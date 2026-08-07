@@ -17,11 +17,11 @@ import {
   SubagentNotFoundError,
   UnsupportedSubagentCapabilityError,
 } from "./errors.ts";
+import { hasCompletionGenerationCapacity } from "./completion.ts";
 import { validateParentMessage } from "./coordination.ts";
-import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
-import { sanitizeName, snapshotView } from "./state.ts";
-import { emptyRunWarningSlots } from "./warnings.ts";
+import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
+import { emptyRunWarningSlots, setRunWarning } from "./warnings.ts";
 
 export interface RunControlDependencies {
   readonly ownerScope: Scope.Scope;
@@ -47,7 +47,6 @@ export interface RunControlDependencies {
   readonly renameBackend: (record: RunRecord, name: string) => Effect.Effect<void, SubagentError>;
   readonly publish: () => void;
   readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
-  readonly deliverForeground: (record: RunRecord, view: SubagentRunView) => boolean;
   readonly failPendingResponses: (record: RunRecord, error: SubagentError) => void;
   readonly closeRecordScope: (record: RunRecord) => Effect.Effect<void>;
   readonly settle: (
@@ -71,11 +70,33 @@ export function makeRunControls(dependencies: RunControlDependencies) {
     renameBackend,
     publish,
     sendPeerNotices,
-    deliverForeground,
     failPendingResponses,
     closeRecordScope,
     settle,
   } = dependencies;
+
+  const retainControlWarning = (record: RunRecord, warning: string) =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const diagnostic = sanitizeDiagnosticText(warning, MAX_ERROR_CHARS);
+      yield* withLock(
+        Effect.sync(() => {
+          if (isTerminalRunState(record.view.state) || record.view.state === "stopping") return;
+          record.warningSlots = setRunWarning(record.warningSlots, "system", diagnostic);
+          record.view = {
+            ...record.view,
+            warning: diagnostic,
+            sessionEvents: appendNoticeSessionEvent(
+              record.view.sessionEvents,
+              "warning",
+              diagnostic,
+              now,
+            ),
+          };
+          publish();
+        }),
+      );
+    });
 
   const send = (id: string, message: string): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.gen(function* () {
@@ -95,7 +116,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               message: `Subagent ${id} already has a parent reply in flight.`,
             });
           if (selected.view.state === "reported" && selected.view.closeOnReport === false) {
-            if (selected.completionGenerations.size >= MAX_UNRESOLVED_REPORT_GENERATIONS)
+            if (!hasCompletionGenerationCapacity(selected))
               return yield* new InvalidSubagentRequestError({
                 code: "report_delivery_backlog",
                 message: `Subagent ${id} has ${selected.completionGenerations.size} unresolved report generations; wait for parent delivery or claim the latest report before beginning another assignment.`,
@@ -113,6 +134,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               replyPendingRequestId: selected.replyPendingRequestId,
             };
             selected.settlement = nextSettlement;
+            selected.pausedAssignmentEpoch = undefined;
             selected.latestAssistantText = undefined;
             selected.warningSlots = emptyRunWarningSlots();
             selected.assignment = {
@@ -195,7 +217,13 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               );
             }),
           )
-        : steerBackend(record, normalized);
+        : steerBackend(record, normalized).pipe(
+            Effect.tapError((error) =>
+              error._tag === "SubagentProcessError" && error.code?.endsWith("_outcome_uncertain")
+                ? retainControlWarning(record, error.message)
+                : Effect.void,
+            ),
+          );
       const now = yield* Clock.currentTimeMillis;
       return yield* withLock(
         Effect.gen(function* () {
@@ -293,7 +321,16 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           // Roll back only when the transport itself reports a definite failure.
           Effect.tapError((error) =>
             error._tag === "SubagentProcessError" && error.code === "reply_outcome_uncertain"
-              ? Effect.void
+              ? retainControlWarning(claimed.record, error.message).pipe(
+                  Effect.andThen(
+                    withLock(
+                      Effect.sync(() => {
+                        if (claimed.record.replyPendingRequestId === claimed.question.requestId)
+                          claimed.record.replyPendingRequestId = undefined;
+                      }),
+                    ),
+                  ),
+                )
               : withLock(
                   Effect.sync(() => {
                     if (claimed.record.replyPendingRequestId !== claimed.question.requestId) return;
@@ -381,6 +418,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                 });
               record.pauseRequested = false;
               if (record.pauseOutcome === pauseOutcome) record.pauseOutcome = undefined;
+              record.pausedAssignmentEpoch = record.assignment.epoch;
               record.activeTools.clear();
               record.view = {
                 ...record.view,
@@ -391,7 +429,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               };
               const view = snapshotView(record.view);
               publish();
-              deliverForeground(record, view);
               return view;
             }),
           );

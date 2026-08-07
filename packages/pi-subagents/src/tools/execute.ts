@@ -39,6 +39,10 @@ import {
   formatStartResultDetails,
   renderedCompletionReceipts,
 } from "./output.ts";
+import {
+  disallowedLaunchOverrideMessage,
+  firstDisallowedLaunchOverride,
+} from "../run/launch-validation.ts";
 import { formatAwaitProgress } from "./render-await.ts";
 import type { SubagentModelsInput, SubagentStartSpec, SubagentToolInput } from "./schema.ts";
 import type {
@@ -103,18 +107,13 @@ const startSpecs = (
         message: `subagent_start requires between 1 and ${MAX_TARGET_RUNS} agents.`,
       });
     for (const agent of agents) {
-      const legacyField = [
-        "execution",
-        "context",
-        "writeIntent",
-        "effort",
-        "backend",
-        "model",
-      ].find((field) => Object.prototype.hasOwnProperty.call(agent, field));
-      if (legacyField)
+      const disallowedField = firstDisallowedLaunchOverride(
+        agent as Readonly<Record<string, unknown>>,
+      );
+      if (disallowedField)
         return yield* new InvalidSubagentRequestError({
-          code: "legacy_launch_override",
-          message: `[legacy_launch_override] subagent_start does not accept ${legacyField}. Put launch choices in the selected version 4 profile route.`,
+          code: "launch_override_not_allowed",
+          message: disallowedLaunchOverrideMessage(disallowedField),
         });
     }
     return agents.map((agent) => {
@@ -192,7 +191,7 @@ const formatProfileDiscovery = (
     "Static eligibility only · executable, authentication, integration, and private-harness checks run at launch.",
     "",
     ...profiles.flatMap((profile) => [
-      `${profile.id}${profile.isDefault ? " · implicit fallback" : ""} — ${profile.description}`,
+      `${profile.id}${profile.isDefault ? " · when omitted" : ""} — ${profile.description}`,
       `  source=${profile.source} · defaults: context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"}`,
       ...(profile.candidates.length > 0
         ? profile.candidates.map(
@@ -216,7 +215,7 @@ const managementAcknowledgement = (
     case "reply":
       return `Reply delivered to ${ids}.`;
     case "interrupt":
-      return `Paused ${ids}.`;
+      return `Interrupted ${ids}; state is paused.`;
     case "resume":
       return `Resumed ${ids}.`;
     case "rename":
@@ -261,7 +260,7 @@ export const executeSubagentAction = async (
           {
             type: "text" as const,
             text: boundToolOutput(
-              formatProfileDiscovery(profiles, snapshot.effectiveConfig.defaultProfile),
+              formatProfileDiscovery(profiles, snapshot.effectiveConfig.fallbackProfile),
             ),
           },
         ],
@@ -269,7 +268,7 @@ export const executeSubagentAction = async (
           action: input.action,
           profiles,
           profileIds: profiles.map((profile) => profile.id),
-          defaultProfile: snapshot.effectiveConfig.defaultProfile,
+          fallbackProfile: snapshot.effectiveConfig.fallbackProfile,
         }),
       };
     });
@@ -586,8 +585,8 @@ export const executeSubagentAction = async (
       const attention = attentionRecoveryText(latestAwaitRuns);
       const summary =
         latestAwaitRuns.length === 0
-          ? "Await cancelled before progress was observed; selected subagents may still be unfinished."
-          : `Await cancelled; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished.`;
+          ? "Await canceled before progress was observed; selected subagents may still be unfinished."
+          : `Await canceled; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished.`;
       const text = [summary, attention].filter(Boolean).join("\n\n");
       onUpdate?.({
         content: [{ type: "text", text }],

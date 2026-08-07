@@ -53,11 +53,7 @@ export const makeSubagentBackendRegistry = (
     resolve,
     preflight: (selection, request) =>
       resolve(selection).pipe(
-        Effect.flatMap((driver) =>
-          driver.preflight
-            ? driver.preflight(request).pipe(Effect.as(driver))
-            : Effect.succeed(driver),
-        ),
+        Effect.flatMap((driver) => driver.preflight(request).pipe(Effect.as(driver))),
       ),
   };
 };

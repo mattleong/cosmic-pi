@@ -1,3 +1,4 @@
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
@@ -94,9 +95,39 @@ export function makeRunProcessLifecycle(dependencies: RunProcessLifecycleDepende
     const scope = record.scope;
     return Effect.gen(function* () {
       yield* prepareBackendSpawn(record);
-      const process = yield* record.driver
-        .spawn(record.launch)
-        .pipe(Effect.provideService(Scope.Scope, scope));
+      const spawnSettled = yield* Deferred.make<void>();
+      const spawnClaimed = yield* withLock(
+        Effect.sync(() => {
+          if (
+            record.scope !== scope ||
+            record.closingScope === scope ||
+            record.stoppedByParent ||
+            record.view.state === "stopping" ||
+            record.view.state === "stopped" ||
+            record.backendSpawnAttempt !== undefined
+          )
+            return false;
+          record.backendSpawnAttempt = { scope, settled: spawnSettled };
+          return true;
+        }),
+      );
+      if (!spawnClaimed)
+        return yield* new InvalidSubagentRequestError({
+          code: "start_cancelled",
+          message: `Subagent ${record.view.id} was stopped before backend spawn.`,
+        });
+      const process = yield* record.driver.spawn(record.launch).pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.ensuring(
+          withLock(
+            Effect.sync(() => {
+              if (record.backendSpawnAttempt?.settled === spawnSettled)
+                record.backendSpawnAttempt = undefined;
+              Deferred.doneUnsafe(spawnSettled, Effect.void);
+            }),
+          ),
+        ),
+      );
       const attached = yield* withLock(
         Effect.sync(() => {
           if (

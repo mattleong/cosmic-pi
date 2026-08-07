@@ -8,7 +8,7 @@
 // @effect-diagnostics effect/preferSchemaOverJson:off
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -101,6 +101,10 @@ export interface ChildProcessShape {
   readonly spawn: (
     request: ChildLaunchRequest,
   ) => Effect.Effect<ChildProcessHandle, SubagentProcessError, Scope.Scope>;
+  readonly reclaimRunState: (request: {
+    readonly parentSessionId: string;
+    readonly runId: string;
+  }) => Effect.Effect<void, SubagentProcessError>;
 }
 
 const processError = (operation: string, error?: unknown, code?: string) =>
@@ -119,6 +123,44 @@ export function safeSubagentDirectorySegment(value: string): string {
   if (/^[A-Za-z0-9_-]{1,128}$/.test(value)) return value;
   return `id-${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
 }
+
+export const subagentRunDirectory = (
+  agentDirectory: string,
+  parentSessionId: string,
+  runId: string,
+): string =>
+  join(
+    agentDirectory,
+    "subagents",
+    safeSubagentDirectorySegment(parentSessionId),
+    safeSubagentDirectorySegment(runId),
+  );
+
+const reclaimChildRunState = (
+  agentDirectory: string,
+  request: { readonly parentSessionId: string; readonly runId: string },
+) =>
+  Effect.tryPromise({
+    try: async () => {
+      const runDirectory = subagentRunDirectory(
+        agentDirectory,
+        request.parentSessionId,
+        request.runId,
+      );
+      await rm(runDirectory, { recursive: true, force: true });
+      try {
+        await rmdir(join(runDirectory, ".."));
+      } catch (error) {
+        const code =
+          typeof error === "object" && error !== null && "code" in error
+            ? (error as { readonly code?: unknown }).code
+            : undefined;
+        if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "EBUSY")
+          throw error;
+      }
+    },
+    catch: (error) => processError("reclaim subagent run state", error),
+  });
 
 export const childToolPolicy = (
   activeTools: ReadonlyArray<string>,
@@ -258,13 +300,11 @@ function extensionPath(): string {
   return fileURLToPath(new URL("./host-child.ts", import.meta.url));
 }
 
-const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: ChildLaunchRequest) {
-  const runDir = join(
-    getAgentDir(),
-    "subagents",
-    safeSubagentDirectorySegment(request.parentSessionId),
-    safeSubagentDirectorySegment(request.runId),
-  );
+const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
+  agentDirectory: string,
+  request: ChildLaunchRequest,
+) {
+  const runDir = subagentRunDirectory(agentDirectory, request.parentSessionId, request.runId);
   yield* Effect.tryPromise({
     try: () => mkdir(runDir, { recursive: true, mode: 0o700 }),
     catch: (error) => processError("create subagent run directory", error),
@@ -556,10 +596,14 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (request: Child
 export class ChildProcess extends Context.Service<ChildProcess, ChildProcessShape>()(
   "pi-subagents/boundary/child-process/ChildProcess",
 ) {
-  static readonly layer = Layer.succeed(this, {
-    spawn: (request) =>
-      Effect.acquireRelease(acquireChild(request), (handle) =>
-        handle.release.pipe(Effect.orDie),
-      ).pipe(Effect.map(({ release: _release, ...handle }) => handle)),
-  });
+  static readonly layer = (options: { readonly agentDirectory?: string } = {}) => {
+    const agentDirectory = options.agentDirectory ?? getAgentDir();
+    return Layer.succeed(this, {
+      spawn: (request) =>
+        Effect.acquireRelease(acquireChild(agentDirectory, request), (handle) =>
+          handle.release.pipe(Effect.orDie),
+        ).pipe(Effect.map(({ release: _release, ...handle }) => handle)),
+      reclaimRunState: (request) => reclaimChildRunState(agentDirectory, request),
+    });
+  };
 }

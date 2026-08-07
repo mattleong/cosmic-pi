@@ -5,7 +5,7 @@ const MAX_NEAR_MATCHES = 6;
 export interface PiCatalogModel {
   readonly provider: string;
   readonly id: string;
-  /** Authenticated host-reported effort capability; omitted only by compatibility callers. */
+  /** Authenticated host-reported effort capability when the host provides one. */
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
 }
 

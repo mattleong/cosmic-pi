@@ -6,8 +6,7 @@ export interface SubagentCompletionNotification {
   readonly id: string;
   readonly name: string;
   readonly generation: number;
-  /** Omitted by legacy embedders; absence means a successful completed outcome. */
-  readonly outcome?: "completed" | "failed" | undefined;
+  readonly outcome: "completed" | "failed";
   readonly finalText?: string | undefined;
   readonly error?: string | undefined;
   readonly warning?: string | undefined;

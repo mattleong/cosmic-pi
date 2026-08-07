@@ -49,22 +49,13 @@ export interface RunEventDependencies {
     message: string,
     pendingError?: SubagentError,
   ) => Effect.Effect<SubagentRunView>;
-  readonly deliverForeground: (record: RunRecord, view: SubagentRunView) => boolean;
 }
 
 const protocolError = (message: string) => new SubagentProtocolError({ message });
 
 export function makeRunEventHandler(dependencies: RunEventDependencies) {
-  const {
-    mutateView,
-    runStarted,
-    runSettled,
-    acceptReport,
-    settle,
-    notify,
-    failRun,
-    deliverForeground,
-  } = dependencies;
+  const { mutateView, runStarted, runSettled, acceptReport, settle, notify, failRun } =
+    dependencies;
 
   const handleContact = (
     record: RunRecord,
@@ -117,14 +108,13 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         };
       });
       if (!view) return;
-      if (!deliverForeground(record, view))
-        yield* notify(record, {
-          type: "question",
-          id: view.id,
-          name: view.name,
-          requestId: envelope.requestId,
-          message,
-        });
+      yield* notify(record, {
+        type: "question",
+        id: view.id,
+        name: view.name,
+        requestId: envelope.requestId,
+        message,
+      });
     });
 
   return (record: RunRecord, event: BackendEvent): Effect.Effect<void, SubagentError> => {
@@ -220,13 +210,15 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         return handleContact(record, event);
       case "supervisor_question_cancelled":
         return mutateView(record, event.assignmentEpoch, (current) => {
-          if (
-            current.state !== "waiting_for_parent" ||
-            current.question?.requestId !== event.requestId
-          )
-            return undefined;
+          const waitingForQuestion =
+            current.state === "waiting_for_parent" &&
+            current.question?.requestId === event.requestId;
+          const replyingToQuestion = record.replyPendingRequestId === event.requestId;
+          if (!waitingForQuestion && !replyingToQuestion) return undefined;
           record.replyPendingRequestId = undefined;
-          return { ...current, state: "running", question: undefined };
+          return waitingForQuestion
+            ? { ...current, state: "running", question: undefined }
+            : { ...current };
         }).pipe(Effect.asVoid);
       case "warning":
         return Clock.currentTimeMillis.pipe(

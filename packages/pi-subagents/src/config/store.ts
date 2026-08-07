@@ -5,7 +5,6 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
-import { LEGACY_PROFILE_ID } from "../profiles/model.ts";
 import type {
   DeclaredProfileCandidate,
   DeclaredProfileRoute,
@@ -81,13 +80,18 @@ const storeError = (operation: string, path: string) => () =>
     message: `Unable to ${operation} Subagents configuration.`,
   });
 
-const unsupportedVersionError = (path: string, legacyVersion3 = false) =>
+const unsupportedVersionError = (path: string) =>
   new SubagentConfigStoreError({
     operation: "activate",
     path,
-    message: legacyVersion3
-      ? "Subagents configuration version 3 is no longer supported. Migrate to version 4 candidates with host, runtime, model, effort, context, and writeIntent; remove denied/discouraged policy fields."
-      : `Subagents configuration must declare version ${SUBAGENT_CONFIG_VERSION}. Migrate every route candidate to the version 4 host/runtime contract.`,
+    message: `Subagents configuration must declare version ${SUBAGENT_CONFIG_VERSION} and use the current host/runtime route contract.`,
+  });
+
+const unsupportedFieldsError = (path: string) =>
+  new SubagentConfigStoreError({
+    operation: "activate",
+    path,
+    message: "Subagents configuration contains fields that are not part of version 4.",
   });
 
 const conflictError = (path: string) =>
@@ -144,11 +148,9 @@ const applyProfilePatch = (
       ? (current.profiles as JsonObject)
       : {};
   const profiles: JsonObject = { ...currentProfiles };
-  if (patch.profile === "generalist") delete profiles[LEGACY_PROFILE_ID];
   if (patch.route === undefined) delete profiles[patch.profile];
   else profiles[patch.profile] = routeJson(patch.route);
   const next: JsonObject = { ...current, version: SUBAGENT_CONFIG_VERSION };
-  delete next.defaultProfile;
   if (Object.keys(profiles).length === 0) delete next.profiles;
   else next.profiles = profiles;
   return next;
@@ -184,14 +186,18 @@ export const subagentConfigStoreLayer = Layer.effect(
           globalRaw !== undefined &&
           (global.unsupportedVersion || global.file.version !== SUBAGENT_CONFIG_VERSION)
         )
-          return yield* unsupportedVersionError(locations.global, global.legacyVersion3);
+          return yield* unsupportedVersionError(locations.global);
+        if (global.diagnostics.some((diagnostic) => diagnostic.endsWith(".<unknown>")))
+          return yield* unsupportedFieldsError(locations.global);
         const project =
           projectRaw === undefined ? undefined : decodeSubagentConfig(projectRaw, "project");
         if (
           projectRaw !== undefined &&
           (project?.unsupportedVersion || project?.file.version !== SUBAGENT_CONFIG_VERSION)
         )
-          return yield* unsupportedVersionError(locations.project, project?.legacyVersion3);
+          return yield* unsupportedVersionError(locations.project);
+        if (project?.diagnostics.some((diagnostic) => diagnostic.endsWith(".<unknown>")))
+          return yield* unsupportedFieldsError(locations.project);
         const config = resolveSubagentConfig({
           globalConfigPath: locations.global,
           projectConfigPath: locations.project,
@@ -238,7 +244,7 @@ export const subagentConfigStoreLayer = Layer.effect(
             )
               return yield* conflictError(target);
             if (!currentIsEmpty && current.version !== SUBAGENT_CONFIG_VERSION)
-              return yield* unsupportedVersionError(target, current.version === 3);
+              return yield* unsupportedVersionError(target);
             return { value: undefined, document: applyProfilePatch(current, patch) };
           }),
         ).pipe(

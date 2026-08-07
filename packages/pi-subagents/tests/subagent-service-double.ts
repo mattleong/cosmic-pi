@@ -6,8 +6,6 @@ type ObservationMethods = Pick<
   SubagentServiceShape,
   | "startSessionOwned"
   | "withAwaitTerminalObservations"
-  | "withForegroundStartObservation"
-  | "withForegroundObservation"
   | "withStatusObservations"
   | "consumeCompletions"
 >;
@@ -34,23 +32,6 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
     ((id: string) => base.status(id).pipe(Effect.map((run): SubagentRunObservation => ({ run }))));
   const consumeCompletions: SubagentServiceShape["consumeCompletions"] =
     base.consumeCompletions ?? (() => Effect.void);
-  const withForegroundObservation: SubagentServiceShape["withForegroundObservation"] =
-    base.withForegroundObservation ??
-    ((id, use) => base.waitForForeground(id).pipe(Effect.flatMap((run) => use({ run }))));
-  const withForegroundStartObservation: SubagentServiceShape["withForegroundStartObservation"] =
-    base.withForegroundStartObservation ??
-    ((request, use) =>
-      base.start(request).pipe(
-        Effect.flatMap((started) =>
-          use(
-            started,
-            base.waitForForeground(started.id).pipe(
-              Effect.catch((error) => Effect.die(error)),
-              Effect.map((run): SubagentRunObservation => ({ run })),
-            ),
-          ),
-        ),
-      ));
   const withStatusObservations: SubagentServiceShape["withStatusObservations"] =
     base.withStatusObservations ??
     ((ids, use) =>
@@ -86,8 +67,6 @@ export function subagentServiceDouble(base: SubagentServiceDoubleInput): Subagen
     ...base,
     startSessionOwned,
     consumeCompletions,
-    withForegroundStartObservation,
-    withForegroundObservation,
     withStatusObservations,
     withAwaitTerminalObservations,
   };

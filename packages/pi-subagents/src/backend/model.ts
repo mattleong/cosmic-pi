@@ -155,10 +155,17 @@ export interface BackendDriver {
   readonly capabilities: ReadonlyArray<SubagentCapability>;
   readonly supportsContext: (context: SubagentContextMode) => boolean;
   /** Bounded readiness only. It must not acquire run, process, lease, or supervisor ownership. */
-  readonly preflight?: (
+  readonly preflight: (
     request: BackendPreflightRequest,
   ) => Effect.Effect<void, import("../run/errors.ts").InvalidSubagentRequestError>;
   readonly spawn: (
     request: BackendLaunchRequest,
   ) => Effect.Effect<BackendHandle, SubagentError, Scope.Scope>;
+  /** Remove private per-run artifacts only after process ownership and resumability are gone. */
+  readonly reclaimRunState?:
+    | ((request: {
+        readonly parentSessionId: string;
+        readonly runId: string;
+      }) => Effect.Effect<void, SubagentProcessError>)
+    | undefined;
 }

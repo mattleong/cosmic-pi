@@ -23,14 +23,9 @@ import type {
   SubagentNotification,
   SubagentNotificationDelivery,
 } from "../boundary/host-notifier.ts";
-import {
-  type CanonicalWriterCwd,
-  type WriterLeaseConflictError,
-  WriterLeaseService,
-} from "../boundary/writer-lease.ts";
+import { type WriterLeaseConflictError, WriterLeaseService } from "../boundary/writer-lease.ts";
 import {
   InvalidSubagentRequestError,
-  SubagentCapacityError,
   type SubagentError,
   SubagentHistoryCapacityError,
   SubagentNotFoundError,
@@ -46,6 +41,7 @@ import {
   collectPendingCompletionNotifications,
   completionClaimOwner,
   deliveredCompletionKeys,
+  hasCompletionGenerationCapacity,
   queuePendingCompletion,
   releaseCompletionClaim,
   removePendingCompletion,
@@ -60,16 +56,15 @@ import {
 import { makeRunEventHandler } from "./events.ts";
 import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
 import { makeRunProcessLifecycle } from "./process-lifecycle.ts";
+import { processCapacityError, writerConflictError } from "./admission.ts";
 import {
   COMPLETION_RETRY_INITIAL_MILLIS,
   COMPLETION_RETRY_MAX_MILLIS,
-  MAX_CONCURRENT_RUNS,
   MAX_RETAINED_RUNS,
 } from "./limits.ts";
 import {
   emptyUsage,
   hasSubagentCapability,
-  isActiveRunState,
   isAssignmentFinishedRunState,
   isTerminalRunState,
   type StartSubagentRequest,
@@ -91,51 +86,6 @@ import { emptyRunWarningSlots, foldRunWarnings, setRunWarning } from "./warnings
 
 let nextRuntimeNamespace = 1;
 const allocateRuntimeNamespace = (): string => `r${(nextRuntimeNamespace++).toString(36)}`;
-
-const ownsProcessSlot = (record: RunRecord): boolean =>
-  record.cleanupPending || record.process !== undefined || record.view.state === "starting";
-
-const ownsWriterSlot = (record: RunRecord): boolean =>
-  record.view.writeIntent === "writer" &&
-  (record.cleanupPending || isActiveRunState(record.view.state));
-
-const processCapacityError = (
-  records: ReadonlyMap<string, RunRecord>,
-  excluded?: RunRecord,
-): SubagentCapacityError | undefined => {
-  const candidates = [...records.values()].filter((record) => record !== excluded);
-  if (candidates.filter(ownsProcessSlot).length < MAX_CONCURRENT_RUNS) return undefined;
-  const cleanupCount = candidates.filter((record) => record.cleanupPending).length;
-  return new SubagentCapacityError({
-    limit: MAX_CONCURRENT_RUNS,
-    message:
-      cleanupCount > 0
-        ? `Subagent capacity is temporarily occupied while ${cleanupCount} run${cleanupCount === 1 ? "" : "s"} finish cleanup; retry shortly.`
-        : `Subagent capacity reached (${MAX_CONCURRENT_RUNS}). Stop an active run first.`,
-  });
-};
-
-const writerConflictError = (
-  records: ReadonlyMap<string, RunRecord>,
-  canonicalCwd: CanonicalWriterCwd,
-  excluded?: RunRecord,
-): SubagentWriterConflictError | undefined => {
-  const activeWriter = [...records.values()].find(
-    (record) =>
-      record !== excluded &&
-      ownsWriterSlot(record) &&
-      record.canonicalWriterCwd?.digest === canonicalCwd.digest,
-  );
-  return activeWriter
-    ? new SubagentWriterConflictError({
-        activeId: activeWriter.view.id,
-        activeName: activeWriter.view.name,
-        message: activeWriter.cleanupPending
-          ? `Writer ${activeWriter.view.name} (${activeWriter.view.id}) remains quarantined because cleanup could not be confirmed.`
-          : `Writer ${activeWriter.view.name} (${activeWriter.view.id}) already owns the shared cwd.`,
-      })
-    : undefined;
-};
 
 export type SubagentNotificationCallback =
   | ((notification: SubagentNotification) => SubagentNotificationDelivery | undefined)
@@ -171,18 +121,6 @@ export interface SubagentServiceShape {
   readonly startSessionOwned: (
     request: StartSubagentRequest,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly withForegroundStartObservation: <A, E, R>(
-    request: StartSubagentRequest,
-    use: (
-      started: SubagentRunView,
-      awaitObservation: Effect.Effect<SubagentRunObservation>,
-    ) => Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, SubagentError | E, R>;
-  readonly waitForForeground: (id: string) => Effect.Effect<SubagentRunView, SubagentNotFoundError>;
-  readonly withForegroundObservation: <A, E, R>(
-    id: string,
-    use: (observation: SubagentRunObservation) => Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, SubagentNotFoundError | E, R>;
   readonly awaitTerminal: (
     ids: ReadonlyArray<string>,
     until: SubagentAwaitUntil,
@@ -239,10 +177,10 @@ const requireCapability = (
     ? Effect.void
     : Effect.fail(
         new UnsupportedSubagentCapabilityError({
-          backend: `${record.view.host ?? "local"}/${record.view.runtime ?? record.view.backend}`,
+          backend: `${record.view.host}/${record.view.runtime}`,
           capability,
           message: unsupportedCapabilityMessage(
-            `${record.view.host ?? "local"}/${record.view.runtime ?? record.view.backend}`,
+            `${record.view.host}/${record.view.runtime}`,
             capability,
             record.view.id,
           ),
@@ -555,24 +493,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         return snapshotView(record.view);
       }),
     );
-  const deliverForeground = (record: RunRecord, view: SubagentRunView): boolean => {
-    if (!record.foregroundWaitPending) return false;
-    record.foregroundWaitPending = false;
-    if (view.state === "completed" || view.state === "reported" || view.state === "failed") {
-      const generation = record.completionGeneration;
-      const existing = record.foregroundCompletionClaim;
-      const claim =
-        existing?.generation === generation
-          ? existing
-          : { generation, claimToken: allocateClaimToken() };
-      if (claimCompletion(record, generation, claim.claimToken)) {
-        record.foregroundCompletionClaim = claim;
-        removePendingCompletion(pendingCompletions, record.view.id, generation);
-      }
-    }
-    Deferred.doneUnsafe(record.foregroundOutcome, Effect.succeed(view));
-    return true;
-  };
   const pauseFromEvent = (record: RunRecord, now: number, assignmentEpoch: number) =>
     withLock(
       Effect.sync(() => {
@@ -584,6 +504,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         )
           return undefined;
         record.activeTools.clear();
+        record.pausedAssignmentEpoch = assignmentEpoch;
         record.view = {
           ...record.view,
           state: "paused",
@@ -597,7 +518,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         record.pauseOutcome = undefined;
         publish();
         if (outcome) Deferred.doneUnsafe(outcome, Effect.succeed(view));
-        deliverForeground(record, view);
         return view;
       }),
     );
@@ -728,6 +648,52 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       Effect.uninterruptible,
     );
   };
+  const reclaimRecordRunState = (record: RunRecord) =>
+    Effect.gen(function* () {
+      const claimed = yield* withLock(
+        Effect.sync(() => {
+          if (record.runStateReclaimState !== "pending") return false;
+          record.runStateReclaimState = "running";
+          return true;
+        }),
+      );
+      if (!claimed) return;
+      const reclaim = record.driver.reclaimRunState;
+      if (!reclaim) {
+        yield* withLock(Effect.sync(() => void (record.runStateReclaimState = "reclaimed")));
+        return;
+      }
+      yield* reclaim({
+        parentSessionId: record.launch.parentSessionId,
+        runId: record.view.id,
+      }).pipe(
+        Effect.timeoutOption("5 seconds"),
+        Effect.flatMap((outcome) =>
+          Option.isSome(outcome)
+            ? Effect.void
+            : Effect.fail(
+                new SubagentProcessError({
+                  operation: "reclaim private run state",
+                  code: "run_state_reclaim_timeout",
+                  message: "Timed out while reclaiming private subagent run state.",
+                }),
+              ),
+        ),
+        Effect.tapError((error) =>
+          withLock(
+            Effect.sync(() => {
+              record.runStateReclaimState = "pending";
+            }),
+          ).pipe(
+            Effect.andThen(
+              Effect.logWarning(`Could not reclaim private subagent run state: ${error.message}`),
+            ),
+          ),
+        ),
+        Effect.annotateLogs("runId", record.view.id),
+      );
+      yield* withLock(Effect.sync(() => void (record.runStateReclaimState = "reclaimed")));
+    });
   const markCleanupPending = (record: RunRecord) =>
     withLock(
       Effect.sync(() => {
@@ -737,19 +703,29 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const clearCleanupPending = (record: RunRecord, scope: Scope.Closeable = record.scope) =>
     withLock(
       Effect.sync(() => {
-        if (record.scope !== scope) return;
+        if (record.scope !== scope) return false;
         record.cleanupPending = false;
         record.process = undefined;
         record.writerLease = undefined;
         record.writerLeaseScope = undefined;
         record.writerLeasePreparationState = undefined;
         record.writerLeaseReleaseState = undefined;
+        const shouldReclaim =
+          record.stoppedByParent ||
+          record.view.state === "failed" ||
+          record.view.state === "stopped" ||
+          record.view.state === "stopping";
         if (record.view.pid !== undefined) {
           const { pid: _pid, ...view } = record.view;
           record.view = view;
           publish();
         }
+        return shouldReclaim;
       }),
+    ).pipe(
+      Effect.flatMap((shouldReclaim) =>
+        shouldReclaim ? reclaimRecordRunState(record) : Effect.void,
+      ),
     );
   const retainCleanupQuarantine = (record: RunRecord, scope: Scope.Closeable) =>
     Effect.gen(function* () {
@@ -757,8 +733,13 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       yield* withLock(
         Effect.sync(() => {
           if (record.scope !== scope) return;
-          const warning =
-            "Subagent cleanup could not be confirmed; process capacity and writer ownership remain quarantined for this session.";
+          const ownershipQuarantined =
+            record.process !== undefined ||
+            record.writerLease !== undefined ||
+            record.writerLeaseScope !== undefined;
+          const warning = ownershipQuarantined
+            ? "Subagent cleanup could not be confirmed; process capacity and writer ownership remain quarantined for this session."
+            : "Subagent cleanup could not be fully confirmed; this run remains quarantined for the session.";
           record.cleanupPending = true;
           record.warningSlots = setRunWarning(record.warningSlots, "system", warning);
           record.view = {
@@ -815,35 +796,60 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       ),
     );
   const closeRecordScope = (record: RunRecord, scope: Scope.Closeable = record.scope) =>
-    withLock(
-      Effect.sync(() => {
-        if (record.closingScope === scope) return false;
-        record.closingScope = scope;
-        if (record.writerLeasePreparationState === "pending")
-          record.writerLeasePreparationState = "settled";
-        return true;
-      }),
-    ).pipe(
-      Effect.flatMap((shouldClose) =>
-        shouldClose
-          ? Scope.close(scope, Exit.void).pipe(
-              Effect.andThen(releaseWriterLeaseAfterCleanup(record, scope)),
-              Effect.exit,
-              Effect.flatMap((exit) =>
-                Exit.isSuccess(exit)
-                  ? clearCleanupPending(record, scope)
-                  : retainCleanupQuarantine(record, scope).pipe(
-                      Effect.andThen(
-                        Effect.logWarning(
-                          "Subagent backend or writer-lease cleanup failed; ownership remains quarantined.",
-                        ).pipe(Effect.annotateLogs("runId", record.view.id)),
-                      ),
-                    ),
+    Effect.gen(function* () {
+      const closeSettled = yield* Deferred.make<void>();
+      const claim = yield* withLock(
+        Effect.sync(() => {
+          if (record.closingScope === scope)
+            return {
+              close: false as const,
+              settled: record.closingScopeSettled,
+            };
+          record.closingScope = scope;
+          record.closingScopeSettled = closeSettled;
+          if (record.writerLeasePreparationState === "pending")
+            record.writerLeasePreparationState = "settled";
+          return {
+            close: true as const,
+            settled: closeSettled,
+            spawnSettled:
+              record.backendSpawnAttempt?.scope === scope
+                ? record.backendSpawnAttempt.settled
+                : undefined,
+          };
+        }),
+      );
+      if (!claim.close) {
+        if (claim.settled) yield* Deferred.await(claim.settled);
+        return;
+      }
+      yield* (claim.spawnSettled ? Deferred.await(claim.spawnSettled) : Effect.void).pipe(
+        Effect.andThen(Scope.close(scope, Exit.void)),
+        Effect.andThen(releaseWriterLeaseAfterCleanup(record, scope)),
+        Effect.exit,
+        Effect.flatMap((exit) =>
+          Exit.isSuccess(exit)
+            ? clearCleanupPending(record, scope)
+            : retainCleanupQuarantine(record, scope).pipe(
+                Effect.andThen(
+                  Effect.logWarning("Subagent cleanup failed; the run remains quarantined.").pipe(
+                    Effect.annotateLogs("runId", record.view.id),
+                  ),
+                ),
               ),
-            )
-          : Effect.void,
-      ),
-    );
+        ),
+        Effect.catch((error) =>
+          retainCleanupQuarantine(record, scope).pipe(
+            Effect.andThen(
+              Effect.logWarning(`Subagent cleanup failed: ${error.message}`).pipe(
+                Effect.annotateLogs("runId", record.view.id),
+              ),
+            ),
+          ),
+        ),
+        Effect.ensuring(Effect.sync(() => Deferred.doneUnsafe(closeSettled, Effect.void))),
+      );
+    }).pipe(Effect.uninterruptible);
   const closeExitedScope = (record: RunRecord, scope: Scope.Closeable): Effect.Effect<void> =>
     Effect.suspend(() =>
       withLock(
@@ -944,8 +950,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           };
           publish();
           const view = snapshotView(record.view);
-          const deliveredToForeground = deliverForeground(record, view);
-          const completionQueued = hasDeliverableOutcome && !deliveredToForeground;
+          const completionQueued = hasDeliverableOutcome;
           if (completionQueued)
             queuePendingCompletion(pendingCompletions, record, completionGeneration);
           return {
@@ -1075,8 +1080,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       Deferred.doneUnsafe(result.settlement, Effect.succeed(result.view));
       if (result.pauseOutcome)
         Deferred.doneUnsafe(result.pauseOutcome, Effect.succeed(result.view));
-      const deliveredToForeground = deliverForeground(record, result.view);
-      if (!deliveredToForeground) yield* queueCompletion(record, result.generation);
+      yield* queueCompletion(record, result.generation);
       yield* sendPeerNotices(record.view.id);
       return result.view;
     });
@@ -1201,6 +1205,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             return { kind: "unchanged" as const };
           record.assignment.startedObserved = true;
           if (record.assignment.phase === "issuing" && !record.assignment.outcomeUncertain) {
+            record.pausedAssignmentEpoch = undefined;
             record.view = {
               ...record.view,
               state: "running",
@@ -1221,6 +1226,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               kind: "report" as const,
               report: commitRetainedReportLocked(record, pendingReport, now),
             };
+          record.pausedAssignmentEpoch = undefined;
           record.view = {
             ...record.view,
             state: "running",
@@ -1246,6 +1252,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         Effect.sync(() => {
           if (
             record.assignment.epoch !== assignmentEpoch ||
+            record.pausedAssignmentEpoch === assignmentEpoch ||
             record.assignment.phase === "preparing" ||
             record.assignment.phase === "reported" ||
             isInactiveRunRecord(record)
@@ -1300,7 +1307,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     acceptReport: acceptBackendReport,
     notify: queueActionNotification,
     failRun,
-    deliverForeground,
   });
 
   ({
@@ -1494,15 +1500,14 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         // Public profile routing already preflights for ordered fallback. Recheck at the service
         // admission boundary with the canonical writer cwd to close readiness races and protect
         // direct internal callers; failure belongs to the selected candidate and never falls through.
-        if (driver.preflight)
-          yield* driver.preflight({
-            context: request.context,
-            writeIntent: request.writeIntent,
-            closeOnReport: request.closeOnReport,
-            model: request.model,
-            effort: request.effort,
-            cwd: canonicalWriterCwd?.path ?? request.cwd,
-          });
+        yield* driver.preflight({
+          context: request.context,
+          writeIntent: request.writeIntent,
+          closeOnReport: request.closeOnReport,
+          model: request.model,
+          effort: request.effort,
+          cwd: canonicalWriterCwd?.path ?? request.cwd,
+        });
         if (request.task.length > MAX_TASK_CHARS)
           return yield* new InvalidSubagentRequestError({
             code: "task_too_large",
@@ -1518,7 +1523,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         const writerLeaseScope = canonicalWriterCwd ? yield* Scope.make() : undefined;
         const writerLeaseReleaseState = writerLeaseScope ? { authorized: false } : undefined;
         const settlement = yield* Deferred.make<SubagentRunView>();
-        const foregroundOutcome = yield* Deferred.make<SubagentRunView>();
+        let evictedRecord: RunRecord | undefined;
         const reserved = yield* withLock(
           Effect.gen(function* () {
             if (closed)
@@ -1547,6 +1552,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                   message: `Subagent history/outbox capacity reached (${MAX_RETAINED_RUNS}); unresolved or claimed reports or cleanup ownership must be resolved before another run can start.`,
                 });
               records.delete(candidate.view.id);
+              evictedRecord = candidate;
               for (const [slot, notification] of pendingActionNotifications)
                 if (notification.id === candidate.view.id) pendingActionNotifications.delete(slot);
               publish();
@@ -1561,10 +1567,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             const id = `agent-${runtimeNamespace}-${ordinal}`;
             const name = requestedName || `subagent-${ordinal}`;
             const assignmentAttemptToken = allocateAssignmentAttemptToken();
-            const foregroundClaim =
-              request.execution === "foreground"
-                ? { generation: 1, claimToken: allocateClaimToken() }
-                : undefined;
             const view: SubagentRunView = {
               id,
               name,
@@ -1580,7 +1582,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               },
               cwd: canonicalWriterCwd?.path ?? request.cwd,
               state: "starting",
-              execution: request.execution,
               context: request.context,
               writeIntent: request.writeIntent,
               fastMode: request.fastMode,
@@ -1588,7 +1589,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               runtime: request.runtime,
               closeOnReport: request.closeOnReport,
               reportGeneration: 0,
-              backend: request.backend,
               capabilities: driver.capabilities,
               model: request.model,
               effort: request.effort,
@@ -1624,12 +1624,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               launch,
               activeTools: new Map(),
               settlement,
-              foregroundOutcome,
-              foregroundWaitPending: request.execution === "foreground",
-              ...(foregroundClaim ? { foregroundCompletionClaim: foregroundClaim } : {}),
               pauseRequested: false,
               stoppedByParent: false,
               cleanupPending: false,
+              runStateReclaimState: "pending",
               ...(canonicalWriterCwd ? { canonicalWriterCwd } : {}),
               ...(writerLeaseScope
                 ? {
@@ -1644,9 +1642,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               completionGeneration: 0,
               warningSlots: emptyRunWarningSlots(),
               completionGenerations: new Map(),
-              completionClaims: new Map(
-                foregroundClaim ? [[foregroundClaim.generation, foregroundClaim.claimToken]] : [],
-              ),
+              completionClaims: new Map(),
               assignment: {
                 epoch: 1,
                 phase: "preparing",
@@ -1671,6 +1667,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           ),
         );
 
+        if (evictedRecord) yield* reclaimRecordRunState(evictedRecord);
         const peerNotice = peerNoticeText(records.values(), reserved.view.id);
         const initialPrompt = taskPrompt(request, peerNotice);
         const initialize = Effect.gen(function* () {
@@ -1763,21 +1760,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                     sanitizeDiagnosticText(Cause.pretty(cause), MAX_ERROR_CHARS),
                   );
               }
-              if (
-                request.execution === "foreground" &&
-                (reserved.view.state === "failed" || reserved.view.state === "stopped")
-              )
-                yield* withLock(
-                  Effect.sync(() => {
-                    const claim = reserved.foregroundCompletionClaim;
-                    reserved.foregroundCompletionClaim = undefined;
-                    reserved.foregroundWaitPending = false;
-                    if (!claim) return;
-                    reserved.completionClaims.delete(claim.generation);
-                    reserved.completionGenerations.delete(claim.generation);
-                    removePendingCompletion(pendingCompletions, reserved.view.id, claim.generation);
-                  }),
-                );
               yield* closeRecordScope(reserved);
             }),
           ),
@@ -1838,79 +1820,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         : {}),
     };
   };
-  const awaitForegroundObservation = (record: RunRecord) =>
-    Deferred.await(record.foregroundOutcome).pipe(
-      Effect.andThen(
-        withLock(
-          Effect.sync(() => observeRecord(record, record.foregroundCompletionClaim?.claimToken)),
-        ),
-      ),
-    );
-  const releaseForegroundObservation = (record: RunRecord, rendered: boolean) =>
-    withLock(
-      Effect.sync(() => {
-        record.foregroundWaitPending = false;
-        const claim = record.foregroundCompletionClaim;
-        if (claim) {
-          record.foregroundCompletionClaim = undefined;
-          if (releaseCompletionClaim(record, claim.generation, claim.claimToken))
-            queuePendingCompletion(pendingCompletions, record, claim.generation);
-        }
-        if (rendered) return undefined;
-        const view = record.view;
-        if (view.state === "waiting_for_parent" && view.question)
-          return {
-            type: "question" as const,
-            id: view.id,
-            name: view.name,
-            requestId: view.question.requestId,
-            message: view.question.message,
-          };
-        return undefined;
-      }),
-    ).pipe(
-      Effect.flatMap((notification) =>
-        scheduleCompletionFlush.pipe(
-          Effect.andThen(
-            notification ? queueActionNotification(record, notification) : Effect.void,
-          ),
-        ),
-      ),
-    );
-  const acquireForegroundRecord = (id: string) =>
-    withLock(Effect.map(requireRecord(id), (record) => ({ record })));
-  const withForegroundObservation: SubagentServiceShape["withForegroundObservation"] = (id, use) =>
-    Effect.acquireUseRelease(
-      acquireForegroundRecord(id),
-      ({ record }) => awaitForegroundObservation(record).pipe(Effect.flatMap(use)),
-      ({ record }, exit) => releaseForegroundObservation(record, Exit.isSuccess(exit)),
-    );
-  const withForegroundStartObservation: SubagentServiceShape["withForegroundStartObservation"] = (
-    request,
-    use,
-  ) => {
-    if (request.execution !== "foreground")
-      return Effect.fail(
-        new InvalidSubagentRequestError({
-          code: "foreground_execution_required",
-          message: "Atomic foreground start observation requires execution=foreground.",
-        }),
-      );
-    return Effect.acquireUseRelease(
-      start(request).pipe(
-        Effect.flatMap((started) =>
-          acquireForegroundRecord(started.id).pipe(
-            Effect.map(({ record }) => ({ record, started })),
-          ),
-        ),
-      ),
-      ({ record, started }) => use(started, awaitForegroundObservation(record)),
-      ({ record }, exit) => releaseForegroundObservation(record, Exit.isSuccess(exit)),
-    );
-  };
-  const waitForForeground: SubagentServiceShape["waitForForeground"] = (id) =>
-    withForegroundObservation(id, (observation) => Effect.succeed(observation.run));
-
   const consumeCompletions: SubagentServiceShape["consumeCompletions"] = (receipts) =>
     withLock(
       Effect.sync(() => {
@@ -2163,6 +2072,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                         ? `Subagent ${id} is retained after report generation ${selected.view.reportGeneration}; use subagent_send to begin its next assignment on the same backend resource.`
                         : `Subagent ${id} cannot resume while ${selected.view.state}.`,
                   });
+                if (!hasCompletionGenerationCapacity(selected))
+                  return yield* new InvalidSubagentRequestError({
+                    code: "report_delivery_backlog",
+                    message: `Subagent ${id} has ${selected.completionGenerations.size} unresolved outcome generations; wait for parent delivery or claim the latest outcome before resuming.`,
+                  });
                 if (selected.view.writeIntent === "writer") {
                   if (writerLeases.platform === "win32")
                     return yield* new UnsupportedSafeWriterOwnershipError({
@@ -2187,13 +2101,14 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                   if (!selected.resumeToken)
                     return yield* new InvalidSubagentRequestError({
                       code: "backend_resume_unavailable",
-                      message: `Subagent ${id} cannot resume because ${selected.view.host ?? "its backend"}/${selected.view.runtime ?? selected.view.backend} did not provide continuation state.`,
+                      message: `Subagent ${id} cannot resume because ${selected.view.host}/${selected.view.runtime} did not provide continuation state.`,
                     });
                 }
                 const attemptToken = allocateAssignmentAttemptToken();
                 selected.settlement = nextSettlement;
                 selected.pauseRequested = false;
                 selected.pauseOutcome = undefined;
+                selected.pausedAssignmentEpoch = undefined;
                 selected.activeTools.clear();
                 selected.notificationGeneration += 1;
                 selected.questionNotificationGeneration = selected.notificationGeneration;
@@ -2247,6 +2162,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                     record.scope = nextScope;
                     record.cleanupPending = false;
                     record.closingScope = undefined;
+                    record.closingScopeSettled = undefined;
                     record.writerLease = undefined;
                     record.writerLeaseScope = nextWriterLeaseScope;
                     record.writerLeasePreparationState = nextWriterLeaseScope
@@ -2390,7 +2306,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     renameBackend,
     publish,
     sendPeerNotices,
-    deliverForeground,
     failPendingResponses,
     closeRecordScope,
     settle,
@@ -2401,9 +2316,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const service: SubagentServiceShape = {
     start,
     startSessionOwned,
-    withForegroundStartObservation,
-    waitForForeground,
-    withForegroundObservation,
     awaitTerminal,
     withAwaitTerminalObservations,
     list,
@@ -2434,8 +2346,19 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               record,
               new SubagentRuntimeClosedError({ message: "Parent session shut down." }),
             );
-            record.cleanupPending = true;
-            return closeRecordScope(record);
+            if (record.closingScope !== record.scope) record.cleanupPending = true;
+            return closeRecordScope(record).pipe(
+              Effect.andThen(
+                withLock(Effect.sync(() => !record.cleanupPending && record.process === undefined)),
+              ),
+              Effect.flatMap((safeToReclaim) =>
+                safeToReclaim
+                  ? reclaimRecordRunState(record).pipe(
+                      Effect.catch(() => retainCleanupQuarantine(record, record.scope)),
+                    )
+                  : Effect.void,
+              ),
+            );
           },
           { concurrency: 8, discard: true },
         ),

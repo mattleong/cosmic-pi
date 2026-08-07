@@ -70,6 +70,7 @@ function fakeChildLayer(
     readonly omitSessionFile?: boolean;
     readonly stateThinkingLevel?: string;
     readonly onRelease?: ((spawnIndex: number) => void) | undefined;
+    readonly failReclaim?: boolean | undefined;
     readonly initialFailures?: ReadonlyArray<{
       readonly spawnIndex: number;
       readonly type: RpcCommand["type"];
@@ -83,9 +84,20 @@ function fakeChildLayer(
   } = {},
 ) {
   const controls: FakeChildControl[] = [];
+  const reclaimedRunIds: string[] = [];
   let nextSpawnIndex = 0;
   let remainingInitialStateDrops = options.dropInitialState ? Number.POSITIVE_INFINITY : 0;
   const layer: Layer.Layer<ChildProcess> = Layer.succeed(ChildProcess, {
+    reclaimRunState: ({ runId }) =>
+      Effect.gen(function* () {
+        reclaimedRunIds.push(runId);
+        if (options.failReclaim)
+          return yield* new SubagentProcessError({
+            operation: "reclaim run state",
+            code: "fixture_reclaim_failed",
+            message: "Fixture run-state reclamation failed.",
+          });
+      }),
     spawn: (launch) =>
       Effect.acquireRelease(
         Effect.gen(function* () {
@@ -291,7 +303,7 @@ function fakeChildLayer(
         ({ release }) => release,
       ).pipe(Effect.map(({ handle }) => handle)),
   });
-  return { controls, layer };
+  return { controls, reclaimedRunIds, layer };
 }
 
 const profileLayerFor = (global: unknown) =>
@@ -368,7 +380,7 @@ function fakeWriterLeaseLayer(
       const lease: WriterLease = {
         canonicalCwd: cwd.path,
         filesystemIdentityDigest: cwd.digest,
-        leasePath: `/private-agent/writer-leases/${cwd.digest}.lease`,
+        leasePath: `/private-agent/writer-leases-v2/${cwd.digest}.lease`,
         ownershipToken,
         evidence: {
           version: 2,
@@ -450,6 +462,7 @@ function fakeRetainedBackendLayer(
     runtime: "claude",
     capabilities: options.capabilities ?? ["steer", "rename-display"],
     supportsContext: (context) => context === "fresh",
+    preflight: () => Effect.void,
     spawn: () =>
       Effect.acquireRelease(
         Effect.gen(function* () {
@@ -546,10 +559,8 @@ const request = (overrides: Partial<StartSubagentRequest> = {}): StartSubagentRe
   host: "local",
   runtime: "pi",
   closeOnReport: true,
-  backend: "pi",
   task: "Inspect authentication",
   cwd: "/project",
-  execution: "background",
   context: "fresh",
   writeIntent: "read-only",
   fastMode: false,
@@ -879,6 +890,43 @@ describe("SubagentService", () => {
         { type: "tool", toolName: "read", target: "src/auth.ts", state: "completed" },
         { type: "assistant", text: "Review complete." },
       ]);
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+      expect(fake.reclaimedRunIds).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("reclaims completed local Pi run state when the session scope ends", () =>
+    Effect.gen(function* () {
+      const fake = fakeChildLayer();
+      const projections: SubagentProjection[] = [];
+      const layer = serviceLayer({
+        publish: (projection) => projections.push(projection),
+      }).pipe(Layer.provide(fake.layer));
+
+      const runId = yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(request({ name: "session-reclaim" }));
+        fake.controls[0]?.offer({ type: "agent_settled" });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+        expect(fake.reclaimedRunIds).toEqual([]);
+        return run.id;
+      }).pipe(Effect.scoped, Effect.provide(layer));
+
+      expect(fake.reclaimedRunIds).toEqual([runId]);
+    }),
+  );
+
+  it.effect("quarantines a stopped run when private state reclamation fails", () => {
+    const fake = fakeChildLayer(Effect.void, { failReclaim: true });
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "reclaim-failure" }));
+      const stopped = yield* service.stop(run.id);
+      expect(stopped.state).toBe("stopped");
+      expect(stopped.warning).toContain("remains quarantined");
+      expect(fake.reclaimedRunIds).toEqual([run.id]);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -1376,6 +1424,37 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("caps resumed runs at 64 unresolved report generations", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      notify: (notification) =>
+        notification.type === "completed" ? { deliveredCompletionKeys: [] } : undefined,
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "resume-backlog" }));
+      for (let generation = 1; generation <= 64; generation += 1) {
+        fake.controls[generation - 1]?.offer({ type: "agent_settled" });
+        yield* yieldUntil(
+          () =>
+            projections.at(-1)?.runs[0]?.state === "completed" &&
+            projections.at(-1)?.runs[0]?.reportGeneration === generation,
+        );
+        if (generation < 64)
+          yield* service.resume(run.id, `Continue assignment ${generation + 1}.`);
+      }
+
+      const failure = yield* service.resume(run.id, "Exceed the backlog.").pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "report_delivery_backlog",
+      });
+      expect(fake.controls).toHaveLength(64);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("rolls back a raced retained start and never reuses its assignment epoch", () => {
     const backend = fakeRetainedBackendLayer();
     const projections: SubagentProjection[] = [];
@@ -1839,7 +1918,7 @@ describe("SubagentService", () => {
     }).pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
       const service = yield* SubagentService;
-      const first = yield* service.start(request({ name: "reader-one", execution: "foreground" }));
+      const first = yield* service.start(request({ name: "reader-one" }));
       fake.controls[0]?.offer({
         type: "extension_ui_request",
         id: "dialog-1",
@@ -1864,7 +1943,7 @@ describe("SubagentService", () => {
       });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
 
-      const waiting = yield* service.waitForForeground(first.id);
+      const waiting = yield* service.status(first.id);
       expect(waiting.question?.message).toBe("Which API should I use?");
       const guidanceFailure = yield* Effect.flip(service.send(first.id, "Use the public API."));
       expect(guidanceFailure.message).toContain(
@@ -1961,259 +2040,6 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.effect("notifies after a foreground waiter returns on a blocking question", () => {
-    const fake = fakeChildLayer();
-    const notifications: SubagentNotification[] = [];
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      notify: (notification) => notifications.push(notification),
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
-
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const run = yield* service.start(
-        request({ name: "foreground-reader", execution: "foreground" }),
-      );
-      fake.controls[0]?.offerIpc({
-        channel: "pi-subagents",
-        type: "contact_parent",
-        requestId: "question-1",
-        kind: "question",
-        message: "First question?",
-      });
-      const waiting = yield* service.waitForForeground(run.id);
-      expect(waiting.state).toBe("waiting_for_parent");
-      expect(notifications).toEqual([]);
-      yield* service.reply(run.id, "First answer.");
-
-      fake.controls[0]?.offerIpc({
-        channel: "pi-subagents",
-        type: "contact_parent",
-        requestId: "question-2",
-        kind: "question",
-        message: "Second question?",
-      });
-      yield* yieldUntil(() => notifications.length === 1);
-      expect(notifications[0]).toMatchObject({
-        type: "question",
-        requestId: "question-2",
-      });
-      yield* service.reply(run.id, "Second answer.");
-      fake.controls[0]?.offer({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Foreground report." }],
-        },
-      });
-      fake.controls[0]?.offer({ type: "agent_settled" });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-      yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => notifications.length === 2);
-      expect(notifications[1]).toMatchObject({
-        type: "completed",
-        runs: [{ id: run.id, finalText: "Foreground report." }],
-      });
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("releases a foreground claim when startup fails before observation ownership", () => {
-    const fake = fakeChildLayer(Effect.void, {
-      initialFailures: [{ spawnIndex: 0, type: "get_state", error: "startup failed" }],
-    });
-    const notifications: SubagentNotification[] = [];
-    const layer = serviceLayer({
-      notify: (notification) => notifications.push(notification),
-    }).pipe(Layer.provide(fake.layer));
-
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      expect(
-        yield* service
-          .start(request({ name: "foreground-start-failure", execution: "foreground" }))
-          .pipe(Effect.flip),
-      ).toBeDefined();
-      const [failed] = yield* service.list;
-      expect(failed).toMatchObject({ name: "foreground-start-failure", state: "failed" });
-      const [observed] = yield* service.awaitTerminal([failed!.id], "all_finished");
-      expect(observed).toMatchObject({ id: failed!.id, state: "failed" });
-      yield* TestClock.adjust("1 second");
-      expect(notifications).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect("requeues a failed foreground outcome when rendering fails", () => {
-    const fake = fakeChildLayer();
-    const notifications: SubagentNotification[] = [];
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      notify: (notification) => notifications.push(notification),
-      publish: (projection) => projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
-
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const run = yield* service.start(
-        request({ name: "foreground-failure", execution: "foreground" }),
-      );
-      const rendering = yield* service
-        .withForegroundObservation(run.id, () => Effect.fail("render failed"))
-        .pipe(Effect.flip, Effect.forkScoped);
-      yield* Effect.yieldNow;
-      fake.controls[0]?.exit(1);
-      expect(yield* Fiber.join(rendering)).toBe("render failed");
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-      yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => notifications.length === 1);
-      expect(notifications[0]).toMatchObject({
-        type: "completed",
-        runs: [{ id: run.id, generation: 1, outcome: "failed" }],
-      });
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
-  it.effect(
-    "requeues a foreground report when a later batch start is gated and the owner cancels",
-    () => {
-      let spawnCount = 0;
-      let secondSpawnGate!: Deferred.Deferred<void>;
-      const fake = fakeChildLayer(
-        Effect.suspend(() => (++spawnCount === 2 ? Deferred.await(secondSpawnGate) : Effect.void)),
-      );
-      const notifications: SubagentNotification[] = [];
-      const projections: SubagentProjection[] = [];
-      const layer = serviceLayer({
-        notify: (notification) => notifications.push(notification),
-        publish: (projection) => projections.push(projection),
-      }).pipe(Layer.provide(fake.layer));
-      return Effect.gen(function* () {
-        secondSpawnGate = yield* Deferred.make<void>();
-        const service = yield* SubagentService;
-        const batch = yield* service
-          .withForegroundStartObservation(
-            request({ name: "batch-foreground", execution: "foreground" }),
-            (_started, awaitObservation) =>
-              Effect.gen(function* () {
-                const background = yield* service
-                  .startSessionOwned(request({ name: "gated-background" }))
-                  .pipe(Effect.forkScoped);
-                yield* Fiber.join(background);
-                return yield* awaitObservation;
-              }),
-          )
-          .pipe(Effect.forkScoped);
-        yield* yieldUntil(() => spawnCount === 2);
-        fake.controls[0]?.offer({
-          type: "message_end",
-          message: { role: "assistant", content: [{ type: "text", text: "Held report." }] },
-        });
-        fake.controls[0]?.offer({ type: "agent_settled" });
-        yield* yieldUntil(
-          () =>
-            projections
-              .at(-1)
-              ?.runs.some(
-                (candidate) =>
-                  candidate.name === "batch-foreground" && candidate.state === "completed",
-              ) === true,
-        );
-
-        yield* Fiber.interrupt(batch);
-        yield* TestClock.adjust("100 millis");
-        yield* yieldUntil(() => notifications.some((value) => value.type === "completed"));
-        expect(notifications).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              type: "completed",
-              runs: [expect.objectContaining({ finalText: "Held report." })],
-            }),
-          ]),
-        );
-        yield* Deferred.succeed(secondSpawnGate, undefined);
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    },
-  );
-
-  it.effect(
-    "requeues a foreground question when a later batch start is gated and the owner cancels",
-    () => {
-      let spawnCount = 0;
-      let secondSpawnGate!: Deferred.Deferred<void>;
-      const fake = fakeChildLayer(
-        Effect.suspend(() => (++spawnCount === 2 ? Deferred.await(secondSpawnGate) : Effect.void)),
-      );
-      const notifications: SubagentNotification[] = [];
-      const projections: SubagentProjection[] = [];
-      const layer = serviceLayer({
-        notify: (notification) => notifications.push(notification),
-        publish: (projection) => projections.push(projection),
-      }).pipe(Layer.provide(fake.layer));
-      return Effect.gen(function* () {
-        secondSpawnGate = yield* Deferred.make<void>();
-        const service = yield* SubagentService;
-        const batch = yield* service
-          .withForegroundStartObservation(
-            request({ name: "batch-question", execution: "foreground" }),
-            (_started, awaitObservation) =>
-              Effect.gen(function* () {
-                const background = yield* service
-                  .startSessionOwned(request({ name: "gated-question-peer" }))
-                  .pipe(Effect.forkScoped);
-                yield* Fiber.join(background);
-                return yield* awaitObservation;
-              }),
-          )
-          .pipe(Effect.forkScoped);
-        yield* yieldUntil(() => spawnCount === 2);
-        fake.controls[0]?.offerIpc({
-          channel: "pi-subagents",
-          type: "contact_parent",
-          requestId: "held-question",
-          kind: "question",
-          message: "Which branch?",
-        });
-        yield* yieldUntil(
-          () =>
-            projections
-              .at(-1)
-              ?.runs.some(
-                (candidate) =>
-                  candidate.name === "batch-question" && candidate.state === "waiting_for_parent",
-              ) === true,
-        );
-
-        yield* Fiber.interrupt(batch);
-        yield* yieldUntil(() => notifications.some((value) => value.type === "question"));
-        expect(notifications).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              type: "question",
-              requestId: "held-question",
-              message: "Which branch?",
-            }),
-          ]),
-        );
-        yield* Deferred.succeed(secondSpawnGate, undefined);
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    },
-  );
-
-  it.effect("releases a foreground waiter when the run is interrupted", () => {
-    const fake = fakeChildLayer();
-    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
-      const run = yield* service.start(
-        request({ name: "foreground-pause", execution: "foreground" }),
-      );
-      const waiting = yield* service.waitForForeground(run.id).pipe(Effect.forkScoped);
-      const paused = yield* service.interrupt(run.id);
-      expect(paused.state).toBe("paused");
-      expect((yield* Fiber.join(waiting)).state).toBe("paused");
-    }).pipe(Effect.scoped, Effect.provide(layer));
-  });
-
   it.effect("finishes an accepted interrupt after its requesting fiber is cancelled", () => {
     const fake = fakeChildLayer();
     const projections: SubagentProjection[] = [];
@@ -2295,6 +2121,27 @@ describe("SubagentService", () => {
       const resumed = yield* service.resume(run.id);
       expect(resumed.state).toBe("running");
       expect(resumed.question).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("ignores child settlement that arrives after interruption is confirmed", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "settled-after-pause" }));
+      expect((yield* service.interrupt(run.id)).state).toBe("paused");
+
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+
+      expect(yield* service.status(run.id)).toMatchObject({
+        state: "paused",
+        reportGeneration: 0,
+      });
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -2386,6 +2233,7 @@ describe("SubagentService", () => {
         runtime: "pi",
         capabilities: ["steer"],
         supportsContext: (context) => context === "fresh",
+        preflight: () => Effect.void,
         spawn: () =>
           Effect.gen(function* () {
             yield* Effect.addFinalizer(() =>
@@ -3052,25 +2900,34 @@ describe("SubagentService", () => {
   it.effect("keeps a run stopped when startup finishes late", () =>
     Effect.gen(function* () {
       const spawnGate = yield* Deferred.make<void>();
-      const fake = fakeChildLayer(Deferred.await(spawnGate));
+      const cleanupOrder: string[] = [];
+      const fake = fakeChildLayer(Deferred.await(spawnGate), {
+        onRelease: () => cleanupOrder.push("backend"),
+      });
       const projections: SubagentProjection[] = [];
-      const layer = serviceLayer({
-        publish: (projection) => projections.push(projection),
-      }).pipe(Layer.provide(fake.layer));
+      const layer = serviceLayer(
+        { publish: (projection) => projections.push(projection) },
+        profileLayerFor({}),
+        fakeWriterLeaseLayer({ onRelease: () => cleanupOrder.push("lease") }),
+      ).pipe(Layer.provide(fake.layer));
 
       yield* Effect.gen(function* () {
         const service = yield* SubagentService;
         const starting = yield* service
-          .start(request({ name: "slow-start" }))
+          .start(request({ name: "slow-start", writeIntent: "writer" }))
           .pipe(Effect.forkScoped);
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "starting");
         const id = projections.at(-1)?.runs[0]?.id;
         expect(id).toBeDefined();
-        const stopped = yield* service.stop(id!);
-        expect(stopped.state).toBe("stopped");
+        const stopping = yield* service.stop(id!).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        expect(projections.at(-1)?.runs[0]?.state).toBe("stopping");
         yield* Deferred.succeed(spawnGate, undefined);
+        expect((yield* Fiber.join(stopping)).state).toBe("stopped");
         yield* Fiber.await(starting);
         expect((yield* service.status(id!)).state).toBe("stopped");
+        expect(fake.reclaimedRunIds).toContain(id);
+        expect(cleanupOrder).toEqual(["backend", "lease"]);
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );

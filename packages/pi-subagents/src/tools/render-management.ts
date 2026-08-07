@@ -13,23 +13,60 @@ export interface SemanticOutcomeBanner {
   readonly text: string;
 }
 
-export const failureRecovery = (code: string | undefined, message: string): string => {
-  const key = `${code ?? ""} ${message}`.toLowerCase();
-  if (key.includes("notfound") || key.includes("not found"))
+export const failureRecovery = (
+  code: string | undefined,
+  message: string,
+  context: "start" | "action" = "action",
+): string => {
+  const normalizedCode = code?.toLowerCase() ?? "";
+  const normalizedMessage = message.toLowerCase();
+  if (context === "start") {
+    if (
+      normalizedCode.includes("profile") ||
+      normalizedCode.includes("candidate") ||
+      normalizedCode.includes("auth") ||
+      normalizedCode.includes("harness") ||
+      normalizedCode.includes("model") ||
+      normalizedCode.includes("unsupported") ||
+      normalizedCode.includes("confinement") ||
+      normalizedCode.includes("readiness")
+    )
+      return "Inspect the effective route with subagent_models or choose a compatible route in /subagents profiles.";
+    if (normalizedCode.includes("capacity") || normalizedCode.includes("writer"))
+      return "Resolve the reported capacity or writer-ownership constraint, then retry the launch.";
+    return "Review the launch failure and profile route before retrying.";
+  }
+  if (
+    normalizedCode.includes("notfound") ||
+    normalizedCode.includes("not_found") ||
+    normalizedMessage.includes("not found")
+  )
     return "Refresh run IDs with subagent_list.";
-  if (key.includes("capabil") || key.includes("unsupported"))
+  if (normalizedCode.includes("completion_claim_conflict"))
+    return "Wait for or cancel the operation that already owns this completion, then retry.";
+  if (normalizedCode.includes("report_delivery_backlog"))
+    return "Wait for automatic outcome delivery or claim the current outcome with subagent_await, then retry.";
+  if (normalizedCode.includes("reply_outcome_uncertain"))
+    return "Do not resend the reply automatically; inspect subagent_status and wait for the run's next event.";
+  if (normalizedCode.includes("question_ownership_mismatch"))
+    return "The question is no longer pending; refresh the run with subagent_status before taking another action.";
+  if (
+    normalizedCode.includes("waiting_for_parent") ||
+    normalizedCode.includes("parent_question") ||
+    normalizedMessage.includes("waiting for a parent reply")
+  )
+    return "Reply with subagent_reply, then await the run again.";
+  if (normalizedCode.includes("capability") || normalizedCode.includes("unsupported"))
     return "Inspect the run's capabilities with subagent_status.";
   if (
-    key.includes("profile") ||
-    key.includes("candidate") ||
-    key.includes("auth") ||
-    key.includes("harness") ||
-    key.includes("model")
+    normalizedCode.includes("profile") ||
+    normalizedCode.includes("candidate") ||
+    normalizedCode.includes("auth") ||
+    normalizedCode.includes("harness") ||
+    normalizedCode.includes("model")
   )
     return "Inspect the effective route with subagent_models or edit it with /subagents profiles.";
-  if (key.includes("waiting") || key.includes("question"))
-    return "Reply with subagent_reply, then await the run again.";
-  return "Review the failure detail and resolve it before retrying.";
+  return "Review the failure detail and current subagent_status before retrying.";
 };
 
 const friendlyCandidateRoute = (value: string, fastModeApplied: boolean): string => {
@@ -87,7 +124,7 @@ class ProfileRoutesComponent implements Component {
     const lines: string[] = [
       this.theme.fg(
         "accent",
-        `Profile routes · static eligibility only${this.details.defaultProfile ? ` · fallback ${this.details.defaultProfile}` : ""}`,
+        `Profile routes · static eligibility only${this.details.fallbackProfile ? ` · fallback ${this.details.fallbackProfile}` : ""}`,
       ),
     ];
     for (const profile of profiles) {
@@ -103,7 +140,7 @@ class ProfileRoutesComponent implements Component {
       lines.push(
         this.theme.fg(
           color,
-          `• ${profile.id}${profile.isDefault ? " · implicit fallback" : ""} · ${profileSource(profile.source)} · ${eligible}/${profile.candidates.length} eligible${first ? ` · ${first}` : " · disabled"}`,
+          `• ${profile.id}${profile.isDefault ? " · when omitted" : ""} · ${profileSource(profile.source)} · ${eligible}/${profile.candidates.length} eligible${first ? ` · ${first}` : " · disabled"}`,
         ),
       );
       if (!this.expanded) continue;
@@ -170,7 +207,7 @@ const actionSummary = (details: CompactSubagentToolDetails): SemanticOutcomeBann
     case "interrupt":
       return {
         color: failed > 0 ? "warning" : "success",
-        text: `Pause · ${count} updated${failed > 0 ? ` · ${failed} failed` : ""}`,
+        text: `Interrupt · ${count} paused${failed > 0 ? ` · ${failed} failed` : ""}`,
       };
     case "resume":
       return {

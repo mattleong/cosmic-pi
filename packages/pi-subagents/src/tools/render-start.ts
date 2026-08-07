@@ -26,7 +26,7 @@ export const renderStartFailures = (
         raw.length <= maximum
           ? raw
           : `${safeTextPrefix(raw, Math.max(0, maximum - marker.length))}${marker}`;
-      const recovery = failureRecovery(failure.code, failure.message);
+      const recovery = failureRecovery(failure.code, failure.message, "start");
       return `${summary}\n${theme.fg("dim", detail)}\n${theme.fg("accent", `Next: ${recovery}`)}`;
     })
     .join("\n");

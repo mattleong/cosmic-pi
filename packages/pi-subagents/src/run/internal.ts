@@ -57,24 +57,25 @@ export interface RunRecord {
   launch: BackendLaunchRequest;
   resumeToken?: BackendResumeToken | undefined;
   process?: BackendHandle | undefined;
+  backendSpawnAttempt?:
+    | { readonly scope: Scope.Closeable; readonly settled: Deferred.Deferred<void> }
+    | undefined;
   readonly activeTools: Map<string, string>;
   settlement: Deferred.Deferred<SubagentRunView>;
-  readonly foregroundOutcome: Deferred.Deferred<SubagentRunView>;
-  foregroundWaitPending: boolean;
-  foregroundCompletionClaim?:
-    | { readonly generation: number; readonly claimToken: string }
-    | undefined;
   pauseOutcome?: Deferred.Deferred<SubagentRunView, SubagentError> | undefined;
   latestAssistantText?: string | undefined;
   pauseRequested: boolean;
+  pausedAssignmentEpoch?: number | undefined;
   stoppedByParent: boolean;
   cleanupPending: boolean;
+  runStateReclaimState: "pending" | "running" | "reclaimed";
   readonly canonicalWriterCwd?: CanonicalWriterCwd | undefined;
   writerLease?: WriterLease | undefined;
   writerLeaseScope?: Scope.Closeable | undefined;
   writerLeasePreparationState?: "pending" | "running" | "settled" | undefined;
   writerLeaseReleaseState?: { authorized: boolean } | undefined;
   closingScope?: Scope.Closeable | undefined;
+  closingScopeSettled?: Deferred.Deferred<void> | undefined;
   initializationPending: boolean;
   pendingInitializationSettlement?: PendingInitializationSettlement | undefined;
   replyPendingRequestId?: string | undefined;

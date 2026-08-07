@@ -1,10 +1,8 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
-  LEGACY_PROFILE_ID,
   PROFILE_CANDIDATE_EFFORTS,
   PROFILE_IDS,
-  PROFILE_INPUT_IDS,
   type DeclaredProfileRoute,
   type ProfileCandidate,
   type ProfileId,
@@ -31,10 +29,9 @@ export interface DecodedSubagentConfig {
   readonly diagnostics: ReadonlyArray<string>;
   readonly invalidProfileRoutes: ReadonlyArray<ProfileId>;
   readonly unsupportedVersion: boolean;
-  readonly legacyVersion3: boolean;
 }
 
-export const ProfileIdSchema = Schema.Literals(PROFILE_INPUT_IDS);
+export const ProfileIdSchema = Schema.Literals(PROFILE_IDS);
 export const ProfileHostSchema = Schema.Literals(["local", "herdr"] as const);
 export const ProfileRuntimeSchema = Schema.Literals(["pi", "claude", "codex"] as const);
 export const ProfileEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
@@ -113,10 +110,6 @@ export const isNativeProfileModelSelector = (runtime: string, selector: string):
     model.split("/").every((segment) => segment !== "." && segment !== ".." && segment.length > 0)
   );
 };
-
-/** Compatibility name retained for callers validating Pi-native selectors. */
-export const isCanonicalProfileModelSelector = (selector: string): boolean =>
-  isNativeProfileModelSelector("pi", selector);
 
 export const decodeProfileCandidate = (value: unknown): ProfileCandidate | undefined => {
   const record = decodedRecord(value);
@@ -197,18 +190,16 @@ const decodeRoute = (
   return invalid ? undefined : candidates;
 };
 
-/** Field-tolerant v4 unknown-boundary decode for one global or project document. */
+/** Strict version-4 unknown-boundary decode for one global or project document. */
 export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedSubagentConfig {
   const diagnostics: string[] = [];
   const decodedRoot = decodedRecord(input);
   const rawRoot = decodedRoot ?? {};
   if (!decodedRoot) diagnostics.push(scope);
-  if (!ownKeysAre(rawRoot, new Set(["version", "defaultProfile", "profiles"])))
+  if (!ownKeysAre(rawRoot, new Set(["version", "profiles"])))
     diagnostics.push(`${scope}.<unknown>`);
 
   const versionField = readField(rawRoot, "version", `${scope}.version`, diagnostics);
-  // `defaultProfile` is accepted as a deprecated no-op and removed on the next settings write.
-  readField(rawRoot, "defaultProfile", `${scope}.defaultProfile`, diagnostics);
   const profilesField = readField(rawRoot, "profiles", `${scope}.profiles`, diagnostics);
   const decodedProfiles = decodedRecord(profilesField.value);
   if (profilesField.present && !decodedProfiles) diagnostics.push(`${scope}.profiles`);
@@ -216,24 +207,14 @@ export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedS
   const profiles: Partial<Record<ProfileId, DeclaredProfileRoute>> = {};
   const invalidProfileRoutes: ProfileId[] = [];
   for (const id of PROFILE_IDS) {
-    const canonicalPath = `${scope}.profiles.${id}`;
-    const canonicalField = readField(profileRecord, id, canonicalPath, diagnostics);
-    const legacyPath = `${scope}.profiles.${LEGACY_PROFILE_ID}`;
-    const legacyField =
-      id === "generalist"
-        ? readField(profileRecord, LEGACY_PROFILE_ID, legacyPath, diagnostics)
-        : undefined;
-    const field = canonicalField.present ? canonicalField : legacyField;
-    if (!field?.present) continue;
-    const route = decodeRoute(
-      field.value,
-      canonicalField.present ? canonicalPath : legacyPath,
-      diagnostics,
-    );
+    const path = `${scope}.profiles.${id}`;
+    const field = readField(profileRecord, id, path, diagnostics);
+    if (!field.present) continue;
+    const route = decodeRoute(field.value, path, diagnostics);
     if (route === undefined) invalidProfileRoutes.push(id);
     else profiles[id] = route;
   }
-  if (!ownKeysAre(profileRecord, new Set<string>(PROFILE_INPUT_IDS)))
+  if (!ownKeysAre(profileRecord, new Set<string>(PROFILE_IDS)))
     diagnostics.push(`${scope}.profiles.<unknown>`);
 
   const version = versionField.value;
@@ -248,6 +229,5 @@ export function decodeSubagentConfig(input: unknown, scope = "config"): DecodedS
     diagnostics: [...new Set(diagnostics)],
     invalidProfileRoutes,
     unsupportedVersion,
-    legacyVersion3: version === 3,
   };
 }

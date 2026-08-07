@@ -14,6 +14,7 @@ describe("subagent host notifier", () => {
           id: "agent-1",
           name: "reader",
           generation: 1,
+          outcome: "completed" as const,
           finalText: "## Read report\n\n- Complete.\n  - Nested.\n\n    const value = 1;",
         },
       ],
@@ -41,6 +42,7 @@ describe("subagent host notifier", () => {
           id: "agent-1",
           name: "reader",
           generation: 2,
+          outcome: "completed" as const,
           finalText: "Follow-up report.",
           retained: true,
         },
@@ -122,7 +124,7 @@ describe("subagent host notifier", () => {
 
     notify({
       type: "completed",
-      runs: [{ id: "agent-1", name: "reader", generation: 1 }],
+      runs: [{ id: "agent-1", name: "reader", generation: 1, outcome: "completed" as const }],
     });
 
     expect(sendMessage.mock.calls[0]?.[0].content).toContain("Completed without a final report.");
@@ -132,8 +134,20 @@ describe("subagent host notifier", () => {
     const sendMessage = vi.fn();
     const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
     const runs = [
-      { id: "agent-1", name: "reader", generation: 1, finalText: "Read." },
-      { id: "agent-2", name: "tester", generation: 1, finalText: "Tested." },
+      {
+        id: "agent-1",
+        name: "reader",
+        generation: 1,
+        outcome: "completed" as const,
+        finalText: "Read.",
+      },
+      {
+        id: "agent-2",
+        name: "tester",
+        generation: 1,
+        outcome: "completed" as const,
+        finalText: "Tested.",
+      },
     ];
 
     notify({ type: "completed", runs });
@@ -153,11 +167,18 @@ describe("subagent host notifier", () => {
     notify({
       type: "completed",
       runs: [
-        { id: "agent-1", name: "reader", generation: 1, finalText: "Read." },
+        {
+          id: "agent-1",
+          name: "reader",
+          generation: 1,
+          outcome: "completed" as const,
+          finalText: "Read.",
+        },
         {
           id: "agent-2",
           name: "reviewer",
           generation: 2,
+          outcome: "completed" as const,
           finalText: "Reviewed.",
           retained: true,
         },
@@ -180,11 +201,27 @@ describe("subagent host notifier", () => {
     const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
     const generationTwo = {
       type: "completed" as const,
-      runs: [{ id: "agent-1", name: "reader", generation: 2, finalText: "Second." }],
+      runs: [
+        {
+          id: "agent-1",
+          name: "reader",
+          generation: 2,
+          outcome: "completed" as const,
+          finalText: "Second.",
+        },
+      ],
     };
     const generationOne = {
       type: "completed" as const,
-      runs: [{ id: "agent-1", name: "reader", generation: 1, finalText: "First." }],
+      runs: [
+        {
+          id: "agent-1",
+          name: "reader",
+          generation: 1,
+          outcome: "completed" as const,
+          finalText: "First.",
+        },
+      ],
     };
 
     expect(notify(generationTwo)?.deliveredCompletionKeys).toEqual(["agent-1:2"]);
@@ -201,8 +238,20 @@ describe("subagent host notifier", () => {
     const delivery = notify({
       type: "completed",
       runs: [
-        { id: "agent-1", name: "reader", generation: 1, finalText: report },
-        { id: "agent-2", name: "tester", generation: 1, finalText: report },
+        {
+          id: "agent-1",
+          name: "reader",
+          generation: 1,
+          outcome: "completed" as const,
+          finalText: report,
+        },
+        {
+          id: "agent-2",
+          name: "tester",
+          generation: 1,
+          outcome: "completed" as const,
+          finalText: report,
+        },
       ],
     });
 
@@ -226,7 +275,15 @@ describe("subagent host notifier", () => {
     const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
     const completion = {
       type: "completed" as const,
-      runs: [{ id: "agent-1", name: "reader", generation: 1, finalText: "Done." }],
+      runs: [
+        {
+          id: "agent-1",
+          name: "reader",
+          generation: 1,
+          outcome: "completed" as const,
+          finalText: "Done.",
+        },
+      ],
     };
 
     expect(notify(completion)?.deliveredCompletionKeys).toEqual([]);
@@ -245,7 +302,13 @@ describe("subagent host notifier", () => {
     notify({
       type: "completed",
       runs: [
-        { id: "agent-1", name: "reader", generation: 1, finalText: "password=hunter2" },
+        {
+          id: "agent-1",
+          name: "reader",
+          generation: 1,
+          outcome: "completed" as const,
+          finalText: "password=hunter2",
+        },
         {
           id: "agent-2",
           name: "tester",

@@ -411,14 +411,33 @@ const failPendingQuestion = (state: NodeChannelState, code: string, message: str
   const pending = state.pendingQuestion;
   if (!pending) return;
   state.pendingQuestion = undefined;
-  void pending.peer.send({
-    version: SUPERVISOR_CHANNEL_VERSION,
-    runId: state.metadata.runId,
-    token: state.token,
-    type: "cancelled",
-    id: pending.requestId,
-  });
+  void pending.peer
+    .send({
+      version: SUPERVISOR_CHANNEL_VERSION,
+      runId: state.metadata.runId,
+      token: state.token,
+      type: "cancelled",
+      id: pending.requestId,
+    })
+    .catch(() => undefined);
   Deferred.doneUnsafe(pending.acknowledgement, Effect.fail(channelError("reply", code, message)));
+};
+
+/**
+ * Cancel one accepted question only after its correlated orchestration event is durably queued.
+ * Contact/report admission keeps one queue slot reserved while a question is pending.
+ */
+const cancelPendingQuestion = (state: NodeChannelState, code: string, message: string): boolean => {
+  const pending = state.pendingQuestion;
+  if (!pending) return false;
+  const offered = Queue.offerUnsafe(state.events, {
+    type: "supervisor_question_cancelled",
+    assignmentEpoch: pending.epoch,
+    requestId: pending.requestId,
+  });
+  if (!offered) return false;
+  failPendingQuestion(state, code, message);
+  return true;
 };
 
 const liveAuthenticatedPeers = (state: NodeChannelState): ReadonlyArray<AuthenticatedPeer> =>
@@ -436,12 +455,14 @@ const sendAuthenticated = (
   peer: AuthenticatedPeer,
   message: Readonly<Record<string, unknown>>,
 ): void => {
-  void peer.send({
-    version: SUPERVISOR_CHANNEL_VERSION,
-    runId: state.metadata.runId,
-    token: state.token,
-    ...message,
-  });
+  void peer
+    .send({
+      version: SUPERVISOR_CHANNEL_VERSION,
+      runId: state.metadata.runId,
+      token: state.token,
+      ...message,
+    })
+    .catch(() => undefined);
 };
 
 const closePeer = (state: NodeChannelState, peer: AuthenticatedPeer): void => {
@@ -449,9 +470,11 @@ const closePeer = (state: NodeChannelState, peer: AuthenticatedPeer): void => {
   const wasAuthenticated = peer.authenticated;
   peer.detach();
   peer.socket.destroy();
+  const affectedEpochUpdates = new Set<Deferred.Deferred<void, SupervisorChannelError>>();
   for (const [id, acknowledgement] of state.epochAcknowledgements) {
     if (acknowledgement.peer !== peer) continue;
     state.epochAcknowledgements.delete(id);
+    affectedEpochUpdates.add(acknowledgement.firstAcknowledgement);
     Deferred.doneUnsafe(
       acknowledgement.deferred,
       Effect.fail(
@@ -463,9 +486,25 @@ const closePeer = (state: NodeChannelState, peer: AuthenticatedPeer): void => {
       ),
     );
   }
+  for (const firstAcknowledgement of affectedEpochUpdates) {
+    const hasLiveUpdate = [...state.epochAcknowledgements.values()].some(
+      (acknowledgement) => acknowledgement.firstAcknowledgement === firstAcknowledgement,
+    );
+    if (!hasLiveUpdate)
+      Deferred.doneUnsafe(
+        firstAcknowledgement,
+        Effect.fail(
+          channelError(
+            "set assignment epoch",
+            "assignment_epoch_outcome_uncertain",
+            "Every assignment epoch acknowledgement transport closed.",
+          ),
+        ),
+      );
+  }
   if (wasAuthenticated) state.readinessGeneration += 1;
   if (state.pendingQuestion?.peer === peer)
-    failPendingQuestion(
+    cancelPendingQuestion(
       state,
       "question_transport_closed",
       "The private supervisor question transport closed before its exact reply was confirmed.",
@@ -635,7 +674,13 @@ const offerReport = (
       MAX_BACKEND_REPORT_EVIDENCE_CHARS,
     ),
   };
-  if (!Queue.offerUnsafe(state.events, report)) {
+  const cancelsQuestion =
+    state.pendingQuestion !== undefined && state.pendingQuestion.epoch <= message.assignmentEpoch;
+  const requiredSlots = state.pendingQuestion === undefined ? 1 : 2;
+  if (
+    Queue.sizeUnsafe(state.events) > EVENT_CAPACITY - requiredSlots ||
+    !Queue.offerUnsafe(state.events, report)
+  ) {
     sendAuthenticated(state, peer, {
       type: "error",
       id: message.id,
@@ -644,8 +689,8 @@ const offerReport = (
     });
     return;
   }
-  if (state.pendingQuestion && state.pendingQuestion.epoch <= message.assignmentEpoch)
-    failPendingQuestion(
+  if (cancelsQuestion)
+    cancelPendingQuestion(
       state,
       "question_cancelled_by_report",
       "The pending supervisor question was cancelled because its assignment report was accepted.",
@@ -677,27 +722,22 @@ const dispatchAuthenticated = (
 ): void => {
   if (message.type === "cancel") {
     const pending = state.pendingQuestion;
-    const cancelled =
+    const ownsQuestion =
       pending !== undefined &&
       pending.requestId === message.targetRequestId &&
       pending.peer === peer;
-    if (cancelled && pending) {
-      const cancellation: SupervisorEvent = {
-        type: "supervisor_question_cancelled",
-        assignmentEpoch: pending.epoch,
-        requestId: pending.requestId,
-      };
-      failPendingQuestion(
+    const cancelled =
+      ownsQuestion &&
+      cancelPendingQuestion(
         state,
         "question_cancelled",
         "The exact pending supervisor question was cancelled by its MCP caller.",
       );
-      Queue.offerUnsafe(state.events, cancellation);
+    if (cancelled)
       sendAuthenticated(state, peer, {
         type: "cancelled",
         id: message.targetRequestId,
       });
-    }
     sendAuthenticated(state, peer, {
       type: "cancel_result",
       id: message.id,
@@ -724,7 +764,7 @@ const dispatchAuthenticated = (
     state.epochAcknowledgements.delete(message.id);
     if (state.pendingAssignmentEpoch === acknowledgement.epoch) {
       if (state.pendingQuestion && state.pendingQuestion.epoch < acknowledgement.epoch)
-        failPendingQuestion(
+        cancelPendingQuestion(
           state,
           "question_assignment_advanced",
           "The pending supervisor question belonged to a prior assignment and was cancelled.",
@@ -871,7 +911,6 @@ const acceptSocket = (state: NodeChannelState, socket: Socket): void => {
 const closeNodeChannel = (state: NodeChannelState): Promise<void> => {
   if (state.closePromise) return state.closePromise;
   state.closed = true;
-  Queue.endUnsafe(state.events);
   for (const waiter of state.readinessWaiters)
     Deferred.doneUnsafe(
       waiter,
@@ -889,6 +928,7 @@ const closeNodeChannel = (state: NodeChannelState): Promise<void> => {
     "channel_closed",
     "The private supervisor channel closed before the pending question settled.",
   );
+  Queue.endUnsafe(state.events);
   state.closePromise = (async () => {
     const serverClose = closeServer(state.server);
     for (const peer of state.peers) {
@@ -1162,17 +1202,24 @@ export const makeSupervisorChannel = (
           const acknowledged = yield* Deferred.await(pending.acknowledgement).pipe(
             Effect.timeoutOption(REPLY_TIMEOUT),
           );
-          if (Option.isNone(acknowledged))
+          if (Option.isNone(acknowledged)) {
+            if (state.pendingQuestion === pending)
+              cancelPendingQuestion(
+                state,
+                "reply_outcome_uncertain",
+                "The exact parent reply was sent but not acknowledged; the question was closed without retry.",
+              );
             return yield* channelError(
               "reply",
               "reply_outcome_uncertain",
               "The exact parent reply was sent but not acknowledged; it will not be retried automatically.",
             );
+          }
         });
 
       const cancelPending = (reason?: string): void => {
         if (!state.pendingQuestion) return;
-        failPendingQuestion(
+        cancelPendingQuestion(
           state,
           "question_cancelled",
           reason?.trim()

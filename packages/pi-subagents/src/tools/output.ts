@@ -24,9 +24,7 @@ const boundedLine = (value: string, maximum: number): string => {
 
 export const formatRun = (run: SubagentRunView, detailed = false): string => {
   const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
-  const host = run.host ?? "local";
-  const runtime = run.runtime ?? run.backend;
-  const route = formatToolRoute(host, runtime, run.model, run.effort, run.fastMode);
+  const route = formatToolRoute(run.host, run.runtime, run.model, run.effort, run.fastMode);
   const header = `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}`;
   if (!detailed) return header;
   const field = (label: string, value: string): string =>
@@ -83,7 +81,7 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     run.finalText
       ? `\nFinal report\n${sanitizeTerminalText(run.finalText)}`
       : run.state === "completed" || run.state === "reported"
-        ? "\nFinal report\nUnavailable in this observation; it may be owned or already delivered."
+        ? "\nFinal report\nUnavailable in this observation; it may be claimed by another subagent_await or already delivered to the parent."
         : undefined,
   ]
     .filter((line): line is string => line !== undefined)

@@ -90,12 +90,13 @@ const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   },
   cwd: "/project",
   state: "running",
-  execution: "background",
   context: "fresh",
   writeIntent: "read-only",
   fastMode: false,
+  host: "local",
+  runtime: "pi",
+  closeOnReport: true,
   reportGeneration: 0,
-  backend: "pi",
   capabilities: [
     "steer",
     "interrupt",
@@ -136,12 +137,13 @@ const profileServiceFor = (
     ),
   );
 
-const defaultProfileService = profileServiceFor(undefined);
+const fallbackProfileService = profileServiceFor(undefined);
 const testBackendDriver = {
   host: "local",
   runtime: "pi",
   capabilities: [],
   supportsContext: () => true,
+  preflight: () => Effect.void,
   spawn: () => Effect.die("unused"),
 } satisfies BackendDriver;
 const testBackendRegistry = {
@@ -168,7 +170,7 @@ const testBackendRegistry = {
 const captureSubagentTools = (
   service: SubagentServiceShape,
   activeTools: ReadonlyArray<string> = ["read"],
-  profileService = defaultProfileService,
+  profileService = fallbackProfileService,
   backendRegistry: SubagentBackendRegistryShape | undefined = undefined,
   environment = { cwd: "/project", projectTrusted: true },
   thinkingLevel: unknown = "high",
@@ -277,13 +279,11 @@ const startCapturingService = (requests: StartSubagentRequest[]) =>
         requests.push(input);
         return view({
           id: `agent-${requests.length}`,
-          backend: input.backend,
           model: input.model,
           selection: input.selection ?? view().selection,
           ...(input.profile ? { profile: input.profile } : {}),
         });
       }),
-    waitForForeground: () => Effect.succeed(view()),
     awaitTerminal: () => Effect.succeed([]),
     list: Effect.succeed([]),
     status: () => Effect.succeed(view()),
@@ -499,24 +499,24 @@ describe("subagent tool", () => {
       }),
     ).toBe(false);
     expect(() => startTool?.prepareArguments?.({ task: "Inspect", profile: "scout" })).toThrow(
-      "[legacy_start_shape]",
+      "[invalid_start_shape]",
     );
     expect(() =>
       startTool?.prepareArguments?.({
         agents: [{ backend: "auto", profile: "scout", task: "Inspect" }],
       }),
-    ).toThrow("[legacy_launch_override]");
+    ).toThrow("[launch_override_not_allowed]");
     expect(() =>
       startTool?.prepareArguments?.({
         agents: [{ model: "openai/model", profile: "scout", task: "Inspect" }],
       }),
-    ).toThrow("[legacy_launch_override]");
+    ).toThrow("[launch_override_not_allowed]");
     for (const field of ["execution", "context", "writeIntent", "effort"])
       expect(() =>
         startTool?.prepareArguments?.({
-          agents: [{ task: "Inspect", [field]: "legacy" }],
+          agents: [{ task: "Inspect", [field]: "override" }],
         }),
-      ).toThrow("[legacy_launch_override]");
+      ).toThrow("[launch_override_not_allowed]");
     expect(tools.get("subagent_start")?.description).toContain("background subagents");
     expect(tools.get("subagent_start")?.description).toContain(
       "selected profile supplies host, runtime, model, effort, context, write intent, fast mode, and closeOnReport",
@@ -642,7 +642,7 @@ describe("subagent tool", () => {
     const managementCard = tools
       .get("subagent_send")
       ?.renderResult?.(
-        { content: [{ type: "text", text: "legacy acknowledgement" }], details: management },
+        { content: [{ type: "text", text: "fallback acknowledgement" }], details: management },
         { isPartial: false, expanded: false },
         theme,
       ) as { readonly render: (width: number) => ReadonlyArray<string> } | undefined;
@@ -780,7 +780,7 @@ describe("subagent tool", () => {
     const awaitTool = captureSubagentTools(
       {} as SubagentServiceShape,
       ["read"],
-      defaultProfileService,
+      fallbackProfileService,
       undefined,
       { cwd: "/project", projectTrusted: true },
       "high",
@@ -870,7 +870,7 @@ describe("subagent tool", () => {
     } as unknown as Theme;
     const component = startTool?.renderResult?.(
       {
-        content: [{ type: "text", text: "legacy progress" }],
+        content: [{ type: "text", text: "fallback progress" }],
         details: makeStartAwaitCardDetails({
           action: "start",
           runs: [view({ id: "agent-2", name: "second-started" })],
@@ -897,7 +897,7 @@ describe("subagent tool", () => {
     expect(rendered.indexOf("second-started")).toBeLessThan(rendered.indexOf("third-failed"));
   });
 
-  it("projects legacy timeout, cancellation, and first-finished await outcomes", () => {
+  it("projects timeout, cancellation, and first-finished await outcomes", () => {
     const running = view({ name: "still-working", state: "running" });
     const completed = view({
       id: "agent-2",
@@ -911,7 +911,7 @@ describe("subagent tool", () => {
     });
     expect(awaitResultBanner({ action: "await", runs: [running], cancelled: true })).toEqual({
       color: "warning",
-      text: "Await cancelled · 1 unfinished",
+      text: "Await canceled · 1 unfinished",
     });
     expect(
       awaitResultBanner({
@@ -1156,7 +1156,6 @@ describe("subagent tool", () => {
     let request: StartSubagentRequest | undefined;
     const service = subagentServiceDouble({
       start: (input) => Effect.sync(() => ((request = input), view())),
-      waitForForeground: () => Effect.succeed(view()),
       awaitTerminal: () => Effect.succeed([view()]),
       list: Effect.succeed([]),
       status: () => Effect.succeed(view()),
@@ -1200,8 +1199,6 @@ describe("subagent tool", () => {
     );
     expect(result?.content[0]?.text).toContain("agent-1");
     expect(request).toMatchObject({
-      backend: "pi",
-      execution: "background",
       context: "fresh",
       model: "openai-codex/gpt-5.6-sol",
       effort: "high",
@@ -1248,7 +1245,6 @@ describe("subagent tool", () => {
 
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({
-      backend: "pi",
       profile: "generalist",
       context: "fresh",
       model: "openai-codex/gpt-5.6-sol",
@@ -1309,31 +1305,6 @@ describe("subagent tool", () => {
     });
   });
 
-  it("accepts delegate as a compatibility alias but records generalist", async () => {
-    const requests: StartSubagentRequest[] = [];
-    const tools = captureSubagentTools(startCapturingService(requests), ["read"]);
-    const tool = tools.get("subagent_start");
-
-    const result = await tool?.execute(
-      "call",
-      { agents: [{ task: "Inspect auth", profile: "delegate" }] },
-      undefined,
-      undefined,
-      context,
-    );
-
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.profile).toBe("generalist");
-    expect(result?.details).toMatchObject({
-      startEntries: [expect.objectContaining({ profile: "generalist" })],
-    });
-
-    const models = await tools
-      .get("subagent_models")
-      ?.execute("call", { profile: "delegate" }, undefined, undefined, context);
-    expect(models?.details).toMatchObject({ profileIds: ["generalist"] });
-  });
-
   it("routes every built-in profile through the tool boundary with its guidance and context", async () => {
     const requests: StartSubagentRequest[] = [];
     const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
@@ -1371,7 +1342,6 @@ describe("subagent tool", () => {
       generalist: "read-only",
     } as const;
     for (const request of requests) {
-      expect(request.backend).toBe("pi");
       expect(request.context).toBe(request.profile === "oracle" ? "fork" : "fresh");
       expect(request.effort).toBe(expectedEffort[request.profile ?? "generalist"]);
       expect(request.writeIntent).toBe(expectedIntent[request.profile ?? "generalist"]);
@@ -1383,23 +1353,6 @@ describe("subagent tool", () => {
         skippedCandidates: [],
       });
     }
-  });
-
-  it("ignores configured defaultProfile and uses generalist when profile is omitted", async () => {
-    const requests: StartSubagentRequest[] = [];
-    const profiles = profileServiceFor({ defaultProfile: "reviewer" });
-    const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles).get(
-      "subagent_start",
-    );
-
-    await tool?.execute("call", { agents: [{ task: "Review" }] }, undefined, undefined, context);
-
-    expect(requests[0]).toMatchObject({
-      profile: "generalist",
-      context: "fresh",
-      selection: { source: "profile-parent-candidate" },
-    });
-    expect(requests[0]?.profileGuidance).toContain("Act as a generalist");
   });
 
   it("uses profile context defaults and never degrades a Pi oracle fork to fresh", async () => {
@@ -1724,7 +1677,7 @@ describe("subagent tool", () => {
       const tools = captureSubagentTools(
         startCapturingService(requests),
         ["read"],
-        defaultProfileService,
+        fallbackProfileService,
         undefined,
         { cwd: "/project", projectTrusted: true },
         thinkingLevel,
@@ -1779,7 +1732,6 @@ describe("subagent tool", () => {
 
   it("starts a per-agent batch and keeps successful launches when one fails", async () => {
     const requests: StartSubagentRequest[] = [];
-    const waited: string[] = [];
     const service = subagentServiceDouble({
       start: (input) =>
         Effect.sync(() => requests.push(input)).pipe(
@@ -1796,18 +1748,11 @@ describe("subagent tool", () => {
                     id: `agent-${index}`,
                     name: input.name ?? `agent-${index}`,
                     task: input.task,
-                    backend: input.backend,
                     model: input.model,
-                    execution: input.execution,
                   }),
                 ),
           ),
         ),
-      waitForForeground: (id) =>
-        Effect.sync(() => {
-          waited.push(id);
-          return view({ id, state: "completed" });
-        }),
       awaitTerminal: () => Effect.succeed([]),
       list: Effect.succeed([]),
       status: () => Effect.succeed(view()),
@@ -1847,10 +1792,8 @@ describe("subagent tool", () => {
       host: "local",
       runtime: "pi",
       model: "openai-codex/gpt-5.6-sol",
-      execution: "background",
       effort: "high",
     });
-    expect(waited).toEqual([]);
     expect(result?.content[0]?.text).toContain("Failed starts (1)");
     expect(result?.content[0]?.text).toContain(
       "#2 broken [SubagentProcessError]: simulated launch failure",
@@ -1864,7 +1807,7 @@ describe("subagent tool", () => {
     });
   });
 
-  it("rejects foreground and other legacy launch overrides before side effects", async () => {
+  it("rejects per-launch routing overrides before side effects", async () => {
     const requests: StartSubagentRequest[] = [];
     const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
 
@@ -1882,7 +1825,7 @@ describe("subagent tool", () => {
           undefined,
           context,
         ),
-      ).rejects.toMatchObject({ code: "legacy_launch_override" });
+      ).rejects.toMatchObject({ code: "launch_override_not_allowed" });
     expect(requests).toEqual([]);
   });
   it("does not let a failed partial renderer turn a successful launch into failure", async () => {
@@ -2011,7 +1954,7 @@ describe("subagent tool", () => {
         undefined,
         context,
       ),
-    ).rejects.toMatchObject({ code: "legacy_launch_override" });
+    ).rejects.toMatchObject({ code: "launch_override_not_allowed" });
     await expect(
       tool?.execute(
         "call",
@@ -2020,7 +1963,7 @@ describe("subagent tool", () => {
         undefined,
         context,
       ),
-    ).rejects.toMatchObject({ code: "legacy_launch_override" });
+    ).rejects.toMatchObject({ code: "launch_override_not_allowed" });
     await expect(
       tool?.execute("call", { agents: [] }, undefined, undefined, context),
     ).rejects.toThrow("requires between 1 and 12 agents");
@@ -2050,17 +1993,17 @@ describe("subagent tool", () => {
           cwd: "/project",
           projectTrusted: true,
         }).pipe(
-          Effect.provideService(SubagentProfileService, defaultProfileService),
+          Effect.provideService(SubagentProfileService, fallbackProfileService),
           Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
         ),
       );
 
     await expect(
       reject({ task: "Probe", model: "pi/openai/other" } as SubagentProfileStartSpec),
-    ).rejects.toMatchObject({ code: "legacy_launch_override" });
+    ).rejects.toMatchObject({ code: "launch_override_not_allowed" });
     await expect(
       reject({ task: "Probe", backend: "claude-cli" } as SubagentProfileStartSpec),
-    ).rejects.toMatchObject({ code: "legacy_launch_override" });
+    ).rejects.toMatchObject({ code: "launch_override_not_allowed" });
   });
 
   it("skips extension-registered providers for Herdr Pi but permits the same @ model locally", async () => {
@@ -2222,7 +2165,6 @@ describe("subagent tool", () => {
     let request: StartSubagentRequest | undefined;
     const service = subagentServiceDouble({
       start: (input: StartSubagentRequest) => Effect.sync(() => ((request = input), view())),
-      waitForForeground: () => Effect.succeed(view()),
       awaitTerminal: () => Effect.succeed([view()]),
       list: Effect.succeed([]),
       status: () => Effect.succeed(view()),
@@ -2382,7 +2324,6 @@ describe("subagent tool", () => {
     });
     const service = subagentServiceDouble({
       start: () => Effect.succeed(completed),
-      waitForForeground: () => Effect.succeed(completed),
       awaitTerminal: () => Effect.succeed([completed]),
       list: Effect.succeed([completed]),
       status: () => Effect.succeed(completed),
@@ -2460,7 +2401,6 @@ describe("subagent tool", () => {
     const sent: string[] = [];
     const service = subagentServiceDouble({
       start: () => Effect.succeed(view()),
-      waitForForeground: () => Effect.succeed(view()),
       awaitTerminal: (_ids, _until, onUpdate) =>
         Effect.sync(() => {
           onUpdate?.([view(), view({ id: "agent-2", name: "test-review" })]);
@@ -2544,7 +2484,7 @@ describe("subagent tool", () => {
     controller.abort();
     await expect(executing).rejects.toBeDefined();
     const cancelled = updates.at(-1)?.content[0]?.text ?? "";
-    expect(cancelled).toContain("Await cancelled; 1 subagent is unfinished.");
+    expect(cancelled).toContain("Await canceled; 1 subagent is unfinished.");
     expect(cancelled).toContain("Question from auth-review: Which fixture?");
     expect(cancelled).toContain('subagent_reply({ runId: "agent-question", message: "..." })');
 
@@ -2563,7 +2503,7 @@ describe("subagent tool", () => {
       );
     await expect(immediate).rejects.toBeDefined();
     expect(immediateUpdates.at(-1)?.content[0]?.text).toContain(
-      "Await cancelled before progress was observed",
+      "Await canceled before progress was observed",
     );
   });
 
@@ -2572,7 +2512,6 @@ describe("subagent tool", () => {
     const interrupted: string[] = [];
     const service = subagentServiceDouble({
       start: () => Effect.succeed(view()),
-      waitForForeground: () => Effect.succeed(view()),
       awaitTerminal: () => Effect.succeed([]),
       list: Effect.succeed([]),
       status: () => Effect.succeed(view()),
@@ -2632,7 +2571,7 @@ describe("subagent tool", () => {
         context,
       );
     expect(interrupted).toEqual(["agent-1"]);
-    expect(lifecycleResult?.content[0]?.text).toContain("Paused agent-1.");
+    expect(lifecycleResult?.content[0]?.text).toContain("Interrupted agent-1; state is paused.");
     expect(lifecycleResult?.content[0]?.text).toContain("agent-2 is already paused");
     expect(lifecycleResult?.details).toMatchObject({
       action: "interrupt",
@@ -2751,7 +2690,6 @@ describe("subagent tool", () => {
     const operations: string[] = [];
     const service = subagentServiceDouble({
       start: () => Effect.succeed(view()),
-      waitForForeground: () => Effect.succeed(view()),
       awaitTerminal: () => Effect.succeed([]),
       list: Effect.succeed([]),
       status: () => Effect.succeed(view()),
@@ -2891,7 +2829,6 @@ describe("subagent tool", () => {
     const consumed: Array<{ readonly id: string; readonly generation: number }> = [];
     const service = subagentServiceDouble({
       start: () => Effect.succeed(runs[0]!),
-      waitForForeground: () => Effect.succeed(runs[0]!),
       awaitTerminal: (ids) => Effect.succeed(ids.map((id) => runs.find((run) => run.id === id)!)),
       list: Effect.succeed(runs),
       status: (id) => Effect.succeed(runs.find((run) => run.id === id)!),
@@ -3070,7 +3007,7 @@ describe("subagent tool", () => {
     const tools = captureSubagentTools(
       startCapturingService(requests),
       ["read"],
-      defaultProfileService,
+      fallbackProfileService,
       undefined,
       { cwd: "/captured/project", projectTrusted: false },
     );

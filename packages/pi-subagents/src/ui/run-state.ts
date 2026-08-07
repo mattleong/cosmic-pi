@@ -10,7 +10,7 @@ export const runStateGlyph = (state: SubagentRunState): string => {
     case "waiting_for_parent":
       return "?";
     case "paused":
-      return "Ⅱ";
+      return "‖";
     case "reported":
       return "✓";
     case "completed":

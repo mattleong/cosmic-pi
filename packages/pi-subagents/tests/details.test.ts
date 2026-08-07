@@ -22,7 +22,6 @@ const run = (index = 1): SubagentRunView => ({
   },
   cwd: "/private/project",
   state: "reported",
-  execution: "background",
   context: "fresh",
   writeIntent: "read-only",
   fastMode: false,
@@ -30,7 +29,6 @@ const run = (index = 1): SubagentRunView => ({
   runtime: "claude",
   closeOnReport: false,
   reportGeneration: 1,
-  backend: "pi",
   capabilities: ["resume"],
   model: "provider/model",
   effort: "high",
@@ -129,7 +127,7 @@ describe("persisted subagent card details", () => {
         finalText: hostile,
       })),
       profileIds: Array.from({ length: 20 }, () => hostile),
-      defaultProfile: hostile,
+      fallbackProfile: "generalist",
       actionFailures: Array.from({ length: 12 }, (_, index) => ({
         id: `${index}-${hostile}`,
         code: hostile,
@@ -145,13 +143,8 @@ describe("persisted subagent card details", () => {
     });
   });
 
-  it("tolerantly projects valid legacy details and rejects malformed persisted details", () => {
-    const legacy = decodeStartAwaitCardDetails({ action: "start", runs: [run()] });
-    expect(legacy).toMatchObject({
-      version: 1,
-      action: "start",
-      cards: [{ id: "agent-r1-1", state: "reported", reportGeneration: 1 }],
-    });
+  it("accepts only current-version persisted details and rejects malformed details", () => {
+    expect(decodeStartAwaitCardDetails({ action: "start", runs: [run()] })).toBeUndefined();
     expect(() =>
       decodeStartAwaitCardDetails({
         version: 1,
@@ -172,8 +165,8 @@ describe("persisted subagent card details", () => {
         version: 1,
         action: "models",
         profileIds: ["delegate"],
-        defaultProfile: "delegate",
+        fallbackProfile: "delegate",
       }),
-    ).toMatchObject({ profileIds: ["generalist"], defaultProfile: "generalist" });
+    ).toMatchObject({ action: "models" });
   });
 });

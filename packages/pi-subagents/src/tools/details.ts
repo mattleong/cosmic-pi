@@ -124,7 +124,7 @@ export interface CompactSubagentToolDetails {
   readonly runCount?: number | undefined;
   readonly profiles?: ReadonlyArray<SubagentProfileRouteCard> | undefined;
   readonly profileIds?: ReadonlyArray<string> | undefined;
-  readonly defaultProfile?: string | undefined;
+  readonly fallbackProfile?: string | undefined;
   readonly contentOmitted?: boolean | undefined;
   readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
   readonly timedOut?: boolean | undefined;
@@ -137,7 +137,7 @@ export interface CompactToolDetailsInput {
   readonly includeReports?: boolean | undefined;
   readonly profiles?: ReadonlyArray<SubagentProfileRouteCard> | undefined;
   readonly profileIds?: ReadonlyArray<string> | undefined;
-  readonly defaultProfile?: string | undefined;
+  readonly fallbackProfile?: string | undefined;
   readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
   readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
@@ -451,7 +451,7 @@ export function makeCompactToolDetails(input: CompactToolDetailsInput): CompactS
     ...(runIds.length > 0 ? { runIds, runCount: input.runs?.length } : {}),
     ...(profiles ? { profiles } : {}),
     ...(profileIds && profileIds.length > 0 ? { profileIds } : {}),
-    ...(input.defaultProfile ? { defaultProfile: cleanProfileId(input.defaultProfile) } : {}),
+    ...(input.fallbackProfile ? { fallbackProfile: cleanProfileId(input.fallbackProfile) } : {}),
     ...(failures && failures.length > 0 ? { actionFailures: failures } : {}),
     ...(input.timedOut ? { timedOut: true } : {}),
     ...(input.attentionRequired ? { attentionRequired: true } : {}),
@@ -484,7 +484,7 @@ export function makeCompactToolDetails(input: CompactToolDetailsInput): CompactS
     action: clean(input.action, 32),
     ...(input.runs ? { runCount: input.runs.length } : {}),
     ...(profileIds && profileIds.length > 0 ? { profileIds } : {}),
-    ...(input.defaultProfile ? { defaultProfile: cleanProfileId(input.defaultProfile) } : {}),
+    ...(input.fallbackProfile ? { fallbackProfile: cleanProfileId(input.fallbackProfile) } : {}),
     ...(failures && failures.length > 0 ? { actionFailures: failures } : {}),
     ...(input.timedOut ? { timedOut: true } : {}),
     ...(input.attentionRequired ? { attentionRequired: true } : {}),

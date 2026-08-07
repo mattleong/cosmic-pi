@@ -75,11 +75,7 @@ const PROFILE_SOURCES: ReadonlySet<string> = new Set([
   "global-invalid",
   "builtin",
 ]);
-const SOURCES: ReadonlySet<string> = new Set([
-  "profile-candidate",
-  "profile-parent-candidate",
-  "profile-parent-fallback",
-]);
+const SOURCES: ReadonlySet<string> = new Set(["profile-candidate", "profile-parent-candidate"]);
 
 const recordOf = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -137,10 +133,7 @@ const decodeSelection = (value: unknown): SubagentSelectionProvenance | undefine
     return undefined;
   const candidateIndex = finiteNumber(record.candidateIndex);
   return {
-    // Defensive legacy card decoding: v1 parent-fallback provenance projects as a parent candidate.
-    source: (record.source === "profile-parent-fallback"
-      ? "profile-parent-candidate"
-      : record.source) as SubagentSelectionSource,
+    source: record.source as SubagentSelectionSource,
     ...(typeof record.routeSource === "string" && PROFILE_SOURCES.has(record.routeSource)
       ? { routeSource: record.routeSource as ProfileRouteSource }
       : {}),
@@ -340,16 +333,19 @@ const decodeProfiles = (value: unknown): ReadonlyArray<SubagentProfileRouteCard>
   return profiles.length > 0 ? profiles : undefined;
 };
 
-/** Tolerant renderer boundary for current details and persisted legacy `{ action, runs }` data. */
+/** Strict current-version renderer boundary for start/await result details. */
 export function decodeStartAwaitCardDetails(
   value: unknown,
 ): SubagentStartAwaitCardDetails | undefined {
   const record = recordOf(value);
-  if (!record || (record.action !== "start" && record.action !== "await")) return undefined;
-  const hasVersion = Object.prototype.hasOwnProperty.call(record, "version");
-  if (hasVersion && record.version !== SUBAGENT_CARD_DETAILS_VERSION) return undefined;
-  const source = hasVersion ? record.cards : record.runs;
-  if (!Array.isArray(source)) return undefined;
+  if (
+    !record ||
+    record.version !== SUBAGENT_CARD_DETAILS_VERSION ||
+    (record.action !== "start" && record.action !== "await") ||
+    !Array.isArray(record.cards)
+  )
+    return undefined;
+  const source = record.cards;
   const cards = source.slice(0, MAX_TARGET_RUNS).flatMap((entry) => {
     const card = decodeCard(entry);
     return card ? [card] : [];
@@ -370,23 +366,18 @@ export function decodeStartAwaitCardDetails(
   });
 }
 
-/** Tolerant renderer boundary for semantic non-start/await result details. */
+/** Strict current-version renderer boundary for semantic non-start/await result details. */
 export function decodeCompactToolDetails(value: unknown): CompactSubagentToolDetails | undefined {
   const record = recordOf(value);
   if (
     !record ||
+    record.version !== SUBAGENT_CARD_DETAILS_VERSION ||
     typeof record.action !== "string" ||
     record.action === "start" ||
     record.action === "await"
   )
     return undefined;
-  const hasVersion = Object.prototype.hasOwnProperty.call(record, "version");
-  if (hasVersion && record.version !== SUBAGENT_CARD_DETAILS_VERSION) return undefined;
-  const source = Array.isArray(record.cards)
-    ? record.cards
-    : Array.isArray(record.runs)
-      ? record.runs
-      : [];
+  const source = Array.isArray(record.cards) ? record.cards : [];
   const cards = source.slice(0, MAX_TARGET_RUNS).flatMap((entry) => {
     const card = decodeCard(entry);
     return card ? [card] : [];
@@ -399,10 +390,10 @@ export function decodeCompactToolDetails(value: unknown): CompactSubagentToolDet
     : undefined;
   const runCount = finiteNumber(record.runCount);
   const profileIds = Array.isArray(record.profileIds)
-    ? record.profileIds
-        .slice(0, 16)
-        .filter((id): id is string => typeof id === "string")
-        .map((id) => normalizeProfileId(id) ?? clean(id, 64))
+    ? record.profileIds.slice(0, 16).flatMap((id) => {
+        const profile = typeof id === "string" ? normalizeProfileId(id) : undefined;
+        return profile ? [profile] : [];
+      })
     : undefined;
   const profiles = decodeProfiles(record.profiles);
   const actionFailures = Array.isArray(record.actionFailures)
@@ -427,11 +418,8 @@ export function decodeCompactToolDetails(value: unknown): CompactSubagentToolDet
     ...(runCount === undefined ? {} : { runCount: Math.max(0, Math.floor(runCount)) }),
     ...(profiles ? { profiles } : {}),
     ...(profileIds && profileIds.length > 0 ? { profileIds } : {}),
-    ...(typeof record.defaultProfile === "string"
-      ? {
-          defaultProfile:
-            normalizeProfileId(record.defaultProfile) ?? clean(record.defaultProfile, 64),
-        }
+    ...(typeof record.fallbackProfile === "string" && normalizeProfileId(record.fallbackProfile)
+      ? { fallbackProfile: normalizeProfileId(record.fallbackProfile)! }
       : {}),
     ...(actionFailures && actionFailures.length > 0 ? { actionFailures } : {}),
     ...(record.timedOut === true ? { timedOut: true } : {}),

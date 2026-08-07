@@ -351,8 +351,8 @@ export const awaitResultBanner = (details: {
       color: "warning",
       text:
         runs.length === 0
-          ? "Await cancelled"
-          : `Await cancelled · ${unfinished.length} unfinished${attention}`,
+          ? "Await canceled"
+          : `Await canceled · ${unfinished.length} unfinished${attention}`,
     };
   if (details.timedOut)
     return {

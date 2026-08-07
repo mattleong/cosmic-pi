@@ -55,6 +55,7 @@ describe("subagent backend contract", () => {
   it.effect("rejects unsafe local Pi model selectors before spawn ownership", () => {
     let spawns = 0;
     const driver = makeLocalPiBackendDriver({
+      reclaimRunState: () => Effect.void,
       spawn: () => {
         spawns += 1;
         return Effect.die("unsafe selector must not spawn");
@@ -63,14 +64,16 @@ describe("subagent backend contract", () => {
     return Effect.gen(function* () {
       for (const model of ["-leading-option", "model with spaces", "model,(glob)*"])
         expect(
-          yield* driver.preflight!({
-            context: "fresh",
-            writeIntent: "read-only",
-            closeOnReport: true,
-            model,
-            effort: "high",
-            cwd: "/project",
-          }).pipe(Effect.flip),
+          yield* driver
+            .preflight({
+              context: "fresh",
+              writeIntent: "read-only",
+              closeOnReport: true,
+              model,
+              effort: "high",
+              cwd: "/project",
+            })
+            .pipe(Effect.flip),
         ).toMatchObject({ code: "pi_model_unsupported" });
       expect(spawns).toBe(0);
     });
@@ -83,6 +86,7 @@ describe("subagent backend contract", () => {
       runtime: "pi",
       capabilities: [],
       supportsContext: (context) => context === "fresh",
+      preflight: () => Effect.void,
       spawn: () => {
         spawns += 1;
         return Effect.die("must not spawn");
@@ -150,6 +154,7 @@ describe("subagent backend contract", () => {
         terminate: () => Effect.void,
       };
       const childProcesses: ChildProcessShape = {
+        reclaimRunState: () => Effect.void,
         spawn: (request) => {
           capturedLaunch = request;
           return Effect.succeed(handle);
@@ -258,6 +263,7 @@ describe("subagent backend contract", () => {
         terminate: () => Effect.void,
       };
       const backend = yield* makeLocalPiBackendDriver({
+        reclaimRunState: () => Effect.void,
         spawn: () => Effect.succeed(handle),
       }).spawn(launch);
       const prompting = yield* backend.controls.start("First", 1).pipe(Effect.forkScoped);

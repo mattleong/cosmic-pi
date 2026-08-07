@@ -478,6 +478,7 @@ export const makeLocalPiBackendDriver = (childProcesses: ChildProcessShape): Bac
       const child = yield* childProcesses.spawn(childRequest);
       return yield* makeLocalPiHandle(child);
     }),
+  reclaimRunState: (request) => childProcesses.reclaimRunState(request),
 });
 
 export const localPiBackendRegistryLayer = Layer.effect(

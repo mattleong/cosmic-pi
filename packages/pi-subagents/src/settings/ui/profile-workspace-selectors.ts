@@ -120,7 +120,7 @@ export const makeProfileSearchSelector = (
       value: profile,
       item: {
         value: profile,
-        label: `${profile}${profile === "generalist" ? " · implicit fallback" : ""}`,
+        label: `${profile}${profile === "generalist" ? " · when omitted" : ""}`,
         description: effectiveProfileSummary(
           options.inspection,
           profile,

@@ -3,12 +3,16 @@ import type {
   SubagentNotificationDelivery,
 } from "../boundary/host-notifier.ts";
 import type { RunRecord } from "./internal.ts";
+import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 
 export const completionNotificationKey = (id: string, generation: number): string =>
   `${id}:${generation}`;
 
 export const completionClaimOwner = (record: RunRecord, generation: number): string | undefined =>
   record.completionClaims.get(generation);
+
+export const hasCompletionGenerationCapacity = (record: RunRecord): boolean =>
+  record.completionGenerations.size < MAX_UNRESOLVED_REPORT_GENERATIONS;
 
 export const claimCompletion = (
   record: RunRecord,

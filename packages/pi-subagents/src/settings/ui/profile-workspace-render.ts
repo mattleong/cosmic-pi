@@ -309,7 +309,7 @@ const profilesPage = (
     ...visibleProfiles.map((entry, offset) => {
       const index = start + offset;
       const marker = index === state.profileIndex ? ">" : " ";
-      const fallback = entry === "generalist" ? "implicit fallback" : "";
+      const fallback = entry === "generalist" ? "when omitted" : "";
       return `${marker} ${entry.padEnd(11)} ${fallback.padEnd(17)} ${effectiveProfileSummary(state.inspection, entry, state.parentEffort, state.parentModel)}`;
     }),
     "",
@@ -533,7 +533,7 @@ const compactWorkspacePage = (
         : `${profile} · candidate ${state.candidateIndex + 1}`;
   const selected =
     state.pane === "profiles"
-      ? `${profile}${profile === "generalist" ? " · implicit fallback" : ""} · ${effectiveProfileSummary(state.inspection, profile, state.parentEffort, state.parentModel)}`
+      ? `${profile}${profile === "generalist" ? " · when omitted" : ""} · ${effectiveProfileSummary(state.inspection, profile, state.parentEffort, state.parentModel)}`
       : state.pane === "candidates"
         ? candidate
           ? candidateSummary(

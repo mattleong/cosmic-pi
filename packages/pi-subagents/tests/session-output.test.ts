@@ -28,12 +28,13 @@ const runView = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => (
   },
   cwd: "/project",
   state: "completed",
-  execution: "background",
   context: "fresh",
   writeIntent: "read-only",
   fastMode: false,
+  host: "local",
+  runtime: "pi",
+  closeOnReport: true,
   reportGeneration: 0,
-  backend: "pi",
   capabilities: [
     "steer",
     "interrupt",
@@ -132,7 +133,7 @@ describe("structured subagent session output", () => {
     expect(rendered).toContain("Preview rendering works.");
     expect(rendered).not.toContain("Rule confirmed.");
     expect(rendered).not.toContain("agent-1");
-    expect(rendered).toContain("15 tokens · $0.0100");
+    expect(rendered).toContain("15 tokens · $0.01");
   });
 
   it("groups adjacent repeated tools and reveals technical details on request", () => {
@@ -191,7 +192,7 @@ describe("structured subagent session output", () => {
     expect(rendered).toContain("300ms");
     expect(rendered).toContain("Technical details");
     expect(rendered).toContain(
-      "agent-1 · profile reviewer · local/pi · closeOnReport=true · background · pid 42",
+      "agent-1 · profile reviewer · local/pi · closeOnReport=true · pid 42",
     );
     expect(rendered).toContain("selection  profile-candidate candidate 2");
     expect(rendered).toContain("skipped  pi/old-model [model_discouraged]");

@@ -50,8 +50,8 @@ export interface FleetOptions {
 const canMessage = (run: SubagentRunView | undefined): boolean =>
   Boolean(
     run &&
-    (((run.state === "running" || run.state === "reported") &&
-      hasSubagentCapability(run, "steer")) ||
+    ((run.state === "reported" && run.closeOnReport === false) ||
+      (run.state === "running" && hasSubagentCapability(run, "steer")) ||
       (run.state === "waiting_for_parent" && hasSubagentCapability(run, "parent-contact"))),
   );
 const canInterrupt = (run: SubagentRunView | undefined): boolean =>
@@ -289,11 +289,11 @@ export class SubagentFleetComponent implements Component, Focusable {
 
     if (this.busyAction) {
       const resolution = this.keymap.resolve(data, { mode: "busy", matchesKeybinding });
-      if (resolution?._tag === "Action" && resolution.action === "cancel") this.options.close();
+      if (resolution?._tag === "Action" && resolution.action === "quit") this.options.close();
       return;
     }
 
-    this.notice = undefined;
+    if (this.notice?.kind !== "error") this.notice = undefined;
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding,
@@ -310,7 +310,7 @@ export class SubagentFleetComponent implements Component, Focusable {
       else if (resolution.key === "i" && selected && canInterrupt(selected))
         this.performAction(
           `Interrupting ${sanitizeTerminalLine(selected.name)}…`,
-          `Interrupted ${sanitizeTerminalLine(selected.name)}.`,
+          `Interrupted ${sanitizeTerminalLine(selected.name)}; state is paused.`,
           () => this.options.actions.interrupt(selected.id),
         );
       else if (resolution.key === "r" && selected && canResume(selected))
@@ -326,6 +326,19 @@ export class SubagentFleetComponent implements Component, Focusable {
         );
       else if (resolution.key === "n" && selected && canRename(selected))
         this.openPrompt(selected, "rename");
+      else if (selected) {
+        const reason =
+          resolution.key === "m"
+            ? "This run cannot receive guidance, a reply, or a new assignment in its current state."
+            : resolution.key === "i"
+              ? "This run cannot be interrupted in its current state or backend."
+              : resolution.key === "r"
+                ? "This run cannot be resumed in its current state or backend."
+                : resolution.key === "n"
+                  ? "This run cannot be renamed in its current state or backend."
+                  : "This run is not currently stoppable.";
+        this.notice = { kind: "info", text: reason };
+      } else this.notice = { kind: "info", text: "No subagent run is selected." };
       this.options.requestRender();
       return;
     }
@@ -360,9 +373,10 @@ export class SubagentFleetComponent implements Component, Focusable {
         }
         break;
       case "confirm":
-        if (this.layout === "narrow" && selected) {
-          this.details = !this.details;
-          this.pane = this.details ? "detail" : "list";
+        if (selected) {
+          if (this.layout === "narrow") this.details = !this.details;
+          else this.pane = "detail";
+          this.pane = this.layout === "narrow" && !this.details ? "list" : "detail";
           this.detailScroll = 0;
           this.keymap.resetChord();
         }
@@ -613,7 +627,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     if (this.prompt)
       return renderResponsiveManagerFooter(contentWidth, [[`${enter} Submit`, `${escape} Cancel`]]);
     if (this.busyAction)
-      return renderResponsiveManagerFooter(contentWidth, [[this.busyAction, `${escape} Close`]]);
+      return renderResponsiveManagerFooter(contentWidth, [[this.busyAction, "q Close"]]);
     if (this.pendingStop)
       return renderResponsiveManagerFooter(contentWidth, [
         [
@@ -790,7 +804,12 @@ export class SubagentFleetComponent implements Component, Focusable {
                 ...visible.map(({ run, index }) => this.runLine(run, index, inner, runs)),
               ];
             })()
-          : [this.options.theme.fg("dim", "No subagents. Start one with subagent_start.")];
+          : [
+              this.options.theme.fg(
+                "dim",
+                "No subagents. Ask the agent to start one with subagent_start.",
+              ),
+            ];
     if (!this.details) {
       this.detailMaxScroll = 0;
       this.detailLineCount = 0;

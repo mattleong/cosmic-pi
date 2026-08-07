@@ -214,7 +214,6 @@ describe("profile settings workspace", () => {
       { version: 4 },
       {
         version: 4,
-        defaultProfile: "scout",
         profiles: { scout: inherited },
       },
     );
@@ -240,7 +239,6 @@ describe("profile settings workspace", () => {
 
     const value = inspection({
       version: 4,
-      defaultProfile: "scout",
       profiles: { scout: configured },
     });
     const eligible = makeComponent(value).component.render(140).join("\n");
@@ -259,7 +257,7 @@ describe("profile settings workspace", () => {
     expect(rendered).toContain("· ready");
     expect(rendered).toContain("[Global]");
     expect(rendered).toContain("Sources  [S] Session > [P] Project > [G] Global > [B] Built-in");
-    expect(rendered).toContain("generalist  implicit fallback");
+    expect(rendered).toContain("generalist  when omitted");
     expect(rendered).not.toContain("★");
     expect(rendered).toContain("1 candidate");
     expect(rendered).not.toContain("1 route");
@@ -334,10 +332,7 @@ describe("profile settings workspace", () => {
     const candidates = Array.from({ length: 8 }, (_, index) =>
       candidate(`provider/a-very-long-model-selector-${index}-with-suffix`),
     );
-    const value = inspection(
-      { version: 4 },
-      { version: 4, defaultProfile: "reviewer", profiles: { reviewer: candidates } },
-    );
+    const value = inspection({ version: 4 }, { version: 4, profiles: { reviewer: candidates } });
     const { component } = makeComponent(value, { getHeight: () => 12 });
     selectProfile(component, "reviewer");
     selectScope(component, "project");
@@ -364,7 +359,6 @@ describe("profile settings workspace", () => {
       { version: 4, profiles: { reviewer: candidate("openai/global") } },
       {
         version: 4,
-        defaultProfile: "reviewer",
         profiles: { reviewer: candidate("openai/project") },
       },
     );
@@ -393,7 +387,6 @@ describe("profile settings workspace", () => {
       { version: 4 },
       {
         version: 4,
-        defaultProfile: "reviewer",
         profiles: { reviewer: [candidate("openai/first"), candidate("openai/second")] },
       },
     );
@@ -481,7 +474,6 @@ describe("profile settings workspace", () => {
       { version: 4, profiles: { reviewer: "disabled" } },
       {
         version: 4,
-        defaultProfile: "reviewer",
         profiles: { reviewer: candidate("openai/project") },
       },
     );
@@ -544,7 +536,6 @@ describe("profile settings workspace", () => {
       { version: 4, profiles: { reviewer: candidate("openai/global") } },
       {
         version: 4,
-        defaultProfile: "reviewer",
         profiles: {
           reviewer: candidate("claude-opus-5", {
             runtime: "claude",
@@ -588,10 +579,7 @@ describe("profile settings workspace", () => {
   });
 
   it("keeps route-only actions out of the profiles pane and blocks empty-route Tab navigation", () => {
-    const value = inspection(
-      { version: 4 },
-      { version: 4, defaultProfile: "generalist", profiles: { generalist: "disabled" } },
-    );
+    const value = inspection({ version: 4 }, { version: 4, profiles: { generalist: "disabled" } });
     const { component } = makeComponent(value);
     selectScope(component, "project");
     component.handleInput("d");
@@ -604,20 +592,20 @@ describe("profile settings workspace", () => {
   });
 
   it("searches profiles and opens the selected route page", () => {
-    const { component } = makeComponent(inspection({ version: 4, defaultProfile: "generalist" }));
+    const { component } = makeComponent(inspection({ version: 4 }));
     component.handleInput("/");
     expect(component.render(120).join("\n")).toContain("Search profiles");
-    expect(component.render(120).join("\n")).toContain("generalist · implicit fallback");
+    expect(component.render(120).join("\n")).toContain("generalist · when omitted");
     for (const character of "review") component.handleInput(character);
     const filtered = component.render(120).join("\n");
     expect(filtered).toContain("reviewer");
-    expect(filtered).not.toContain("generalist · implicit fallback");
+    expect(filtered).not.toContain("generalist · when omitted");
     component.handleInput(input.enter);
     expect(component.render(120).join("\n")).toContain("reviewer route");
   });
 
   it("opens a searchable selector for an enum field and persists its exact value", () => {
-    const value = inspection({ version: 4, defaultProfile: "generalist" });
+    const value = inspection({ version: 4 });
     const { component, saveDraft } = makeComponent(value);
     component.handleInput(input.enter);
     component.handleInput(input.enter);
@@ -665,10 +653,7 @@ describe("profile settings workspace", () => {
         },
       ],
     } satisfies CandidateModelPickerData);
-    const { component, saveDraft } = makeComponent(
-      inspection({ version: 4, defaultProfile: "generalist" }),
-      { loadModelPicker },
-    );
+    const { component, saveDraft } = makeComponent(inspection({ version: 4 }), { loadModelPicker });
     component.handleInput(input.enter);
     component.handleInput(input.enter);
     component.handleInput(input.down);
@@ -689,10 +674,7 @@ describe("profile settings workspace", () => {
       ...modelPicker("claude-opus-5", "claude"),
       defaultSelector: "anthropic/claude-opus-5",
     });
-    const { component, saveDraft } = makeComponent(
-      inspection({ version: 4, defaultProfile: "generalist" }),
-      { loadModelPicker },
-    );
+    const { component, saveDraft } = makeComponent(inspection({ version: 4 }), { loadModelPicker });
     component.handleInput(input.enter);
     component.handleInput(input.enter);
     component.handleInput(input.down);
@@ -724,7 +706,6 @@ describe("profile settings workspace", () => {
       { version: 4 },
       {
         version: 4,
-        defaultProfile: "reviewer",
         profiles: {
           reviewer: candidate("claude-opus-5", { runtime: "claude", effort: "high" }),
         },
@@ -765,7 +746,7 @@ describe("profile settings workspace", () => {
   });
 
   it("enters a full-page searchable model dropdown and persists its selection", async () => {
-    const value = inspection({ version: 4, defaultProfile: "reviewer" });
+    const value = inspection({ version: 4 });
     const loadModelPicker = vi.fn().mockResolvedValue(modelPicker("parent", "pi"));
     const { component, saveDraft } = makeComponent(value, { loadModelPicker });
     selectProfile(component, "reviewer");
@@ -829,13 +810,10 @@ describe("profile settings workspace", () => {
   });
 
   it("adds and clones complete candidates without a separate save step", async () => {
-    const value = inspection(
-      { version: 4 },
-      { version: 4, defaultProfile: "worker", profiles: { worker: "disabled" } },
-    );
+    const value = inspection({ version: 4 }, { version: 4, profiles: { worker: "disabled" } });
     const addedValue = inspection(
       { version: 4 },
-      { version: 4, defaultProfile: "worker", profiles: { worker: candidate("parent") } },
+      { version: 4, profiles: { worker: candidate("parent") } },
     );
     const saveDraft = vi
       .fn()
@@ -860,7 +838,7 @@ describe("profile settings workspace", () => {
   it("requires an in-workspace confirmation for destructive route operations", () => {
     const value = inspection(
       { version: 4 },
-      { version: 4, defaultProfile: "generalist", profiles: { generalist: candidate("parent") } },
+      { version: 4, profiles: { generalist: candidate("parent") } },
     );
     const { component, saveDraft } = makeComponent(value);
     component.handleInput(input.enter);
@@ -874,7 +852,7 @@ describe("profile settings workspace", () => {
   it("shows and confirms the selected-profile reset option for each scope", () => {
     const project = makeComponent(
       inspection(
-        { version: 4, defaultProfile: "generalist" },
+        { version: 4 },
         { version: 4, profiles: { generalist: candidate("openai/project") } },
       ),
     );
@@ -895,7 +873,6 @@ describe("profile settings workspace", () => {
     const global = makeComponent(
       inspection({
         version: 4,
-        defaultProfile: "generalist",
         profiles: { generalist: candidate("openai/global") },
       }),
     );
@@ -913,7 +890,6 @@ describe("profile settings workspace", () => {
       { version: 4, profiles: { generalist: candidate("openai/global") } },
       {
         version: 4,
-        defaultProfile: "generalist",
         profiles: { generalist: candidate("openai/project") },
       },
     );
@@ -923,11 +899,7 @@ describe("profile settings workspace", () => {
     trusted.component.handleInput("i");
     expect(trusted.saveDraft.mock.calls[0]?.[2]).toMatchObject({ kind: "inherit" });
 
-    const untrustedValue = inspection(
-      { version: 4, defaultProfile: "generalist" },
-      undefined,
-      false,
-    );
+    const untrustedValue = inspection({ version: 4 }, undefined, false);
     const untrusted = makeComponent(untrustedValue);
     untrusted.component.handleInput("s");
     expect(untrusted.component.render(120).join("\n")).toContain("[Session]");

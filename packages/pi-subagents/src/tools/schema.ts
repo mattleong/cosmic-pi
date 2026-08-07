@@ -1,6 +1,10 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
-import { PROFILE_INPUT_IDS } from "../profiles/model.ts";
+import { PROFILE_IDS } from "../profiles/model.ts";
+import {
+  disallowedLaunchOverrideMessage,
+  firstDisallowedLaunchOverride,
+} from "../run/launch-validation.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS } from "../run/limits.ts";
 import { MAX_NAME_CHARS, MAX_TASK_CHARS } from "../run/state.ts";
 
@@ -30,9 +34,9 @@ const StartSpecFields = {
     }),
   ),
   profile: Type.Optional(
-    StringEnum(PROFILE_INPUT_IDS, {
+    StringEnum(PROFILE_IDS, {
       description:
-        "Behavior and model-routing profile. Omit to use the fixed generalist fallback. `delegate` is a temporary compatibility alias for `generalist`. The selected profile always determines the model route; the deprecated configuration field defaultProfile is ignored.",
+        "Behavior and model-routing profile. Omit to use the fixed generalist fallback. The selected profile always determines the model route.",
     }),
   ),
 } as const;
@@ -55,9 +59,8 @@ const MessageParameters = Type.String({
 export const ModelsParameters = Type.Object(
   {
     profile: Type.Optional(
-      StringEnum(PROFILE_INPUT_IDS, {
-        description:
-          "Optional profile filter; omit to discover every built-in profile route. `delegate` is a temporary compatibility alias for `generalist`.",
+      StringEnum(PROFILE_IDS, {
+        description: "Optional profile filter; omit to discover every built-in profile route.",
       }),
     ),
   },
@@ -184,19 +187,18 @@ export const prepareSubagentStartArguments = (args: unknown): SubagentStartInput
   if (!Array.isArray(agents)) {
     if (Object.prototype.hasOwnProperty.call(record, "task"))
       throw new Error(
-        '[legacy_start_shape] subagent_start requires { agents: [{ task: "..." }] }; wrap the top-level launch fields in the agents array.',
+        '[invalid_start_shape] subagent_start requires { agents: [{ task: "..." }] }; wrap the top-level launch fields in the agents array.',
       );
     return prepared;
   }
   agents.forEach((agent, index) => {
     if (!agent || typeof agent !== "object" || Array.isArray(agent)) return;
-    const fields = agent as Readonly<Record<string, unknown>>;
-    const legacyField = ["execution", "context", "writeIntent", "effort", "backend", "model"].find(
-      (field) => Object.prototype.hasOwnProperty.call(fields, field),
+    const disallowedField = firstDisallowedLaunchOverride(
+      agent as Readonly<Record<string, unknown>>,
     );
-    if (legacyField)
+    if (disallowedField)
       throw new Error(
-        `[legacy_launch_override] subagent_start agents[${index}]: ${legacyField} is not accepted. Put host, runtime, model, effort, context, writeIntent, fastMode, and closeOnReport in the selected version 4 profile route.`,
+        disallowedLaunchOverrideMessage(disallowedField, `subagent_start agents[${index}]`),
       );
   });
   return prepared;

@@ -17,7 +17,7 @@ export interface ResolvedSubagentConfig {
   readonly projectTrusted: boolean;
   readonly globalConfigExists: boolean;
   readonly projectConfigExists: boolean;
-  readonly defaultProfile: ProfileId;
+  readonly fallbackProfile: ProfileId;
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
   readonly diagnostics: ReadonlyArray<string>;
@@ -80,7 +80,7 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     projectTrusted: input.projectTrusted,
     globalConfigExists: input.globalConfigExists,
     projectConfigExists: input.projectTrusted && input.projectConfigExists,
-    defaultProfile: "generalist",
+    fallbackProfile: "generalist",
     profiles,
     profileSources,
     diagnostics: [...input.global.diagnostics, ...(project?.diagnostics ?? [])],

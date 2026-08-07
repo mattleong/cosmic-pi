@@ -24,12 +24,13 @@ const projection: SubagentProjection = {
       },
       cwd: "/project",
       state: "waiting_for_parent",
-      execution: "background",
       context: "fresh",
       writeIntent: "read-only",
       fastMode: false,
+      host: "local",
+      runtime: "pi",
+      closeOnReport: true,
       reportGeneration: 0,
-      backend: "pi",
       capabilities: [
         "steer",
         "interrupt",
@@ -322,12 +323,13 @@ describe("/subagents fleet UI", () => {
     expect(component.render(42).at(-1)).toContain("m Reply");
   });
 
-  it.each([120, 80])("does not reset detail scrolling with Enter at width %s", (width) => {
+  it.each([120, 80])("focuses the visible detail pane with Enter at width %s", (width) => {
     const { component } = makeComponent(width, 12, completedProjection);
     for (let index = 0; index < 20; index += 1) component.handleInput("\u0015");
-    const before = component.render(width).join("\n");
     component.handleInput("\r");
-    expect(component.render(width).join("\n")).toBe(before);
+    const rendered = component.render(width).join("\n");
+    expect(rendered).toContain("Final report");
+    expect(component.render(width).at(-1)).toContain("C-u/d Detail");
   });
 
   it("keeps stop confirmation modal and cancels before selection changes", () => {
@@ -352,7 +354,6 @@ describe("/subagents fleet UI", () => {
       runs: [
         {
           ...projection.runs[0]!,
-          backend: "pi",
           model: "anthropic/claude-opus-5",
           capabilities: ["resume", "rename-display"],
           state: "running",

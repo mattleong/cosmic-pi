@@ -173,7 +173,7 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
         args.agents
           .map(
             (agent, index) =>
-              `${agent.name ?? `#${index + 1}`} [${agent.profile ?? "default"}]: ${agent.task}`,
+              `${agent.name ?? `#${index + 1}`} [${agent.profile ?? "generalist"}]: ${agent.task}`,
           )
           .join(" · "),
         theme,

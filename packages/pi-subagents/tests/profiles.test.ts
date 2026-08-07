@@ -70,48 +70,19 @@ describe("subagent v4 profile configuration and resolution", () => {
       });
       expect(config.profileSources[id]).toBe("builtin");
     }
-    expect(config.defaultProfile).toBe("generalist");
+    expect(config.fallbackProfile).toBe("generalist");
   });
 
-  it("ignores deprecated defaultProfile and normalizes the delegate route alias", () => {
-    const legacyCandidate = candidate({ model: "openai/gpt-parent" });
-    const decoded = decodeSubagentConfig(
-      document({
-        defaultProfile: "delegate",
-        profiles: { delegate: legacyCandidate },
-      }),
+  it("rejects removed configuration fields and profile aliases", () => {
+    const removedField = decodeSubagentConfig(document({ defaultProfile: "generalist" }), "global");
+    expect(removedField.diagnostics).toContain("global.<unknown>");
+
+    const removedAlias = decodeSubagentConfig(
+      document({ profiles: { delegate: candidate() } }),
       "global",
     );
-    expect(decoded.file).not.toHaveProperty("defaultProfile");
-    expect(decoded.file.profiles?.generalist).toEqual({
-      ...legacyCandidate,
-      closeOnReport: true,
-    });
-    expect(decoded.diagnostics).not.toContain("global.profiles.<unknown>");
-
-    const config = resolved(
-      document({
-        defaultProfile: "delegate",
-        profiles: { delegate: legacyCandidate },
-      }),
-    );
-    expect(config.defaultProfile).toBe("generalist");
-    expect(resolveProfilePlan("delegate", config, environment)).toMatchObject({
-      kind: "resolved",
-      profile: "generalist",
-    });
-  });
-
-  it("prefers the canonical generalist route when both alias keys exist", () => {
-    const decoded = decodeSubagentConfig(
-      document({
-        profiles: {
-          delegate: candidate({ model: "openai/legacy" }),
-          generalist: candidate({ model: "openai/canonical" }),
-        },
-      }),
-    );
-    expect(decoded.file.profiles?.generalist).toMatchObject({ model: "openai/canonical" });
+    expect(removedAlias.diagnostics).toContain("global.profiles.<unknown>");
+    expect(removedAlias.file.profiles?.generalist).toBeUndefined();
   });
 
   it("decodes disabled, one candidate, and ordered candidates with closeOnReport defaulting true", () => {
@@ -254,7 +225,7 @@ describe("subagent v4 profile configuration and resolution", () => {
         ],
       },
     });
-    const inherited = resolved(global, document({ defaultProfile: "worker" }));
+    const inherited = resolved(global, document());
     expect(inherited.profiles.worker.candidates).toHaveLength(2);
     expect(inherited.profileSources.worker).toBe("global");
     expect(inherited.profileSources.scout).toBe("builtin");
@@ -335,10 +306,10 @@ describe("subagent v4 profile configuration and resolution", () => {
     expect(decoded.diagnostics).toContain("global.profiles.worker[32+]");
   });
 
-  it("accepts only declared v4 and records v3 for actionable store migration", () => {
+  it("accepts only the current declared version", () => {
     expect(decodeSubagentConfig({ version: 4 }, "global").unsupportedVersion).toBe(false);
     const v3 = decodeSubagentConfig({ version: 3, denied: [] }, "global");
-    expect(v3).toMatchObject({ unsupportedVersion: true, legacyVersion3: true });
+    expect(v3).toMatchObject({ unsupportedVersion: true });
     expect(v3.diagnostics).toEqual(expect.arrayContaining(["global.version", "global.<unknown>"]));
     for (const version of [1, 2, "4", null, false, 4.5])
       expect(decodeSubagentConfig({ version }, "global").unsupportedVersion).toBe(true);

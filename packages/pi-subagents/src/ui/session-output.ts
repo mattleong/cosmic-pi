@@ -15,6 +15,7 @@ import {
   type SubagentRunView,
   type SubagentSessionEvent,
 } from "../run/model.ts";
+import { formatCost, formatDuration, formatTokenCount } from "./metrics.ts";
 import { animatedRunStateGlyph, runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "./sanitize.ts";
 
@@ -28,18 +29,6 @@ type NoticeEvent = Extract<SubagentSessionEvent, { readonly type: "notice" }>;
 type ActivityItem =
   | { readonly type: "tools"; readonly events: ReadonlyArray<ToolEvent> }
   | { readonly type: "notice"; readonly event: NoticeEvent };
-
-const compactNumber = (value: number): string =>
-  new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
-
-const formatDuration = (milliseconds: number): string => {
-  const safe = Math.max(0, milliseconds);
-  if (safe < 1_000) return `${safe}ms`;
-  const seconds = Math.round(safe / 1_000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${seconds % 60}s`;
-};
 
 export const formatRelativeAge = (milliseconds: number): string => {
   const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
@@ -220,9 +209,8 @@ function addTechnicalDetails(container: Container, run: SubagentRunView, theme: 
   const process = [
     run.id,
     run.profile ? `profile ${run.profile}` : undefined,
-    `${run.host ?? "local"}/${run.runtime ?? run.backend}`,
-    `closeOnReport=${run.closeOnReport ?? true}`,
-    run.execution,
+    `${run.host}/${run.runtime}`,
+    `closeOnReport=${run.closeOnReport}`,
     run.pid ? `pid ${run.pid}` : undefined,
     `report generation ${run.reportGeneration}`,
   ]
@@ -382,7 +370,7 @@ export function renderSubagentSessionOutput(
   }
 
   container.addChild(new Spacer(1));
-  const usage = `${compactNumber(run.usage.totalTokens)} tokens · $${run.usage.cost.toFixed(4)}`;
+  const usage = `${formatTokenCount(run.usage.totalTokens)} tokens · ${formatCost(run.usage.cost)}`;
   container.addChild(new Text(theme.fg("dim", usage), 0, 0));
   if (options.showTechnicalDetails) addTechnicalDetails(container, run, theme);
   return container;
