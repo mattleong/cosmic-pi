@@ -44,6 +44,7 @@ Visible results are strict version-1 custom entries, not messages. Review cards 
 - `src/queue/` — bounded observation/checkpoint queue.
 - `src/status/` — Effect-owned spinner resource.
 - `src/logging/` and `src/domain/` — redacted diagnostics and plain domain contracts.
+- `tests/support/` — direct-import test fixtures (no barrel): Promise deferred/tick, resolved config, final-turn/pass checkpoints, the controllable runtime driver, and composable extension host doubles. Semantically local seams (Effect deferreds, hostile accessors, spy harnesses) stay in their test files.
 
 ## State and resource boundaries
 

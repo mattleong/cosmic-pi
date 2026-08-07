@@ -2775,6 +2775,101 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("re-delivers only the unacknowledged half of a partially delivered batch", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const batches: Array<ReadonlyArray<{ id: string; generation: number }>> = [];
+    const layer = serviceLayer({
+      notify: (notification) => {
+        if (notification.type !== "completed") return undefined;
+        batches.push(notification.runs.map(({ id, generation }) => ({ id, generation })));
+        const first = notification.runs[0];
+        return { deliveredCompletionKeys: first ? [`${first.id}:${first.generation}`] : [] };
+      },
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const one = yield* service.start(request({ name: "partial-one" }));
+      const two = yield* service.start(request({ name: "partial-two" }));
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      fake.controls[1]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() =>
+        Boolean(projections.at(-1)?.runs.every((run) => run.state === "completed")),
+      );
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => batches.length === 1);
+      expect(batches[0]).toEqual([
+        { id: one.id, generation: 1 },
+        { id: two.id, generation: 1 },
+      ]);
+
+      // A partial acknowledgment resets the retry delay to its initial value and
+      // retains only the unacknowledged completion for the next attempt.
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => batches.length === 2);
+      expect(batches[1]).toEqual([{ id: two.id, generation: 1 }]);
+      yield* TestClock.adjust("30 seconds");
+      expect(batches).toHaveLength(2);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("claiming a queued completion retry removes it from delivery ownership", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    let attempts = 0;
+    const layer = serviceLayer({
+      notify: (notification) => {
+        if (notification.type !== "completed") return undefined;
+        attempts += 1;
+        return { deliveredCompletionKeys: [] };
+      },
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "claimed-retry" }));
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => attempts === 1);
+
+      // The await claim is serialized against delivery and removes the queued retry.
+      const runs = yield* service.awaitTerminal([run.id], "all_finished");
+      expect(runs[0]?.state).toBe("completed");
+      yield* TestClock.adjust("60 seconds");
+      expect(attempts).toBe(1);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("stops pending completion retries when the session scope closes", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    let attempts = 0;
+    const layer = serviceLayer({
+      notify: (notification) => {
+        if (notification.type !== "completed") return undefined;
+        attempts += 1;
+        return { deliveredCompletionKeys: [] };
+      },
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        yield* service.start(request({ name: "shutdown-retry" }));
+        fake.controls[0]?.offer({ type: "agent_settled" });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        yield* TestClock.adjust("100 millis");
+        yield* yieldUntil(() => attempts === 1);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+
+      // The retry fiber is owner-scoped: closing the session scope ends redelivery.
+      yield* TestClock.adjust("60 seconds");
+      expect(attempts).toBe(1);
+    });
+  });
+
   it.effect("allows local display rename for stopped runs", () => {
     const fake = fakeChildLayer();
     const layer = serviceLayer().pipe(Layer.provide(fake.layer));
@@ -4143,6 +4238,49 @@ describe("SubagentService", () => {
         message: "Delivery after idle?",
       });
       yield* yieldUntil(() => attempts.some((value) => value.requestId === "new-question"));
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("wakes a sleeping question retry when a new question is queued", () => {
+    const fake = fakeChildLayer();
+    const attempts: Array<Extract<SubagentNotification, { type: "question" }>> = [];
+    const layer = serviceLayer({
+      notify: (notification) => {
+        if (notification.type === "completed") return undefined;
+        attempts.push(notification);
+        return notification.requestId === "sleepy-question"
+          ? { deliveredActionKeys: [] }
+          : {
+              deliveredActionKeys: [
+                `${notification.id}:question:default:${notification.generation}`,
+              ],
+            };
+      },
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "action-retry-wake" }));
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "sleepy-question",
+        kind: "question",
+        message: "This attempt stays unacknowledged.",
+      });
+      yield* yieldUntil(() => attempts.some((value) => value.requestId === "sleepy-question"));
+      yield* service.reply(run.id, "Answered while the retry slept.");
+
+      // Queuing the replacement question wakes the sleeping retry loop without any
+      // clock advancement past the pending backoff delay.
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "wake-question",
+        kind: "question",
+        message: "Deliver immediately after the wake?",
+      });
+      yield* yieldUntil(() => attempts.some((value) => value.requestId === "wake-question"));
+      expect(attempts.filter((value) => value.requestId === "sleepy-question")).toHaveLength(1);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

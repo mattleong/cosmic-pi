@@ -2,18 +2,10 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ResolvedCommand,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { describe, expect, test, vi } from "vitest";
-import type {
-  AdvisorCheckpoint,
-  AdvisorCheckpointRequest,
-  AdvisorRuntimeDriver,
-} from "../src/runtime/runtime.ts";
+import type { AdvisorCheckpoint, AdvisorCheckpointRequest } from "../src/runtime/runtime.ts";
 import {
   abortAdvisorParentAtHostBoundary,
   AdvisorHostContextError,
@@ -29,38 +21,24 @@ import {
 } from "../src/boundary/host-context.ts";
 import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
+import { tick } from "./support/async.ts";
+import { finalTurn, passCheckpoint as pass } from "./support/checkpoints.ts";
+import { resolvedAdvisorConfig } from "./support/config.ts";
+import {
+  advisorExtensionApi,
+  advisorExtensionContext,
+  anchorUserBranch,
+  commandRegistry,
+  handlerRegistry,
+} from "./support/extension-host.ts";
+import { controllableRuntimeDriver } from "./support/runtime-driver.ts";
 
-const resolvedConfig = (): ResolvedAdvisorConfig => ({
-  configPath: "/tmp/pi-advisor-host-session-test.json",
-  enabled: true,
-  provider: "provider",
-  model: "model",
-  setupDismissed: true,
-  configured: true,
-});
-
-function deferred<A>() {
-  let resolve!: (value: A) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<A>((resume, fail) => {
-    resolve = resume;
-    reject = fail;
+const resolvedConfig = (): ResolvedAdvisorConfig =>
+  resolvedAdvisorConfig({
+    configPath: "/tmp/pi-advisor-host-session-test.json",
+    provider: "provider",
+    model: "model",
   });
-  return { promise, reject, resolve };
-}
-
-function finalTurn(text: string) {
-  return {
-    type: "turn_end",
-    turnIndex: 1,
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text }],
-      stopReason: "stop",
-    },
-    toolResults: [],
-  };
-}
 
 function revise(
   request: AdvisorCheckpointRequest,
@@ -87,91 +65,30 @@ function revise(
   };
 }
 
-function pass(request: AdvisorCheckpointRequest): AdvisorCheckpoint {
-  return {
-    checkpointId: request.checkpointId,
-    processedThrough: request.processedThrough,
-    stateSummary: "compact",
-    verdict: "pass",
-    summary: "No issue.",
-    findings: [],
-  };
-}
-
-async function tick(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-type HostHandler = (event: never, ctx: ExtensionContext) => unknown | Promise<unknown>;
-
 function makeHarness() {
-  const handlers = new Map<string, HostHandler[]>();
-  const commands = new Map<string, Omit<ResolvedCommand, "name" | "sourceInfo">>();
+  const registry = handlerRegistry();
+  const { commands, registerCommand } = commandRegistry();
   const sendMessage = vi.fn();
-  const branch = [
-    {
-      id: "anchor",
-      type: "message",
-      parentId: null,
-      timestamp: "now",
-      message: { role: "user", content: "request" },
-    },
-  ];
-  const requests: AdvisorCheckpointRequest[] = [];
-  const pending: Array<ReturnType<typeof deferred<AdvisorCheckpoint>>> = [];
-  const driver: AdvisorRuntimeDriver = {
-    activeToolNames: ["read"],
-    start: vi.fn(async () => undefined),
-    checkpoint: vi.fn((request) => {
-      requests.push(request);
-      const result = deferred<AdvisorCheckpoint>();
-      pending.push(result);
-      return result.promise;
-    }),
-    steer: vi.fn(async () => true),
-    reprime: vi.fn(async () => undefined),
-    abort: vi.fn(async () => undefined),
-    dispose: vi.fn(async () => undefined),
-  };
-  const pi = {
-    on: (name: string, handler: HostHandler) =>
-      handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-    registerCommand: (name: string, command: Omit<ResolvedCommand, "name" | "sourceInfo">) =>
-      commands.set(name, command),
-    registerMessageRenderer: vi.fn(),
-    registerEntryRenderer: vi.fn(),
+  const branch = anchorUserBranch();
+  const { driver, pending, requests } = controllableRuntimeDriver({ activeToolNames: ["read"] });
+  const pi = advisorExtensionApi({
+    on: registry.on,
+    registerCommand,
     sendMessage,
-    appendEntry: vi.fn(),
-  } as unknown as ExtensionAPI;
-  const ctx = {
-    cwd: "/project",
-    mode: "tui",
-    hasUI: true,
-    signal: undefined,
-    abort: vi.fn(),
-    hasPendingMessages: vi.fn(() => false),
-    isIdle: vi.fn(() => true),
-    isProjectTrusted: vi.fn(() => false),
-    ui: { notify: vi.fn(), setStatus: vi.fn(), select: vi.fn() },
+  });
+  const ctx = advisorExtensionContext({
+    getBranch: () => branch,
+    isProjectTrusted: false,
     modelRegistry: { getAvailable: vi.fn(() => []), find: vi.fn() },
-    sessionManager: {
-      buildContextEntries: vi.fn(() => []),
-      getBranch: vi.fn(() => branch),
-      getLeafId: vi.fn(() => "anchor"),
-      getSessionId: vi.fn(() => "session"),
-    },
-  } as unknown as ExtensionContext;
+  });
 
   createAdvisorExtension({
     loadConfig: resolvedConfig,
     createRuntime: () => driver,
   })(pi);
 
-  const emit = async (name: string, event: unknown): Promise<void> => {
-    for (const handler of handlers.get(name) ?? []) {
-      await handler(event as never, ctx);
-    }
-  };
+  const emit = async (name: string, event: unknown): Promise<void> =>
+    registry.emitWithContext(name, event, ctx);
 
   return {
     commands,

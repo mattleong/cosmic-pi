@@ -2,26 +2,20 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test, vi } from "vitest";
 import { normalizeAdvisorConfig } from "../src/config/options.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
-import type {
-  AdvisorCheckpoint,
-  AdvisorCheckpointRequest,
-  AdvisorRuntimeDriver,
-} from "../src/runtime/runtime.ts";
+import type { AdvisorCheckpoint, AdvisorCheckpointRequest } from "../src/runtime/runtime.ts";
 import { ADVISOR_REVIEW_ACTION_TYPE, ADVISOR_REVIEW_CARD_TYPE } from "../src/ui/review-card.ts";
-
-type Handler = (event: never, ctx: ExtensionContext) => unknown;
-const deferred = <T>() => {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-};
-const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+import { tick } from "./support/async.ts";
+import { finalTurn, passCheckpoint } from "./support/checkpoints.ts";
+import {
+  advisorExtensionApi,
+  advisorExtensionContext,
+  commandRegistry,
+  handlerRegistry,
+} from "./support/extension-host.ts";
+import { controllableRuntimeDriver } from "./support/runtime-driver.ts";
 
 function finding(
   request: AdvisorCheckpointRequest,
@@ -69,23 +63,7 @@ function suggestion(request: AdvisorCheckpointRequest): AdvisorCheckpoint {
   };
 }
 function pass(request: AdvisorCheckpointRequest): AdvisorCheckpoint {
-  return {
-    checkpointId: request.checkpointId,
-    processedThrough: request.processedThrough,
-    stateSummary: "state",
-    verdict: "pass",
-    summary: "Looks good",
-    suggestions: [],
-    findings: [],
-  };
-}
-function finalTurn(text = "candidate") {
-  return {
-    type: "turn_end",
-    turnIndex: 1,
-    message: { role: "assistant", content: [{ type: "text", text }], stopReason: "stop" },
-    toolResults: [],
-  };
+  return passCheckpoint(request, { stateSummary: "state", summary: "Looks good", suggestions: [] });
 }
 function progressTurn() {
   return {
@@ -110,10 +88,11 @@ function harness(
     failSend?: boolean;
   } = {},
 ) {
-  const handlers = new Map<string, Handler[]>();
-  const commands = new Map<string, { handler: (args: string, ctx: never) => unknown }>();
-  const requests: AdvisorCheckpointRequest[] = [];
-  const pending: Array<ReturnType<typeof deferred<AdvisorCheckpoint>>> = [];
+  const registry = handlerRegistry();
+  const { commands, registerCommand } = commandRegistry<{
+    handler: (args: string, ctx: never) => unknown;
+  }>();
+  const { driver, pending, requests } = controllableRuntimeDriver();
   const entries: Array<Record<string, unknown>> = [
     {
       id: "anchor",
@@ -124,28 +103,10 @@ function harness(
   ];
   const sent: unknown[] = [];
   let remainingCardAppendFailures = options.failCardAppends ?? 0;
-  const driver: AdvisorRuntimeDriver = {
-    activeToolNames: ["read", "grep", "find", "ls"],
-    start: vi.fn(async () => undefined),
-    checkpoint: vi.fn((request) => {
-      requests.push(request);
-      const item = deferred<AdvisorCheckpoint>();
-      pending.push(item);
-      return item.promise;
-    }),
-    steer: vi.fn(async () => true),
-    reprime: vi.fn(async () => undefined),
-    abort: vi.fn(async () => undefined),
-    dispose: vi.fn(async () => undefined),
-  };
-  const pi = {
-    on: (name: string, handler: Handler) =>
-      handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-    registerCommand: (name: string, command: { handler: (args: string, ctx: never) => unknown }) =>
-      commands.set(name, command),
-    registerEntryRenderer: vi.fn(),
-    registerMessageRenderer: vi.fn(),
-    appendEntry: vi.fn((customType: string, data: unknown) => {
+  const pi = advisorExtensionApi({
+    on: registry.on,
+    registerCommand,
+    appendEntry: (customType: string, data: unknown) => {
       if (customType === ADVISOR_REVIEW_CARD_TYPE && remainingCardAppendFailures > 0) {
         remainingCardAppendFailures -= 1;
         throw new Error("card append failed");
@@ -159,26 +120,15 @@ function harness(
         customType,
         data,
       });
-    }),
+    },
     sendMessage: vi.fn((message: unknown) => {
       if (options.failSend) throw new Error("send failed");
       sent.push(message);
     }),
-  } as unknown as ExtensionAPI;
-  const ctx = {
-    cwd: "/project",
-    mode: "tui",
-    hasUI: true,
-    signal: undefined,
-    abort: vi.fn(),
-    isIdle: vi.fn(() => true),
-    hasPendingMessages: vi.fn(() => false),
-    isProjectTrusted: vi.fn(() => true),
-    ui: {
-      notify: vi.fn(),
-      setStatus: vi.fn(),
-      select: vi.fn(async () => options.setupSelection),
-    },
+  });
+  const ctx = advisorExtensionContext({
+    getBranch: () => entries,
+    select: vi.fn(async () => options.setupSelection),
     modelRegistry: {
       getAvailable: vi.fn(() =>
         options.setupSelection && options.setupSelection !== "Not now"
@@ -188,13 +138,7 @@ function harness(
       find: vi.fn((provider: string, model: string) => ({ provider, id: model })),
       hasConfiguredAuth: vi.fn(() => true),
     },
-    sessionManager: {
-      buildContextEntries: vi.fn(() => []),
-      getBranch: vi.fn(() => entries),
-      getLeafId: vi.fn(() => "anchor"),
-      getSessionId: vi.fn(() => "session"),
-    },
-  } as unknown as ExtensionContext;
+  });
   createAdvisorExtension({
     loadConfig: () =>
       normalizeAdvisorConfig(
@@ -206,9 +150,7 @@ function harness(
     createRuntime: () => driver,
     catchUpTimeoutMs: 25,
   })(pi);
-  const emit = async (name: string, event: unknown) => {
-    for (const handler of handlers.get(name) ?? []) await handler(event as never, ctx);
-  };
+  const emit = async (name: string, event: unknown) => registry.emitWithContext(name, event, ctx);
   return { pi, ctx, commands, requests, pending, entries, sent, emit };
 }
 

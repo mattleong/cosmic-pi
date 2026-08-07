@@ -4,41 +4,22 @@
 // @effect-diagnostics effect/nodeBuiltinImport:off
 // @effect-diagnostics effect/globalDate:off
 // @effect-diagnostics effect/globalTimers:off
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ResolvedCommand,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test, vi } from "vitest";
-import type {
-  AdvisorCheckpoint,
-  AdvisorCheckpointRequest,
-  AdvisorRuntimeDriver,
-} from "../src/runtime/runtime.ts";
+import type { AdvisorCheckpoint, AdvisorCheckpointRequest } from "../src/runtime/runtime.ts";
 import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
-
-function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisorConfig {
-  return {
-    configPath: "/tmp/pi-advisor.json",
-    enabled: true,
-    provider: "p",
-    model: "m",
-    setupDismissed: true,
-    configured: true,
-    ...overrides,
-  };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, reject, resolve };
-}
+import { deferred, tick } from "./support/async.ts";
+import { finalTurn, passCheckpoint as pass } from "./support/checkpoints.ts";
+import { resolvedAdvisorConfig } from "./support/config.ts";
+import {
+  advisorExtensionApi,
+  advisorExtensionContext,
+  anchorUserBranch,
+  commandRegistry,
+  handlerRegistry,
+} from "./support/extension-host.ts";
+import { controllableRuntimeDriver, type ControllableRuntime } from "./support/runtime-driver.ts";
 
 type TrackedAbortListener = EventListenerOrEventListenerObject;
 
@@ -98,60 +79,27 @@ function harness(
     withoutSessionId?: boolean;
   } = {},
 ) {
-  type Handler = (event: never, ctx: ExtensionContext) => unknown | Promise<unknown>;
-  const handlers = new Map<string, Handler[]>();
-  const commands = new Map<string, Omit<ResolvedCommand, "name" | "sourceInfo">>();
+  const registry = handlerRegistry();
+  const { commands, registerCommand } = commandRegistry();
   const sendMessage = vi.fn();
   const appended: unknown[] = [];
-  const runtimes: Array<{
-    driver: AdvisorRuntimeDriver;
-    requests: AdvisorCheckpointRequest[];
-    pending: Array<ReturnType<typeof deferred<AdvisorCheckpoint>>>;
-  }> = [];
+  const runtimes: ControllableRuntime[] = [];
   const createRuntime = () => {
     const runtimeIndex = runtimes.length;
-    const requests: AdvisorCheckpointRequest[] = [];
-    const pending: Array<ReturnType<typeof deferred<AdvisorCheckpoint>>> = [];
-    const driver: AdvisorRuntimeDriver = {
-      activeToolNames: ["read", "grep", "find", "ls"],
-      start: vi.fn(async () => {
-        if (options.runtimeStartError) throw options.runtimeStartError;
-        await options.runtimeStartPromises?.[runtimeIndex];
-      }),
-      checkpoint: vi.fn((request: AdvisorCheckpointRequest) => {
-        requests.push(request);
-        const wait = deferred<AdvisorCheckpoint>();
-        pending.push(wait);
-        return wait.promise;
-      }),
-      steer: vi.fn(async () => true),
-      reprime: vi.fn(async () => undefined),
-      abort: vi.fn(async () => undefined),
-      dispose: vi.fn(async () => {
-        await options.runtimeDisposePromises?.[runtimeIndex];
-      }),
-    };
-    runtimes.push({ driver, requests, pending });
-    return driver;
+    const runtime = controllableRuntimeDriver({
+      startError: options.runtimeStartError,
+      startPromise: options.runtimeStartPromises?.[runtimeIndex],
+      disposePromise: options.runtimeDisposePromises?.[runtimeIndex],
+    });
+    runtimes.push(runtime);
+    return runtime.driver;
   };
-  const branch = options.branch ?? [
-    {
-      id: "anchor",
-      type: "message",
-      parentId: null,
-      timestamp: "now",
-      message: { role: "user", content: "request" },
-    },
-  ];
-  const pi = {
-    on: (name: string, handler: Handler) =>
-      handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-    registerCommand: (name: string, command: Omit<ResolvedCommand, "name" | "sourceInfo">) =>
-      commands.set(name, command),
-    registerMessageRenderer: vi.fn(),
-    registerEntryRenderer: vi.fn(),
+  const branch = options.branch ?? anchorUserBranch();
+  const pi = advisorExtensionApi({
+    on: registry.on,
+    registerCommand,
     sendMessage,
-    appendEntry: vi.fn((customType: string, data: unknown) => {
+    appendEntry: (customType: string, data: unknown) => {
       appended.push(data);
       branch.push({
         id: `ledger-${branch.length}`,
@@ -161,42 +109,24 @@ function harness(
         customType,
         data,
       });
-    }),
-  } as unknown as ExtensionAPI;
-  const ctx = {
-    cwd: "/project",
-    mode: "tui",
-    hasUI: true,
-    signal: undefined,
-    abort: vi.fn(),
-    hasPendingMessages: vi.fn(() => false),
-    isIdle: vi.fn(() => true),
-    isProjectTrusted: vi.fn(() => true),
-    ui: { notify: vi.fn(), setStatus: vi.fn(), select: vi.fn() },
-    modelRegistry: { getAvailable: vi.fn(() => []), find: vi.fn(), hasConfiguredAuth: vi.fn() },
-    sessionManager: {
-      buildContextEntries: vi.fn(() => []),
-      getBranch: vi.fn(() => branch),
-      getLeafId: vi.fn(() => "anchor"),
-      ...(options.withoutSessionId ? {} : { getSessionId: vi.fn(() => "session") }),
     },
-  } as unknown as ExtensionContext;
+  });
+  const ctx = advisorExtensionContext({
+    getBranch: () => branch,
+    withoutSessionId: options.withoutSessionId,
+  });
   const logFailure = vi.fn();
   createAdvisorExtension({
-    loadConfig: () => config(overrides),
+    loadConfig: () => resolvedAdvisorConfig(overrides),
     createRuntime,
     logFailure,
     catchUpTimeoutMs: options.catchUpTimeoutMs,
   })(pi);
-  const emitWithContext = async (name: string, event: unknown, context: ExtensionContext) => {
-    for (const handler of handlers.get(name) ?? []) await handler(event as never, context);
-  };
+  const emitWithContext = registry.emitWithContext;
   const emitAwait = async (name: string, event: unknown) => emitWithContext(name, event, ctx);
   const emit = async (name: string, event: unknown) => {
     if (name !== "turn_end") return emitAwait(name, event);
-    for (const handler of handlers.get(name) ?? []) {
-      Promise.resolve(handler(event as never, ctx)).catch(() => undefined);
-    }
+    registry.emitDetachedWithContext(name, event, ctx);
   };
   return {
     appended,
@@ -209,26 +139,6 @@ function harness(
     logFailure,
     runtimes,
     sendMessage,
-  };
-}
-
-function finalTurn(text: string) {
-  return {
-    type: "turn_end",
-    turnIndex: 1,
-    message: { role: "assistant", content: [{ type: "text", text }], stopReason: "stop" },
-    toolResults: [],
-  };
-}
-
-function pass(request: AdvisorCheckpointRequest): AdvisorCheckpoint {
-  return {
-    checkpointId: request.checkpointId,
-    processedThrough: request.processedThrough,
-    stateSummary: "compact",
-    verdict: "pass",
-    summary: "No issue.",
-    findings: [],
   };
 }
 
@@ -276,10 +186,6 @@ function confidentBlocker(
       evidenceBasis: "direct",
     })),
   };
-}
-
-async function tick() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 async function resolveVerifiedBlocker(
