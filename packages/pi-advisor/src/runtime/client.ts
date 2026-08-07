@@ -1,3 +1,4 @@
+import type { ProviderHeaders } from "@earendil-works/pi-ai";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
 import {
   ModelRuntime,
@@ -17,15 +18,33 @@ export class AdvisorModelError extends Schema.TaggedErrorClass<AdvisorModelError
 ) {}
 const modelError = (message: string) => new AdvisorModelError({ message });
 const StringMapSchema = Schema.Record(Schema.String, Schema.String);
+const ProviderHeadersSchema = Schema.Record(Schema.String, Schema.NullOr(Schema.String));
 const ParentAuthWireSchema = Schema.Union([
   Schema.Struct({
     ok: Schema.Literal(true),
     apiKey: Schema.optional(Schema.String),
-    headers: Schema.optional(StringMapSchema),
+    headers: Schema.optional(ProviderHeadersSchema),
     env: Schema.optional(StringMapSchema),
   }),
   Schema.Struct({ ok: Schema.Literal(false), error: Schema.String }),
 ]);
+
+function resolveTransferredHeaders(
+  ...sources: ReadonlyArray<Readonly<ProviderHeaders> | undefined>
+): Record<string, string> {
+  const resolved = new Map<string, { readonly name: string; readonly value: string }>();
+  for (const source of sources) {
+    if (!source) continue;
+    for (const [name, value] of Object.entries(source)) {
+      const normalized = name.toLowerCase();
+      if (value === null) resolved.delete(normalized);
+      else resolved.set(normalized, { name, value });
+    }
+  }
+  return Object.fromEntries(
+    Array.from(resolved.values(), ({ name, value }) => [name, value] as const),
+  );
+}
 export interface AdvisorUsageTelemetry {
   cacheReadTokens: number;
   cacheWriteTokens: number;
@@ -79,7 +98,10 @@ export const createAdvisorChildModelEffect = Effect.fn("AdvisorClient.createChil
       modelRuntime.registerProvider(
         registeredProviderId,
         registeredProviderId === providerId && parentAuth.headers
-          ? { ...provider, headers: { ...provider.headers, ...parentAuth.headers } }
+          ? {
+              ...provider,
+              headers: resolveTransferredHeaders(provider.headers, parentAuth.headers),
+            }
           : provider,
       );
     }
@@ -87,7 +109,7 @@ export const createAdvisorChildModelEffect = Effect.fn("AdvisorClient.createChil
     if (!selectedProviderRegistered && (selectedProvider || parentAuth.headers)) {
       modelRuntime.registerProvider(providerId, {
         ...selectedProvider,
-        headers: { ...selectedProvider?.headers, ...parentAuth.headers },
+        headers: resolveTransferredHeaders(selectedProvider?.headers, parentAuth.headers),
       });
     }
   });

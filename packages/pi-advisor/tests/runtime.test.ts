@@ -262,6 +262,8 @@ describe("AdvisorRuntime", () => {
     expect(options?.sessionManager?.getSessionFile()).toBeUndefined();
     expect(options?.resourceLoader).toBeInstanceOf(NoDiscoveryAdvisorResourceLoader);
     expect(options?.resourceLoader?.getExtensions().extensions).toEqual([]);
+    expect(options?.resourceLoader?.getSystemPromptSource()).toBeUndefined();
+    expect(options?.resourceLoader?.getAppendSystemPromptSources()).toEqual([]);
     expect(options?.tools).toEqual(ADVISOR_TOOL_NAMES);
     expect(options?.customTools?.map((tool) => tool.name)).toEqual(ADVISOR_TOOL_NAMES);
     expect(session.sessionFile).toBeUndefined();

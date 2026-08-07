@@ -79,6 +79,21 @@ describe("advisor child model construction", () => {
     });
   });
 
+  test("applies public runtime header deletion markers", async () => {
+    const { ctx, runtime } = harness({
+      auth: { ok: true, apiKey: "runtime-key", headers: { "X-Provider-Default": null } },
+    });
+    (ctx.modelRegistry.getRegisteredProviderConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      name: "Custom",
+      headers: { "x-provider-default": "legacy", "x-keep": "kept" },
+    });
+    await createAdvisorChildModel(ctx, config());
+    expect(runtime.registerProvider).toHaveBeenCalledWith("advisor-provider", {
+      name: "Custom",
+      headers: { "x-keep": "kept" },
+    });
+  });
+
   test("preserves child OAuth refresh instead of pinning the resolved access token", async () => {
     const { ctx, runtime } = harness({
       auth: { ok: true, apiKey: "ephemeral-oauth-token" },

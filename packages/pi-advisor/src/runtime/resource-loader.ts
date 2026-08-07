@@ -28,7 +28,13 @@ export class NoDiscoveryAdvisorResourceLoader implements ResourceLoader {
   getSystemPrompt() {
     return this.systemPrompt;
   }
+  getSystemPromptSource(): undefined {
+    return undefined;
+  }
   getAppendSystemPrompt(): string[] {
+    return [];
+  }
+  getAppendSystemPromptSources(): [] {
     return [];
   }
   extendResources(_paths: Parameters<ResourceLoader["extendResources"]>[0]): void {}

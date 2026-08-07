@@ -131,6 +131,10 @@ describe("OpenAI compaction projection", () => {
 
   test("calls the standalone endpoint with resolved auth and decodes its checkpoint", async () => {
     let captured: StreamingHttpTestRequest | undefined;
+    const requestModel = {
+      ...model,
+      headers: { "x-provider-default": "remove", "x-model-header": "keep" },
+    } satisfies Model<"openai-responses">;
     const responseBody = new TextEncoder().encode(
       JSON.stringify({
         object: "response.compaction",
@@ -144,7 +148,11 @@ describe("OpenAI compaction projection", () => {
         return streamingHttpResponse(200, Stream.make(responseBody));
       }),
     );
-    const getApiKeyAndHeaders = vi.fn(async () => ({ ok: true as const, apiKey: "secret" }));
+    const getApiKeyAndHeaders = vi.fn(async () => ({
+      ok: true as const,
+      apiKey: "secret",
+      headers: { "X-Provider-Default": null, "x-runtime-header": "runtime" },
+    }));
     const layer = OpenAICompactionClient.layer(() => ({ getApiKeyAndHeaders })).pipe(
       Layer.provide(http),
     );
@@ -152,7 +160,7 @@ describe("OpenAI compaction projection", () => {
     const result = await Effect.runPromise(
       OpenAICompactionClient.use((client) =>
         client.compact({
-          model,
+          model: requestModel,
           input: [{ role: "user", content: "hello" }],
           instructions: "system",
         }),
@@ -161,6 +169,9 @@ describe("OpenAI compaction projection", () => {
 
     expect(captured?.url).toBe("https://api.openai.com/v1/responses/compact");
     expect(captured?.headers?.authorization).toBe("Bearer secret");
+    expect(captured?.headers?.["x-provider-default"]).toBeUndefined();
+    expect(captured?.headers?.["x-model-header"]).toBe("keep");
+    expect(captured?.headers?.["x-runtime-header"]).toBe("runtime");
     expect(captured?.encodedJsonBody).toEqual({
       model: model.id,
       input: [{ role: "user", content: "hello" }],

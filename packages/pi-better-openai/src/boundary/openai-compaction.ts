@@ -1,4 +1,4 @@
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -8,12 +8,12 @@ import * as Stream from "effect/Stream";
 import { StreamingHttpClient } from "pi-cosmic-core";
 import type { OpenAICompactionJsonObject } from "../compaction/protocol.ts";
 
-const StringMapSchema = Schema.Record(Schema.String, Schema.String);
+const ProviderHeadersSchema = Schema.Record(Schema.String, Schema.NullOr(Schema.String));
 const AuthSchema = Schema.Union([
   Schema.Struct({
     ok: Schema.Literal(true),
     apiKey: Schema.optional(Schema.String),
-    headers: Schema.optional(StringMapSchema),
+    headers: Schema.optional(ProviderHeadersSchema),
   }),
   Schema.Struct({ ok: Schema.Literal(false), error: Schema.String }),
 ]);
@@ -80,6 +80,23 @@ type Registry = Pick<
   "getApiKeyAndHeaders"
 >;
 
+function mergeRequestHeaders(
+  ...sources: ReadonlyArray<Readonly<ProviderHeaders> | undefined>
+): Record<string, string> {
+  const resolved = new Map<string, { readonly name: string; readonly value: string }>();
+  for (const source of sources) {
+    if (!source) continue;
+    for (const [name, value] of Object.entries(source)) {
+      const normalized = name.toLowerCase();
+      if (value === null) resolved.delete(normalized);
+      else resolved.set(normalized, { name, value });
+    }
+  }
+  return Object.fromEntries(
+    Array.from(resolved.values(), ({ name, value }) => [name, value] as const),
+  );
+}
+
 function hasAuthorization(headers: Readonly<Record<string, string>>): boolean {
   return Object.entries(headers).some(
     ([name, value]) => name.toLowerCase() === "authorization" && value.trim().length > 0,
@@ -118,12 +135,12 @@ export class OpenAICompactionClient extends Context.Service<
           );
           if (!auth.ok)
             return yield* boundaryError("auth", "OpenAI authentication was unavailable.");
-          const headers = {
-            ...request.model.headers,
-            ...(auth.apiKey ? { authorization: `Bearer ${auth.apiKey}` } : {}),
-            ...auth.headers,
-          };
-          if (!auth.apiKey && !hasAuthorization(headers))
+          const headers = mergeRequestHeaders(
+            request.model.headers,
+            auth.apiKey ? { authorization: `Bearer ${auth.apiKey}` } : undefined,
+            auth.headers,
+          );
+          if (!hasAuthorization(headers))
             return yield* boundaryError("auth", "OpenAI API credentials were unavailable.");
           const body = {
             model: request.model.id,
