@@ -552,7 +552,8 @@ const toolDefinitions = [
   },
   {
     name: "supervisor_warning",
-    description: "Send one bounded assignment warning to the parent.",
+    description:
+      "Record one bounded non-blocking assignment warning in parent-visible run status; repeat it in the final report.",
     inputSchema: {
       type: "object",
       properties: { message: { type: "string", minLength: 1, maxLength: MAX_MESSAGE_CHARS } },
@@ -705,7 +706,7 @@ const executeTool = async (request, signal) => {
       return;
     case "supervisor_warning":
       await channelCall("warning", { message: args.message }, signal);
-      toolResult(request.id, "Warning delivered to the parent.");
+      toolResult(request.id, "Warning recorded in parent-visible run status.");
       return;
     case "supervisor_question": {
       const result = await channelCall("question", { message: args.message }, signal, true);

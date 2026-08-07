@@ -1050,6 +1050,64 @@ describe("SubagentService", () => {
     },
   );
 
+  it.effect("delivers a retained report and later failure as distinct outcome generations", () => {
+    const backend = fakeRetainedBackendLayer();
+    const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
+    const layer = retainedServiceLayer(backend, {
+      notify: (notification) => notifications.push(notification),
+      publish: (projection) => projections.push(projection),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          name: "retained-failure-generation",
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      backend.controls[0]?.offer({
+        type: "report",
+        runId: run.id,
+        sequence: 1,
+        deliveryId: "retained-success",
+        text: "First report.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.length === 1);
+      expect(notifications[0]).toMatchObject({
+        type: "completed",
+        runs: [{ id: run.id, generation: 1, outcome: "completed", retained: true }],
+      });
+
+      expect((yield* service.send(run.id, "Begin the next assignment.")).state).toBe("running");
+      backend.controls[0]?.offer({
+        type: "exit",
+        exitCode: 1,
+        diagnostic: "Retained backend exited.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.length === 2);
+      expect(notifications[1]).toMatchObject({
+        type: "completed",
+        runs: [
+          {
+            id: run.id,
+            generation: 2,
+            outcome: "failed",
+            error: "Retained backend exited.",
+          },
+        ],
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("rejects parallel await ownership and releases only the cancelled claim", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
@@ -1841,6 +1899,31 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
+  it.effect("delivers a claimed failure through await without a background notification", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      notify: (notification) => notifications.push(notification),
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "awaited-failure" }));
+      const awaiting = yield* service
+        .awaitTerminal([run.id], "all_finished")
+        .pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      fake.controls[0]?.exit(1);
+      const [failed] = yield* Fiber.join(awaiting);
+      expect(failed).toMatchObject({ id: run.id, state: "failed", error: expect.any(String) });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      yield* TestClock.adjust("1 second");
+      expect(notifications).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("notifies after a foreground waiter returns on a blocking question", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
@@ -1894,6 +1977,61 @@ describe("SubagentService", () => {
       expect(notifications[1]).toMatchObject({
         type: "completed",
         runs: [{ id: run.id, finalText: "Foreground report." }],
+      });
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("releases a foreground claim when startup fails before observation ownership", () => {
+    const fake = fakeChildLayer(Effect.void, {
+      initialFailures: [{ spawnIndex: 0, type: "get_state", error: "startup failed" }],
+    });
+    const notifications: SubagentNotification[] = [];
+    const layer = serviceLayer({
+      notify: (notification) => notifications.push(notification),
+    }).pipe(Layer.provide(fake.layer));
+
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      expect(
+        yield* service
+          .start(request({ name: "foreground-start-failure", execution: "foreground" }))
+          .pipe(Effect.flip),
+      ).toBeDefined();
+      const [failed] = yield* service.list;
+      expect(failed).toMatchObject({ name: "foreground-start-failure", state: "failed" });
+      const [observed] = yield* service.awaitTerminal([failed!.id], "all_finished");
+      expect(observed).toMatchObject({ id: failed!.id, state: "failed" });
+      yield* TestClock.adjust("1 second");
+      expect(notifications).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("requeues a failed foreground outcome when rendering fails", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      notify: (notification) => notifications.push(notification),
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({ name: "foreground-failure", execution: "foreground" }),
+      );
+      const rendering = yield* service
+        .withForegroundObservation(run.id, () => Effect.fail("render failed"))
+        .pipe(Effect.flip, Effect.forkScoped);
+      yield* Effect.yieldNow;
+      fake.controls[0]?.exit(1);
+      expect(yield* Fiber.join(rendering)).toBe("render failed");
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.length === 1);
+      expect(notifications[0]).toMatchObject({
+        type: "completed",
+        runs: [{ id: run.id, generation: 1, outcome: "failed" }],
       });
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
@@ -2792,16 +2930,35 @@ describe("SubagentService", () => {
       ]);
 
       const failedRun = yield* service.start(request({ name: "failed-name" }));
-      fake.controls[1]?.offer({ type: "tool_execution_start" });
+      fake.controls[1]?.exit(1);
       yield* yieldUntil(() =>
         Boolean(
           projections.at(-1)?.runs.some((run) => run.id === failedRun.id && run.state === "failed"),
         ),
       );
-      const failedBeforeStop = yield* service.status(failedRun.id);
+      const failedBeforeStop = projections
+        .at(-1)
+        ?.runs.find((candidate) => candidate.id === failedRun.id);
+      for (let attempt = 0; attempt < 5 && notifications.length < 2; attempt += 1) {
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("100 millis");
+      }
+      expect(notifications.filter((item) => item.type === "completed")).toHaveLength(2);
+      expect(notifications[1]).toMatchObject({
+        type: "completed",
+        runs: [
+          {
+            id: failedRun.id,
+            name: "failed-name",
+            generation: 1,
+            outcome: "failed",
+            error: expect.any(String),
+          },
+        ],
+      });
       const stoppedFailed = yield* service.stop(failedRun.id);
       expect(stoppedFailed.state).toBe("failed");
-      expect(stoppedFailed.endedAt).toBe(failedBeforeStop.endedAt);
+      expect(stoppedFailed.endedAt).toBe(failedBeforeStop?.endedAt);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -3869,11 +4026,13 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.effect("delivers distinct warnings while triggering only the first warning turn", () => {
+  it.effect("keeps warnings in projection and session history without host notification", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
     const layer = serviceLayer({
       notify: (notification) => notifications.push(notification),
+      publish: (projection) => projections.push(projection),
     }).pipe(Layer.provide(fake.layer));
     return Effect.gen(function* () {
       const service = yield* SubagentService;
@@ -3891,45 +4050,67 @@ describe("SubagentService", () => {
           kind,
           message,
         });
-      yield* yieldUntil(() => notifications.length === 2);
-      expect(notifications).toMatchObject([
-        { type: "warning", message: "First warning", triggerTurn: true },
-        { type: "warning", message: "Second warning", triggerTurn: false },
-      ]);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning === "Second warning");
+      expect(notifications).toEqual([]);
 
       fake.controls[0]?.offer({
         type: "extension_error",
         error: "Extension bridge failed token=secret-value",
       });
-      yield* yieldUntil(() => notifications.length === 3);
-      expect(notifications[2]).toMatchObject({ type: "warning", triggerTurn: false });
-      const extensionWarning = notifications[2];
-      expect(extensionWarning?.type).toBe("warning");
-      if (extensionWarning?.type === "warning")
-        expect(extensionWarning.message).not.toContain("secret-value");
+      yield* yieldUntil(() =>
+        Boolean(projections.at(-1)?.runs[0]?.warning?.includes("Extension bridge failed")),
+      );
+      expect(notifications).toEqual([]);
       const status = yield* service.status(run.id);
       expect(status.progress).toBe("Second progress");
       expect(status.warning).toContain("Extension bridge failed");
       expect(status.warning).not.toContain("secret-value");
+      expect(
+        status.sessionEvents.filter((event) => event.type === "notice" && event.kind === "warning"),
+      ).toHaveLength(3);
+
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: "Final report." }] },
+      });
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.length === 1);
+      expect(notifications).toMatchObject([
+        {
+          type: "completed",
+          runs: [
+            {
+              id: run.id,
+              outcome: "completed",
+              finalText: "Final report.",
+              warning: expect.stringContaining("Extension bridge failed"),
+            },
+          ],
+        },
+      ]);
+      const completion = notifications[0];
+      expect(completion?.type).toBe("completed");
+      if (completion?.type === "completed")
+        expect(completion.runs[0]?.warning).not.toContain("secret-value");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.effect("retries actionable question and warning delivery once without duplicates", () => {
+  it.effect("retries actionable question delivery once without warning interference", () => {
     const fake = fakeChildLayer();
-    const attempts = new Map<string, number>();
+    let attempts = 0;
     const delivered: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
     const layer = serviceLayer({
+      publish: (projection) => projections.push(projection),
       notify: (notification) => {
         if (notification.type === "completed") return undefined;
-        const key = notification.type === "question" ? "question" : notification.message;
-        const attempt = (attempts.get(key) ?? 0) + 1;
-        attempts.set(key, attempt);
-        if (attempt === 1) throw new Error("transient parent delivery failure");
+        attempts += 1;
+        if (attempts === 1) throw new Error("transient parent delivery failure");
         delivered.push(notification);
         return {
-          deliveredActionKeys: [
-            `${notification.id}:${notification.type}:${notification.type === "warning" ? (notification.slotKey ?? "default") : "default"}:${notification.generation}`,
-          ],
+          deliveredActionKeys: [`${notification.id}:question:default:${notification.generation}`],
         };
       },
     }).pipe(Layer.provide(fake.layer));
@@ -3943,49 +4124,41 @@ describe("SubagentService", () => {
         kind: "question",
         message: "Retry this question?",
       });
-      yield* yieldUntil(() => attempts.get("question") === 1);
+      yield* yieldUntil(() => attempts === 1);
 
-      // A distinct warning must not supersede the still-undelivered question generation.
       fake.controls[0]?.offerIpc({
         channel: "pi-subagents",
         type: "contact_parent",
-        requestId: "retry-warning",
+        requestId: "projection-warning",
         kind: "warning",
-        message: "Retry this warning.",
+        message: "Keep this warning in status only.",
       });
-      yield* yieldUntil(() => delivered.some((notification) => notification.type === "question"));
-      yield* yieldUntil(() => attempts.get("Retry this warning.") === 1);
-      yield* TestClock.adjust("200 millis");
-      yield* yieldUntil(() =>
-        delivered.some(
-          (notification) =>
-            notification.type === "warning" && notification.message === "Retry this warning.",
-        ),
+      yield* yieldUntil(
+        () => projections.at(-1)?.runs[0]?.warning === "Keep this warning in status only.",
       );
+      expect(attempts).toBe(1);
+
+      yield* TestClock.adjust("200 millis");
+      yield* yieldUntil(() => delivered.length === 1);
       yield* TestClock.adjust("30 seconds");
-      expect(delivered.filter((notification) => notification.type === "question")).toHaveLength(1);
-      expect(
-        delivered.filter(
-          (notification) =>
-            notification.type === "warning" && notification.message === "Retry this warning.",
-        ),
-      ).toHaveLength(1);
+      expect(attempts).toBe(2);
+      expect(delivered).toMatchObject([{ type: "question", message: "Retry this question?" }]);
       expect((yield* service.status(run.id)).state).toBe("waiting_for_parent");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
-  it.effect("restarts actionable delivery after a stale queue drains to idle", () => {
+  it.effect("restarts question delivery after a stale queue drains to idle", () => {
     const fake = fakeChildLayer();
-    const attempts: SubagentNotification[] = [];
+    const attempts: Array<Extract<SubagentNotification, { type: "question" }>> = [];
     const layer = serviceLayer({
       notify: (notification) => {
         if (notification.type === "completed") return undefined;
         attempts.push(notification);
-        return notification.type === "question"
+        return notification.requestId === "stale-question"
           ? { deliveredActionKeys: [] }
           : {
               deliveredActionKeys: [
-                `${notification.id}:warning:${notification.slotKey ?? "default"}:${notification.generation}`,
+                `${notification.id}:question:default:${notification.generation}`,
               ],
             };
       },
@@ -4000,22 +4173,18 @@ describe("SubagentService", () => {
         kind: "question",
         message: "This will become stale.",
       });
-      yield* yieldUntil(() => attempts.some((value) => value.type === "question"));
+      yield* yieldUntil(() => attempts.some((value) => value.requestId === "stale-question"));
       yield* service.reply(run.id, "Resolved before retry.");
       yield* TestClock.adjust("200 millis");
 
       fake.controls[0]?.offerIpc({
         channel: "pi-subagents",
         type: "contact_parent",
-        requestId: "new-warning",
-        kind: "warning",
-        message: "Delivery after idle.",
+        requestId: "new-question",
+        kind: "question",
+        message: "Delivery after idle?",
       });
-      yield* yieldUntil(() =>
-        attempts.some(
-          (value) => value.type === "warning" && value.message === "Delivery after idle.",
-        ),
-      );
+      yield* yieldUntil(() => attempts.some((value) => value.requestId === "new-question"));
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

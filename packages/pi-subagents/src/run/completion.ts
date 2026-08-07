@@ -51,7 +51,10 @@ export function collectPendingCompletionNotifications(
         id: record.view.id,
         name: record.view.name,
         generation: receipt.generation,
+        outcome: completion.outcome,
         ...(completion.finalText ? { finalText: completion.finalText } : {}),
+        ...(completion.error ? { error: completion.error } : {}),
+        ...(completion.warning ? { warning: completion.warning } : {}),
         ...(completion.retained ? { retained: true } : {}),
       },
     ];

@@ -280,9 +280,14 @@ describe("local CLI Phase One backends", () => {
     const writeArgs = claudeArgv({ ...launch("claude"), writeIntent: "writer" }, paths);
     const readTools = readArgs[readArgs.indexOf("--tools") + 1];
     const writeTools = writeArgs[writeArgs.indexOf("--tools") + 1];
+    const readerAllowed = readArgs[readArgs.indexOf("--allowedTools") + 1]?.split(",") ?? [];
     const writerAllowed = writeArgs[writeArgs.indexOf("--allowedTools") + 1]?.split(",") ?? [];
-    expect(readTools).not.toContain("Bash");
+    expect(readTools).toContain("Bash");
+    expect(readTools).not.toContain("Edit");
     expect(readTools).not.toContain("Write");
+    expect(readerAllowed).not.toContain("Bash");
+    expect(readerAllowed).not.toContain("Edit");
+    expect(readerAllowed).not.toContain("Write");
     expect(writeTools).toContain("Bash");
     expect(writeTools).toContain("Edit");
     expect(writeTools).not.toContain("Write");
@@ -302,6 +307,25 @@ describe("local CLI Phase One backends", () => {
     expect(claudeInterruptFrame("interrupt-1")).toMatchObject({
       request: { subtype: "interrupt", cancel_queued: true },
     });
+    expect(claudeSettings(launch("claude"))).toMatchObject({
+      permissions: {
+        defaultMode: "dontAsk",
+        allow: expect.not.arrayContaining(["Bash", "Edit", "Write"]),
+      },
+      sandbox: {
+        enabled: true,
+        autoAllowBashIfSandboxed: true,
+        failIfUnavailable: true,
+        allowUnsandboxedCommands: false,
+        filesystem: { allowWrite: [], denyWrite: [process.cwd()] },
+        network: {
+          allowedDomains: [],
+          strictAllowlist: true,
+          allowAllUnixSockets: false,
+          allowLocalBinding: false,
+        },
+      },
+    });
     expect(claudeSettings({ ...launch("claude"), writeIntent: "writer" })).toMatchObject({
       permissions: {
         defaultMode: "dontAsk",
@@ -312,13 +336,7 @@ describe("local CLI Phase One backends", () => {
         autoAllowBashIfSandboxed: true,
         failIfUnavailable: true,
         allowUnsandboxedCommands: false,
-        filesystem: { allowWrite: [process.cwd()] },
-        network: {
-          allowedDomains: [],
-          strictAllowlist: true,
-          allowAllUnixSockets: false,
-          allowLocalBinding: false,
-        },
+        filesystem: { allowWrite: [process.cwd()], denyWrite: [] },
       },
     });
 
@@ -356,6 +374,26 @@ describe("local CLI Phase One backends", () => {
       turnStartRequest("4", "thread", "task", "gpt-5.6-sol", "high", "read-only", true).params
         .serviceTier,
     ).toBe("priority");
+  });
+
+  it("rejects read-only Claude Bash where the strict sandbox is unsupported", async () => {
+    const processes = makeLocalCliProcess({
+      agentDirectory: "/unused-before-platform-rejection",
+      executables: { claude: "claude", codex: "codex" },
+      platform: "freebsd",
+    });
+    await expect(
+      Effect.runPromise(
+        processes.preflight({
+          runtime: "claude",
+          context: "fresh",
+          writeIntent: "read-only",
+          closeOnReport: true,
+          model: "claude-model",
+          effort: "xhigh",
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "claude_shell_confinement_unsupported" });
   });
 
   it("runs Claude stream JSON with confirmed guidance/interrupt and supervisor correlation", async () => {

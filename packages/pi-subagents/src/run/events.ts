@@ -41,9 +41,7 @@ export interface RunEventDependencies {
   ) => Effect.Effect<SubagentRunView>;
   readonly notify: (
     record: RunRecord,
-    notification:
-      | Omit<Extract<SubagentNotification, { type: "question" }>, "generation">
-      | Omit<Extract<SubagentNotification, { type: "warning" }>, "generation">,
+    notification: Omit<Extract<SubagentNotification, { type: "question" }>, "generation">,
   ) => Effect.Effect<void>;
   readonly failRun: (
     record: RunRecord,
@@ -93,27 +91,21 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         return;
       }
       if (envelope.kind === "warning") {
-        let duplicate = false;
-        const view = yield* mutateView(record, envelope.assignmentEpoch, (current) => {
-          if (current.state === "paused") return undefined;
-          duplicate = current.warning === message;
-          return {
-            ...current,
-            warning: message,
-            lastActivityAt: now,
-            sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "warning", message, now),
-          };
-        });
-        if (!view || duplicate) return;
-        const triggerTurn = !record.warningTurnTriggered;
-        record.warningTurnTriggered = true;
-        yield* notify(record, {
-          type: "warning",
-          id: view.id,
-          name: view.name,
-          message,
-          triggerTurn,
-        });
+        yield* mutateView(record, envelope.assignmentEpoch, (current) =>
+          current.state === "paused"
+            ? undefined
+            : {
+                ...current,
+                warning: message,
+                lastActivityAt: now,
+                sessionEvents: appendNoticeSessionEvent(
+                  current.sessionEvents,
+                  "warning",
+                  message,
+                  now,
+                ),
+              },
+        );
         return;
       }
       const view = yield* mutateView(record, envelope.assignmentEpoch, (current) => {
@@ -241,13 +233,10 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           return { ...current, state: "running", question: undefined };
         }).pipe(Effect.asVoid);
       case "warning":
-        return Effect.gen(function* () {
-          const now = yield* Clock.currentTimeMillis;
-          const message = sanitizeDiagnosticText(event.message, MAX_ERROR_CHARS);
-          let duplicate = false;
-          const view = yield* mutateView(record, undefined, (current) => {
-            duplicate = current.warning === message;
-            return {
+        return Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) => {
+            const message = sanitizeDiagnosticText(event.message, MAX_ERROR_CHARS);
+            return mutateView(record, undefined, (current) => ({
               ...current,
               warning: message,
               lastActivityAt: now,
@@ -257,19 +246,10 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                 `Extension error: ${message}`,
                 now,
               ),
-            };
-          });
-          if (!view || duplicate) return;
-          const triggerTurn = !record.warningTurnTriggered;
-          record.warningTurnTriggered = true;
-          yield* notify(record, {
-            type: "warning",
-            id: view.id,
-            name: view.name,
-            message,
-            triggerTurn,
-          });
-        });
+            }));
+          }),
+          Effect.asVoid,
+        );
       case "protocol_error": {
         const error = protocolError(event.message);
         return failRun(record, error.message, error).pipe(Effect.asVoid);

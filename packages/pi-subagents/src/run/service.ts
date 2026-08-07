@@ -262,7 +262,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   >();
   const pendingActionNotifications = new Map<
     string,
-    Extract<SubagentNotification, { readonly type: "question" | "warning" }>
+    Extract<SubagentNotification, { readonly type: "question" }>
   >();
   let completionFlushScheduled = false;
   let actionFlushScheduled = false;
@@ -380,27 +380,20 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       Effect.sync(() => queuePendingCompletion(pendingCompletions, record, generation)),
     ).pipe(Effect.andThen(scheduleCompletionFlush));
 
-  const actionSlot = (
-    notification: Extract<SubagentNotification, { type: "question" | "warning" }>,
-  ) =>
-    `${notification.id}:${notification.type}:${notification.type === "warning" ? (notification.slotKey ?? "default") : "default"}`;
-  const actionDeliveryKey = (
-    notification: Extract<SubagentNotification, { type: "question" | "warning" }>,
-  ) => `${actionSlot(notification)}:${notification.generation}`;
+  const actionSlot = (notification: Extract<SubagentNotification, { type: "question" }>) =>
+    `${notification.id}:question:default`;
+  const actionDeliveryKey = (notification: Extract<SubagentNotification, { type: "question" }>) =>
+    `${actionSlot(notification)}:${notification.generation}`;
   const actionRelevant = (
-    notification: Extract<SubagentNotification, { type: "question" | "warning" }>,
+    notification: Extract<SubagentNotification, { type: "question" }>,
   ): boolean => {
     const record = records.get(notification.id);
-    if (!record || record.notificationGeneration < notification.generation) return false;
-    if (notification.type === "question")
-      return (
-        record.questionNotificationGeneration === notification.generation &&
-        record.view.state === "waiting_for_parent" &&
-        record.view.question?.requestId === notification.requestId
-      );
     return (
-      record.warningNotificationGenerations.get(actionSlot(notification)) ===
-      notification.generation
+      record !== undefined &&
+      record.notificationGeneration >= notification.generation &&
+      record.questionNotificationGeneration === notification.generation &&
+      record.view.state === "waiting_for_parent" &&
+      record.view.question?.requestId === notification.requestId
     );
   };
 
@@ -526,19 +519,16 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const queueActionNotification = (
     record: RunRecord,
-    notification:
-      | Omit<Extract<SubagentNotification, { type: "question" }>, "generation">
-      | Omit<Extract<SubagentNotification, { type: "warning" }>, "generation">,
+    notification: Omit<Extract<SubagentNotification, { type: "question" }>, "generation">,
   ) =>
     withLock(
       Effect.sync(() => {
         const generation = ++record.notificationGeneration;
         const queued = { ...notification, generation } as Extract<
           SubagentNotification,
-          { type: "question" | "warning" }
+          { type: "question" }
         >;
-        if (queued.type === "question") record.questionNotificationGeneration = generation;
-        else record.warningNotificationGenerations.set(actionSlot(queued), generation);
+        record.questionNotificationGeneration = generation;
         pendingActionNotifications.set(actionSlot(queued), queued);
         if (actionRetryWake) Deferred.doneUnsafe(actionRetryWake, Effect.void);
       }),
@@ -567,7 +557,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const deliverForeground = (record: RunRecord, view: SubagentRunView): boolean => {
     if (!record.foregroundWaitPending) return false;
     record.foregroundWaitPending = false;
-    if (view.state === "completed" || view.state === "reported") {
+    if (view.state === "completed" || view.state === "reported" || view.state === "failed") {
       const generation = record.completionGeneration;
       const existing = record.foregroundCompletionClaim;
       const claim =
@@ -904,19 +894,21 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           record.pauseOutcome = undefined;
           record.pauseRequested = false;
           record.activeTools.clear();
-          const completionGeneration =
-            state === "completed" ? ++record.completionGeneration : record.completionGeneration;
-          if (state === "completed")
+          const hasDeliverableOutcome = state === "completed" || state === "failed";
+          const completionGeneration = hasDeliverableOutcome
+            ? ++record.completionGeneration
+            : record.completionGeneration;
+          if (hasDeliverableOutcome)
             record.completionGenerations.set(completionGeneration, {
               generation: completionGeneration,
-              ...(record.latestAssistantText ? { finalText: record.latestAssistantText } : {}),
+              outcome: state,
+              ...(state === "completed" && record.latestAssistantText
+                ? { finalText: record.latestAssistantText }
+                : {}),
+              ...(state === "failed" ? { error: error ?? "Run failed." } : {}),
+              ...(record.view.warning ? { warning: record.view.warning } : {}),
               retained: false,
             });
-          for (const [slot, notification] of pendingActionNotifications) {
-            if (notification.id !== record.view.id || notification.type !== "warning") continue;
-            pendingActionNotifications.delete(slot);
-            record.warningNotificationGenerations.delete(slot);
-          }
           record.notificationGeneration += 1;
           record.questionNotificationGeneration = record.notificationGeneration;
           pendingActionNotifications.delete(`${record.view.id}:question:default`);
@@ -935,35 +927,35 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                   ...(record.latestAssistantText ? { finalText: record.latestAssistantText } : {}),
                 }
               : {}),
-            ...(error ? { error } : {}),
+            ...(state === "failed" ? { error: error ?? "Run failed." } : error ? { error } : {}),
           };
           publish();
+          const view = snapshotView(record.view);
+          const deliveredToForeground = deliverForeground(record, view);
+          const completionQueued = hasDeliverableOutcome && !deliveredToForeground;
+          if (completionQueued)
+            queuePendingCompletion(pendingCompletions, record, completionGeneration);
           return {
             transitioned: true as const,
-            view: snapshotView(record.view),
+            view,
             settlement,
             pauseOutcome,
             completedScope,
-            completionGeneration,
+            completionQueued,
           };
         }),
+      ).pipe(
+        Effect.tap((transition) =>
+          transition.transitioned && transition.completionQueued
+            ? scheduleCompletionFlush
+            : Effect.void,
+        ),
+        Effect.uninterruptible,
       );
       const view = result.view;
       if (!result.transitioned) return view;
       Deferred.doneUnsafe(result.settlement, Effect.succeed(view));
       if (result.pauseOutcome) Deferred.doneUnsafe(result.pauseOutcome, Effect.succeed(view));
-      const deliveredToForeground = deliverForeground(record, view);
-      if (state === "completed") {
-        if (!deliveredToForeground) yield* queueCompletion(record, result.completionGeneration);
-      } else if (!deliveredToForeground && state === "failed") {
-        yield* queueActionNotification(record, {
-          type: "warning",
-          id: view.id,
-          name: view.name,
-          message: error ?? "Run failed.",
-          triggerTurn: true,
-        });
-      }
       yield* sendPeerNotices(record.view.id);
       if (result.completedScope)
         yield* closeRecordScope(record, result.completedScope).pipe(
@@ -1022,7 +1014,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     const text = report.text;
     record.completionGenerations.set(generation, {
       generation,
+      outcome: "completed",
       ...(text ? { finalText: text } : {}),
+      ...(record.view.warning ? { warning: record.view.warning } : {}),
       retained: true,
     });
     record.notificationGeneration += 1;
@@ -1614,10 +1608,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                   }
                 : {}),
               initializationPending: true,
-              warningTurnTriggered: false,
               notificationGeneration: 0,
               questionNotificationGeneration: 0,
-              warningNotificationGenerations: new Map(),
               completionGeneration: 0,
               completionGenerations: new Map(),
               completionClaims: new Map(
@@ -1739,6 +1731,21 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                     sanitizeDiagnosticText(Cause.pretty(cause), MAX_ERROR_CHARS),
                   );
               }
+              if (
+                request.execution === "foreground" &&
+                (reserved.view.state === "failed" || reserved.view.state === "stopped")
+              )
+                yield* withLock(
+                  Effect.sync(() => {
+                    const claim = reserved.foregroundCompletionClaim;
+                    reserved.foregroundCompletionClaim = undefined;
+                    reserved.foregroundWaitPending = false;
+                    if (!claim) return;
+                    reserved.completionClaims.delete(claim.generation);
+                    reserved.completionGenerations.delete(claim.generation);
+                    removePendingCompletion(pendingCompletions, reserved.view.id, claim.generation);
+                  }),
+                );
               yield* closeRecordScope(reserved);
             }),
           ),
@@ -1775,7 +1782,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const observeRecord = (record: RunRecord, claimToken?: string): SubagentRunObservation => {
     const generation = record.completionGeneration;
-    if (record.view.state !== "completed" && record.view.state !== "reported")
+    if (
+      record.view.state !== "completed" &&
+      record.view.state !== "reported" &&
+      record.view.state !== "failed"
+    )
       return { run: snapshotView(record.view) };
     const unresolved = record.completionGenerations.has(generation);
     const owns =
@@ -1822,14 +1833,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
             name: view.name,
             requestId: view.question.requestId,
             message: view.question.message,
-          };
-        if (view.state === "failed")
-          return {
-            type: "warning" as const,
-            id: view.id,
-            name: view.name,
-            message: view.error ?? "Run failed.",
-            triggerTurn: true,
           };
         return undefined;
       }),
@@ -2160,10 +2163,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 selected.pauseRequested = false;
                 selected.pauseOutcome = undefined;
                 selected.activeTools.clear();
-                selected.warningTurnTriggered = false;
                 selected.notificationGeneration += 1;
                 selected.questionNotificationGeneration = selected.notificationGeneration;
-                selected.warningNotificationGenerations.clear();
                 for (const [slot, notification] of pendingActionNotifications)
                   if (notification.id === selected.view.id) pendingActionNotifications.delete(slot);
                 selected.replyPendingRequestId = undefined;

@@ -275,7 +275,11 @@ export const candidateFieldChoices = (
       : [{ value: "fresh", label: "Fresh", description: "Required by this host/runtime" }];
   if (field === "writeIntent")
     return [
-      { value: "read-only", label: "Read-only", description: "Inspect without modifying files" },
+      {
+        value: "read-only",
+        label: "Read-only",
+        description: "Inspect and validate with Bash; do not modify project files",
+      },
       { value: "writer", label: "Writer", description: "May modify files under writer policy" },
     ];
   if (field === "fastMode") {

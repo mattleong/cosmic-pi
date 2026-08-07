@@ -69,10 +69,7 @@ const SUPERVISOR_TOOLS = [
   "mcp__pi_subagents_supervisor__supervisor_question",
   "mcp__pi_subagents_supervisor__supervisor_submit_report",
 ] as const;
-const CLAUDE_READ_TOOLS = ["Glob", "Grep", "Read", "WebFetch", "WebSearch", ...SUPERVISOR_TOOLS];
-const CLAUDE_WRITE_TOOLS = [
-  "Bash",
-  "Edit",
+const CLAUDE_INSPECTION_TOOLS = [
   "Glob",
   "Grep",
   "Read",
@@ -80,6 +77,8 @@ const CLAUDE_WRITE_TOOLS = [
   "WebSearch",
   ...SUPERVISOR_TOOLS,
 ];
+const CLAUDE_READ_TOOLS = ["Bash", ...CLAUDE_INSPECTION_TOOLS];
+const CLAUDE_WRITE_TOOLS = ["Bash", "Edit", ...CLAUDE_INSPECTION_TOOLS];
 const CLAUDE_DENIED_TOOLS = [
   "Agent",
   "Task",
@@ -230,8 +229,8 @@ export const sanitizeLocalCliEnvironment = (
 const claudeAllowedTools = (launch: BackendLaunchRequest): ReadonlyArray<string> => {
   const writerPolicy = claudeWriterCwdPolicy(launch.cwd);
   return launch.writeIntent === "writer" && writerPolicy
-    ? [...CLAUDE_READ_TOOLS, writerPolicy.scopedEditRule]
-    : CLAUDE_READ_TOOLS;
+    ? [...CLAUDE_INSPECTION_TOOLS, writerPolicy.scopedEditRule]
+    : CLAUDE_INSPECTION_TOOLS;
 };
 
 export const claudeSettings = (launch: BackendLaunchRequest): Readonly<Record<string, unknown>> => {
@@ -249,6 +248,7 @@ export const claudeSettings = (launch: BackendLaunchRequest): Readonly<Record<st
       allowUnsandboxedCommands: false,
       filesystem: {
         allowWrite: launch.writeIntent === "writer" && writerPolicy ? [writerPolicy.cwd] : [],
+        denyWrite: launch.writeIntent === "read-only" ? [launch.cwd] : [],
       },
       network: {
         allowedDomains: [],
@@ -986,14 +986,13 @@ export const makeLocalCliProcess = (
         );
       if (
         request.runtime === "claude" &&
-        request.writeIntent === "writer" &&
         !(["darwin", "linux"] as ReadonlyArray<NodeJS.Platform>).includes(
           options.platform ?? process.platform,
         )
       )
         return yield* preflightError(
-          "claude_writer_confinement_unsupported",
-          "Local Claude writers require a current supported strict sandbox platform.",
+          "claude_shell_confinement_unsupported",
+          "Local Claude subagents require a current supported strict Bash sandbox platform.",
         );
       if (!isSafeNativeModelSelector(request.model))
         return yield* preflightError(

@@ -190,6 +190,49 @@ describe("Herdr native harness security", () => {
     });
   });
 
+  it("rejects read-only Claude Bash where the strict sandbox is unsupported", async () => {
+    const test = await setup();
+    const harness = makeHerdrHarness({
+      agentDirectory: test.agentDirectory,
+      environment: test.environment,
+      integrationPaths: test.integrations,
+      platform: "freebsd",
+    });
+    await expect(
+      Effect.runPromise(harness.preflight("claude", launch("claude"))),
+    ).rejects.toMatchObject({ code: "claude_shell_confinement_unsupported" });
+  });
+
+  it("exposes read-only Claude Bash only through the strict sandbox", async () => {
+    const test = await setup();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const prepared = yield* test.harness.prepare("claude", launch("claude"), test.supervisor);
+          expect(valueAfter(prepared.argv, "--tools")).toContain("Bash");
+          expect(valueAfter(prepared.argv, "--tools")).not.toContain("Edit");
+          const allowed = valueAfter(prepared.argv, "--allowedTools")?.split(",") ?? [];
+          expect(allowed).not.toContain("Bash");
+          expect(allowed).not.toContain("Edit");
+          expect(allowed).not.toContain("Write");
+          const settings = JSON.parse(
+            yield* Effect.promise(() =>
+              fs.readFile(valueAfter(prepared.argv, "--settings")!, "utf8"),
+            ),
+          );
+          expect(settings.sandbox).toMatchObject({
+            enabled: true,
+            autoAllowBashIfSandboxed: true,
+            failIfUnavailable: true,
+            allowUnsandboxedCommands: false,
+            filesystem: { allowWrite: [], denyWrite: [process.cwd()] },
+          });
+          prepared.authorizeCleanup();
+        }),
+      ),
+    );
+  });
+
   it("fixes Claude args and reuses strict cwd-scoped writer policy", async () => {
     const test = await setup();
     await Effect.runPromise(
@@ -368,11 +411,7 @@ describe("Herdr native harness security", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const prepared = yield* test.harness.prepare(
-            "pi",
-            launch("pi", "writer"),
-            test.supervisor,
-          );
+          const prepared = yield* test.harness.prepare("pi", launch("pi"), test.supervisor);
           expect(valueAfter(prepared.argv, "--model")).toBe("openai-codex/gpt-5.6-sol");
           expect(valueAfter(prepared.argv, "--thinking")).toBe("xhigh");
           expect(prepared.argv).toContain("--no-extensions");
@@ -381,11 +420,15 @@ describe("Herdr native harness security", () => {
           expect(prepared.argv).toContain("--no-themes");
           expect(prepared.argv).toContain("--no-context-files");
           expect(prepared.argv.filter((value) => value === "--extension")).toHaveLength(2);
+          expect(valueAfter(prepared.argv, "--tools")).toContain("bash");
+          expect(valueAfter(prepared.argv, "--tools")).not.toContain("edit");
+          expect(valueAfter(prepared.argv, "--tools")).not.toContain("write");
           expect(valueAfter(prepared.argv, "--tools")).toContain("supervisor_submit_report");
           expect(valueAfter(prepared.argv, "--exclude-tools")).toContain("subagent_start");
+          expect(valueAfter(prepared.argv, "--exclude-tools")).toContain("workflow_control");
           const promptPath = valueAfter(prepared.argv, "--system-prompt")!;
           expect(yield* Effect.promise(() => fs.readFile(promptPath, "utf8"))).toBe(
-            launch("pi", "writer").systemPrompt,
+            launch("pi").systemPrompt,
           );
           expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
           expect(prepared.secretCommand).not.toContain("pi-runtime-secret");

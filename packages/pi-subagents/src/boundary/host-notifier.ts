@@ -6,7 +6,11 @@ export interface SubagentCompletionNotification {
   readonly id: string;
   readonly name: string;
   readonly generation: number;
+  /** Omitted by legacy embedders; absence means a successful completed outcome. */
+  readonly outcome?: "completed" | "failed" | undefined;
   readonly finalText?: string | undefined;
+  readonly error?: string | undefined;
+  readonly warning?: string | undefined;
   readonly retained?: boolean | undefined;
 }
 
@@ -22,16 +26,6 @@ export type SubagentNotification =
       readonly requestId: string;
       readonly message: string;
       readonly generation: number;
-    }
-  | {
-      readonly type: "warning";
-      readonly id: string;
-      readonly name: string;
-      readonly message: string;
-      readonly triggerTurn: boolean;
-      readonly generation: number;
-      /** Service-owned identity for independently retried warning classes. */
-      readonly slotKey?: string | undefined;
     };
 
 export interface SubagentNotificationDelivery {
@@ -69,8 +63,27 @@ interface CompletionChunk {
   readonly runs: ReadonlyArray<SubagentCompletionNotification>;
 }
 
+const completionWarning = (run: SubagentCompletionNotification): string | undefined => {
+  const warning = run.warning?.trim();
+  return warning && warning !== run.error?.trim() ? `Warning: ${warning}` : undefined;
+};
+
+const completionBody = (run: SubagentCompletionNotification): string => {
+  const warning = completionWarning(run);
+  const primary =
+    run.outcome === "failed"
+      ? `Error: ${run.error?.trim() || "Run failed without an error report."}`
+      : run.finalText?.trim() || "Completed without a final report.";
+  return warning ? `${primary}\n\n${warning}` : primary;
+};
+
+const completionHeading = (run: SubagentCompletionNotification): string =>
+  run.outcome === "failed"
+    ? `failed outcome ${run.generation}`
+    : `report ${run.generation}${run.retained ? " · retained" : ""}`;
+
 const completionSection = (run: SubagentCompletionNotification): string =>
-  `## ${run.name} (${run.id}) · report ${run.generation}${run.retained ? " · retained" : ""}${run.finalText ? `\n\n${run.finalText}` : "\n\nCompleted without a final report."}`;
+  `## ${run.name} (${run.id}) · ${completionHeading(run)}\n\n${completionBody(run)}`;
 
 const boundedCompletionSection = (
   run: SubagentCompletionNotification,
@@ -78,8 +91,20 @@ const boundedCompletionSection = (
 ): string => {
   const section = completionSection(run);
   if (section.length <= maximumLength) return clip(section, maximumLength);
-  const marker = `\n\n[Report truncated; use subagent_status or subagent_await for ${run.id}.]`;
+  const noun = run.outcome === "failed" ? "Outcome" : "Report";
+  const marker = `\n\n[${noun} truncated; use subagent_status or subagent_await for ${run.id}.]`;
   return `${clip(section, Math.max(0, maximumLength - marker.length))}${marker}`;
+};
+
+const boundedCompletionBody = (
+  run: SubagentCompletionNotification,
+  maximumLength: number,
+): string => {
+  const body = completionBody(run);
+  if (body.length <= maximumLength) return clip(body, maximumLength);
+  const noun = run.outcome === "failed" ? "Outcome" : "Report";
+  const marker = `\n\n[${noun} truncated; use subagent_status or subagent_await for ${run.id}.]`;
+  return `${clip(body, Math.max(0, maximumLength - marker.length))}${marker}`;
 };
 
 const completionChunks = (
@@ -87,29 +112,28 @@ const completionChunks = (
 ): ReadonlyArray<CompletionChunk> => {
   if (runs.length === 1) {
     const run = runs[0]!;
-    const prefix = run.retained
-      ? `Background subagent ${run.name} (${run.id}) reported generation ${run.generation} and remains available for guidance.`
-      : `Background subagent ${run.name} (${run.id}) completed.`;
-    const maximumReportLength = Math.max(0, MAX_NOTIFICATION_CHARS - prefix.length - 2);
-    const report = run.finalText
-      ? boundedCompletionSection({ ...run, name: "Final report" }, maximumReportLength).replace(
-          `## Final report (${run.id}) · report ${run.generation}${run.retained ? " · retained" : ""}\n\n`,
-          "",
-        )
-      : "Completed without a final report.";
-    const content = `${prefix}\n\n${report}`;
+    const prefix =
+      run.outcome === "failed"
+        ? `Background subagent ${run.name} (${run.id}) failed.`
+        : run.retained
+          ? `Background subagent ${run.name} (${run.id}) reported generation ${run.generation} and remains available for guidance.`
+          : `Background subagent ${run.name} (${run.id}) completed.`;
+    const maximumBodyLength = Math.max(0, MAX_NOTIFICATION_CHARS - prefix.length - 2);
+    const content = `${prefix}\n\n${boundedCompletionBody(run, maximumBodyLength)}`;
     return [{ content: clip(content), runs: [run] }];
   }
 
   const chunks: CompletionChunk[] = [];
   let chunkRuns: SubagentCompletionNotification[] = [];
   let sections: string[] = [];
-  const retained = runs.filter((run) => run.retained).length;
-  const closed = runs.length - retained;
+  const failed = runs.filter((run) => run.outcome === "failed").length;
+  const retained = runs.filter((run) => run.outcome !== "failed" && run.retained).length;
+  const closed = runs.length - retained - failed;
   const headerFor = (chunkIndex: number): string => {
     const continuation = chunkIndex === 0 ? "" : ` (continued ${chunkIndex + 1})`;
     const outcomes = [
       closed > 0 ? `${closed} completed` : undefined,
+      failed > 0 ? `${failed} failed` : undefined,
       retained > 0 ? `${retained} reported and retained` : undefined,
     ]
       .filter((value): value is string => value !== undefined)
@@ -171,8 +195,8 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
               content: chunk.content,
               display: true,
             },
-            // Steering joins an active orchestration run before its next model call.
-            // Unlike followUp, it cannot accumulate behind the final synthesis.
+            // Terminal outcomes intentionally join an active orchestration run or wake an idle
+            // parent. Host acceptance is synchronous; model consumption may occur later.
             { deliverAs: "steer", triggerTurn: true },
           );
           for (const run of chunk.runs) {
@@ -189,26 +213,21 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
       return { deliveredCompletionKeys };
     }
 
-    const actionIdentity = `${notification.id}:${notification.type}:${notification.type === "warning" ? (notification.slotKey ?? "default") : "default"}`;
+    const actionIdentity = `${notification.id}:question:default`;
     const actionKey = `${actionIdentity}:${notification.generation}`;
     if ((deliveredActions.get(actionIdentity) ?? 0) >= notification.generation)
       return { deliveredActionKeys: [actionKey] };
     const content = clip(
-      notification.type === "question"
-        ? `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with subagent_reply({ runId: "${notification.id}", message: "..." }), then call subagent_await again.`
-        : `Subagent ${notification.name} (${notification.id}) warning: ${notification.message}`,
+      `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with subagent_reply({ runId: "${notification.id}", message: "..." }), then call subagent_await again.`,
     );
     try {
       pi.sendMessage(
         {
-          customType: `pi-subagents-${notification.type}`,
+          customType: "pi-subagents-question",
           content,
           display: true,
         },
-        {
-          deliverAs: "steer",
-          triggerTurn: notification.type === "question" || notification.triggerTurn,
-        },
+        { deliverAs: "steer", triggerTurn: true },
       );
       remember(deliveredActions, actionIdentity, notification.generation);
       return { deliveredActionKeys: [actionKey] };

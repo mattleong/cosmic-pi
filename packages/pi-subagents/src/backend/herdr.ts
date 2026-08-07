@@ -34,6 +34,7 @@ const unsupported = (runtime: SubagentRuntime, capability: string) =>
 
 /** Fixed supervisor/report contract shared by all three Herdr native harnesses. */
 export const withHerdrSupervisorInstructions = (
+  runtime: SubagentRuntime,
   request: BackendLaunchRequest,
 ): BackendLaunchRequest => ({
   ...request,
@@ -43,7 +44,9 @@ export const withHerdrSupervisorInstructions = (
     "Use only the private pi_subagents_supervisor tools for parent communication: supervisor_progress, supervisor_warning, supervisor_question, and supervisor_submit_report. The generic contact_parent instruction refers to these tools.",
     "supervisor_submit_report is the only completion signal. Submit exactly one complete bounded report for each assignment with a fresh stable delivery_id. Raw assistant text and native idle/done status never complete the run.",
     request.writeIntent === "read-only"
-      ? "Read-only is a fixed capability policy for Pi and Claude and a native read-only Codex sandbox. Do not mutate files or use a shell through Pi or Claude."
+      ? runtime === "pi"
+        ? "Read-only Bash is available for inspection and validation. Pi does not provide a filesystem sandbox, so this is a behavioral policy: do not mutate project files or run destructive commands, and use a writer assignment for intentional project changes."
+        : "Read-only Bash is available for inspection and validation inside the runtime's strict filesystem sandbox. Do not attempt to mutate project files or bypass the sandbox; use a writer assignment for intentional project changes."
       : "Writer intent permits only assigned-cwd changes through the fixed runtime policy. Keep edits narrowly within the assignment.",
   ].join("\n\n"),
 });
@@ -309,7 +312,7 @@ export const makeHerdrBackendDriver = (
   preflight: (request) => host.preflight({ runtime, ...request }),
   spawn: (request) =>
     Effect.gen(function* () {
-      const launch = withHerdrSupervisorInstructions(request);
+      const launch = withHerdrSupervisorInstructions(runtime, request);
       const supervisor = yield* supervisors
         .open({ runId: request.runId })
         .pipe(

@@ -299,9 +299,9 @@ const startCapturingService = (requests: StartSubagentRequest[]) =>
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
 
-  it("enforces the Pi read-only tool policy", () => {
+  it("allows Bash inspection while withholding direct Pi mutation tools", () => {
     const tools = ["read", "grep", "edit", "write", "bash", "mcp"];
-    expect(piToolsForWriteIntent(tools, "read-only")).toEqual(["read", "grep"]);
+    expect(piToolsForWriteIntent(tools, "read-only")).toEqual(["read", "grep", "bash"]);
     expect(piToolsForWriteIntent(tools, "writer")).toEqual(tools);
   });
 
@@ -1207,7 +1207,7 @@ describe("subagent tool", () => {
       effort: "high",
       writeIntent: "read-only",
       parentLeafId: "user-1",
-      activeTools: ["read", "grep"],
+      activeTools: ["read", "grep", "bash"],
     });
   });
 

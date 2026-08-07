@@ -11,7 +11,7 @@ export const withLocalSupervisorInstructions = (
     "A supervisor_submit_report call is the only completion signal. Submit one concise final report with a fresh bounded deliveryId after the assignment is complete. Raw final assistant text does not complete the run.",
     "Never launch, delegate to, or coordinate another agent. Do not use integrations, plugins, apps, hooks, skills, browser automation, remote control, or MCP servers other than pi_subagents_supervisor.",
     request.writeIntent === "read-only"
-      ? "Read-only is a fixed tool capability policy for Claude Code and a native read-only sandbox for Codex. Do not run shell commands or mutate any file."
+      ? "Read-only Bash is available for inspection and validation inside the runtime's strict filesystem sandbox. Do not attempt to mutate project files or bypass the sandbox; use a writer assignment for intentional project changes."
       : "Writer intent permits project edits within the assigned cwd only; keep changes narrowly within the assignment.",
   ].join("\n\n"),
 });

@@ -60,23 +60,33 @@ describe("subagent host notifier", () => {
     });
   });
 
-  it("steers warnings without triggering a turn when requested", () => {
+  it("delivers failures and folded warnings through the coalesced outcome channel", () => {
     const sendMessage = vi.fn();
     const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
 
     notify({
-      type: "warning",
-      id: "agent-1",
-      name: "reader",
-      message: "Later warning.",
-      triggerTurn: false,
-      generation: 1,
+      type: "completed",
+      runs: [
+        {
+          id: "agent-1",
+          name: "reader",
+          generation: 1,
+          outcome: "failed",
+          error: "Process exited unexpectedly.",
+          warning: "Ownership remains quarantined.",
+        },
+      ],
     });
 
     expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage.mock.calls[0]?.[0]).toMatchObject({
+      customType: "pi-subagents-completed",
+      content:
+        "Background subagent reader (agent-1) failed.\n\nError: Process exited unexpectedly.\n\nWarning: Ownership remains quarantined.",
+    });
     expect(sendMessage.mock.calls[0]?.[1]).toEqual({
       deliverAs: "steer",
-      triggerTurn: false,
+      triggerTurn: true,
     });
   });
 
@@ -136,7 +146,7 @@ describe("subagent host notifier", () => {
     expect(sendMessage.mock.calls[0]?.[0].content).toContain("## tester (agent-2)");
   });
 
-  it("distinguishes retained reports in multi-run completion headers", () => {
+  it("distinguishes completed, failed, and retained outcomes in batch headers", () => {
     const sendMessage = vi.fn();
     const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
     notify({
@@ -150,10 +160,17 @@ describe("subagent host notifier", () => {
           finalText: "Reviewed.",
           retained: true,
         },
+        {
+          id: "agent-3",
+          name: "tester",
+          generation: 1,
+          outcome: "failed",
+          error: "Tests failed.",
+        },
       ],
     });
     expect(sendMessage.mock.calls[0]?.[0].content).toContain(
-      "2 background subagents finished · 1 completed · 1 reported and retained",
+      "3 background subagents finished · 1 completed · 1 failed · 1 reported and retained",
     );
   });
 
@@ -220,18 +237,32 @@ describe("subagent host notifier", () => {
     expect(notify(completion)?.deliveredCompletionKeys).toEqual(["agent-1:1"]);
   });
 
-  it("does not retain raw report secrets in custom-message metadata", () => {
+  it("does not retain raw outcome secrets in custom-message metadata", () => {
     const sendMessage = vi.fn();
     const notify = makeHostNotifier({ sendMessage } as unknown as ExtensionAPI);
 
     notify({
       type: "completed",
-      runs: [{ id: "agent-1", name: "reader", generation: 1, finalText: "password=hunter2" }],
+      runs: [
+        { id: "agent-1", name: "reader", generation: 1, finalText: "password=hunter2" },
+        {
+          id: "agent-2",
+          name: "tester",
+          generation: 1,
+          outcome: "failed",
+          error: "token=terminal-secret",
+          warning: "api_key=warning-secret",
+        },
+      ],
     });
 
     const [message] = sendMessage.mock.calls[0] ?? [];
     expect(message.content).toContain("password=[REDACTED]");
+    expect(message.content).toContain("token=[REDACTED]");
+    expect(message.content).toContain("api_key=[REDACTED]");
     expect(message).not.toHaveProperty("details");
     expect(JSON.stringify(message)).not.toContain("hunter2");
+    expect(JSON.stringify(message)).not.toContain("terminal-secret");
+    expect(JSON.stringify(message)).not.toContain("warning-secret");
   });
 });

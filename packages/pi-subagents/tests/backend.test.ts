@@ -9,8 +9,10 @@ import type {
   ChildProcessShape,
   ChildWireEvent,
 } from "../src/boundary/child-process.ts";
-import type { BackendDriver } from "../src/backend/model.ts";
+import { withHerdrSupervisorInstructions } from "../src/backend/herdr.ts";
 import { makeLocalPiBackendDriver } from "../src/backend/local-pi.ts";
+import { withLocalSupervisorInstructions } from "../src/backend/local-supervisor-prompt.ts";
+import type { BackendDriver } from "../src/backend/model.ts";
 import { makeSubagentBackendRegistry } from "../src/backend/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 
@@ -33,6 +35,23 @@ const launch = {
 };
 
 describe("subagent backend contract", () => {
+  it("describes read-only Bash according to each runtime boundary", () => {
+    const readOnlyLaunch = {
+      ...launch,
+      context: "fresh" as const,
+      writeIntent: "read-only" as const,
+    };
+    expect(withLocalSupervisorInstructions(readOnlyLaunch).systemPrompt).toContain(
+      "inside the runtime's strict filesystem sandbox",
+    );
+    expect(withHerdrSupervisorInstructions("claude", readOnlyLaunch).systemPrompt).toContain(
+      "inside the runtime's strict filesystem sandbox",
+    );
+    expect(withHerdrSupervisorInstructions("pi", readOnlyLaunch).systemPrompt).toContain(
+      "behavioral policy",
+    );
+  });
+
   it.effect("rejects unsafe local Pi model selectors before spawn ownership", () => {
     let spawns = 0;
     const driver = makeLocalPiBackendDriver({

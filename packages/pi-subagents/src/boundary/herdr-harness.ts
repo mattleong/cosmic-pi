@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import type { BackendLaunchRequest } from "../backend/model.ts";
+import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT } from "../run/coordination.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors.ts";
 import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
 import { subagentRuntimeEfforts, type SubagentRuntime } from "../run/model.ts";
@@ -68,7 +69,7 @@ const PI_SUPERVISOR_TOOLS = [
   "supervisor_question",
   "supervisor_submit_report",
 ] as const;
-const CLAUDE_READ_TOOLS = [
+const CLAUDE_INSPECTION_TOOLS = [
   "Glob",
   "Grep",
   "Read",
@@ -76,16 +77,8 @@ const CLAUDE_READ_TOOLS = [
   "WebSearch",
   ...SUPERVISOR_NATIVE_TOOLS,
 ];
-const CLAUDE_WRITE_TOOLS = [
-  "Bash",
-  "Edit",
-  "Glob",
-  "Grep",
-  "Read",
-  "WebFetch",
-  "WebSearch",
-  ...SUPERVISOR_NATIVE_TOOLS,
-];
+const CLAUDE_READ_TOOLS = ["Bash", ...CLAUDE_INSPECTION_TOOLS];
+const CLAUDE_WRITE_TOOLS = ["Bash", "Edit", ...CLAUDE_INSPECTION_TOOLS];
 const CLAUDE_DENIED_TOOLS = [
   "Agent",
   "Task",
@@ -397,8 +390,8 @@ const claudeArgv = (
   const writerPolicy = claudeWriterCwdPolicy(request.cwd);
   const allowed =
     request.writeIntent === "writer" && writerPolicy
-      ? [...CLAUDE_READ_TOOLS, writerPolicy.scopedEditRule]
-      : CLAUDE_READ_TOOLS;
+      ? [...CLAUDE_INSPECTION_TOOLS, writerPolicy.scopedEditRule]
+      : CLAUDE_INSPECTION_TOOLS;
   return [
     "--name",
     request.name,
@@ -441,7 +434,8 @@ const piArgv = (
     "grep",
     "find",
     "ls",
-    ...(request.writeIntent === "writer" ? ["bash", "edit", "write"] : []),
+    "bash",
+    ...(request.writeIntent === "writer" ? ["edit", "write"] : []),
     ...PI_SUPERVISOR_TOOLS,
   ];
   return [
@@ -467,7 +461,7 @@ const piArgv = (
     "--tools",
     tools.join(","),
     "--exclude-tools",
-    "subagent_models,subagent_start,subagent_list,subagent_status,subagent_await,subagent_send,subagent_reply,subagent_lifecycle,subagent_rename,herdr_agent_start,herdr_agent_list,herdr_agent_status,herdr_agent_await,herdr_agent_read,herdr_agent_send,herdr_agent_stop",
+    ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
     "--system-prompt",
     promptPath,
     "--pi-subagents-supervisor-config",
@@ -721,6 +715,16 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
           return yield* readinessError(
             "herdr_platform_unsupported",
             "The private Herdr subagent harness currently requires POSIX env, shell, and lifecycle-integration semantics; Windows candidates are rejected before topology ownership.",
+          );
+        if (
+          runtime === "claude" &&
+          !(["darwin", "linux"] as ReadonlyArray<NodeJS.Platform>).includes(
+            fixedOptions.platform ?? process.platform,
+          )
+        )
+          return yield* readinessError(
+            "claude_shell_confinement_unsupported",
+            "Herdr Claude subagents require a current supported strict Bash sandbox platform.",
           );
         if (!isSafeNativeModelSelector(request.model))
           return yield* readinessError(

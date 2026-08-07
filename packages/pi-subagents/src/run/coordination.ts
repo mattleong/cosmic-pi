@@ -59,6 +59,7 @@ const PI_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "grep",
   "find",
   "ls",
+  "bash",
   "web_search",
   "fetch_content",
   "get_search_content",
@@ -103,11 +104,11 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
     "Before changing or reviewing files, read and follow applicable AGENTS.md instructions in the workspace.",
     "Use contact_parent(kind=progress) only for meaningful progress or discoveries that change the plan.",
     "Use contact_parent(kind=question) when blocked on a decision; wait for the parent reply instead of guessing.",
-    "Use contact_parent(kind=warning) for a material non-blocking risk.",
+    "Use contact_parent(kind=warning) to record a material non-blocking risk in parent-visible run status, and repeat that risk in the final report. Use kind=question instead when the parent must act before you can continue.",
     "Always end with a concise, self-contained final report containing the actual findings or work completed. Never finish with only an acknowledgement.",
     request.writeIntent === "writer"
       ? "You are the sole declared writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."
-      : "Your run is declared read-only. Use the available inspection tools, but do not edit, write, patch, generate, or otherwise mutate project files.",
+      : "Your run is declared read-only. When Bash is available, use it for inspection and validation only; do not use it to edit, write, patch, generate, or otherwise mutate project files. Use a writer assignment for intentional project changes.",
   ].join("\n\n");
 
 export const taskPrompt = (request: StartSubagentRequest, peerNotice: string): string =>

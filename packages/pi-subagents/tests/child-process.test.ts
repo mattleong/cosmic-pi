@@ -35,6 +35,11 @@ describe("subagent child process boundary", () => {
     expect(HERDR_AGENT_TOOL_NAMES.every((name) => excluded.has(name))).toBe(true);
   });
 
+  it("allows Bash but withholds direct mutation tools from read-only Pi children", () => {
+    const policy = childToolPolicy(["read", "bash", "edit", "write"], "read-only");
+    expect(policy.enabled).toEqual(["read", "bash"]);
+  });
+
   it.effect("bounds a cooperative abort when stdin never drains", () =>
     Effect.gen(function* () {
       const abort = yield* requestCooperativeAbort(() => Effect.never).pipe(Effect.forkScoped);

@@ -51,6 +51,7 @@ if (args.includes("--print")) {
     session_id: "claude-fixture-session",
     model,
     tools: [
+      "Bash",
       "Glob",
       "Grep",
       "Read",

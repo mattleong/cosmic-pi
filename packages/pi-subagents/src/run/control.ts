@@ -104,7 +104,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               view: snapshotView(selected.view),
               settlement: selected.settlement,
               latestAssistantText: selected.latestAssistantText,
-              warningTurnTriggered: selected.warningTurnTriggered,
               assignment: { ...selected.assignment },
               activeTools: [...selected.activeTools.entries()] as const,
               pauseRequested: selected.pauseRequested,
@@ -113,7 +112,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             };
             selected.settlement = nextSettlement;
             selected.latestAssistantText = undefined;
-            selected.warningTurnTriggered = false;
             selected.assignment = {
               epoch: selected.nextAssignmentEpoch++,
               phase: "issuing",
@@ -180,7 +178,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                   record.view = selected.previous.view;
                   record.settlement = selected.previous.settlement;
                   record.latestAssistantText = selected.previous.latestAssistantText;
-                  record.warningTurnTriggered = selected.previous.warningTurnTriggered;
                   record.assignment = selected.previous.assignment;
                   record.activeTools.clear();
                   for (const [toolCallId, toolName] of selected.previous.activeTools)

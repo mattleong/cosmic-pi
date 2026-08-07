@@ -82,7 +82,7 @@ The unified service defines capabilities and outcomes; it does not pretend all s
 
 The safety invariant is one writer for the same working directory across same-host parent processes, regardless of local or Herdr host and regardless of runtime. Achieving that cross-process invariant is an eventual MVP target, not a claim made by the Phase A in-memory guard. The implementation must use an ownership-token-checked same-host lock with liveness/orphan handling before advertising cross-process writer safety.
 
-The current Phase One tree implements that target in `pi-subagents` with a parent-owned private agent-directory protocol keyed by a SHA-256 digest of stable local directory identity (device + inode/file ID), not pathname. `realpath` remains launch/diagnostic data, so symlink aliases and directory renames cannot evade the in-memory or disk guard. Windows writer starts are rejected with typed `unsupported_safe_writer_ownership` before lease or spawn until native Job Object ownership can prove descendant termination; read-only starts remain allowed.
+The current Phase One tree implements that target for declared writers in `pi-subagents` with a parent-owned private agent-directory protocol keyed by a SHA-256 digest of stable local directory identity (device + inode/file ID), not pathname. `realpath` remains launch/diagnostic data, so symlink aliases and directory renames cannot evade the in-memory or disk guard. Windows writer starts are rejected with typed `unsupported_safe_writer_ownership` before lease or spawn until native Job Object ownership can prove descendant termination; read-only starts remain allowed. Read-only Pi now exposes unsandboxed Bash for inspection and validation without taking this lease, so its no-mutation rule is behavioral and a violating shell command is outside the one-declared-writer guarantee.
 
 A lease begins as `reserved`. An ownership-token-checked, atomic, synced `markSpawnStarted` transition must confirm before every initial or respawn backend driver call. If that transition fails or is ambiguous, no spawn is invoked. Positive parent death permits reclaim only for stably decoded `reserved` evidence. Parent death is insufficient for `spawn-started`: detached local process groups and Herdr PTYs can survive, so spawn-started, corrupt, transitional, permission-denied, or otherwise uncertain evidence remains fail-closed. Recovery is manual private-state removal only after an operator independently verifies external backend and descendant death; this ADR makes no automatic crash-cleanup claim for those leases.
 
@@ -92,14 +92,14 @@ Dead-reservation takeover and normal release atomically move the whole token-bou
 
 `read-only` is a capability policy, not a confidentiality or general security boundary.
 
-- Pi and Claude read-only modes depend on fixed tool allow/deny policy. They are not OS sandboxes. A runtime defect, an installed integration outside the controlled harness, or a newly introduced native capability can escape what a tool-name list expresses.
-- Codex's native read-only sandbox provides a stronger filesystem boundary for the model process, but adapter-owned MCP servers and hooks run outside that sandbox by design. The private report helper is an intentional narrowly scoped write capability.
+- Pi read-only mode uses a fixed tool allow/deny policy that now includes Bash for inspection and validation while excluding direct edit/write tools. Pi has no OS filesystem sandbox; Bash can technically mutate files, so the no-mutation contract is behavioral rather than enforced.
+- Claude and Codex expose shell execution inside their mandatory native read-only sandboxes. Claude fails closed when its strict Bash sandbox is unavailable and explicitly denies Bash writes to the assigned cwd for read-only runs. Adapter-owned MCP servers, lifecycle hooks, model/web traffic, and other host capabilities remain outside those subprocess sandboxes by design.
 - Allowed file reads, web tools, model inference, and runtime network behavior can disclose sensitive content after prompt injection. Read-only does not mean confidential or offline.
 - Capability policy does not roll back side effects performed by allowed external services, host hooks, or pre-existing processes. It cannot prove that a native session restored by another product retains the launch policy.
 - Herdr native restore may resume an official session without replaying the restricted launch arguments. Such a restored process is outside the unified run's guarantees and must fail ownership revalidation rather than be adopted.
 - Unknown extension tools are excluded rather than assumed safe. The policy intentionally sacrifices capability for fail-closed behavior, but exclusion alone is not proof of non-mutation.
 
-The product documentation and tool output must describe these limits accurately and must not call capability-restricted Pi or Claude execution sandboxed.
+The product documentation and tool output must describe these limits accurately: Pi execution is not sandboxed, while Claude/Codex sandbox claims apply only to their model subprocess shell boundary.
 
 ## Consequences
 

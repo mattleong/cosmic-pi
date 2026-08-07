@@ -24,7 +24,10 @@ export const isInactiveRunRecord = (record: RunRecord): boolean =>
 
 export interface CompletionGenerationRecord {
   readonly generation: number;
+  readonly outcome: "completed" | "failed";
   readonly finalText?: string | undefined;
+  readonly error?: string | undefined;
+  readonly warning?: string | undefined;
   readonly retained: boolean;
 }
 
@@ -74,10 +77,8 @@ export interface RunRecord {
   initializationPending: boolean;
   pendingInitializationSettlement?: PendingInitializationSettlement | undefined;
   replyPendingRequestId?: string | undefined;
-  warningTurnTriggered: boolean;
   notificationGeneration: number;
   questionNotificationGeneration: number;
-  readonly warningNotificationGenerations: Map<string, number>;
   completionGeneration: number;
   readonly completionGenerations: Map<number, CompletionGenerationRecord>;
   /** One exclusive capability token may own a generation at a time. */
