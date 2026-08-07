@@ -1,5 +1,6 @@
-// Promise assertions are test-runner boundaries.
+// Promise assertions and controllable pending refreshes are test-runner boundaries.
 // @effect-diagnostics effect/asyncFunction:off
+// @effect-diagnostics effect/newPromise:off
 import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, type Component } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
@@ -205,7 +206,7 @@ describe("/subagents profile workspace", () => {
     });
   });
 
-  it("refreshes Pi models before constructing the profile workspace", async () => {
+  it("starts a Pi model refresh before constructing the profile workspace", async () => {
     const custom = vi.fn().mockResolvedValue(false);
     const ctx = baseContext({ custom, notify: vi.fn() });
     const refresh = ctx.modelRegistry.refresh as ReturnType<typeof vi.fn>;
@@ -214,6 +215,33 @@ describe("/subagents profile workspace", () => {
 
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(refresh.mock.invocationCallOrder[0]).toBeLessThan(custom.mock.invocationCallOrder[0]!);
+  });
+
+  it("opens the profile workspace without waiting for a stalled model refresh", async () => {
+    const custom = vi.fn().mockResolvedValue(false);
+    const ctx = baseContext({ custom, notify: vi.fn() });
+    const originalRegistry = ctx.modelRegistry;
+    const refresh = vi.fn(
+      (options?: { readonly signal?: AbortSignal }) =>
+        new Promise<void>((resolve) => {
+          options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    Object.assign(ctx, {
+      modelRegistry: {
+        refresh,
+        getError: () => originalRegistry.getError(),
+        getAvailable: () => originalRegistry.getAvailable(),
+        find: (provider: string, id: string) => originalRegistry.find(provider, id),
+        getRegisteredProviderIds: () => originalRegistry.getRegisteredProviderIds(),
+      },
+    });
+
+    await register(actions())("profiles", ctx);
+
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh.mock.calls[0]?.[0]?.signal?.aborted).toBe(true);
   });
 
   it("uses refreshed non-extension models when switching a candidate to Herdr Pi", async () => {
@@ -257,6 +285,19 @@ describe("/subagents profile workspace", () => {
         route: expect.objectContaining({ host: "herdr", model: "openai/fresh" }),
       }),
     );
+  });
+
+  it("reports profile overlay failures instead of failing silently", async () => {
+    const notify = vi.fn();
+    const custom = vi.fn().mockRejectedValue(new Error("overlay unavailable"));
+
+    await register(actions())("profiles", baseContext({ custom, notify }));
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("Could not open Subagents profile settings"),
+      "error",
+    );
+    expect(JSON.stringify(notify.mock.calls)).not.toContain("overlay unavailable");
   });
 
   it("uses the cached snapshot when Pi records a refresh error without rejecting", async () => {

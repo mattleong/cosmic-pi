@@ -229,32 +229,42 @@ async function openProfileSettings(
     return;
   }
 
-  const cachedAvailableModels = ctx.modelRegistry.getAvailable();
-  const cachedParentCatalogModel = ctx.model
+  let availableModels = ctx.modelRegistry.getAvailable();
+  let parentCatalogModel = ctx.model
     ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
     : undefined;
-  let availableModels = cachedAvailableModels;
-  let parentCatalogModel = cachedParentCatalogModel;
-  let modelRefreshFailed = false;
-  try {
-    await ctx.modelRegistry.refresh();
-    if (ctx.modelRegistry.getError()) modelRefreshFailed = true;
-    else {
-      const refreshedModels = ctx.modelRegistry.getAvailable();
-      const refreshedParentModel = ctx.model
-        ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
-        : undefined;
-      availableModels = refreshedModels;
-      parentCatalogModel = refreshedParentModel;
-    }
-  } catch {
-    modelRefreshFailed = true;
-  }
-  if (modelRefreshFailed)
+  let requestWorkspaceRender: (() => void) | undefined;
+  let modelRefreshNotified = false;
+  const modelRefreshController = new AbortController();
+  const notifyModelRefreshFailure = (): void => {
+    if (modelRefreshNotified || modelRefreshController.signal.aborted) return;
+    modelRefreshNotified = true;
     ctx.ui.notify(
       "Could not refresh Pi model catalogs; showing the last authenticated snapshot.",
       "warning",
     );
+  };
+  const refreshModels = async (): Promise<void> => {
+    try {
+      await ctx.modelRegistry.refresh({ signal: modelRefreshController.signal });
+      if (modelRefreshController.signal.aborted) return;
+      if (ctx.modelRegistry.getError()) {
+        notifyModelRefreshFailure();
+        return;
+      }
+      availableModels = ctx.modelRegistry.getAvailable();
+      parentCatalogModel = ctx.model
+        ? ctx.modelRegistry.find(ctx.model.provider, ctx.model.id)
+        : undefined;
+      requestWorkspaceRender?.();
+    } catch {
+      notifyModelRefreshFailure();
+    }
+  };
+  void refreshModels();
+  // Catalog I/O must never hold the settings overlay closed. Immediately resolved refreshes still
+  // update the initial snapshot; slower providers finish while the workspace is already visible.
+  await Promise.resolve();
   let extensionProviders: ReadonlySet<string> | undefined;
   try {
     extensionProviders = new Set(ctx.modelRegistry.getRegisteredProviderIds());
@@ -354,52 +364,67 @@ async function openProfileSettings(
     }
   };
 
-  const reloadRequired = await ctx.ui.custom<boolean>(
-    (tui, theme, keybindings, done) =>
-      new ProfileWorkspaceComponent({
-        theme,
-        inspection,
-        projectTrusted,
-        initialScope: selectedInitialScope,
-        parentEffort,
-        ...(preferredPiModel ? { piModel: preferredPiModel } : {}),
-        ...(parentModel ? { parentModel } : {}),
-        getHeight: () => tui.terminal.rows,
-        requestRender: () => tui.requestRender(),
-        matchesKeybinding: (data, id) => keybindings.matches(data, id),
-        keybindingLabel: (id, fallback) =>
-          fullScreenKeybindingLabel(
-            id,
-            fallback,
-            typeof keybindings.getKeys === "function"
-              ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
-              : undefined,
-          ),
-        close: done,
-        saveDraft,
-        clearSessionOverrides,
-        loadModelPicker: (profile, candidateIndex, candidate, signal) =>
-          loadCandidateModelPicker(ctx, {
-            profile,
-            candidateIndex,
-            candidate,
-            listNativeModels: actions.listNativeModels,
-            piModels: availableModels,
-            ...(parentCatalogModel ? { piParentModel: parentCatalogModel } : {}),
-            ...(extensionProviders
-              ? { registeredPiProviderIds: [...extensionProviders] }
-              : { piProviderInspectionFailed: true }),
-            ...(signal ? { signal } : {}),
-          }),
-        supportedPiEfforts: (candidate) =>
-          supportedPiEfforts(candidate, availableModels, parentCatalogModel, extensionProviders),
-        fastModeAvailable: (candidate) => fastModeAvailable(ctx, candidate, extensionProviders),
-        reload: () => requestProfileReload(ctx, bridge),
-      }),
-    { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } },
-  );
-  if (reloadRequired)
-    ctx.ui.notify("Profile changes are saved. Run /reload to apply them to new subagents.", "info");
+  try {
+    const reloadRequired = await ctx.ui.custom<boolean>(
+      (tui, theme, keybindings, done) => {
+        requestWorkspaceRender = () => tui.requestRender();
+        return new ProfileWorkspaceComponent({
+          theme,
+          inspection,
+          projectTrusted,
+          initialScope: selectedInitialScope,
+          parentEffort,
+          ...(preferredPiModel ? { piModel: preferredPiModel } : {}),
+          ...(parentModel ? { parentModel } : {}),
+          getHeight: () => tui.terminal.rows,
+          requestRender: () => tui.requestRender(),
+          matchesKeybinding: (data, id) => keybindings.matches(data, id),
+          keybindingLabel: (id, fallback) =>
+            fullScreenKeybindingLabel(
+              id,
+              fallback,
+              typeof keybindings.getKeys === "function"
+                ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
+                : undefined,
+            ),
+          close: done,
+          saveDraft,
+          clearSessionOverrides,
+          loadModelPicker: (profile, candidateIndex, candidate, signal) =>
+            loadCandidateModelPicker(ctx, {
+              profile,
+              candidateIndex,
+              candidate,
+              listNativeModels: actions.listNativeModels,
+              piModels: availableModels,
+              ...(parentCatalogModel ? { piParentModel: parentCatalogModel } : {}),
+              ...(extensionProviders
+                ? { registeredPiProviderIds: [...extensionProviders] }
+                : { piProviderInspectionFailed: true }),
+              ...(signal ? { signal } : {}),
+            }),
+          supportedPiEfforts: (candidate) =>
+            supportedPiEfforts(candidate, availableModels, parentCatalogModel, extensionProviders),
+          fastModeAvailable: (candidate) => fastModeAvailable(ctx, candidate, extensionProviders),
+          reload: () => requestProfileReload(ctx, bridge),
+        });
+      },
+      { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } },
+    );
+    if (reloadRequired)
+      ctx.ui.notify(
+        "Profile changes are saved. Run /reload to apply them to new subagents.",
+        "info",
+      );
+  } catch {
+    ctx.ui.notify(
+      "Could not open Subagents profile settings. Run /reload and try again; inspect the Pi logs if the problem continues.",
+      "error",
+    );
+  } finally {
+    requestWorkspaceRender = undefined;
+    modelRefreshController.abort();
+  }
 }
 
 export function registerSubagentManagerCommand(
