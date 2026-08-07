@@ -73,7 +73,8 @@ describe("subagent host notifier", () => {
           generation: 1,
           outcome: "failed",
           error: "Process exited unexpectedly.",
-          warning: "Ownership remains quarantined.",
+          warning:
+            "System warning: Ownership remains quarantined.\nChild warning: Validation was incomplete.",
         },
       ],
     });
@@ -82,7 +83,7 @@ describe("subagent host notifier", () => {
     expect(sendMessage.mock.calls[0]?.[0]).toMatchObject({
       customType: "pi-subagents-completed",
       content:
-        "Background subagent reader (agent-1) failed.\n\nError: Process exited unexpectedly.\n\nWarning: Ownership remains quarantined.",
+        "Background subagent reader (agent-1) failed.\n\nError: Process exited unexpectedly.\n\nWarning: System warning: Ownership remains quarantined.\nChild warning: Validation was incomplete.",
     });
     expect(sendMessage.mock.calls[0]?.[1]).toEqual({
       deliverAs: "steer",

@@ -160,7 +160,7 @@ export default function registerPiSubagentSupervisorBridge(pi: ExtensionAPI): vo
       messageTool(
         "supervisor_warning",
         "Supervisor Warning",
-        "Record a bounded non-blocking warning in parent-visible run status; repeat it in the final report.",
+        "Record a bounded non-blocking warning in parent-visible run status; repeat it in the final report. Ask a question instead when the risk could invalidate work the parent is doing now.",
       ),
       messageTool(
         "supervisor_question",

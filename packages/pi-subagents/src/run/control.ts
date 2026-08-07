@@ -21,6 +21,7 @@ import { validateParentMessage } from "./coordination.ts";
 import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { sanitizeName, snapshotView } from "./state.ts";
+import { emptyRunWarningSlots } from "./warnings.ts";
 
 export interface RunControlDependencies {
   readonly ownerScope: Scope.Scope;
@@ -104,6 +105,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               view: snapshotView(selected.view),
               settlement: selected.settlement,
               latestAssistantText: selected.latestAssistantText,
+              warningSlots: { ...selected.warningSlots },
               assignment: { ...selected.assignment },
               activeTools: [...selected.activeTools.entries()] as const,
               pauseRequested: selected.pauseRequested,
@@ -112,6 +114,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             };
             selected.settlement = nextSettlement;
             selected.latestAssistantText = undefined;
+            selected.warningSlots = emptyRunWarningSlots();
             selected.assignment = {
               epoch: selected.nextAssignmentEpoch++,
               phase: "issuing",
@@ -175,9 +178,11 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               return withLock(
                 Effect.sync(() => {
                   if (record.assignment.attemptToken !== selected.attemptToken) return;
-                  record.view = selected.previous.view;
+                  const sessionEvents = record.view.sessionEvents;
+                  record.view = { ...selected.previous.view, sessionEvents };
                   record.settlement = selected.previous.settlement;
                   record.latestAssistantText = selected.previous.latestAssistantText;
+                  record.warningSlots = selected.previous.warningSlots;
                   record.assignment = selected.previous.assignment;
                   record.activeTools.clear();
                   for (const [toolCallId, toolName] of selected.previous.activeTools)

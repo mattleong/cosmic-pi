@@ -19,6 +19,7 @@ import {
   sanitizeDiagnosticText,
   sanitizeOutputText,
 } from "./state.ts";
+import { setRunWarning } from "./warnings.ts";
 
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 
@@ -91,21 +92,16 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         return;
       }
       if (envelope.kind === "warning") {
-        yield* mutateView(record, envelope.assignmentEpoch, (current) =>
-          current.state === "paused"
-            ? undefined
-            : {
-                ...current,
-                warning: message,
-                lastActivityAt: now,
-                sessionEvents: appendNoticeSessionEvent(
-                  current.sessionEvents,
-                  "warning",
-                  message,
-                  now,
-                ),
-              },
-        );
+        yield* mutateView(record, envelope.assignmentEpoch, (current) => {
+          if (current.state === "paused") return undefined;
+          record.warningSlots = setRunWarning(record.warningSlots, "child", message);
+          return {
+            ...current,
+            warning: message,
+            lastActivityAt: now,
+            sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "warning", message, now),
+          };
+        });
         return;
       }
       const view = yield* mutateView(record, envelope.assignmentEpoch, (current) => {
@@ -236,17 +232,20 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         return Clock.currentTimeMillis.pipe(
           Effect.flatMap((now) => {
             const message = sanitizeDiagnosticText(event.message, MAX_ERROR_CHARS);
-            return mutateView(record, undefined, (current) => ({
-              ...current,
-              warning: message,
-              lastActivityAt: now,
-              sessionEvents: appendNoticeSessionEvent(
-                current.sessionEvents,
-                "warning",
-                `Extension error: ${message}`,
-                now,
-              ),
-            }));
+            return mutateView(record, undefined, (current) => {
+              record.warningSlots = setRunWarning(record.warningSlots, "system", message);
+              return {
+                ...current,
+                warning: message,
+                lastActivityAt: now,
+                sessionEvents: appendNoticeSessionEvent(
+                  current.sessionEvents,
+                  "warning",
+                  `Extension error: ${message}`,
+                  now,
+                ),
+              };
+            });
           }),
           Effect.asVoid,
         );

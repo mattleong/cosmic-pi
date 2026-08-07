@@ -87,6 +87,7 @@ import {
   sanitizeOutputText,
   snapshotView,
 } from "./state.ts";
+import { emptyRunWarningSlots, foldRunWarnings, setRunWarning } from "./warnings.ts";
 
 let nextRuntimeNamespace = 1;
 const allocateRuntimeNamespace = (): string => `r${(nextRuntimeNamespace++).toString(36)}`;
@@ -751,18 +752,29 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       }),
     );
   const retainCleanupQuarantine = (record: RunRecord, scope: Scope.Closeable) =>
-    withLock(
-      Effect.sync(() => {
-        if (record.scope !== scope) return;
-        record.cleanupPending = true;
-        record.view = {
-          ...record.view,
-          warning:
-            "Subagent cleanup could not be confirmed; process capacity and writer ownership remain quarantined for this session.",
-        };
-        publish();
-      }),
-    );
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      yield* withLock(
+        Effect.sync(() => {
+          if (record.scope !== scope) return;
+          const warning =
+            "Subagent cleanup could not be confirmed; process capacity and writer ownership remain quarantined for this session.";
+          record.cleanupPending = true;
+          record.warningSlots = setRunWarning(record.warningSlots, "system", warning);
+          record.view = {
+            ...record.view,
+            warning,
+            sessionEvents: appendNoticeSessionEvent(
+              record.view.sessionEvents,
+              "warning",
+              warning,
+              now,
+            ),
+          };
+          publish();
+        }),
+      );
+    });
   const waitForWriterLeasePreparation = (
     record: RunRecord,
     scope: Scope.Closeable,
@@ -898,6 +910,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           const completionGeneration = hasDeliverableOutcome
             ? ++record.completionGeneration
             : record.completionGeneration;
+          const completionWarning = foldRunWarnings(record.warningSlots);
           if (hasDeliverableOutcome)
             record.completionGenerations.set(completionGeneration, {
               generation: completionGeneration,
@@ -906,7 +919,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 ? { finalText: record.latestAssistantText }
                 : {}),
               ...(state === "failed" ? { error: error ?? "Run failed." } : {}),
-              ...(record.view.warning ? { warning: record.view.warning } : {}),
+              ...(completionWarning ? { warning: completionWarning } : {}),
               retained: false,
             });
           record.notificationGeneration += 1;
@@ -973,15 +986,18 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     readonly generation: number;
   };
 
-  const rejectReportLocked = (record: RunRecord, reason: string): SubagentRunView => {
+  const rejectReportLocked = (record: RunRecord, reason: string, now: number): SubagentRunView => {
     const warning = sanitizeDiagnosticText(
       `Rejected protocol-invalid backend report: ${reason}`,
       MAX_ERROR_CHARS,
     );
-    if (record.view.warning !== warning) {
-      record.view = { ...record.view, warning };
-      publish();
-    }
+    record.warningSlots = setRunWarning(record.warningSlots, "system", warning);
+    record.view = {
+      ...record.view,
+      warning,
+      sessionEvents: appendNoticeSessionEvent(record.view.sessionEvents, "warning", warning, now),
+    };
+    publish();
     return snapshotView(record.view);
   };
 
@@ -1012,11 +1028,12 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     record.activeTools.clear();
     const generation = ++record.completionGeneration;
     const text = report.text;
+    const completionWarning = foldRunWarnings(record.warningSlots);
     record.completionGenerations.set(generation, {
       generation,
       outcome: "completed",
       ...(text ? { finalText: text } : {}),
-      ...(record.view.warning ? { warning: record.view.warning } : {}),
+      ...(completionWarning ? { warning: completionWarning } : {}),
       retained: true,
     });
     record.notificationGeneration += 1;
@@ -1104,6 +1121,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               view: rejectReportLocked(
                 record,
                 `sequence ${report.sequence} reused delivery identity ${report.deliveryId}.`,
+                now,
               ),
             };
           if (record.assignment.phase === "issuing") {
@@ -1117,6 +1135,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 view: rejectReportLocked(
                   record,
                   `assignment ${report.assignmentEpoch} produced more than one in-flight report.`,
+                  now,
                 ),
               };
             if (!pending) record.assignment.pendingReport = report;
@@ -1128,6 +1147,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               view: rejectReportLocked(
                 record,
                 `sequence ${report.sequence} arrived while assignment ${report.assignmentEpoch} was ${record.assignment.phase}.`,
+                now,
               ),
             };
           if (record.view.closeOnReport !== false) return { kind: "close" as const, report };
@@ -1387,7 +1407,18 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           )
             return { kind: "unchanged" as const };
           record.assignment.outcomeUncertain = true;
-          record.view = { ...record.view, warning };
+          const diagnostic = sanitizeDiagnosticText(warning, MAX_ERROR_CHARS);
+          record.warningSlots = setRunWarning(record.warningSlots, "system", diagnostic);
+          record.view = {
+            ...record.view,
+            warning: diagnostic,
+            sessionEvents: appendNoticeSessionEvent(
+              record.view.sessionEvents,
+              "warning",
+              diagnostic,
+              now,
+            ),
+          };
           if (!record.assignment.startedObserved) {
             publish();
             return { kind: "unchanged" as const };
@@ -1611,6 +1642,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
               notificationGeneration: 0,
               questionNotificationGeneration: 0,
               completionGeneration: 0,
+              warningSlots: emptyRunWarningSlots(),
               completionGenerations: new Map(),
               completionClaims: new Map(
                 foregroundClaim ? [[foregroundClaim.generation, foregroundClaim.claimToken]] : [],
@@ -2171,6 +2203,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 selected.initializationPending = needsRespawn;
                 selected.pendingInitializationSettlement = undefined;
                 selected.latestAssistantText = undefined;
+                selected.warningSlots = emptyRunWarningSlots();
                 selected.assignment = {
                   epoch: selected.nextAssignmentEpoch++,
                   phase: "issuing",

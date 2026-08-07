@@ -104,7 +104,7 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
     "Before changing or reviewing files, read and follow applicable AGENTS.md instructions in the workspace.",
     "Use contact_parent(kind=progress) only for meaningful progress or discoveries that change the plan.",
     "Use contact_parent(kind=question) when blocked on a decision; wait for the parent reply instead of guessing.",
-    "Use contact_parent(kind=warning) to record a material non-blocking risk in parent-visible run status, and repeat that risk in the final report. Use kind=question instead when the parent must act before you can continue.",
+    "Use contact_parent(kind=warning) to record a material non-blocking risk in parent-visible run status, and repeat that risk in the final report. Use kind=question instead when the parent must act before you can continue or the risk could invalidate work the parent is doing now.",
     "Always end with a concise, self-contained final report containing the actual findings or work completed. Never finish with only an acknowledgement.",
     request.writeIntent === "writer"
       ? "You are the sole declared writer in the shared working directory. Keep edits narrowly within the assigned task and report changed files and validation."

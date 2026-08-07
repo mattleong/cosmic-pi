@@ -553,7 +553,7 @@ const toolDefinitions = [
   {
     name: "supervisor_warning",
     description:
-      "Record one bounded non-blocking assignment warning in parent-visible run status; repeat it in the final report.",
+      "Record one bounded non-blocking assignment warning in parent-visible run status; repeat it in the final report. Ask a question instead when the risk could invalidate work the parent is doing now.",
     inputSchema: {
       type: "object",
       properties: { message: { type: "string", minLength: 1, maxLength: MAX_MESSAGE_CHARS } },

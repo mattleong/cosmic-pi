@@ -1294,6 +1294,14 @@ describe("SubagentService", () => {
           reportGeneration: 1,
           finalText: "First assignment.",
         });
+        expect(
+          (yield* service.status(run.id)).sessionEvents.some(
+            (event) =>
+              event.type === "notice" &&
+              event.kind === "warning" &&
+              event.text.includes("protocol-invalid"),
+          ),
+        ).toBe(true);
 
         backend.controls[0]?.offer({
           type: "report",
@@ -1403,15 +1411,44 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs.at(-1) === 2);
       backend.controls[0]?.offer({ type: "run_started", assignmentEpoch: 2 });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
+      backend.controls[0]?.offer({
+        type: "supervisor_contact",
+        assignmentEpoch: 2,
+        requestId: "failed-child-warning",
+        kind: "warning",
+        message: "Warning from the failed assignment.",
+      });
+      backend.controls[0]?.offer({
+        type: "warning",
+        source: "runtime-extension",
+        message: "Handle warning during failed assignment.",
+      });
+      yield* yieldUntil(() =>
+        Boolean(projections.at(-1)?.runs[0]?.warning?.includes("Handle warning")),
+      );
       yield* Deferred.succeed(failureGate, undefined);
       expect(yield* Fiber.join(failing).pipe(Effect.flip)).toMatchObject({
         _tag: "SubagentProcessError",
       });
-      expect(yield* service.status(run.id)).toMatchObject({
+      const rolledBack = yield* service.status(run.id);
+      expect(rolledBack).toMatchObject({
         state: "reported",
         reportGeneration: 1,
         finalText: "Preserve this report.",
       });
+      expect(rolledBack.warning).toBeUndefined();
+      expect(
+        rolledBack.sessionEvents.filter(
+          (event) => event.type === "notice" && event.kind === "warning",
+        ),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ text: "Warning from the failed assignment." }),
+          expect.objectContaining({
+            text: "Extension error: Handle warning during failed assignment.",
+          }),
+        ]),
+      );
 
       const nextGate = yield* Deferred.make<void>();
       backend.controls[0]?.gateNextStart(nextGate);
@@ -4092,8 +4129,65 @@ describe("SubagentService", () => {
       ]);
       const completion = notifications[0];
       expect(completion?.type).toBe("completed");
-      if (completion?.type === "completed")
+      if (completion?.type === "completed") {
+        expect(completion.runs[0]?.warning).toContain("System warning: Extension bridge failed");
+        expect(completion.runs[0]?.warning).toContain("Child warning: Second warning");
+        expect(completion.runs[0]?.warning).not.toContain("First warning");
         expect(completion.runs[0]?.warning).not.toContain("secret-value");
+      }
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("folds child and system warnings into a failed outcome", () => {
+    const fake = fakeChildLayer();
+    const notifications: SubagentNotification[] = [];
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      notify: (notification) => notifications.push(notification),
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request({ name: "warning-failure" }));
+      fake.controls[0]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_parent",
+        requestId: "child-risk",
+        kind: "warning",
+        message: "Child validation is incomplete.",
+      });
+      yield* yieldUntil(
+        () => projections.at(-1)?.runs[0]?.warning === "Child validation is incomplete.",
+      );
+      fake.controls[0]?.offer({
+        type: "extension_error",
+        error: "Extension transport degraded.",
+      });
+      yield* yieldUntil(
+        () => projections.at(-1)?.runs[0]?.warning === "Extension transport degraded.",
+      );
+      fake.controls[0]?.exit(1);
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.length === 1);
+      expect(notifications).toMatchObject([
+        {
+          type: "completed",
+          runs: [
+            {
+              id: run.id,
+              outcome: "failed",
+              warning: expect.stringContaining("System warning: Extension transport degraded."),
+            },
+          ],
+        },
+      ]);
+      const notification = notifications[0];
+      expect(notification?.type).toBe("completed");
+      if (notification?.type === "completed")
+        expect(notification.runs[0]?.warning).toContain(
+          "Child warning: Child validation is incomplete.",
+        );
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

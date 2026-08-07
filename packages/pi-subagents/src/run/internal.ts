@@ -10,6 +10,7 @@ import type {
 import type { CanonicalWriterCwd, WriterLease } from "../boundary/writer-lease.ts";
 import type { SubagentError } from "./errors.ts";
 import { isTerminalRunState, type SubagentRunView } from "./model.ts";
+import type { RunWarningSlots } from "./warnings.ts";
 
 export interface PendingInitializationSettlement {
   readonly state: "completed" | "failed" | "stopped";
@@ -80,6 +81,7 @@ export interface RunRecord {
   notificationGeneration: number;
   questionNotificationGeneration: number;
   completionGeneration: number;
+  warningSlots: RunWarningSlots;
   readonly completionGenerations: Map<number, CompletionGenerationRecord>;
   /** One exclusive capability token may own a generation at a time. */
   readonly completionClaims: Map<number, string>;

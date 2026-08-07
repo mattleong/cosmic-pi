@@ -151,7 +151,7 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
     name: "contact_parent",
     label: "Contact Parent",
     description:
-      "Send progress, record a non-blocking warning in parent-visible run status, or ask a blocking parent question. Repeat warnings in the final report.",
+      "Send progress, record a non-blocking warning in parent-visible run status, or ask a blocking parent question. Repeat warnings in the final report; use a question instead when a risk could invalidate work the parent is doing now.",
     parameters: ContactParentParameters,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal) {
