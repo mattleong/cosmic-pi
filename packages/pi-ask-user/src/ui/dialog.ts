@@ -3,6 +3,7 @@ import {
   Editor,
   type EditorTheme,
   type Focusable,
+  isKeyRepeat,
   Key,
   matchesKey,
   type OverlayHandle,
@@ -27,6 +28,8 @@ import {
 } from "../tools/schema.ts";
 import { PreviewPane } from "./components/preview-pane.ts";
 import { type DialogInputMode, renderQuestionnaireView } from "./dialog-render.ts";
+
+const CHOICE_SHORTCUTS = ["1", "2", "3", "4"] as const;
 
 export interface AskUserDialogOptions {
   readonly tui: TUI;
@@ -300,18 +303,28 @@ export class AskUserDialog implements Focusable {
       this.options.done(cancelQuestionnaire());
       return;
     }
+    const unanswered = this.state.drafts.findIndex((draft) => draft.answer === undefined);
+    if (unanswered >= 0) {
+      this.state = reduceQuestionnaire(this.state, { type: "set-tab", tab: unanswered });
+      this.inputError = "Answer this question to finish.";
+      this.refresh();
+      return;
+    }
     const outcome = submitQuestionnaire(this.state);
     if (outcome) this.options.done(outcome);
-    else {
-      this.inputError = "Answer every question before submitting.";
-      this.refresh();
-    }
   }
 
   private handleQuestionInput(data: string): void {
     const question = this.currentQuestion();
     const draft = this.state.drafts[this.state.currentTab];
     if (!question || !draft) return;
+    for (let index = 0; index < question.choices.length; index++) {
+      const shortcut = CHOICE_SHORTCUTS[index];
+      if (shortcut && matchesKey(data, shortcut)) {
+        if (!isKeyRepeat(data)) this.activateChoice(question, index);
+        return;
+      }
+    }
     if (this.options.keybindings.matches(data, "tui.select.up")) {
       this.setCursor(draft.cursor - 1);
       return;
@@ -330,14 +343,7 @@ export class AskUserDialog implements Focusable {
     }
     if (!this.options.keybindings.matches(data, "tui.select.confirm")) return;
     if (draft.cursor < question.choices.length) {
-      if (question.mode === "single") {
-        this.state = reduceQuestionnaire(this.state, {
-          type: "select-one",
-          question: this.state.currentTab,
-          choice: draft.cursor,
-        });
-        this.advance();
-      } else this.toggleMultiple(draft.cursor);
+      this.activateChoice(question, draft.cursor);
       return;
     }
     if (draft.cursor === question.choices.length) {
@@ -349,6 +355,24 @@ export class AskUserDialog implements Focusable {
       this.inputError = "Select at least one choice or write a custom answer.";
       this.refresh();
     }
+  }
+
+  private activateChoice(question: AskUserQuestion, choice: number): void {
+    this.state = reduceQuestionnaire(this.state, {
+      type: "set-cursor",
+      question: this.state.currentTab,
+      cursor: choice,
+    });
+    if (question.mode === "single") {
+      this.state = reduceQuestionnaire(this.state, {
+        type: "select-one",
+        question: this.state.currentTab,
+        choice,
+      });
+      this.advance();
+      return;
+    }
+    this.toggleMultiple(choice);
   }
 
   private toggleMultiple(choice: number): void {

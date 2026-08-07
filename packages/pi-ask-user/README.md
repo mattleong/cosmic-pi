@@ -77,13 +77,16 @@ Cancellation returns `{ "outcome": "cancelled", "answers": [] }`; unsubmitted dr
 
 - `Tab` or `←`/`→`: move between questions and Review.
 - `↑`/`↓`: move through choices.
+- `1`-`4`: directly choose or toggle a numbered choice.
 - `Enter`: choose or activate an action.
 - `Space`: toggle a focused multi-select choice.
-- `n`: edit a note for the current question.
+- `n`: add or edit a note for the current question.
 - Pi's configured external-editor binding: edit a custom answer or note externally.
 - `b`: hide the questionnaire without losing state.
 - `/ask-user`: resume a hidden questionnaire.
 - `Esc`: leave an editor or cancel the questionnaire.
+
+The overlay shows question/answer progress, live text limits, mode-specific controls, and the selected count for multi-select questions. Review highlights unanswered questions; activating the primary review action jumps to the next unanswered item before submission.
 
 ## Mode behavior
 

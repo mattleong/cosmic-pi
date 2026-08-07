@@ -2,7 +2,12 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Editor, truncateToWidth } from "@earendil-works/pi-tui";
 import { isQuestionnaireComplete } from "../questionnaire/reducer.ts";
 import type { QuestionnaireState } from "../questionnaire/model.ts";
-import type { AskUserQuestion, AskUserRequest } from "../tools/schema.ts";
+import {
+  MAX_CUSTOM_ANSWER_LENGTH,
+  MAX_NOTE_LENGTH,
+  type AskUserQuestion,
+  type AskUserRequest,
+} from "../tools/schema.ts";
 import type { PreviewPane } from "./components/preview-pane.ts";
 import { appendWrapped, borderLine, joinColumns, safeText } from "./render.ts";
 
@@ -38,6 +43,18 @@ function renderTabs(model: QuestionnaireRenderModel, width: number): string[] {
   );
   const lines: string[] = [];
   appendWrapped(lines, " ", parts.join(" "), width);
+  return lines;
+}
+
+function renderProgress(model: QuestionnaireRenderModel, width: number): string[] {
+  const lines: string[] = [];
+  const total = model.request.questions.length;
+  const answered = model.state.drafts.filter((draft) => draft.answer !== undefined).length;
+  const text =
+    model.state.currentTab === total
+      ? `Review • ${answered} of ${total} answered`
+      : `Question ${model.state.currentTab + 1} of ${total} • ${answered} of ${total} answered`;
+  appendWrapped(lines, " ", model.theme.fg("dim", text), width);
   return lines;
 }
 
@@ -79,15 +96,25 @@ function renderQuestion(
   );
   if (question.mode === "multiple") {
     const continueFocused = draft.cursor === customIndex + 1;
+    const selectedCount = draft.answer?.kind === "choices" ? draft.answer.values.length : undefined;
+    const continueLabel =
+      draft.answer?.kind === "custom"
+        ? "→ Continue (custom answer)"
+        : `→ Continue (${selectedCount ?? 0} selected)`;
     appendWrapped(
       lines,
       continueFocused ? model.theme.fg("accent", "> ") : "  ",
-      model.theme.fg(draft.answer ? (continueFocused ? "accent" : "success") : "dim", "→ Continue"),
+      model.theme.fg(
+        draft.answer ? (continueFocused ? "accent" : "success") : "dim",
+        continueLabel,
+      ),
       width,
     );
   }
-  if (draft.note)
-    appendWrapped(lines, " ", model.theme.fg("muted", `Note: ${safeText(draft.note)}`), width);
+  const note = draft.note
+    ? `n Edit note — ${truncateToWidth(safeText(draft.note), 48)}`
+    : "n Add an optional note";
+  appendWrapped(lines, "  ", model.theme.fg(draft.note ? "muted" : "dim", note), width);
   return lines;
 }
 
@@ -112,7 +139,7 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
     appendWrapped(
       lines,
       " ",
-      `${model.theme.fg("muted", `${safeText(question.title)}: `)}${model.theme.fg(answer ? "text" : "warning", safeText(value))}`,
+      `${model.theme.fg(answer ? "success" : "warning", answer ? "✓ " : "! ")}${model.theme.fg(answer ? "muted" : "warning", `${safeText(question.title)}: `)}${model.theme.fg(answer ? "text" : "warning", safeText(value))}`,
       width,
     );
     if (draft?.note)
@@ -120,16 +147,13 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
   });
   lines.push("");
   const complete = isQuestionnaireComplete(model.state);
-  const actions = [
-    { label: "Submit answers", enabled: complete },
-    { label: "Cancel", enabled: true },
-  ];
+  const actions = [complete ? "Submit answers" : "Answer next unanswered", "Cancel"];
   actions.forEach((action, index) => {
     const focused = model.state.reviewCursor === index;
     appendWrapped(
       lines,
       focused ? model.theme.fg("accent", "> ") : "  ",
-      model.theme.fg(!action.enabled ? "dim" : focused ? "accent" : "text", action.label),
+      model.theme.fg(focused ? "accent" : "text", action),
       width,
     );
   });
@@ -138,7 +162,12 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
 
 export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: number): string[] {
   const renderWidth = Math.max(1, width);
-  const lines = [borderLine(renderWidth, model.theme), ...renderTabs(model, renderWidth), ""];
+  const lines = [
+    borderLine(renderWidth, model.theme),
+    ...renderTabs(model, renderWidth),
+    ...renderProgress(model, renderWidth),
+    "",
+  ];
   if (model.input) {
     const question = model.request.questions[model.input.question]!;
     appendWrapped(
@@ -155,6 +184,17 @@ export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: 
       renderWidth,
     );
     lines.push(...model.editor.render(Math.max(1, renderWidth)));
+    const maximum = model.input.kind === "note" ? MAX_NOTE_LENGTH : MAX_CUSTOM_ANSWER_LENGTH;
+    const characterCount = model.editor.getExpandedText().trim().length;
+    appendWrapped(
+      lines,
+      " ",
+      model.theme.fg(
+        characterCount >= maximum * 0.9 ? "warning" : "dim",
+        `${characterCount} / ${maximum} characters`,
+      ),
+      renderWidth,
+    );
     if (model.externalEditorBusy)
       appendWrapped(lines, " ", model.theme.fg("warning", "External editor is open…"), renderWidth);
     if (model.inputError)
@@ -164,7 +204,7 @@ export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: 
       " ",
       model.theme.fg(
         "dim",
-        "Enter submit • Shift+Enter newline • Esc back • configured external-editor key opens editor",
+        `Enter ${model.input.kind === "note" ? "save note" : "use answer"} • Shift+Enter newline • Esc back • configured external-editor key opens editor`,
       ),
       renderWidth,
     );
@@ -199,16 +239,16 @@ export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: 
       appendWrapped(lines, " ", model.theme.fg("warning", model.inputError), renderWidth);
   }
   lines.push("");
-  if (!model.input)
-    appendWrapped(
-      lines,
-      " ",
-      model.theme.fg(
-        "dim",
-        "h/l or Tab/←→ questions • j/k or ↑↓ move • Enter choose • Space toggle • n note • b hide • Esc cancel",
-      ),
-      renderWidth,
-    );
+  if (!model.input) {
+    const onReview = model.state.currentTab === model.request.questions.length;
+    const question = onReview ? undefined : model.request.questions[model.state.currentTab];
+    const help = onReview
+      ? `↑↓ move • Enter ${isQuestionnaireComplete(model.state) ? "confirm" : "open unanswered"} • h/l or Tab/←→ questions • b hide • Esc cancel`
+      : question?.mode === "multiple"
+        ? `1–${question.choices.length} toggle • ↑↓ move • Space toggle • Enter activate • h/l or Tab/←→ questions • b hide • Esc cancel`
+        : `1–${question?.choices.length ?? 0} choose • ↑↓ move • Enter activate • h/l or Tab/←→ questions • b hide • Esc cancel`;
+    appendWrapped(lines, " ", model.theme.fg("dim", help), renderWidth);
+  }
   lines.push(borderLine(renderWidth, model.theme));
   return lines.map((line) => truncateToWidth(line, renderWidth, ""));
 }
