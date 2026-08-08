@@ -34,10 +34,13 @@ const Usage = Schema.Struct({
   cache_read_input_tokens: Schema.optional(Token),
   cache_creation_input_tokens: Schema.optional(Token),
 });
+const Cost = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0));
+const MessageOrigin = Schema.Struct({ kind: Name });
 const Assistant = Schema.Struct({
   type: Schema.Literal("assistant"),
   session_id: Schema.optional(Id),
   message: Schema.Struct({
+    id: Schema.optional(Id),
     role: Schema.Literal("assistant"),
     content: Schema.Array(Schema.Unknown),
     usage: Schema.optional(Usage),
@@ -45,9 +48,11 @@ const Assistant = Schema.Struct({
 });
 const User = Schema.Struct({
   type: Schema.Literal("user"),
+  uuid: Schema.optional(Id),
   session_id: Schema.optional(Id),
   isSynthetic: Schema.optional(Schema.Boolean),
   isReplay: Schema.optional(Schema.Boolean),
+  origin: Schema.optional(MessageOrigin),
   message: Schema.Struct({
     role: Schema.Literal("user"),
     content: Schema.Union([Text, Schema.Array(Schema.Unknown)]),
@@ -84,6 +89,11 @@ const Result = Schema.Struct({
   errors: Schema.optional(Schema.Array(Text)),
   stop_reason: Schema.optional(Schema.Union([Schema.Null, Name])),
   session_id: Schema.optional(Id),
+  /** UUID of the user message whose query produced this result, when reported. */
+  user_message_uuid: Schema.optional(Id),
+  origin: Schema.optional(MessageOrigin),
+  usage: Schema.optional(Usage),
+  total_cost_usd: Schema.optional(Cost),
 });
 const ControlResponse = Schema.Struct({
   type: Schema.Literal("control_response"),
@@ -130,18 +140,22 @@ export type ClaudeProtocolEvent =
       readonly type: "user";
       readonly text: string;
       readonly toolResults: ReadonlyArray<{ readonly id: string; readonly isError: boolean }>;
+      readonly uuid?: string | undefined;
       readonly sessionId?: string | undefined;
+      readonly originKind?: string | undefined;
       readonly isSynthetic: boolean;
       readonly isReplay: boolean;
     }
   | {
       readonly type: "assistant";
       readonly text?: string | undefined;
+      readonly messageId?: string | undefined;
       readonly tools: ReadonlyArray<{
         readonly id: string;
         readonly name: string;
         readonly input: unknown;
       }>;
+      /** As-reported cumulative usage for this native message; the adapter deduplicates. */
       readonly usage: SubagentUsage;
     }
   | { readonly type: "activity" }
@@ -151,6 +165,12 @@ export type ClaudeProtocolEvent =
       readonly subtype?: string | undefined;
       readonly stopReason?: string | undefined;
       readonly sessionId?: string | undefined;
+      readonly userMessageUuid?: string | undefined;
+      readonly originKind?: string | undefined;
+      /** As-reported cumulative usage for the whole query, when present. */
+      readonly usage?: SubagentUsage | undefined;
+      /** Known cumulative client-side cost estimate in USD, when present. */
+      readonly totalCostUsd?: number | undefined;
       readonly diagnostic?: string | undefined;
     }
   | {
@@ -190,14 +210,20 @@ const textFromContent = (content: string | ReadonlyArray<unknown>): string =>
         })
         .join("\n");
 
-const zeroUsage = (): SubagentUsage => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: 0,
-});
+/** Chosen total-token definition: input + output + cache-read + cache-write. */
+const usageFromNative = (usage: Schema.Schema.Type<typeof Usage> | undefined): SubagentUsage => {
+  const input = usage?.input_tokens ?? 0;
+  const output = usage?.output_tokens ?? 0;
+  const cacheRead = usage?.cache_read_input_tokens ?? 0;
+  const cacheWrite = usage?.cache_creation_input_tokens ?? 0;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: input + output + cacheRead + cacheWrite,
+  };
+};
 
 export const decodeClaudeProtocolEvent = (
   value: unknown,
@@ -235,19 +261,15 @@ export const decodeClaudeProtocolEvent = (
           type: "user",
           text: textFromContent(event.message.content),
           toolResults,
+          ...(event.uuid ? { uuid: event.uuid } : {}),
           ...(event.session_id ? { sessionId: event.session_id } : {}),
+          ...(event.origin ? { originKind: event.origin.kind } : {}),
           isSynthetic: event.isSynthetic === true,
           isReplay: event.isReplay === true,
         };
       }
       case "assistant": {
         const event = yield* Schema.decodeUnknownEffect(Assistant)(value);
-        const usage = event.message.usage;
-        const normalized = zeroUsage();
-        const input = usage?.input_tokens ?? 0;
-        const output = usage?.output_tokens ?? 0;
-        const cacheRead = usage?.cache_read_input_tokens ?? 0;
-        const cacheWrite = usage?.cache_creation_input_tokens ?? 0;
         const tools = event.message.content.flatMap((part) => {
           const decoded = Schema.decodeUnknownOption(ToolUsePart)(part);
           return decoded._tag === "Some"
@@ -258,15 +280,9 @@ export const decodeClaudeProtocolEvent = (
         return {
           type: "assistant",
           ...(text ? { text } : {}),
+          ...(event.message.id ? { messageId: event.message.id } : {}),
           tools,
-          usage: {
-            ...normalized,
-            input,
-            output,
-            cacheRead,
-            cacheWrite,
-            totalTokens: input + output,
-          },
+          usage: usageFromNative(event.message.usage),
         };
       }
       case "stream_event":
@@ -286,6 +302,10 @@ export const decodeClaudeProtocolEvent = (
           ...(event.subtype ? { subtype: event.subtype } : {}),
           ...(event.stop_reason ? { stopReason: event.stop_reason } : {}),
           ...(event.session_id ? { sessionId: event.session_id } : {}),
+          ...(event.user_message_uuid ? { userMessageUuid: event.user_message_uuid } : {}),
+          ...(event.origin ? { originKind: event.origin.kind } : {}),
+          ...(event.usage ? { usage: usageFromNative(event.usage) } : {}),
+          ...(event.total_cost_usd === undefined ? {} : { totalCostUsd: event.total_cost_usd }),
           ...(diagnostic ? { diagnostic } : {}),
         };
       }
@@ -318,9 +338,10 @@ export const decodeClaudeMcpStatusControlResponse = (value: unknown) =>
 
 export const claudeUserFrame = (
   message: string,
-  options: { readonly shouldQuery?: boolean | undefined } = {},
+  options: { readonly shouldQuery?: boolean | undefined; readonly uuid?: string | undefined } = {},
 ): Readonly<Record<string, unknown>> => ({
   type: "user",
+  ...(options.uuid ? { uuid: options.uuid } : {}),
   message: { role: "user", content: message },
   ...(options.shouldQuery === undefined ? {} : { shouldQuery: options.shouldQuery }),
 });

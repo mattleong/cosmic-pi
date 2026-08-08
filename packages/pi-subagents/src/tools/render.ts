@@ -255,9 +255,11 @@ class RunOverviewComponent implements Component {
           truncateToWidth(
             this.theme.fg(
               "warning",
-              run.capabilities?.includes("resume")
-                ? `${sanitizeTerminalLine(run.name)} is paused · resume or stop it with subagent_lifecycle.`
-                : `${sanitizeTerminalLine(run.name)} cannot resume · stop it and start a replacement.`,
+              run.capabilities === undefined
+                ? `${sanitizeTerminalLine(run.name)} is paused · check resume support with subagent_status, or stop it with subagent_lifecycle.`
+                : run.capabilities.includes("resume")
+                  ? `${sanitizeTerminalLine(run.name)} is paused · resume or stop it with subagent_lifecycle.`
+                  : `${sanitizeTerminalLine(run.name)} cannot resume · stop it and start a replacement.`,
             ),
             safeWidth,
           ),

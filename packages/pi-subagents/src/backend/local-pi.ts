@@ -48,7 +48,8 @@ const usageFromRpc = (usage: ReturnType<typeof decodeRpcUsageOption>): SubagentU
   cacheRead: usage?.cacheRead ?? 0,
   cacheWrite: usage?.cacheWrite ?? 0,
   totalTokens: usage?.totalTokens ?? 0,
-  cost: usage?.cost?.total ?? 0,
+  // Pi reports a known client-side cost total; absence remains unknown, never $0.
+  ...(usage?.cost?.total === undefined ? {} : { cost: usage.cost.total }),
 });
 
 const rpcOutcomeCode = (command: string): string => {

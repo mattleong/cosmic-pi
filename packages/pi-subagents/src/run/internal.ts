@@ -69,6 +69,14 @@ export interface RunRecord {
   stoppedByParent: boolean;
   cleanupPending: boolean;
   runStateReclaimState: "pending" | "running" | "reclaimed";
+  /**
+   * Exclusive start-admission eviction claim. Set under the service lock while
+   * one start reclaims this terminal record's private state; the record stays
+   * registered until the claiming start revalidates and deletes it atomically.
+   */
+  evictionReclaimClaim?: boolean | undefined;
+  /** Process/writer admission reserved while the claimed record is reclaimed. */
+  evictionAdmission?: { readonly writerCwdDigest?: string | undefined } | undefined;
   readonly canonicalWriterCwd?: CanonicalWriterCwd | undefined;
   writerLease?: WriterLease | undefined;
   writerLeaseScope?: Scope.Closeable | undefined;

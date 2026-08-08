@@ -21,6 +21,8 @@ const EVENT_CAPACITY = 256;
 const RECONCILE_INTERVAL = "500 millis";
 const MISSING_REPORT_POLLS = 10;
 const PROMPT_EVIDENCE_POLLS = 10;
+/** Bounded grace for sustained `unknown` agent status after a confirmed start. */
+const UNKNOWN_STATUS_POLLS = 20;
 
 const processError = (operation: string, code: string, message: string) =>
   new SubagentProcessError({ operation, code, message });
@@ -76,6 +78,7 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
   let confirmedStartedEpoch = 0;
   let reconcilingEpoch = 0;
   let missingReportPolls = 0;
+  let unknownStatusPolls = 0;
   let closed = false;
 
   const offer = (event: BackendEvent) => Queue.offer(events, event).pipe(Effect.asVoid);
@@ -100,19 +103,45 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
     if (closed) return Effect.void;
     return hosted.inspect.pipe(
       Effect.flatMap((remote) => {
+        if (confirmedStartedEpoch <= 0) {
+          missingReportPolls = 0;
+          unknownStatusPolls = 0;
+          return Effect.void;
+        }
         if (
-          confirmedStartedEpoch <= 0 ||
-          (remote.agentStatus !== "idle" && remote.agentStatus !== "done")
+          remote.agentStatus !== "unknown" &&
+          remote.agentStatus !== "idle" &&
+          remote.agentStatus !== "done"
         ) {
+          unknownStatusPolls = 0;
           missingReportPolls = 0;
           return Effect.void;
         }
+        // Accepted report ownership wins before terminal/unknown topology checks.
+        // This is essential for retained runs: their backend remains alive after a
+        // successful report and later observability loss must not overwrite it.
         return supervisor.hasAcceptedReport(confirmedStartedEpoch).pipe(
           Effect.flatMap((accepted) => {
             if (accepted) {
+              unknownStatusPolls = 0;
               missingReportPolls = 0;
               return Effect.void;
             }
+            if (remote.agentStatus === "unknown") {
+              // Sustained unobservable status without a causal report fails closed;
+              // transient unknown does not erase existing missing-report evidence.
+              unknownStatusPolls += 1;
+              if (unknownStatusPolls < UNKNOWN_STATUS_POLLS) return Effect.void;
+              return offer({
+                type: "protocol_error",
+                message: `${runtime} agent status in Herdr remained unknown beyond the bounded observation grace after a confirmed start.`,
+              }).pipe(
+                Effect.andThen(
+                  finish(`${runtime} agent status in Herdr remained unobservable after start.`),
+                ),
+              );
+            }
+            unknownStatusPolls = 0;
             missingReportPolls += 1;
             if (missingReportPolls < MISSING_REPORT_POLLS) return Effect.void;
             return offer({
@@ -189,6 +218,7 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
       confirmedStartedEpoch = epoch;
       reconcilingEpoch = 0;
       missingReportPolls = 0;
+      unknownStatusPolls = 0;
     }).pipe(Effect.andThen(offer({ type: "run_started", assignmentEpoch: epoch })));
 
   const reconcilePromptEvidence = (
@@ -252,6 +282,7 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
             .pipe(Effect.mapError((error) => processError("start", error.code, error.message)));
           preparedEpoch = epoch;
           missingReportPolls = 0;
+          unknownStatusPolls = 0;
           const baseline = yield* hosted.inspect;
           promptIssuingEpoch = epoch;
           const prompt = yield* hosted

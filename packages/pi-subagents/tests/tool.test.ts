@@ -665,6 +665,26 @@ describe("subagent tool", () => {
       "cannot resume · stop it and start a replacement",
     );
 
+    // Absent capability evidence renders neutral guidance rather than a
+    // definite cannot-resume claim.
+    const { capabilities: _omittedCapabilities, ...pausedWithoutCapabilities } = view({
+      state: "paused",
+    });
+    const unknownCapabilityDetails = makeCompactToolDetails({
+      action: "list",
+      runs: [pausedWithoutCapabilities as SubagentRunView],
+    });
+    const unknownCapabilityCard = tools
+      .get("subagent_list")
+      ?.renderResult?.(
+        { content: [{ type: "text", text: "paused" }], details: unknownCapabilityDetails },
+        { isPartial: false, expanded: false },
+        theme,
+      ) as { readonly render: (width: number) => ReadonlyArray<string> } | undefined;
+    const unknownCapabilityText = unknownCapabilityCard?.render(160).join("\n") ?? "";
+    expect(unknownCapabilityText).toContain("check resume support with subagent_status");
+    expect(unknownCapabilityText).not.toContain("cannot resume");
+
     const statusDetails = makeCompactToolDetails({
       action: "status",
       runs: [view({ state: "completed", finalText: "## Summary\nEverything passed." })],
@@ -764,6 +784,7 @@ describe("subagent tool", () => {
         .join("\n");
       expect(rendered).toContain("Total usage · 18k tokens · $0.04");
       expect(rendered).toContain("running · 10s · active 2s ago");
+      expect(rendered).toContain("18k tok · $0.04");
     } finally {
       vi.useRealTimers();
     }

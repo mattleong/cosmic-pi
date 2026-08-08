@@ -161,6 +161,15 @@ describe("/subagents fleet UI", () => {
     expect(footer).not.toContain("r Resume");
   });
 
+  it("does not advertise unreachable alternate help when the fleet is empty", () => {
+    const empty: SubagentProjection = { revision: 3, runs: [] };
+    const { component } = makeComponent(80, 18, empty);
+    const footer = component.render(80).at(-1) ?? "";
+    expect(footer).toContain("No runs");
+    expect(footer).toContain("Esc/q Close");
+    expect(footer).not.toContain("? More");
+  });
+
   it("shows completion age in fleet rows", () => {
     const { lines } = makeComponent(80, 18, completedProjection);
     expect(lines.join("\n")).toContain("finished 18s ago");

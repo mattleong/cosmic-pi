@@ -76,7 +76,11 @@ export interface SubagentUsage {
   readonly cacheRead: number;
   readonly cacheWrite: number;
   readonly totalTokens: number;
-  readonly cost: number;
+  /**
+   * Known client-side cost estimate in USD. Absent means the backend never
+   * reported a known cost; it is never presented as a known `$0`.
+   */
+  readonly cost?: number | undefined;
 }
 
 export type SubagentSessionEvent =
@@ -206,5 +210,4 @@ export const emptyUsage = (): SubagentUsage => ({
   cacheRead: 0,
   cacheWrite: 0,
   totalTokens: 0,
-  cost: 0,
 });

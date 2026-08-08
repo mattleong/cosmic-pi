@@ -53,7 +53,7 @@ const boundedUsage = (usage: SubagentUsage): SubagentUsage => ({
   cacheRead: boundedNonNegative(usage.cacheRead),
   cacheWrite: boundedNonNegative(usage.cacheWrite),
   totalTokens: boundedNonNegative(usage.totalTokens),
-  cost: boundedNonNegative(usage.cost),
+  ...(usage.cost === undefined ? {} : { cost: boundedNonNegative(usage.cost) }),
 });
 
 const RUN_STATES: ReadonlySet<string> = new Set(SUBAGENT_RUN_STATES);
@@ -87,15 +87,18 @@ const finiteNumber = (value: unknown): number | undefined =>
 const decodeUsage = (value: unknown): SubagentUsage | undefined => {
   const record = recordOf(value);
   if (!record) return undefined;
-  const fields = ["input", "output", "cacheRead", "cacheWrite", "totalTokens", "cost"] as const;
+  const fields = ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const;
   if (fields.some((field) => finiteNumber(record[field]) === undefined)) return undefined;
+  // Cost stays optional: absence means unknown and is preserved rather than becoming $0.
+  if (record.cost !== undefined && finiteNumber(record.cost) === undefined) return undefined;
+  const cost = finiteNumber(record.cost);
   return boundedUsage({
     input: finiteNumber(record.input) ?? 0,
     output: finiteNumber(record.output) ?? 0,
     cacheRead: finiteNumber(record.cacheRead) ?? 0,
     cacheWrite: finiteNumber(record.cacheWrite) ?? 0,
     totalTokens: finiteNumber(record.totalTokens) ?? 0,
-    cost: finiteNumber(record.cost) ?? 0,
+    ...(cost === undefined ? {} : { cost }),
   });
 };
 

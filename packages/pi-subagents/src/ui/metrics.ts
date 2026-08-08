@@ -9,8 +9,33 @@ export const formatTokenCount = (tokens: number): string => {
 export const formatCost = (cost: number): string => {
   const value = Number.isFinite(cost) ? Math.max(0, cost) : 0;
   if (value === 0) return "$0";
-  if (value < 0.01) return `$${value.toFixed(4)}`;
+  if (value < 0.0001) return "$<0.0001";
+  if (value < 0.01) return `$${value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}`;
   return `$${value.toFixed(2)}`;
+};
+
+export interface FormatUsageInput {
+  readonly totalTokens: number;
+  readonly cost?: number | undefined;
+}
+
+/**
+ * Renders known usage only. Unknown cost is omitted rather than shown as `$0`,
+ * and usage with no tokens and no positive known cost renders nothing.
+ */
+export const formatUsage = (
+  usage: FormatUsageInput | undefined,
+  tokensLabel = "tokens",
+): string => {
+  if (!usage) return "";
+  const hasTokens = Number.isFinite(usage.totalTokens) && usage.totalTokens > 0;
+  const hasCost = usage.cost !== undefined && Number.isFinite(usage.cost);
+  if (!hasTokens && (!hasCost || usage.cost === 0)) return "";
+  const parts = [
+    `${formatTokenCount(usage.totalTokens)} ${tokensLabel}`,
+    ...(hasCost ? [formatCost(usage.cost ?? 0)] : []),
+  ];
+  return parts.join(" · ");
 };
 
 export const formatDuration = (milliseconds: number): string => {

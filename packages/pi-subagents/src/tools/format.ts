@@ -2,10 +2,10 @@ import type { SubagentSelectionProvenance } from "../profiles/model.ts";
 import type { SubagentRunView } from "../run/model.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { safeTextPrefix } from "../run/state.ts";
-import { formatCost, formatDuration, formatTokenCount } from "../ui/metrics.ts";
+import { formatCost, formatDuration, formatTokenCount, formatUsage } from "../ui/metrics.ts";
 import { sanitizeTerminalLine } from "../ui/sanitize.ts";
 
-export { formatCost, formatDuration, formatTokenCount };
+export { formatCost, formatDuration, formatTokenCount, formatUsage };
 import type { SubagentRunCard } from "./details.ts";
 
 export const selectionSourceLabel = (

@@ -72,18 +72,25 @@ const isValidUsage = (usage: SubagentUsage): boolean =>
   [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens].every(
     (value) => Number.isSafeInteger(value) && value >= 0,
   ) &&
-  Number.isFinite(usage.cost) &&
-  usage.cost >= 0;
+  (usage.cost === undefined || (Number.isFinite(usage.cost) && usage.cost >= 0));
 
+/**
+ * Sums token counts and known costs. Cost stays unknown (absent) only while no
+ * event has ever reported a known cost; a known cost never regresses to unknown.
+ */
 export const addUsage = (left: SubagentUsage, right: SubagentUsage): SubagentUsage => {
   if (!isValidUsage(right)) return left;
+  const cost =
+    left.cost === undefined && right.cost === undefined
+      ? undefined
+      : (left.cost ?? 0) + (right.cost ?? 0);
   const combined: SubagentUsage = {
     input: left.input + right.input,
     output: left.output + right.output,
     cacheRead: left.cacheRead + right.cacheRead,
     cacheWrite: left.cacheWrite + right.cacheWrite,
     totalTokens: left.totalTokens + right.totalTokens,
-    cost: left.cost + right.cost,
+    ...(cost === undefined ? {} : { cost }),
   };
   return isValidUsage(combined) ? combined : left;
 };

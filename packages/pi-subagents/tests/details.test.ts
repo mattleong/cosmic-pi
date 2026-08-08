@@ -169,4 +169,47 @@ describe("persisted subagent card details", () => {
       }),
     ).toMatchObject({ action: "models" });
   });
+
+  it("preserves capabilities and unknown cost through the compact card fallback", () => {
+    // Hostile escaping in identity/model/reason fields forces the compact
+    // fallback stage without dropping the whole card list.
+    const hostile = `${"\\".repeat(4_000)}`;
+    const details = makeStartAwaitCardDetails({
+      action: "await",
+      runs: Array.from({ length: 12 }, (_, index) => ({
+        ...run(index + 1),
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+        selection: {
+          source: "profile-candidate" as const,
+          reason: hostile,
+          skippedCandidates: [
+            { candidate: hostile, code: "unavailable", reason: hostile },
+            { candidate: hostile, code: "unavailable", reason: hostile },
+          ],
+        },
+      })),
+    });
+    expect(details.cards.length).toBeGreaterThan(0);
+    for (const card of details.cards) {
+      // The compact stage was reached: provenance collapsed to its bounded form.
+      expect(card.selection.skippedCandidates).toEqual([]);
+      expect(card.selection.reason.length).toBeLessThanOrEqual(96);
+      // Compact fallback keeps capability evidence so renderers stay neutral
+      // instead of treating the run as definitely non-resumable.
+      expect(card.capabilities).toEqual(["resume"]);
+      // Unknown cost stays absent instead of becoming a fabricated known $0.
+      expect(card.usage?.cost).toBeUndefined();
+      expect(card.usage?.totalTokens).toBe(2);
+    }
+    const decoded = decodeStartAwaitCardDetails(details);
+    expect(decoded?.cards[0]?.capabilities).toEqual(["resume"]);
+    expect(decoded?.cards[0]?.usage?.cost).toBeUndefined();
+  });
+
+  it("round-trips a known zero cost distinctly from an unknown cost", () => {
+    const details = makeStartAwaitCardDetails({ action: "await", runs: [run()] });
+    expect(details.cards[0]?.usage?.cost).toBe(0);
+    const decoded = decodeStartAwaitCardDetails(details);
+    expect(decoded?.cards[0]?.usage?.cost).toBe(0);
+  });
 });

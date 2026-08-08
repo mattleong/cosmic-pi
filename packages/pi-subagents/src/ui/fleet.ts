@@ -643,7 +643,8 @@ export class SubagentFleetComponent implements Component, Focusable {
           ? "m New task"
           : "m Guide";
     if (!selected)
-      return renderResponsiveManagerFooter(contentWidth, [["No runs · ? More", "q Close"]]);
+      // No alternate help exists without a selected run, so no "? More" hint is offered.
+      return renderResponsiveManagerFooter(contentWidth, [["No runs", `${escape}/q Close`]]);
     const actions = [
       messageAction,
       canInterrupt(selected) ? "i Interrupt" : undefined,

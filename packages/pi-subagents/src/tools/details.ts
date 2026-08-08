@@ -264,7 +264,7 @@ const boundedUsage = (usage: SubagentUsage): SubagentUsage => ({
   cacheRead: boundedNonNegative(usage.cacheRead),
   cacheWrite: boundedNonNegative(usage.cacheWrite),
   totalTokens: boundedNonNegative(usage.totalTokens),
-  cost: boundedNonNegative(usage.cost),
+  ...(usage.cost === undefined ? {} : { cost: boundedNonNegative(usage.cost) }),
 });
 
 const compactCardFallback = (card: SubagentRunCard): SubagentRunCard => ({
@@ -281,6 +281,9 @@ const compactCardFallback = (card: SubagentRunCard): SubagentRunCard => ({
   ...(card.fastMode === undefined ? {} : { fastMode: card.fastMode }),
   ...(card.context ? { context: card.context } : {}),
   ...(card.writeIntent ? { writeIntent: card.writeIntent } : {}),
+  // Capabilities are bounded literals; dropping them would make renderers treat
+  // the run as definitely lacking resume/steer support.
+  ...(card.capabilities ? { capabilities: [...card.capabilities] } : {}),
   ...(card.startedAt === undefined ? {} : { startedAt: card.startedAt }),
   ...(card.lastActivityAt === undefined ? {} : { lastActivityAt: card.lastActivityAt }),
   ...(card.usage ? { usage: boundedUsage(card.usage) } : {}),

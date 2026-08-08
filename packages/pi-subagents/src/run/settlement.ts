@@ -4,9 +4,9 @@ import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import { type SubagentError, SubagentProcessError } from "./errors.ts";
 import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
-import { isTerminalRunState, type SubagentRunView } from "./model.ts";
+import { isTerminalRunState, type SubagentRunView, type SubagentUsage } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
-import { MAX_ERROR_CHARS, sanitizeDiagnosticText, snapshotView } from "./state.ts";
+import { addUsage, MAX_ERROR_CHARS, sanitizeDiagnosticText, snapshotView } from "./state.ts";
 import { foldRunWarnings } from "./warnings.ts";
 
 export interface RunSettlementDependencies {
@@ -49,6 +49,27 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         record.view = next;
         publish();
         return snapshotView(record.view);
+      }),
+    );
+  /**
+   * Merges exact-epoch usage that a backend reported only at its final native
+   * result, after an accepted report already settled the run. Only the completed
+   * outcome of the same assignment may absorb it; idle retained `reported`,
+   * stopped, failed, and parent-stopped records ignore late usage entirely.
+   */
+  const mergeLateUsage = (record: RunRecord, assignmentEpoch: number, usage: SubagentUsage) =>
+    withLock(
+      Effect.sync(() => {
+        if (
+          record.stoppedByParent ||
+          record.assignment.epoch !== assignmentEpoch ||
+          record.view.state !== "completed"
+        )
+          return;
+        const merged = addUsage(record.view.usage, usage);
+        if (merged === record.view.usage) return;
+        record.view = { ...record.view, usage: merged };
+        publish();
       }),
     );
   const pauseFromEvent = (record: RunRecord, now: number, assignmentEpoch: number) =>
@@ -209,6 +230,8 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
   return {
     /** Locked epoch/phase-guarded view mutation for assignment-scoped events. */
     mutateEventView,
+    /** Locked exact-epoch usage merge for results arriving after report settlement. */
+    mergeLateUsage,
     /** Commits a requested pause exactly once for the active running assignment. */
     pauseFromEvent,
     failPendingResponses,

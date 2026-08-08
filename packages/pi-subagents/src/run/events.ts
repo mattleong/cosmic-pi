@@ -29,6 +29,11 @@ export interface RunEventDependencies {
     assignmentEpoch: number | undefined,
     update: (view: SubagentRunView) => SubagentRunView | undefined,
   ) => Effect.Effect<SubagentRunView | undefined>;
+  readonly mergeLateUsage: (
+    record: RunRecord,
+    assignmentEpoch: number,
+    usage: import("./model.ts").SubagentUsage,
+  ) => Effect.Effect<void>;
   readonly runStarted: (record: RunRecord, assignmentEpoch: number) => Effect.Effect<void>;
   readonly runSettled: (record: RunRecord, assignmentEpoch: number) => Effect.Effect<void>;
   readonly acceptReport: (
@@ -54,8 +59,16 @@ export interface RunEventDependencies {
 const protocolError = (message: string) => new SubagentProtocolError({ message });
 
 export function makeRunEventHandler(dependencies: RunEventDependencies) {
-  const { mutateView, runStarted, runSettled, acceptReport, settle, notify, failRun } =
-    dependencies;
+  const {
+    mutateView,
+    mergeLateUsage,
+    runStarted,
+    runSettled,
+    acceptReport,
+    settle,
+    notify,
+    failRun,
+  } = dependencies;
 
   const handleContact = (
     record: RunRecord,
@@ -118,7 +131,14 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     });
 
   return (record: RunRecord, event: BackendEvent): Effect.Effect<void, SubagentError> => {
-    if (event.type !== "exit" && isInactiveRunRecord(record)) return Effect.void;
+    if (event.type !== "exit" && isInactiveRunRecord(record)) {
+      // A backend may report final cumulative usage/cost only at its native
+      // result, after the accepted report already settled the run. That exact
+      // epoch's usage still merges into the completed outcome.
+      if (event.type === "assistant_message")
+        return mergeLateUsage(record, event.assignmentEpoch, event.usage);
+      return Effect.void;
+    }
     switch (event.type) {
       case "run_started":
         return runStarted(record, event.assignmentEpoch);

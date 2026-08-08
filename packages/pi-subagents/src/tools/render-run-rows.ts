@@ -9,7 +9,7 @@ import {
 } from "../ui/run-state.ts";
 import { sanitizeTerminalLine } from "../ui/sanitize.ts";
 import type { SubagentRunCard } from "./details.ts";
-import { formatCost, formatDuration, formatTokenCount } from "./format.ts";
+import { formatCost, formatDuration, formatTokenCount, formatUsage } from "./format.ts";
 
 const MAX_SESSION_DISPLAY_AGE = 7 * 24 * 60 * 60 * 1_000;
 
@@ -31,8 +31,14 @@ export const runTiming = (run: SubagentRunCard): string => {
 
 export const aggregateRunUsage = (runs: ReadonlyArray<SubagentRunCard>): string => {
   const tokens = runs.reduce((total, run) => total + (run.usage?.totalTokens ?? 0), 0);
-  const cost = runs.reduce((total, run) => total + (run.usage?.cost ?? 0), 0);
-  return tokens > 0 || cost > 0 ? `${formatTokenCount(tokens)} tokens · ${formatCost(cost)}` : "";
+  const knownCosts = runs.flatMap((run) => (run.usage?.cost === undefined ? [] : [run.usage.cost]));
+  const cost = knownCosts.reduce((total, value) => total + value, 0);
+  const costKnown = knownCosts.length > 0;
+  // A subtotal over runs with unknown costs is explicitly marked as a lower bound.
+  const partial = costKnown && knownCosts.length < runs.length;
+  if (tokens <= 0 && (!costKnown || cost === 0)) return "";
+  const costPart = costKnown ? ` · ${partial ? "≥ " : ""}${formatCost(cost)}` : "";
+  return `${formatTokenCount(tokens)} tokens${costPart}`;
 };
 
 const padVisible = (value: string, width: number): string =>
@@ -50,10 +56,7 @@ const runRoute = (run: SubagentRunCard, width: number): string => {
   );
 };
 
-const runUsage = (run: SubagentRunCard): string =>
-  run.usage && (run.usage.totalTokens > 0 || run.usage.cost > 0)
-    ? `${formatTokenCount(run.usage.totalTokens)} tok · ${formatCost(run.usage.cost)}`
-    : "";
+const runUsage = (run: SubagentRunCard): string => formatUsage(run.usage, "tok");
 
 export interface ResponsiveRunRowOptions {
   readonly frame?: number;
@@ -83,6 +86,7 @@ export const renderResponsiveRunRows = (
         [runStateLabel(run.state), run.currentTool, runTiming(run)].filter(Boolean).join(" · "),
     ),
   );
+  const usages = runs.map(runUsage);
   const intentWidth = intents.reduce((max, intent) => Math.max(max, visibleWidth(intent)), 0);
   const identityWidth = Math.min(
     Math.max(16, ...identities.map((identity) => visibleWidth(identity))),
@@ -92,7 +96,15 @@ export const renderResponsiveRunRows = (
     Math.max(14, ...states.map((state) => visibleWidth(state))),
     Math.max(14, Math.floor(safeWidth * 0.28)),
   );
-  const routeWidth = safeWidth - identityWidth - intentWidth - stateWidth - 9;
+  const hasUsage = usages.some(Boolean);
+  const usageWidth = hasUsage
+    ? Math.min(
+        Math.max(...usages.map((usage) => visibleWidth(usage))),
+        Math.max(8, Math.floor(safeWidth * 0.18)),
+      )
+    : 0;
+  const routeWidth =
+    safeWidth - identityWidth - intentWidth - stateWidth - usageWidth - (hasUsage ? 12 : 9);
   if (safeWidth >= 88 && routeWidth >= 12)
     return runs.map((run, index) => {
       const color = runStateColor(run.state);
@@ -102,8 +114,10 @@ export const renderResponsiveRunRows = (
         run.writeIntent === "writer" ? "warning" : "muted",
         intents[index] ?? "",
       );
+      const usage = theme.fg("muted", truncateToWidth(usages[index] ?? "", usageWidth));
       const state = theme.fg(color, truncateToWidth(states[index] ?? "", stateWidth));
-      return `${padVisible(identity, identityWidth)} · ${padVisible(route, routeWidth)} · ${padVisible(intent, intentWidth)} · ${padVisible(state, stateWidth)}`;
+      const usageColumn = hasUsage ? ` · ${padVisible(usage, usageWidth)}` : "";
+      return `${padVisible(identity, identityWidth)} · ${padVisible(route, routeWidth)} · ${padVisible(intent, intentWidth)}${usageColumn} · ${padVisible(state, stateWidth)}`;
     });
   return runs.flatMap((run, index) => {
     const color = runStateColor(run.state);
@@ -112,7 +126,7 @@ export const renderResponsiveRunRows = (
     const compactRouteWidth = Math.max(1, safeWidth - visibleWidth(intentText) - 3);
     const route = theme.fg("toolOutput", runRoute(run, compactRouteWidth));
     const metadata = `${route} · ${theme.fg(run.writeIntent === "writer" ? "warning" : "muted", intentText)}`;
-    const status = [states[index] ?? "", runUsage(run)].filter(Boolean).join(" · ");
+    const status = [states[index] ?? "", usages[index] ?? ""].filter(Boolean).join(" · ");
     return [
       truncateToWidth(identity, safeWidth),
       truncateToWidth(metadata, safeWidth),

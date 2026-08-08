@@ -15,7 +15,7 @@ import {
   type SubagentRunView,
   type SubagentSessionEvent,
 } from "../run/model.ts";
-import { formatCost, formatDuration, formatTokenCount } from "./metrics.ts";
+import { formatDuration, formatUsage } from "./metrics.ts";
 import { animatedRunStateGlyph, runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "./sanitize.ts";
 
@@ -369,9 +369,11 @@ export function renderSubagentSessionOutput(
     );
   }
 
-  container.addChild(new Spacer(1));
-  const usage = `${formatTokenCount(run.usage.totalTokens)} tokens · ${formatCost(run.usage.cost)}`;
-  container.addChild(new Text(theme.fg("dim", usage), 0, 0));
+  const usage = formatUsage(run.usage);
+  if (usage) {
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("dim", usage), 0, 0));
+  }
   if (options.showTechnicalDetails) addTechnicalDetails(container, run, theme);
   return container;
 }

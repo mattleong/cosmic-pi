@@ -142,6 +142,11 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
               Effect.gen(function* () {
                 const selected = yield* requireRecord(id);
                 yield* requireCapability(selected, "resume");
+                if (selected.evictionReclaimClaim)
+                  return yield* new InvalidSubagentRequestError({
+                    code: "resume_state_invalid",
+                    message: `Subagent ${id} is being evicted by start admission and can no longer resume.`,
+                  });
                 if (selected.view.state !== "paused" && selected.view.state !== "completed")
                   return yield* new InvalidSubagentRequestError({
                     code: "resume_state_invalid",

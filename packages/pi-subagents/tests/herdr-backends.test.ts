@@ -197,6 +197,17 @@ const fixture = Effect.gen(function* () {
     prompts,
     setRemoteStatus: (status: HerdrAgent["agentStatus"]) => void (remoteStatus = status),
     setPromptMode: (mode: typeof promptMode) => void (promptMode = mode),
+    acceptReport: (epoch: number, runtime: "pi" | "claude" | "codex" = "pi") => {
+      acceptedEpochs.add(epoch);
+      Queue.offerUnsafe(supervisorEvents, {
+        type: "report",
+        runId: `agent-${runtime}`,
+        assignmentEpoch: epoch,
+        sequence: epoch,
+        deliveryId: `accepted-${epoch}`,
+        text: "Accepted retained report.",
+      });
+    },
     closed: () => closed,
   };
 });
@@ -342,6 +353,71 @@ describe("Herdr Phase One backend drivers", () => {
       yield* take(handle.events);
       test.setRemoteStatus("done");
       yield* TestClock.adjust("6 seconds");
+      const event = yield* take(handle.events);
+      expect(event).toMatchObject({
+        type: "protocol_error",
+        message: expect.stringContaining("without an accepted supervisor report"),
+      });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("fails closed after sustained unknown agent status following a confirmed start", () =>
+    Effect.gen(function* () {
+      const test = yield* fixture;
+      const handle = yield* makeHerdrBackendDriver("pi", test.host, test.supervisors).spawn(
+        launch("pi"),
+      );
+      yield* handle.controls.initialize;
+      yield* handle.controls.start("Task", 1);
+      yield* take(handle.events);
+      test.setRemoteStatus("unknown");
+      yield* TestClock.adjust("11 seconds");
+      const event = yield* take(handle.events);
+      expect(event).toMatchObject({
+        type: "protocol_error",
+        message: expect.stringContaining("remained unknown"),
+      });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "does not fail a retained run whose report was accepted before status became unknown",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* fixture;
+        const handle = yield* makeHerdrBackendDriver("pi", test.host, test.supervisors).spawn(
+          launch("pi"),
+        );
+        yield* handle.controls.initialize;
+        yield* handle.controls.start("Task", 1);
+        yield* take(handle.events);
+        test.acceptReport(1);
+        expect(yield* take(handle.events)).toMatchObject({ type: "report", assignmentEpoch: 1 });
+        test.setRemoteStatus("unknown");
+        yield* TestClock.adjust("20 seconds");
+        expect((yield* Queue.poll(handle.events))._tag).toBe("None");
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("recovers from transient unknown status without erasing missing-report evidence", () =>
+    Effect.gen(function* () {
+      const test = yield* fixture;
+      const handle = yield* makeHerdrBackendDriver("pi", test.host, test.supervisors).spawn(
+        launch("pi"),
+      );
+      yield* handle.controls.initialize;
+      yield* handle.controls.start("Task", 1);
+      yield* take(handle.events);
+      // Accumulate partial missing-report evidence while settled without a report.
+      test.setRemoteStatus("done");
+      yield* TestClock.adjust("2500 millis");
+      // A transient unknown blip inside the bounded grace neither fails closed
+      // nor resets the missing-report counter.
+      test.setRemoteStatus("unknown");
+      yield* TestClock.adjust("1 second");
+      expect((yield* Queue.poll(handle.events))._tag).toBe("None");
+      test.setRemoteStatus("done");
+      yield* TestClock.adjust("3 seconds");
       const event = yield* take(handle.events);
       expect(event).toMatchObject({
         type: "protocol_error",

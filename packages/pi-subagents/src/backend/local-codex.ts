@@ -1,6 +1,7 @@
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -64,6 +65,13 @@ interface PendingInterrupt {
   readonly turnId: string;
   readonly assignmentEpoch: number;
   readonly completion: Deferred.Deferred<void, SubagentError>;
+  /**
+   * Set when the public interrupt call timed out with an uncertain outcome. The
+   * lifecycle then remains exactly owned: a late matching interrupted turn
+   * completion settles the assignment through `run_settled` instead of failing.
+   */
+  abandoned: boolean;
+  completionSeen: boolean;
 }
 
 const outcomeCode = (method: CodexRequest["method"]): string => {
@@ -79,23 +87,30 @@ const outcomeCode = (method: CodexRequest["method"]): string => {
   }
 };
 
-const toolName = (item: {
+/**
+ * Item classification: only known executable item types own a
+ * tool_started/tool_finished lifecycle. Reasoning and other informational items
+ * surface as activity, forbidden nested-agent/collaboration items stay fatal,
+ * and unknown future item types never fabricate tool lifecycle entries.
+ */
+const FORBIDDEN_ITEM_TYPES: ReadonlySet<string> = new Set([
+  "collabAgentToolCall",
+  "subAgentActivity",
+]);
+const EXECUTABLE_ITEM_TOOL_NAMES: Readonly<Record<string, string>> = {
+  commandExecution: "Bash",
+  fileChange: "ApplyPatch",
+  webSearch: "WebSearch",
+};
+
+const executableToolName = (item: {
   readonly type: string;
   readonly server?: string | undefined;
   readonly tool?: string | undefined;
-}) => {
-  switch (item.type) {
-    case "commandExecution":
-      return "Bash";
-    case "fileChange":
-      return "ApplyPatch";
-    case "mcpToolCall":
-      return `mcp:${item.server ?? "unknown"}/${item.tool ?? "unknown"}`;
-    case "webSearch":
-      return "WebSearch";
-    default:
-      return item.type;
-  }
+}): string | undefined => {
+  if (item.type === "mcpToolCall")
+    return `mcp:${item.server ?? "unknown"}/${item.tool ?? "unknown"}`;
+  return EXECUTABLE_ITEM_TOOL_NAMES[item.type];
 };
 
 const usageDelta = (
@@ -113,7 +128,7 @@ const usageDelta = (
   cacheRead: Math.max(0, total.cachedInputTokens - previous.cacheRead),
   cacheWrite: Math.max(0, (total.cacheWriteInputTokens ?? 0) - previous.cacheWrite),
   totalTokens: Math.max(0, total.totalTokens - previous.totalTokens),
-  cost: 0,
+  // Codex reports no client-side cost; it remains unknown rather than a known $0.
 });
 
 const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function* (
@@ -137,7 +152,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     cacheRead: 0,
     cacheWrite: 0,
     totalTokens: 0,
-    cost: 0,
   };
 
   const acknowledge = (event: BackendEvent) => {
@@ -228,7 +242,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
               cacheRead: event.total.cachedInputTokens,
               cacheWrite: event.total.cacheWriteInputTokens ?? 0,
               totalTokens: event.total.totalTokens,
-              cost: 0,
             };
             return offer({ type: "assistant_message", assignmentEpoch, usage: delta }, raw);
           }
@@ -237,9 +250,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
               child.acknowledge(raw);
               return Effect.void;
             }
-            if (event.item.type === "agentMessage")
-              return offer({ type: "activity", assignmentEpoch }, raw);
-            if (event.item.type === "collabAgentToolCall" || event.item.type === "subAgentActivity")
+            if (FORBIDDEN_ITEM_TYPES.has(event.item.type))
               return offer(
                 {
                   type: "protocol_error",
@@ -247,12 +258,17 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                 },
                 raw,
               );
+            const tool = executableToolName(event.item);
+            if (tool === undefined)
+              // agentMessage, reasoning, and unknown future informational items
+              // are activity; they never fabricate a tool lifecycle entry.
+              return offer({ type: "activity", assignmentEpoch }, raw);
             return offer(
               {
                 type: "tool_started",
                 assignmentEpoch,
                 toolCallId: event.item.id,
-                toolName: toolName(event.item),
+                toolName: tool,
                 args:
                   event.item.arguments ??
                   (event.item.command ? { command: event.item.command } : {}),
@@ -265,6 +281,14 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
               child.acknowledge(raw);
               return Effect.void;
             }
+            if (FORBIDDEN_ITEM_TYPES.has(event.item.type))
+              return offer(
+                {
+                  type: "protocol_error",
+                  message: "Codex emitted forbidden multi-agent activity.",
+                },
+                raw,
+              );
             if (event.item.type === "agentMessage")
               return offer(
                 {
@@ -277,17 +301,23 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                     cacheRead: 0,
                     cacheWrite: 0,
                     totalTokens: 0,
-                    cost: 0,
                   },
                 },
                 raw,
               );
+            const tool = executableToolName(event.item);
+            if (tool === undefined) {
+              // Completion of an informational or unknown item is acknowledged
+              // without a fabricated tool_finished, matching item_started.
+              child.acknowledge(raw);
+              return Effect.void;
+            }
             return offer(
               {
                 type: "tool_finished",
                 assignmentEpoch,
                 toolCallId: event.item.id,
-                toolName: toolName(event.item),
+                toolName: tool,
                 isError: event.item.status === "failed" || event.item.status === "declined",
               },
               raw,
@@ -307,6 +337,17 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                 interrupt?.turnId === event.turnId &&
                 interrupt.assignmentEpoch === completedEpoch
               ) {
+                interrupt.completionSeen = true;
+                if (interrupt.abandoned) {
+                  // The exact native interrupted settlement arrived after the
+                  // public interrupt timed out; settle it as a pause rather
+                  // than failing the run.
+                  pendingInterrupt = undefined;
+                  return offer(
+                    { type: "run_settled", assignmentEpoch: interrupt.assignmentEpoch },
+                    raw,
+                  );
+                }
                 Deferred.doneUnsafe(interrupt.completion, Effect.void);
                 child.acknowledge(raw);
                 return Effect.void;
@@ -649,13 +690,17 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                     error: processError(
                       "interrupt",
                       "interrupt_not_sent",
-                      "Another Codex interrupt lifecycle is already pending.",
+                      pendingInterrupt.abandoned
+                        ? "A previous Codex interrupt lifecycle is still unresolved; a second interrupt would be ambiguously correlated."
+                        : "Another Codex interrupt lifecycle is already pending.",
                     ),
                   } as const;
                 const lifecycle: PendingInterrupt = {
                   turnId,
                   assignmentEpoch,
                   completion: Deferred.makeUnsafe<void, SubagentError>(),
+                  abandoned: false,
+                  completionSeen: false,
                 };
                 pendingInterrupt = lifecycle;
                 return { lifecycle } as const;
@@ -692,10 +737,40 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
                   ),
                 );
               },
-              (acquired) =>
-                Effect.sync(() => {
-                  if (acquired.lifecycle && pendingInterrupt === acquired.lifecycle)
+              (acquired, exit) =>
+                Effect.suspend(() => {
+                  if (!acquired.lifecycle || pendingInterrupt !== acquired.lifecycle)
+                    return Effect.void;
+                  // An uncertain or cancelled interrupt retains exact lifecycle
+                  // ownership so a late matching interrupted completion pauses
+                  // through run_settled. Definite outcomes release ownership.
+                  const retainOwnership =
+                    Exit.isFailure(exit) &&
+                    (exit.cause.reasons.every(Cause.isInterruptReason) ||
+                      (() => {
+                        const error = Cause.squash(exit.cause);
+                        return (
+                          typeof error === "object" &&
+                          error !== null &&
+                          "_tag" in error &&
+                          error._tag === "SubagentProcessError" &&
+                          (error as SubagentProcessError).code === "interrupt_outcome_uncertain"
+                        );
+                      })());
+                  if (!retainOwnership) {
                     pendingInterrupt = undefined;
+                    return Effect.void;
+                  }
+                  acquired.lifecycle.abandoned = true;
+                  // Native terminal evidence may have arrived before timeout while
+                  // only the JSON-RPC response was missing. Bridge it immediately;
+                  // otherwise no later event would remain to settle the pause.
+                  if (!acquired.lifecycle.completionSeen) return Effect.void;
+                  pendingInterrupt = undefined;
+                  return offer({
+                    type: "run_settled",
+                    assignmentEpoch: acquired.lifecycle.assignmentEpoch,
+                  });
                 }),
             ),
           ),

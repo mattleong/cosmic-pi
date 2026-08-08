@@ -5,7 +5,10 @@ import { MAX_CONCURRENT_RUNS } from "./limits.ts";
 import { isActiveRunState } from "./model.ts";
 
 const ownsProcessSlot = (record: RunRecord): boolean =>
-  record.cleanupPending || record.process !== undefined || record.view.state === "starting";
+  record.cleanupPending ||
+  record.process !== undefined ||
+  record.view.state === "starting" ||
+  record.evictionAdmission !== undefined;
 
 const ownsWriterSlot = (record: RunRecord): boolean =>
   record.view.writeIntent === "writer" &&
@@ -32,19 +35,21 @@ export const writerConflictError = (
   canonicalCwd: CanonicalWriterCwd,
   excluded?: RunRecord,
 ): SubagentWriterConflictError | undefined => {
-  const activeWriter = [...records.values()].find(
+  const conflictingRecord = [...records.values()].find(
     (record) =>
       record !== excluded &&
-      ownsWriterSlot(record) &&
-      record.canonicalWriterCwd?.digest === canonicalCwd.digest,
+      ((ownsWriterSlot(record) && record.canonicalWriterCwd?.digest === canonicalCwd.digest) ||
+        record.evictionAdmission?.writerCwdDigest === canonicalCwd.digest),
   );
-  return activeWriter
-    ? new SubagentWriterConflictError({
-        activeId: activeWriter.view.id,
-        activeName: activeWriter.view.name,
-        message: activeWriter.cleanupPending
-          ? `Writer ${activeWriter.view.name} (${activeWriter.view.id}) remains quarantined because cleanup could not be confirmed.`
-          : `Writer ${activeWriter.view.name} (${activeWriter.view.id}) already owns the shared cwd.`,
-      })
-    : undefined;
+  if (!conflictingRecord) return undefined;
+  const reserved = conflictingRecord.evictionAdmission?.writerCwdDigest === canonicalCwd.digest;
+  return new SubagentWriterConflictError({
+    activeId: conflictingRecord.view.id,
+    activeName: conflictingRecord.view.name,
+    message: reserved
+      ? `Writer start admission for the shared cwd is already reserved while subagent history is reclaimed.`
+      : conflictingRecord.cleanupPending
+        ? `Writer ${conflictingRecord.view.name} (${conflictingRecord.view.id}) remains quarantined because cleanup could not be confirmed.`
+        : `Writer ${conflictingRecord.view.name} (${conflictingRecord.view.id}) already owns the shared cwd.`,
+  });
 };

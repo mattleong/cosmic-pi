@@ -71,6 +71,7 @@ function fakeChildLayer(
     readonly stateThinkingLevel?: string;
     readonly onRelease?: ((spawnIndex: number) => void) | undefined;
     readonly failReclaim?: boolean | undefined;
+    readonly reclaimGate?: Deferred.Deferred<void, never> | undefined;
     readonly initialFailures?: ReadonlyArray<{
       readonly spawnIndex: number;
       readonly type: RpcCommand["type"];
@@ -91,6 +92,7 @@ function fakeChildLayer(
     reclaimRunState: ({ runId }) =>
       Effect.gen(function* () {
         reclaimedRunIds.push(runId);
+        if (options.reclaimGate) yield* Deferred.await(options.reclaimGate);
         if (options.failReclaim)
           return yield* new SubagentProcessError({
             operation: "reclaim run state",
@@ -2877,6 +2879,164 @@ describe("SubagentService", () => {
       expect(retained).toHaveLength(50);
       expect(retained.some((run) => run.id === firstId)).toBe(false);
       expect(fake.reclaimedRunIds).toEqual([firstId]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("keeps the evicted record registered and admits nothing when reclaim fails", () => {
+    let reclaimFails = true;
+    const fake = fakeChildLayer(Effect.void, {
+      get failReclaim() {
+        return reclaimFails;
+      },
+    });
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      notify: (notification) =>
+        notification.type === "completed"
+          ? {
+              deliveredCompletionKeys: notification.runs.map(
+                (run) => `${run.id}:${run.generation}`,
+              ),
+            }
+          : undefined,
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      let firstId = "";
+      for (let index = 0; index < 50; index += 1) {
+        const run = yield* service.start(request({ name: `evictable-${index + 1}` }));
+        if (index === 0) firstId = run.id;
+        fake.controls[index]?.offer({ type: "agent_settled" });
+        yield* yieldUntil(
+          () =>
+            projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state ===
+            "completed",
+        );
+        yield* yieldUntil(() => fake.controls[index]?.released() === 1);
+      }
+      yield* TestClock.adjust("100 millis");
+      const blocked = yield* service.start(request({ name: "blocked" })).pipe(Effect.flip);
+      expect(blocked).toMatchObject({
+        _tag: "SubagentProcessError",
+        code: "fixture_reclaim_failed",
+      });
+      // Reclaim failure admitted nothing, left no starting orphan, and kept the
+      // uncertain candidate registered but quarantined against unsafe resume.
+      const afterFailure = yield* service.list;
+      const secondId = afterFailure[1]?.id ?? "";
+      const thirdId = afterFailure[2]?.id ?? "";
+      expect(afterFailure).toHaveLength(50);
+      expect(afterFailure.find((run) => run.id === firstId)?.warning).toContain(
+        "remains quarantined",
+      );
+      expect(afterFailure.some((run) => run.name === "blocked")).toBe(false);
+      expect(fake.reclaimedRunIds).toEqual([firstId]);
+      // The prospective admission reservation is released, but the uncertain
+      // record stays quarantined; a retry selects the next safe candidate.
+      const retried = yield* service.start(request({ name: "blocked-retry" })).pipe(Effect.flip);
+      expect(retried).toMatchObject({ code: "fixture_reclaim_failed" });
+      expect(fake.reclaimedRunIds).toEqual([firstId, secondId]);
+      reclaimFails = false;
+      const recovered = yield* service.start(request({ name: "recovered" }));
+      expect(recovered.state).toBe("running");
+      const retained = yield* service.list;
+      expect(retained).toHaveLength(50);
+      expect(retained.some((run) => run.id === firstId)).toBe(true);
+      expect(retained.some((run) => run.id === secondId)).toBe(true);
+      expect(retained.some((run) => run.id === thirdId)).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("concurrent evicting starts never claim the same reclaim candidate", () => {
+    let gate: Deferred.Deferred<void, never> | undefined;
+    const fake = fakeChildLayer(Effect.void, {
+      get reclaimGate() {
+        return gate;
+      },
+    });
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      notify: (notification) =>
+        notification.type === "completed"
+          ? {
+              deliveredCompletionKeys: notification.runs.map(
+                (run) => `${run.id}:${run.generation}`,
+              ),
+            }
+          : undefined,
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      for (let index = 0; index < 40; index += 1) {
+        const run = yield* service.start(request({ name: `candidate-${index + 1}` }));
+        fake.controls[index]?.offer({ type: "agent_settled" });
+        yield* yieldUntil(
+          () =>
+            projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state ===
+            "completed",
+        );
+        yield* yieldUntil(() => fake.controls[index]?.released() === 1);
+      }
+      yield* TestClock.adjust("100 millis");
+      for (let index = 0; index < 10; index += 1)
+        yield* service.start(request({ name: `active-before-eviction-${index + 1}` }));
+      gate = yield* Deferred.make<void>();
+      const startA = yield* service.start(request({ name: "evict-a" })).pipe(Effect.forkScoped);
+      const startB = yield* service.start(request({ name: "evict-b" })).pipe(Effect.forkScoped);
+      yield* yieldUntil(() => fake.reclaimedRunIds.length === 2);
+      // Each start claimed a distinct candidate and reserved one prospective
+      // process slot while both destructive reclaims were in flight.
+      expect(new Set(fake.reclaimedRunIds).size).toBe(2);
+      const blocked = yield* service.start(request({ name: "evict-c" })).pipe(Effect.flip);
+      expect(blocked).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });
+      expect(fake.reclaimedRunIds).toHaveLength(2);
+      yield* Deferred.succeed(gate, undefined);
+      expect((yield* Fiber.join(startA)).state).toBe("running");
+      expect((yield* Fiber.join(startB)).state).toBe("running");
+      expect(yield* service.list).toHaveLength(50);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("rejects capacity before reclaiming resumable history", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = serviceLayer({
+      notify: (notification) =>
+        notification.type === "completed"
+          ? {
+              deliveredCompletionKeys: notification.runs.map(
+                (run) => `${run.id}:${run.generation}`,
+              ),
+            }
+          : undefined,
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      let oldestId = "";
+      for (let index = 0; index < 38; index += 1) {
+        const run = yield* service.start(request({ name: `history-${index + 1}` }));
+        if (index === 0) oldestId = run.id;
+        fake.controls[index]?.offer({ type: "agent_settled" });
+        yield* yieldUntil(
+          () =>
+            projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state ===
+            "completed",
+        );
+        yield* yieldUntil(() => fake.controls[index]?.released() === 1);
+      }
+      yield* TestClock.adjust("100 millis");
+      for (let index = 0; index < 12; index += 1)
+        yield* service.start(request({ name: `active-${index + 1}` }));
+      const failure = yield* service.start(request({ name: "capacity-blocked" })).pipe(Effect.flip);
+      expect(failure).toMatchObject({ _tag: "SubagentCapacityError", limit: 12 });
+      const retained = yield* service.list;
+      expect(retained).toHaveLength(50);
+      expect(retained.some((run) => run.id === oldestId)).toBe(true);
+      expect(retained.some((run) => run.name === "capacity-blocked")).toBe(false);
+      expect(fake.reclaimedRunIds).not.toContain(oldestId);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

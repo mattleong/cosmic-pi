@@ -237,7 +237,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   let interruptBackend: (record: RunRecord) => Effect.Effect<void, SubagentError>;
   let renameBackend: (record: RunRecord, name: string) => Effect.Effect<void, SubagentError>;
 
-  const { mutateEventView, pauseFromEvent, failPendingResponses, settle, failRun } =
+  const { mutateEventView, mergeLateUsage, pauseFromEvent, failPendingResponses, settle, failRun } =
     makeRunSettlement({
       ownerScope,
       withLock,
@@ -264,6 +264,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const handleWireEvent = makeRunEventHandler({
     mutateView: mutateEventView,
+    mergeLateUsage,
     runStarted: runStartedFromBackend,
     runSettled: runSettledFromBackend,
     settle,
@@ -315,6 +316,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     allocateRunIdentity,
     allocateAssignmentAttemptToken,
     reclaimRecordRunState,
+    quarantineReclaimFailure: (record) => retainCleanupQuarantine(record, record.scope),
     markCleanupPending,
     closeRecordScope,
     settle,

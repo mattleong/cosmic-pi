@@ -33,6 +33,7 @@ const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infini
 
 if (args.includes("--print")) {
   const model = args[args.indexOf("--model") + 1] ?? "fixture-claude";
+  let assistantCounter = 0;
   if (process.env.HOME?.includes("hanging-catalog"))
     writeFileSync(join(process.env.HOME, "fixture.pid"), String(process.pid));
   if (process.env.HOME?.includes("deduplicated-catalog"))
@@ -144,6 +145,9 @@ if (args.includes("--print")) {
             type: "user",
             isReplay: true,
             session_id: "claude-fixture-session",
+            ...(model === "interrupt-foreign-marker"
+              ? { uuid: "00000000-0000-4000-8000-00000000fade" }
+              : {}),
             message: { role: "user", content: "[Request interrupted by user]" },
           });
         const result = () =>
@@ -158,6 +162,9 @@ if (args.includes("--print")) {
                 ? ["genuine fixture failure"]
                 : ["Request aborted."],
             session_id: "claude-fixture-session",
+            ...(model === "interrupt-foreign-result"
+              ? { user_message_uuid: "00000000-0000-4000-8000-00000000dead" }
+              : {}),
           });
         const terminal = () => {
           if (model === "interrupt-result-first") {
@@ -168,7 +175,16 @@ if (args.includes("--print")) {
             result();
           }
         };
-        if (model === "interrupt-terminal-first") {
+        if (model === "interrupt-late-terminal") {
+          // The correlated marker/result settlement arrives only after the
+          // parent's public interrupt timeout has already expired.
+          response();
+          setTimeout(terminal, 11_000);
+          return;
+        }
+        if (model === "interrupt-terminal-no-response") {
+          terminal();
+        } else if (model === "interrupt-terminal-first") {
           terminal();
           response();
         } else {
@@ -188,8 +204,25 @@ if (args.includes("--print")) {
       type: "user",
       isReplay: true,
       session_id: "claude-fixture-session",
+      ...(frame.uuid ? { uuid: frame.uuid } : {}),
       message: frame.message,
     });
+    if (model === "duplicate-replay" && frame.uuid)
+      write({
+        type: "user",
+        isReplay: true,
+        session_id: "claude-fixture-session",
+        uuid: frame.uuid,
+        message: frame.message,
+      });
+    if (model === "foreign-replay" && frame.shouldQuery !== false)
+      write({
+        type: "user",
+        isReplay: true,
+        session_id: "claude-fixture-session",
+        uuid: "00000000-0000-4000-8000-00000000f0f0",
+        message: { role: "user", content: "foreign injected input" },
+      });
     if (frame.shouldQuery === false) {
       write({
         type: "result",
@@ -198,6 +231,7 @@ if (args.includes("--print")) {
         result: "",
         stop_reason: null,
         session_id: "claude-fixture-session",
+        ...(frame.uuid ? { user_message_uuid: frame.uuid } : {}),
       });
       return;
     }
@@ -209,10 +243,12 @@ if (args.includes("--print")) {
       process.stdout.write(`${"x".repeat(4 * 1024 * 1024 + 1)}\n`);
       return;
     }
-    write({
+    assistantCounter += 1;
+    const assistantMessage = (usage) => ({
       type: "assistant",
       session_id: "claude-fixture-session",
       message: {
+        id: `msg-fixture-${assistantCounter}`,
         role: "assistant",
         content: [
           {
@@ -220,13 +256,50 @@ if (args.includes("--print")) {
             text: `Claude saw: ${text}; envLeak=${process.env.TEST_SECRET ?? "none"}`,
           },
         ],
-        usage: { input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 1 },
+        usage,
       },
     });
+    write(assistantMessage({ input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 1 }));
+    // The current CLI repeats cumulative usage for the same assistant message id.
+    if (model === "repeated-usage")
+      write(assistantMessage({ input_tokens: 3, output_tokens: 6, cache_read_input_tokens: 1 }));
+    if (model === "task-notification") {
+      const notificationUuid = "00000000-0000-4000-8000-00000000a501";
+      write({
+        type: "user",
+        uuid: notificationUuid,
+        isSynthetic: true,
+        origin: { kind: "task-notification" },
+        session_id: "claude-fixture-session",
+        message: { role: "user", content: "A background task completed." },
+      });
+      write({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "",
+        session_id: "claude-fixture-session",
+        origin: { kind: "task-notification" },
+      });
+    }
     // Interrupt fixtures model a still-running native turn: only the correlated interrupt emits
     // their terminal result. Other models complete normally and exercise missing-report handling.
-    if (model !== "claude-fixture" && !model.startsWith("interrupt"))
-      write({ type: "result", subtype: "success", is_error: false, result: "raw final ignored" });
+    if (model !== "claude-fixture" && !model.startsWith("interrupt")) {
+      const emitResult = () =>
+        write({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "raw final ignored",
+          session_id: "claude-fixture-session",
+          ...(frame.uuid ? { user_message_uuid: frame.uuid } : {}),
+          usage: { input_tokens: 5, output_tokens: 4, cache_read_input_tokens: 1 },
+          total_cost_usd: 0.001,
+        });
+      // Exceeds the former two-second grace to characterize real post-tool finalization.
+      if (model === "buffered-report-cost") setTimeout(emitResult, 3_000);
+      else emitResult();
+    }
     if (model === "exit-no-report") process.exit(0);
   });
 } else if (args[0] === "app-server") {
@@ -309,6 +382,31 @@ if (args.includes("--print")) {
             turn: { id: turn, status: "inProgress", items: [] },
           },
         });
+        if (model === "informational-items") {
+          for (const item of [
+            { id: "reasoning-1", type: "reasoning", text: "thinking" },
+            { id: "future-1", type: "futureInformationalItem" },
+            { id: "command-1", type: "commandExecution", command: "ls", status: "completed" },
+          ]) {
+            write({
+              method: "item/started",
+              params: { threadId: "thread-fixture", turnId: turn, item },
+            });
+            write({
+              method: "item/completed",
+              params: { threadId: "thread-fixture", turnId: turn, item },
+            });
+          }
+        }
+        if (model === "forbidden-completed-item")
+          write({
+            method: "item/completed",
+            params: {
+              threadId: "thread-fixture",
+              turnId: turn,
+              item: { id: "collab-1", type: "collabAgentToolCall" },
+            },
+          });
         write({
           method: "item/completed",
           params: {
@@ -375,7 +473,14 @@ if (args.includes("--print")) {
               turn: { id: "turn-fixture", status: "interrupted", items: [] },
             },
           });
-        if (model === "interrupt-notification-first") {
+        if (model === "interrupt-late-completion") {
+          response();
+          setTimeout(completed, 11_000);
+          break;
+        }
+        if (model === "interrupt-completion-no-response") {
+          completed();
+        } else if (model === "interrupt-notification-first") {
           completed();
           response();
         } else {

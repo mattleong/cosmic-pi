@@ -427,8 +427,11 @@ describe("local CLI Phase One backends", () => {
             expect(assistant).toMatchObject({
               type: "assistant_message",
               assignmentEpoch: 7,
-              usage: { input: 3, output: 4, cacheRead: 1, totalTokens: 7 },
+              usage: { input: 3, output: 4, cacheRead: 1, totalTokens: 8 },
             });
+            expect(
+              assistant.type === "assistant_message" ? assistant.usage.cost : -1,
+            ).toBeUndefined();
             expect(assistant.type === "assistant_message" ? assistant.text : "").toContain(
               "envLeak=none",
             );
@@ -517,6 +520,41 @@ describe("local CLI Phase One backends", () => {
                 });
                 yield* Fiber.interrupt(interrupting);
               }
+            }),
+          ),
+        );
+      } finally {
+        await fs.rm(harness.directory, { recursive: true, force: true });
+      }
+    }
+  }, 20_000);
+
+  it("rejects foreign UUID evidence during an owned Claude interrupt", async () => {
+    for (const model of ["interrupt-foreign-result", "interrupt-foreign-marker"] as const) {
+      const harness = await makeTempHarness();
+      const supervisor = supervisorFixture();
+      try {
+        await Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const backend = yield* makeLocalClaudeBackendDriver(
+                harness.processes,
+                supervisor.shape,
+              ).spawn(launch("claude", model));
+              yield* backend.controls.initialize;
+              yield* backend.controls.start("Interrupt foreign evidence", 1);
+              yield* take(backend.events);
+              yield* take(backend.events);
+              const interrupting = yield* backend.controls.interrupt.pipe(Effect.forkScoped);
+              expect(yield* take(backend.events)).toMatchObject({
+                type: "protocol_error",
+                message: expect.stringContaining(
+                  model === "interrupt-foreign-result"
+                    ? "result failed"
+                    : "uncorrelated stream-input",
+                ),
+              });
+              yield* Fiber.interrupt(interrupting);
             }),
           ),
         );
@@ -723,6 +761,20 @@ describe("local CLI Phase One backends", () => {
                 type: "assistant_message",
                 assignmentEpoch: 9,
               });
+              // Result-level reconciliation emits only the uncounted remainder
+              // plus the known client-side cost estimate.
+              expect(yield* take(backend.events)).toMatchObject({
+                type: "assistant_message",
+                assignmentEpoch: 9,
+                usage: {
+                  input: 2,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 2,
+                  cost: 0.001,
+                },
+              });
               if (acceptedEpoch === 9)
                 expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
               else
@@ -788,6 +840,10 @@ describe("local CLI Phase One backends", () => {
             yield* backend.controls.start("Claude task", 9);
             expect(yield* take(backend.events)).toMatchObject({ type: "run_started" });
             expect(yield* take(backend.events)).toMatchObject({ type: "assistant_message" });
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "assistant_message",
+              usage: expect.objectContaining({ cost: 0.001 }),
+            });
             expect(yield* take(backend.events)).toMatchObject({
               type: "report",
               assignmentEpoch: 9,
@@ -1049,6 +1105,436 @@ describe("local CLI Phase One backends", () => {
       } finally {
         await fs.rm(harness.directory, { recursive: true, force: true });
       }
+    }
+  }, 30_000);
+
+  it("deduplicates repeated cumulative Claude assistant usage and reconciles the result", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    supervisor.acceptReport(3);
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalClaudeBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("claude", "repeated-usage"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Repeat usage", 3);
+            expect(yield* take(backend.events)).toMatchObject({ type: "run_started" });
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "assistant_message",
+              usage: { input: 3, output: 4, cacheRead: 1, totalTokens: 8 },
+            });
+            // Same message id repeats cumulatively; only the delta is accounted.
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "assistant_message",
+              usage: { input: 0, output: 2, cacheRead: 0, totalTokens: 2 },
+            });
+            // The result's cumulative output (4) regresses below the emitted
+            // total (6): warn rather than subtract, and stay monotone.
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "warning",
+              message: expect.stringContaining("regressing cumulative"),
+            });
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "assistant_message",
+              usage: { input: 2, output: 0, totalTokens: 2, cost: 0.001 },
+            });
+            expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("forwards Claude result cost before the accepted report that triggers cleanup", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    supervisor.acceptReport(6);
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalClaudeBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("claude", "buffered-report-cost"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Report with final cost", 6);
+            expect(yield* take(backend.events)).toMatchObject({ type: "run_started" });
+            expect(yield* take(backend.events)).toMatchObject({ type: "assistant_message" });
+            Queue.offerUnsafe(
+              supervisor.current().events as Queue.Queue<BackendEvent, Cause.Done>,
+              {
+                type: "report",
+                runId: "agent-claude",
+                assignmentEpoch: 6,
+                sequence: 1,
+                deliveryId: "buffered-cost-6",
+                text: "Cost-bearing report",
+              },
+            );
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "assistant_message",
+              assignmentEpoch: 6,
+              usage: { input: 2, totalTokens: 2, cost: 0.001 },
+            });
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "report",
+              assignmentEpoch: 6,
+              deliveryId: "buffered-cost-6",
+            });
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("preserves an accepted Claude report when transport exit races a saturated event queue", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    supervisor.acceptReport(12);
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalClaudeBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("claude", "claude-fixture"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Saturate report forwarding", 12);
+            const started = yield* take(backend.events);
+            backend.acknowledge(started);
+            const assistant = yield* take(backend.events);
+            backend.acknowledge(assistant);
+            const supervisorQueue = supervisor.current().events as Queue.Queue<
+              BackendEvent,
+              Cause.Done
+            >;
+            for (let index = 0; index < 512; index += 1)
+              Queue.offerUnsafe(supervisorQueue, {
+                type: "supervisor_contact",
+                assignmentEpoch: 12,
+                requestId: `progress-${index}`,
+                kind: "progress",
+                message: `Progress ${index}`,
+              });
+            while ((yield* Queue.size(backend.events)) < 512) yield* Effect.sleep("1 millis");
+            Queue.offerUnsafe(supervisorQueue, {
+              type: "report",
+              runId: "agent-claude",
+              assignmentEpoch: 12,
+              sequence: 12,
+              deliveryId: "saturated-report-12",
+              text: "Saturated report",
+            });
+            while ((yield* Queue.size(supervisorQueue)) > 0) yield* Effect.sleep("1 millis");
+            yield* backend.terminate("force").pipe(Effect.forkScoped);
+            // Free one queue slot only after transport-exit preservation has had
+            // the opportunity to join the in-flight report forwarding attempt.
+            yield* Effect.sleep("25 millis");
+            for (let index = 0; index < 512; index += 1) yield* take(backend.events);
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "report",
+              assignmentEpoch: 12,
+            });
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("accepts UUID-owned Claude task-notification subturns without treating them as foreign input", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    supervisor.acceptReport(8);
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalClaudeBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("claude", "task-notification"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Run a background task", 8);
+            expect(yield* take(backend.events)).toMatchObject({ type: "run_started" });
+            expect(yield* take(backend.events)).toMatchObject({ type: "assistant_message" });
+            expect(yield* take(backend.events)).toEqual({
+              type: "activity",
+              assignmentEpoch: 8,
+            });
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "assistant_message",
+              assignmentEpoch: 8,
+              usage: expect.objectContaining({ cost: 0.001 }),
+            });
+            expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("acknowledges duplicate known-UUID Claude replays without failing the run", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    supervisor.acceptReport(5);
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalClaudeBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("claude", "duplicate-replay"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Duplicate replay", 5);
+            expect(yield* take(backend.events)).toMatchObject({ type: "run_started" });
+            expect(yield* take(backend.events)).toMatchObject({ type: "assistant_message" });
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "assistant_message",
+              usage: expect.objectContaining({ cost: 0.001 }),
+            });
+            expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("fails closed on a genuinely unknown Claude replay UUID", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalClaudeBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("claude", "foreign-replay"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Foreign replay", 4);
+            expect(yield* take(backend.events)).toMatchObject({ type: "run_started" });
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "protocol_error",
+              message: "Claude replayed an uncorrelated stream-input message.",
+            });
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("treats Codex informational and unknown items as activity without tool lifecycles", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalCodexBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("codex", "informational-items"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Codex items", 2);
+            const observed: BackendEvent[] = [];
+            for (let index = 0; index < 7; index += 1) observed.push(yield* take(backend.events));
+            expect(observed.map((event) => event.type)).toEqual([
+              "run_started",
+              "activity",
+              "activity",
+              "tool_started",
+              "tool_finished",
+              "assistant_message",
+              "assistant_message",
+            ]);
+            const toolStarted = observed.find((event) => event.type === "tool_started");
+            expect(toolStarted).toMatchObject({ toolName: "Bash", toolCallId: "command-1" });
+            const toolFinished = observed.find((event) => event.type === "tool_finished");
+            expect(toolFinished).toMatchObject({ toolName: "Bash", toolCallId: "command-1" });
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("keeps forbidden Codex collaboration item completions fatal", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalCodexBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("codex", "forbidden-completed-item"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Codex forbidden", 2);
+            expect(yield* take(backend.events)).toMatchObject({ type: "run_started" });
+            expect(yield* take(backend.events)).toMatchObject({
+              type: "protocol_error",
+              message: "Codex emitted forbidden multi-agent activity.",
+            });
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("settles a late Claude interrupted lifecycle as run_settled after the public timeout", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    const takeLate = <A>(queue: Queue.Dequeue<A, Cause.Done>) =>
+      Queue.take(queue).pipe(
+        Effect.timeoutOption("10 seconds"),
+        Effect.flatMap((value) =>
+          value._tag === "Some" ? Effect.succeed(value.value) : Effect.die("late event timeout"),
+        ),
+      );
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalClaudeBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("claude", "interrupt-late-terminal"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Interrupt late", 1);
+            yield* take(backend.events);
+            yield* take(backend.events);
+            const failure = yield* backend.controls.interrupt.pipe(Effect.flip);
+            expect(failure).toMatchObject({ code: "interrupt_outcome_uncertain" });
+            // The exact lifecycle stays owned: a second interrupt is rejected as
+            // ambiguous while the first remains unresolved.
+            const second = yield* backend.controls.interrupt.pipe(Effect.flip);
+            expect(second).toMatchObject({ code: "interrupt_not_sent" });
+            expect(yield* takeLate(backend.events)).toEqual({
+              type: "run_settled",
+              assignmentEpoch: 1,
+            });
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  }, 40_000);
+
+  it("settles Claude when native interrupt evidence precedes a missing control response", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalClaudeBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("claude", "interrupt-terminal-no-response"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Interrupt without response", 4);
+            yield* take(backend.events);
+            yield* take(backend.events);
+            const failure = yield* backend.controls.interrupt.pipe(Effect.flip);
+            expect(failure).toMatchObject({ code: "interrupt_outcome_uncertain" });
+            expect(yield* take(backend.events)).toEqual({
+              type: "run_settled",
+              assignmentEpoch: 4,
+            });
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("settles a late Codex interrupted completion as run_settled after the public timeout", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    const takeLate = <A>(queue: Queue.Dequeue<A, Cause.Done>) =>
+      Queue.take(queue).pipe(
+        Effect.timeoutOption("10 seconds"),
+        Effect.flatMap((value) =>
+          value._tag === "Some" ? Effect.succeed(value.value) : Effect.die("late event timeout"),
+        ),
+      );
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalCodexBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("codex", "interrupt-late-completion"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Codex late interrupt", 9);
+            for (let index = 0; index < 3; index += 1) yield* take(backend.events);
+            const failure = yield* backend.controls.interrupt.pipe(Effect.flip);
+            expect(failure).toMatchObject({ code: "interrupt_outcome_uncertain" });
+            const second = yield* backend.controls.interrupt.pipe(Effect.flip);
+            expect(second).toMatchObject({ code: "interrupt_not_sent" });
+            expect(yield* takeLate(backend.events)).toEqual({
+              type: "run_settled",
+              assignmentEpoch: 9,
+            });
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
+    }
+  }, 40_000);
+
+  it("settles Codex when native interrupt completion precedes a missing control response", async () => {
+    const harness = await makeTempHarness();
+    const supervisor = supervisorFixture();
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const backend = yield* makeLocalCodexBackendDriver(
+              harness.processes,
+              supervisor.shape,
+            ).spawn(launch("codex", "interrupt-completion-no-response"));
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Codex interrupt without response", 10);
+            for (let index = 0; index < 3; index += 1) yield* take(backend.events);
+            const failure = yield* backend.controls.interrupt.pipe(Effect.flip);
+            expect(failure).toMatchObject({ code: "interrupt_outcome_uncertain" });
+            expect(yield* take(backend.events)).toEqual({
+              type: "run_settled",
+              assignmentEpoch: 10,
+            });
+          }),
+        ),
+      );
+    } finally {
+      await fs.rm(harness.directory, { recursive: true, force: true });
     }
   }, 30_000);
 

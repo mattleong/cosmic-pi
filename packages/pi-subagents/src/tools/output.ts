@@ -5,13 +5,7 @@ import { runStateLabel } from "../ui/run-state.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { safeTextPrefix } from "../run/state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
-import {
-  formatCost,
-  formatDuration,
-  formatTokenCount,
-  formatToolRoute,
-  selectionSourceLabel,
-} from "./format.ts";
+import { formatDuration, formatToolRoute, formatUsage, selectionSourceLabel } from "./format.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./subagent.ts";
 
 const boundedLine = (value: string, maximum: number): string => {
@@ -69,10 +63,7 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     run.pid ? field("Process", `pid ${run.pid}`) : undefined,
     elapsed ? field("Elapsed", elapsed) : undefined,
     activity ? field("Activity", activity) : undefined,
-    field(
-      "Usage",
-      `${formatTokenCount(run.usage.totalTokens)} tokens · ${formatCost(run.usage.cost)}`,
-    ),
+    field("Usage", formatUsage(run.usage) || "unknown"),
     run.currentTool ? field("Current tool", run.currentTool) : undefined,
     run.progress ? field("Progress", run.progress) : undefined,
     run.warning ? field("Warning", run.warning) : undefined,

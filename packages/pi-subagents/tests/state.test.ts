@@ -37,4 +37,18 @@ describe("subagent usage state", () => {
       usage({ input: Number.MAX_SAFE_INTEGER }),
     );
   });
+
+  it("keeps cost unknown until a backend reports a known cost", () => {
+    const unknown = usage({ cost: undefined });
+    const combinedUnknown = addUsage(unknown, usage({ cost: undefined }));
+    expect(combinedUnknown.cost).toBeUndefined();
+    expect(combinedUnknown.totalTokens).toBe(4);
+    // A known cost joins and never regresses back to unknown.
+    const known = addUsage(combinedUnknown, usage({ cost: 0.25 }));
+    expect(known.cost).toBe(0.25);
+    const retained = addUsage(known, usage({ cost: undefined }));
+    expect(retained.cost).toBe(0.25);
+    // A backend-reported known zero stays a known zero.
+    expect(addUsage(usage({ cost: undefined }), usage({ cost: 0 })).cost).toBe(0);
+  });
 });
