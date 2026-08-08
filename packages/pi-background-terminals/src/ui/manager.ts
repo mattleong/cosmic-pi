@@ -99,6 +99,7 @@ export class ProcessManagerComponent implements Component {
   private detailMaxScroll = 0;
   private detailLineCount = 0;
   private detailPageSize = 1;
+  private listPageSize = 1;
   private pendingStop: string | undefined;
   private layout: ProcessManagerLayout = "narrow";
   private pane: ListDetailPane = "list";
@@ -176,8 +177,10 @@ export class ProcessManagerComponent implements Component {
         this.detailScroll = 0;
         this.follow = true;
       } else if (resolution.key === "f" && selected && isActiveJobState(selected.state)) {
+        // Unfollow is sticky: the anchored detail window keeps the viewed slice even before
+        // overflow; toggling follow back on returns to the newest lines.
         this.follow = !this.follow;
-        this.detailScroll = this.follow ? 0 : Math.min(this.detailMaxScroll, 1);
+        this.detailScroll = 0;
       } else if (resolution.key === "x" && selected && isActiveJobState(selected.state)) {
         this.pendingStop = selected.id;
       } else if (resolution.key === "c" && jobs.some((job) => !isActiveJobState(job.state)))
@@ -214,7 +217,7 @@ export class ProcessManagerComponent implements Component {
           hasSelection: selected !== undefined,
           detailMaxScroll: this.detailMaxScroll,
           detailSteps: pageSteps(this.detailPageSize),
-          listSteps: pageSteps(this.options.getHeight() - 3),
+          listSteps: pageSteps(this.listPageSize),
         },
       );
       if (result._tag === "Close") {
@@ -225,7 +228,9 @@ export class ProcessManagerComponent implements Component {
         this.pane = result.state.pane;
         this.details = result.state.details;
         this.detailScroll = result.state.detailScroll;
-        if (result.scrolledDetail) this.follow = this.detailScroll === 0;
+        // Scrolling away from the newest lines detaches follow; an explicit unfollow stays
+        // sticky, so scrolling back to the bottom never silently re-follows.
+        if (result.scrolledDetail && this.detailScroll > 0) this.follow = false;
         if (result.movedSelection) this.select(result.state.selected, jobs);
         if (result.resetChord) this.keymap.resetChord();
       }
@@ -360,6 +365,9 @@ export class ProcessManagerComponent implements Component {
     jobs: ReadonlyArray<BackgroundJobView>,
     limit: number,
   ): ReadonlyArray<{ readonly job: BackgroundJobView; readonly index: number }> {
+    // The rendered window is the authoritative list page size for half/full-page motions,
+    // so stacked layouts page by their actual visible rows rather than the full height.
+    this.listPageSize = Math.max(1, limit);
     const start = listWindowStart(jobs.length, this.selected, limit);
     return jobs.slice(start, start + Math.max(1, limit)).map((job, offset) => ({
       job,

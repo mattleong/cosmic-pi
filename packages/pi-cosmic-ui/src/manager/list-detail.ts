@@ -225,9 +225,13 @@ export interface DetailWindow {
 }
 
 /**
- * Computes the bottom-anchored detail window: reserves one position row on overflow, keeps
- * the viewed slice stable while new lines arrive above the fold, and clamps the scroll.
- * `follow` pins the window to the newest lines before computing.
+ * Computes the bottom-anchored detail window: reserves one position row on overflow (only
+ * when more than one row exists — a one-row window always shows content and omits the
+ * position label), keeps the viewed slice stable while new lines arrive above the fold, and
+ * clamps the scroll. `follow: true` pins the window to the newest lines before computing;
+ * `follow: false` records an explicit unfollow, so the viewed slice stays anchored even from
+ * the bottom (scroll 0) as new lines arrive; `undefined` means the caller has no follow
+ * policy and scroll 0 keeps tracking the newest lines.
  */
 export const computeDetailWindow = (options: {
   readonly lines: ReadonlyArray<string>;
@@ -249,7 +253,8 @@ export const computeDetailWindow = (options: {
   let scroll = options.follow ? 0 : previous.scroll;
   const hasOverflow = lines.length > height;
   const bodyHeight = hasOverflow && height > 1 ? height - 1 : height;
-  if (scroll > 0 && lines.length > previous.lineCount) scroll += lines.length - previous.lineCount;
+  const anchored = options.follow === false || scroll > 0;
+  if (anchored && lines.length > previous.lineCount) scroll += lines.length - previous.lineCount;
   const maxScroll = Math.max(0, lines.length - bodyHeight);
   scroll = Math.min(scroll, maxScroll);
   const start = Math.max(0, lines.length - bodyHeight - scroll);
@@ -259,9 +264,10 @@ export const computeDetailWindow = (options: {
     maxScroll,
     pageSize: Math.max(1, bodyHeight),
     lineCount: lines.length,
-    overflow: hasOverflow
-      ? { start: start + 1, end: Math.min(lines.length, start + bodyHeight), total: lines.length }
-      : undefined,
+    overflow:
+      hasOverflow && height > 1
+        ? { start: start + 1, end: Math.min(lines.length, start + bodyHeight), total: lines.length }
+        : undefined,
   };
 };
 

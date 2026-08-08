@@ -15,12 +15,17 @@ const SPECIAL_KEY_LABELS: Readonly<Record<string, string>> = {
   space: "Space",
 };
 
+const MODIFIER_LABELS: Readonly<Record<string, string>> = {
+  ctrl: "C-",
+  shift: "⇧",
+  alt: "A-",
+  super: "⌘",
+};
+
 export const formatFullScreenKeyId = (value: string): string => {
   const parts = value.split("+");
   const base = parts.pop() ?? value;
-  const modifiers = parts
-    .map((part) => (part === "ctrl" ? "C-" : part === "shift" ? "⇧" : part === "alt" ? "A-" : "⌘"))
-    .join("");
+  const modifiers = parts.map((part) => MODIFIER_LABELS[part] ?? `${part}-`).join("");
   const label = SPECIAL_KEY_LABELS[base] ?? base;
   return `${modifiers}${parts.includes("shift") && base.length === 1 ? label.toUpperCase() : label}`;
 };

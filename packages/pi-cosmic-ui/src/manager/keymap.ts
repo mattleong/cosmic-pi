@@ -49,8 +49,12 @@ export interface FullScreenKeymapOptions {
   readonly reservedKeys?: ReadonlySet<string> | undefined;
 }
 
-export const decodeFullScreenPrintable = (data: string): string | undefined =>
-  data.length === 1 && data.charCodeAt(0) >= 32 ? data : decodeKittyPrintable(data);
+/** Decodes raw or Kitty CSI-u printable input; DEL (0x7f) is a control key, never printable. */
+export const decodeFullScreenPrintable = (data: string): string | undefined => {
+  const printable =
+    data.length === 1 && data.charCodeAt(0) >= 32 ? data : decodeKittyPrintable(data);
+  return printable !== undefined && printable.charCodeAt(0) === 127 ? undefined : printable;
+};
 
 const action = (value: FullScreenAction): FullScreenResolution => ({
   _tag: "Action",
@@ -100,7 +104,10 @@ export class FullScreenKeymap {
       return action("cancel");
     }
 
-    if (mode === "busy") return undefined;
+    if (mode === "busy") {
+      this.resetChord();
+      return printable?.toLowerCase() === "q" ? action("quit") : undefined;
+    }
 
     if (mode === "confirmation") {
       this.resetChord();

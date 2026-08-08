@@ -119,6 +119,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   private detailMaxScroll = 0;
   private detailLineCount = 0;
   private detailPageSize = 1;
+  private listPageSize = 1;
   private showTechnicalDetails = false;
   private alternateHelp = false;
   private pendingStop: string | undefined;
@@ -305,12 +306,19 @@ export class SubagentFleetComponent implements Component, Focusable {
     }
 
     if (this.busyAction) {
+      // Esc/q close the overlay so a hung action can never trap the user; the in-flight
+      // operation itself is not cancelled and settles into the notice state on its own.
       const resolution = this.keymap.resolve(data, { mode: "busy", matchesKeybinding });
-      if (resolution?._tag === "Action" && resolution.action === "quit") this.options.close();
+      if (
+        resolution?._tag === "Action" &&
+        (resolution.action === "cancel" || resolution.action === "quit")
+      )
+        this.options.close();
       return;
     }
 
-    if (this.notice?.kind !== "error") this.notice = undefined;
+    // Every notice, including errors, dismisses on the next navigation key.
+    this.notice = undefined;
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding,
@@ -387,7 +395,7 @@ export class SubagentFleetComponent implements Component, Focusable {
           hasSelection: selected !== undefined,
           detailMaxScroll: this.detailMaxScroll,
           detailSteps: pageSteps(this.detailPageSize),
-          listSteps: pageSteps(this.options.getHeight() - 3),
+          listSteps: pageSteps(this.listPageSize),
         },
       );
       if (result._tag === "Close") {
@@ -570,6 +578,9 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   private visibleRuns(runs: ReadonlyArray<SubagentRunView>, limit: number) {
+    // The rendered window is the authoritative list page size for half/full-page motions,
+    // so stacked layouts page by their actual visible rows rather than the full height.
+    this.listPageSize = Math.max(1, limit);
     const start = listWindowStart(runs.length, this.selected, limit);
     return runs
       .slice(start, start + Math.max(1, limit))
@@ -603,7 +614,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     if (this.prompt)
       return renderResponsiveManagerFooter(contentWidth, [[`${enter} Submit`, `${escape} Cancel`]]);
     if (this.busyAction)
-      return renderResponsiveManagerFooter(contentWidth, [[this.busyAction, "q Close"]]);
+      return renderResponsiveManagerFooter(contentWidth, [[this.busyAction, `${escape}/q Close`]]);
     if (this.pendingStop)
       return renderResponsiveManagerFooter(contentWidth, [
         [

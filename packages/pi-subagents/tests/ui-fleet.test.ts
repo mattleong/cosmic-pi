@@ -2,6 +2,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import * as Effect from "effect/Effect";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { SubagentProjection } from "../src/run/model.ts";
 import { SubagentFleetComponent } from "../src/ui/fleet.ts";
@@ -462,6 +463,53 @@ describe("/subagents fleet UI", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(component.render(80).join("\n")).toContain("Interrupt channel unavailable");
+  });
+
+  it("dismisses error notices on the next navigation key", async () => {
+    const { actions, component } = makeComponent(80, 18);
+    actions.interrupt.mockRejectedValueOnce(new Error("Interrupt channel unavailable"));
+    component.handleInput("i");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(component.render(80).join("\n")).toContain("Interrupt channel unavailable");
+    component.handleInput("j");
+    expect(component.render(80).join("\n")).not.toContain("Interrupt channel unavailable");
+  });
+
+  it("closes the overlay from a hung action with Esc or q without cancelling it", () => {
+    const escape = String.fromCharCode(27);
+    const { actions, close, component } = makeComponent(80, 18);
+    actions.interrupt.mockReturnValueOnce(Effect.runPromise(Effect.never));
+    component.handleInput("i");
+    const footer = component.render(80).at(-1) ?? "";
+    expect(footer).toContain("Interrupting");
+    expect(footer).toContain("Esc/q Close");
+    component.handleInput("j");
+    component.handleInput("x");
+    expect(close).not.toHaveBeenCalled();
+    expect(actions.stop).not.toHaveBeenCalled();
+    component.handleInput("q");
+    expect(close).toHaveBeenCalledTimes(1);
+    component.handleInput(escape);
+    expect(close).toHaveBeenCalledTimes(2);
+    // Closing never fabricates a cancellation; the operation is still in flight.
+    expect(component.render(80).at(-1)).toContain("Interrupting");
+  });
+
+  it("pages the stacked run list by its rendered rows instead of the full height", () => {
+    const pageDownKey = `${String.fromCharCode(27)}[6~`;
+    const halfPageDownKey = String.fromCharCode(4);
+    const runs = Array.from({ length: 20 }, (_, index) => ({
+      ...projection.runs[0]!,
+      id: `agent-${index}`,
+      name: `reader-${index}`,
+    }));
+    const { component } = makeComponent(80, 18, { revision: 10, runs });
+    component.handleInput(pageDownKey);
+    const paged = component.render(80).join("\n");
+    expect(paged).toMatch(/> . reader-5 /);
+    component.handleInput(halfPageDownKey);
+    expect(component.render(80).join("\n")).toMatch(/> . reader-7 /);
   });
 
   it("half-pages a narrow run list and shows list position cues", () => {

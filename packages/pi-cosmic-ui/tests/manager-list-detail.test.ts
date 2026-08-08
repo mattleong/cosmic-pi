@@ -163,6 +163,52 @@ describe("shared list/detail primitives", () => {
     ).toMatchObject({ visible: ["a"], overflow: undefined });
   });
 
+  it("prioritizes the content row and omits the position label in one-row windows", () => {
+    const lines = ["a", "b", "c", "d"];
+    const bottom = computeDetailWindow({ lines, height: 1, previous: { scroll: 0, lineCount: 4 } });
+    expect(bottom.visible).toEqual(["d"]);
+    expect(bottom.overflow).toBeUndefined();
+    expect(bottom.pageSize).toBe(1);
+    expect(bottom.maxScroll).toBe(3);
+
+    const scrolled = computeDetailWindow({
+      lines,
+      height: 1,
+      previous: { scroll: 3, lineCount: 4 },
+    });
+    expect(scrolled.visible).toEqual(["a"]);
+    expect(scrolled.overflow).toBeUndefined();
+  });
+
+  it("keeps an explicit unfollow anchored from the bottom while lines grow", () => {
+    const grownLines = ["a", "b", "c", "d", "e", "f"];
+    const unfollowed = computeDetailWindow({
+      lines: grownLines,
+      height: 4,
+      previous: { scroll: 0, lineCount: 3 },
+      follow: false,
+    });
+    expect(unfollowed.visible).toEqual(["a", "b", "c"]);
+    expect(unfollowed.scroll).toBe(3);
+
+    const followed = computeDetailWindow({
+      lines: grownLines,
+      height: 4,
+      previous: { scroll: 0, lineCount: 3 },
+      follow: true,
+    });
+    expect(followed.visible).toEqual(["d", "e", "f"]);
+    expect(followed.scroll).toBe(0);
+
+    // Without a follow policy, scroll 0 keeps tracking the newest lines.
+    const policyFree = computeDetailWindow({
+      lines: grownLines,
+      height: 4,
+      previous: { scroll: 0, lineCount: 3 },
+    });
+    expect(policyFree.visible).toEqual(["d", "e", "f"]);
+  });
+
   it("standardizes the detail position copy", () => {
     expect(detailWindowPositionLabel({ start: 8, end: 10, total: 12 })).toBe(
       " 8–10 of 12 · C-u/d half-page ",

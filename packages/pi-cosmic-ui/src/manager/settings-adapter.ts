@@ -107,14 +107,17 @@ const translatedSettingsInput = (action: FullScreenAction): string | undefined =
 
 /**
  * Structural view of the *private* pi-tui SettingsList/SelectList internals the adapter
- * deliberately couples to: `searchInput` (search focus), `submenuComponent` (submenu focus
- * and trailing-blank-line handling), and an optional `focused` field. This is an explicit
- * contract with the pinned pi-tui version; `tests/settings-surface.test.ts` probes the real
- * SettingsList so a pi-tui upgrade that changes these internals fails loudly there.
+ * deliberately couples to: `searchInput` (search focus plus `setValue` for clearing the
+ * filter text on Esc), `applyFilter` (re-filtering after the search text is cleared, so a
+ * dismissed search cannot keep filtering the list invisibly), `submenuComponent` (submenu
+ * focus and trailing-blank-line handling), and an optional `focused` field. This is an
+ * explicit contract with the pinned pi-tui version; `tests/settings-surface.test.ts` probes
+ * the real SettingsList so a pi-tui upgrade that changes these internals fails loudly there.
  */
 type SettingsFocusableBridge = {
   focused?: boolean;
-  searchInput?: Focusable | undefined;
+  searchInput?: (Focusable & { setValue: (value: string) => void }) | undefined;
+  applyFilter?: (query: string) => void;
   submenuComponent?: (Component & Partial<Focusable>) | null | undefined;
 };
 
@@ -156,8 +159,13 @@ export class VimSettingsAdapter implements Component, Focusable {
     });
     if (this.mode === "search") {
       if (resolution?._tag === "Action" && resolution.action === "cancel") {
+        // Esc leaves search without forwarding a close to the child; the typed filter is
+        // cleared and re-applied so it cannot keep filtering the list invisibly.
         this.mode = "navigation";
         this.keymap.resetChord();
+        const bridge = this.child as Component & SettingsFocusableBridge;
+        bridge.searchInput?.setValue("");
+        bridge.applyFilter?.("");
       } else if (resolution?._tag === "Action") {
         const id = selectionIdForAction(resolution.action);
         const configured = id && this.options.matchesKeybinding?.(data, id);

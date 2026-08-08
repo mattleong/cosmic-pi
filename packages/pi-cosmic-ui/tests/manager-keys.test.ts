@@ -5,6 +5,7 @@ import {
   fullScreenKeybindingLabel,
 } from "../src/manager/key-labels.ts";
 import {
+  decodeFullScreenPrintable,
   FullScreenKeymap,
   pageSteps,
   type FullScreenResolution,
@@ -166,6 +167,26 @@ describe("shared full-screen keymap", () => {
     expect(keymap.resolve("j", { mode: "busy" })).toBeUndefined();
   });
 
+  it("resolves only Esc cancel and q/Q quit while busy and swallows everything else", () => {
+    const escape = String.fromCharCode(27);
+    const ctrlU = String.fromCharCode(21);
+    const keymap = new FullScreenKeymap();
+    expect(resolvedAction(keymap.resolve(escape, { mode: "busy" }))).toBe("cancel");
+    expect(resolvedAction(keymap.resolve("q", { mode: "busy" }))).toBe("quit");
+    expect(resolvedAction(keymap.resolve("Q", { mode: "busy" }))).toBe("quit");
+    expect(resolvedAction(keymap.resolve(`${escape}[113u`, { mode: "busy" }))).toBe("quit");
+    for (const key of ["j", "k", "x", "g", "G", "/", "?", "\r", ctrlU, `${escape}[5~`])
+      expect(keymap.resolve(key, { mode: "busy" })).toBeUndefined();
+  });
+
+  it("excludes DEL from printable decoding in raw and Kitty encodings", () => {
+    const escape = String.fromCharCode(27);
+    expect(decodeFullScreenPrintable(String.fromCharCode(127))).toBeUndefined();
+    expect(decodeFullScreenPrintable(`${escape}[127u`)).toBeUndefined();
+    expect(decodeFullScreenPrintable("q")).toBe("q");
+    expect(decodeFullScreenPrintable(`${escape}[113u`)).toBe("q");
+  });
+
   it("adapts SettingsList input without stealing search text", () => {
     const received: string[] = [];
     const child = {
@@ -213,11 +234,48 @@ describe("shared full-screen keymap", () => {
     expect(confirmReceived).toEqual(["x", "\r", "\u001b[B"]);
   });
 
+  it("clears the pinned search internals when Esc leaves search without closing", () => {
+    const escape = String.fromCharCode(27);
+    const received: string[] = [];
+    const setValues: string[] = [];
+    const filters: string[] = [];
+    const searchInput = { focused: false, setValue: (value: string) => setValues.push(value) };
+    const child = {
+      searchInput,
+      submenuComponent: null,
+      applyFilter: (query: string) => filters.push(query),
+      render: () => ["settings"],
+      handleInput: (data: string) => received.push(data),
+      invalidate: () => undefined,
+    };
+    const adapter = new VimSettingsAdapter(child, { search: true });
+    adapter.focused = true;
+    adapter.handleInput("/");
+    adapter.handleInput("d");
+    expect(searchInput.focused).toBe(true);
+    adapter.handleInput(escape);
+    // Esc is never forwarded, so the child's onCancel cannot fire from search dismissal.
+    expect(received).toEqual(["d"]);
+    expect(setValues).toEqual([""]);
+    expect(filters).toEqual([""]);
+    expect(searchInput.focused).toBe(false);
+    adapter.handleInput("j");
+    expect(received).toEqual(["d", `${escape}[B`]);
+  });
+
   it("formats configured labels without uppercasing plain letters", () => {
     expect(formatFullScreenKeyId("j")).toBe("j");
     expect(formatFullScreenKeyId("shift+g")).toBe("⇧G");
     expect(formatFullScreenKeyId("ctrl+pageDown")).toBe("C-PgDn");
     expect(fullScreenKeybindingLabel("tui.select.down", "↓", () => ["j", "down"])).toBe("j/↓");
+  });
+
+  it("formats known modifiers explicitly and unknown modifiers by name", () => {
+    expect(formatFullScreenKeyId("ctrl+u")).toBe("C-u");
+    expect(formatFullScreenKeyId("alt+x")).toBe("A-x");
+    expect(formatFullScreenKeyId("super+k")).toBe("⌘k");
+    expect(formatFullScreenKeyId("hyper+k")).toBe("hyper-k");
+    expect(formatFullScreenKeyId("meta+enter")).toBe("meta-Enter");
   });
 
   it("drops configured labels that collide with screen-reserved shortcuts", () => {

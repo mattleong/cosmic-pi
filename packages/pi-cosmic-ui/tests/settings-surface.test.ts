@@ -104,6 +104,10 @@ describe("pi-tui SettingsList internal coupling probe", () => {
     expect("searchInput" in list).toBe(true);
     expect(list.searchInput).toBeTruthy();
     expect(list.searchInput as object).toHaveProperty("focused");
+    // Esc-from-search clearing relies on the search Input's setValue plus the list's
+    // applyFilter internals of the pinned pi-tui version.
+    expect(typeof (list.searchInput as { setValue?: unknown }).setValue).toBe("function");
+    expect(typeof list.applyFilter).toBe("function");
     expect("submenuComponent" in list).toBe(true);
     expect(list.submenuComponent).toBeNull();
     // SettingsList itself has no `focused` field; the adapter's focus sync depends on that.
@@ -124,5 +128,31 @@ describe("pi-tui SettingsList internal coupling probe", () => {
     surface.handleInput?.("/");
     const rendered = surface.render(80).join("\n");
     expect(rendered).toContain("Type to filter");
+  });
+
+  it("clears the real SettingsList filter when Esc dismisses search", () => {
+    let cancelled = 0;
+    const { surface } = createSettingsListSurface({
+      header: { render: () => [], invalidate: () => undefined },
+      items: items(),
+      height: 6,
+      listTheme,
+      onChange: () => undefined,
+      onCancel: () => {
+        cancelled += 1;
+      },
+      dim: (text) => text,
+    });
+    surface.focused = true;
+    surface.handleInput?.("/");
+    for (const key of "den") surface.handleInput?.(key);
+    expect(surface.render(80).join("\n")).not.toContain("Enabled");
+    surface.handleInput?.(String.fromCharCode(27));
+    const rendered = surface.render(80).join("\n");
+    expect(rendered).toContain("Enabled");
+    expect(rendered).toContain("Density");
+    expect(rendered).not.toContain("den");
+    // Esc left search without closing or cancelling the surface.
+    expect(cancelled).toBe(0);
   });
 });
