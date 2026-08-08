@@ -19,9 +19,6 @@ const DELIVERY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 
 export const isSupervisorRunId = (value: string): boolean => RUN_ID_PATTERN.test(value);
-export const isSupervisorChannelId = (value: string): boolean => CHANNEL_ID_PATTERN.test(value);
-export const isSupervisorDeliveryId = (value: string): boolean =>
-  DELIVERY_ID_PATTERN.test(value) && value.length <= MAX_BACKEND_REPORT_ID_CHARS;
 
 const RunIdSchema = Schema.String.check(
   Schema.isMinLength(1),

@@ -73,10 +73,10 @@ export interface RunRecord {
    * Exclusive start-admission eviction claim. Set under the service lock while
    * one start reclaims this terminal record's private state; the record stays
    * registered until the claiming start revalidates and deletes it atomically.
+   * The claim also reserves the prospective process slot (and writer digest,
+   * when present) while reclamation runs outside the lock.
    */
-  evictionReclaimClaim?: boolean | undefined;
-  /** Process/writer admission reserved while the claimed record is reclaimed. */
-  evictionAdmission?: { readonly writerCwdDigest?: string | undefined } | undefined;
+  evictionClaim?: { readonly writerCwdDigest?: string | undefined } | undefined;
   readonly canonicalWriterCwd?: CanonicalWriterCwd | undefined;
   writerLease?: WriterLease | undefined;
   writerLeaseScope?: Scope.Closeable | undefined;
@@ -88,7 +88,6 @@ export interface RunRecord {
   pendingInitializationSettlement?: PendingInitializationSettlement | undefined;
   replyPendingRequestId?: string | undefined;
   notificationGeneration: number;
-  questionNotificationGeneration: number;
   completionGeneration: number;
   warningSlots: RunWarningSlots;
   readonly completionGenerations: Map<number, CompletionGenerationRecord>;

@@ -255,10 +255,11 @@ const projectFailures = (
 
 const serializedLength = (value: unknown): number => JSON.stringify(value).length;
 
-const boundedNonNegative = (value: number): number =>
+export const boundedNonNegative = (value: number): number =>
   Number.isFinite(value) ? Math.max(0, value) : 0;
 
-const boundedUsage = (usage: SubagentUsage): SubagentUsage => ({
+/** Shared bounded usage normalization for versioned details and their strict renderer decode. */
+export const boundedUsage = (usage: SubagentUsage): SubagentUsage => ({
   input: boundedNonNegative(usage.input),
   output: boundedNonNegative(usage.output),
   cacheRead: boundedNonNegative(usage.cacheRead),

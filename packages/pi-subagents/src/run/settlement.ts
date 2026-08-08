@@ -149,7 +149,6 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
               retained: false,
             });
           record.notificationGeneration += 1;
-          record.questionNotificationGeneration = record.notificationGeneration;
           delivery.discardQuestionLocked(record.view.id);
           record.replyPendingRequestId = undefined;
           if (state === "completed") record.assignment.phase = "reported";

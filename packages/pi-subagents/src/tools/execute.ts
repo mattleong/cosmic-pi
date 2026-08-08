@@ -210,8 +210,26 @@ const managementAcknowledgement = (
   const ids = runs.map((run) => run.id).join(", ");
   if (runs.length === 0) return "";
   switch (action) {
-    case "send":
-      return `Guidance delivered to ${runs.length} subagent${runs.length === 1 ? "" : "s"}: ${ids}.`;
+    case "send": {
+      // Retained (closeOnReport=false) targets consumed the send as their next
+      // assignment rather than as guidance inside an active one.
+      const guided = runs.filter((run) => run.closeOnReport !== false);
+      const retained = runs.filter((run) => run.closeOnReport === false);
+      const idList = (targets: ReadonlyArray<SubagentRunView>): string =>
+        targets.map((run) => run.id).join(", ");
+      return [
+        ...(guided.length > 0
+          ? [
+              `Guidance delivered to ${guided.length} subagent${guided.length === 1 ? "" : "s"}: ${idList(guided)}.`,
+            ]
+          : []),
+        ...(retained.length > 0
+          ? [
+              `Started the next assignment on ${retained.length} retained subagent${retained.length === 1 ? "" : "s"}: ${idList(retained)}; subagent_await now targets the new report generation.`,
+            ]
+          : []),
+      ].join("\n");
+    }
     case "reply":
       return `Reply delivered to ${ids}.`;
     case "interrupt":

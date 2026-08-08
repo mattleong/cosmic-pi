@@ -172,8 +172,8 @@ describe("structured subagent session output", () => {
               {
                 candidateIndex: 0,
                 candidate: "pi/old-model",
-                code: "model_discouraged",
-                reason: "Old model is discouraged.",
+                code: "pi_model_unknown",
+                reason: "Pi candidate is unknown or unauthenticated.",
               },
             ],
             warning: "Explicit warning.",
@@ -195,7 +195,7 @@ describe("structured subagent session output", () => {
       "agent-1 · profile reviewer · local/pi · closeOnReport=true · pid 42",
     );
     expect(rendered).toContain("selection  profile-candidate candidate 2");
-    expect(rendered).toContain("skipped  pi/old-model [model_discouraged]");
+    expect(rendered).toContain("skipped  pi/old-model [pi_model_unknown]");
     expect(rendered).toContain("route warning  Explicit warning.");
     expect(rendered).toContain("session  /tmp/session.jsonl");
   });

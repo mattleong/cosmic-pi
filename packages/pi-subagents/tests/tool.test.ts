@@ -33,9 +33,11 @@ import {
 } from "../src/run/errors.ts";
 import {
   decodeSubagentEffort,
+  emptyUsage,
   type StartSubagentRequest,
   type SubagentRunView,
 } from "../src/run/model.ts";
+import { formatRun } from "../src/tools/output.ts";
 import {
   SubagentService,
   type SubagentAwaitUntil,
@@ -2323,8 +2325,8 @@ describe("subagent tool", () => {
           {
             candidateIndex: 0,
             candidate: "pi/old-model",
-            code: "model_discouraged",
-            reason: "Old model is discouraged.",
+            code: "pi_model_unknown",
+            reason: "Pi candidate is unknown or unauthenticated.",
           },
         ],
       },
@@ -2373,7 +2375,7 @@ describe("subagent tool", () => {
     expect(text).toContain("Retention  close after report · assignment 1");
     expect(text).toContain("Selection  profile-candidate candidate 2");
     expect(text).toContain("Reason     Profile reviewer selected configured candidate 2.");
-    expect(text).toContain("Skipped    candidate 1 [model_discouraged]");
+    expect(text).toContain("Skipped    candidate 1 [pi_model_unknown]");
     expect(text).toContain(
       "Capabilities steer, interrupt, resume, rename-display, parent-contact, peer-notice, native-fork",
     );
@@ -2635,6 +2637,67 @@ describe("subagent tool", () => {
 
     expect(sent).toEqual(["agent-1"]);
     expect(result?.content[0]?.text).toBe("Guidance delivered to 1 subagent: agent-1.");
+  });
+
+  it("acknowledges retained-send next assignments distinctly from steering guidance", async () => {
+    const base = startCapturingService([]);
+    const retainedView = (id: string) =>
+      view({ id, closeOnReport: false, host: "herdr", state: "running", reportGeneration: 1 });
+    const allRetained = subagentServiceDouble({
+      ...base,
+      send: (id) => Effect.succeed(retainedView(id)),
+    });
+    const retainedResult = await captureSubagentTools(allRetained)
+      .get("subagent_send")
+      ?.execute(
+        "call",
+        { runIds: ["agent-r1", "agent-r2"], message: "Next task." },
+        undefined,
+        undefined,
+        context,
+      );
+    expect(retainedResult?.content[0]?.text).toBe(
+      "Started the next assignment on 2 retained subagents: agent-r1, agent-r2; subagent_await now targets the new report generation.",
+    );
+
+    const mixed = subagentServiceDouble({
+      ...base,
+      send: (id) => Effect.succeed(id === "agent-r1" ? retainedView(id) : view({ id })),
+    });
+    const mixedResult = await captureSubagentTools(mixed)
+      .get("subagent_send")
+      ?.execute(
+        "call",
+        { runIds: ["agent-1", "agent-r1"], message: "Continue." },
+        undefined,
+        undefined,
+        context,
+      );
+    const text = mixedResult?.content[0]?.text ?? "";
+    expect(text).toContain("Guidance delivered to 1 subagent: agent-1.");
+    expect(text).toContain(
+      "Started the next assignment on 1 retained subagent: agent-r1; subagent_await now targets the new report generation.",
+    );
+  });
+
+  it("omits unknown usage from detailed status while still rendering known usage", () => {
+    const unknown = formatRun(view({ usage: emptyUsage() }), true);
+    expect(unknown).toContain("Subagent status");
+    expect(unknown).not.toContain("Usage");
+    const known = formatRun(
+      view({
+        usage: {
+          input: 600,
+          output: 400,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 1_000,
+          cost: 0.5,
+        },
+      }),
+      true,
+    );
+    expect(known).toContain("Usage      1k tokens · $0.50");
   });
 
   it("renders state-aware stop acknowledgements for terminal no-ops", async () => {

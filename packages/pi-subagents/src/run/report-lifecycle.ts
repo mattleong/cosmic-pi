@@ -107,7 +107,6 @@ export function makeRunReportLifecycle(dependencies: RunReportLifecycleDependenc
       retained: true,
     });
     record.notificationGeneration += 1;
-    record.questionNotificationGeneration = record.notificationGeneration;
     delivery.discardQuestionLocked(record.view.id);
     record.replyPendingRequestId = undefined;
     record.latestAssistantText = text;

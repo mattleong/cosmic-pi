@@ -4,8 +4,9 @@ import { synchronousNow } from "../boundary/native-clock.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { safeTextPrefix } from "../run/state.ts";
+import { formatDuration, formatUsage } from "../ui/metrics.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
-import { formatDuration, formatToolRoute, formatUsage, selectionSourceLabel } from "./format.ts";
+import { formatToolRoute, selectionSourceLabel } from "./format.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./subagent.ts";
 
 const boundedLine = (value: string, maximum: number): string => {
@@ -36,6 +37,8 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
       ? `${formatDuration(activityMilliseconds)} ago`
       : undefined;
   const retained = run.state === "reported" && run.closeOnReport === false;
+  // Unknown or zero-information usage renders nothing rather than "unknown".
+  const usage = formatUsage(run.usage);
   return [
     "Subagent status",
     field("Name", run.name),
@@ -63,7 +66,7 @@ export const formatRun = (run: SubagentRunView, detailed = false): string => {
     run.pid ? field("Process", `pid ${run.pid}`) : undefined,
     elapsed ? field("Elapsed", elapsed) : undefined,
     activity ? field("Activity", activity) : undefined,
-    field("Usage", formatUsage(run.usage) || "unknown"),
+    usage ? field("Usage", usage) : undefined,
     run.currentTool ? field("Current tool", run.currentTool) : undefined,
     run.progress ? field("Progress", run.progress) : undefined,
     run.warning ? field("Warning", run.warning) : undefined,

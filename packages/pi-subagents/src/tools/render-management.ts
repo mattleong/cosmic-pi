@@ -180,7 +180,7 @@ class ProfileRoutesComponent implements Component {
 }
 
 const actionSummary = (details: CompactSubagentToolDetails): SemanticOutcomeBanner => {
-  const count = details.cards?.length ?? details.runCount ?? 0;
+  const count = details.runCount ?? details.cards?.length ?? 0;
   const failed = details.actionFailures?.length ?? 0;
   const plural = count === 1 ? "" : "s";
   switch (details.action) {
@@ -194,11 +194,21 @@ const actionSummary = (details: CompactSubagentToolDetails): SemanticOutcomeBann
         color: failed > 0 ? "warning" : "accent",
         text: `Status · ${count} found${failed > 0 ? ` · ${failed} missing` : ""}`,
       };
-    case "send":
+    case "send": {
+      // closeOnReport=false targets started their next assignment; others got guidance.
+      const cards = details.cards ?? [];
+      const retained = cards.filter((card) => card.closeOnReport === false).length;
+      const label =
+        cards.length > 0 && retained === cards.length
+          ? "Next assignments"
+          : retained > 0
+            ? "Guidance/next assignments"
+            : "Guidance";
       return {
         color: failed > 0 ? (count > 0 ? "warning" : "error") : "success",
-        text: `Guidance · ${count} delivered${failed > 0 ? ` · ${failed} failed` : ""}`,
+        text: `${label} · ${count} delivered${failed > 0 ? ` · ${failed} failed` : ""}`,
       };
+    }
     case "reply":
       return {
         color: failed > 0 ? "error" : "success",
@@ -281,16 +291,26 @@ class CompactResultComponent implements Component {
     const safeWidth = Math.max(1, width);
     const cards = this.details.cards ?? [];
     const summary = actionSummary(this.details);
-    const omitted = this.details.contentOmitted
-      ? {
-          color: "warning" as const,
-          text: `${summary.text} · Some report content was omitted; query individual run IDs with subagent_status`,
-        }
-      : summary;
+    const totalRuns = this.details.runCount ?? cards.length;
+    const omittedRuns = Math.max(0, totalRuns - cards.length);
+    const omissionCues = [
+      ...(omittedRuns > 0
+        ? [
+            `${cards.length} of ${totalRuns} shown · ${omittedRuns} omitted · use subagent_status for specific run IDs`,
+          ]
+        : []),
+      ...(this.details.contentOmitted
+        ? ["Report content omitted · use subagent_status for individual run IDs"]
+        : []),
+    ];
+    const omissionLines = omissionCues.flatMap((cue) =>
+      wrapTextWithAnsi(this.theme.fg("warning", cue), safeWidth),
+    );
     return [
-      ...this.renderRuns(cards, this.expanded, omitted, this.details.action === "status").render(
+      ...this.renderRuns(cards, this.expanded, summary, this.details.action === "status").render(
         safeWidth,
       ),
+      ...omissionLines,
       ...renderActionFailures(this.details, safeWidth, this.theme),
     ];
   }

@@ -125,10 +125,12 @@ export function makeRunNotificationDelivery(dependencies: RunNotificationDeliver
     `${actionSlot(notification)}:${notification.generation}`;
   const actionRelevant = (notification: SubagentQuestionNotification): boolean => {
     const record = records.get(notification.id);
+    // Question queueing stamps the record's current notification generation and
+    // every later record transition increments it, so a queued question is
+    // relevant exactly while it still matches that generation.
     return (
       record !== undefined &&
-      record.notificationGeneration >= notification.generation &&
-      record.questionNotificationGeneration === notification.generation &&
+      record.notificationGeneration === notification.generation &&
       record.view.state === "waiting_for_parent" &&
       record.view.question?.requestId === notification.requestId
     );
@@ -262,7 +264,6 @@ export function makeRunNotificationDelivery(dependencies: RunNotificationDeliver
       Effect.sync(() => {
         const generation = ++record.notificationGeneration;
         const queued = { ...notification, generation } as SubagentQuestionNotification;
-        record.questionNotificationGeneration = generation;
         pendingActionNotifications.set(actionSlot(queued), queued);
         if (actionRetryWake) Deferred.doneUnsafe(actionRetryWake, Effect.void);
       }),

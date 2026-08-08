@@ -222,7 +222,20 @@ describe("profile settings workspace", () => {
     component.handleInput(input.enter);
     expect(component.render(120).join("\n")).toContain("parent:low (default)");
     component.handleInput(input.enter);
-    expect(component.render(120).join("\n")).toContain("Effort         low (default)");
+    expect(component.render(120).join("\n")).toContain("Effort           low (default)");
+  });
+
+  it("keeps the longest field label and its edit action intact at narrow widths", () => {
+    const { component } = makeComponent();
+    component.handleInput(input.enter);
+    component.handleInput(input.enter);
+    const lines = component.render(46);
+    expect(lines.every((line) => visibleWidth(line) <= 46)).toBe(true);
+    const fastRow = lines.find((line) => line.includes("OpenAI fast mode"));
+    expect(fastRow).toBeDefined();
+    expect(fastRow).toContain("· edit");
+    const modelRow = lines.find((line) => line.includes("Model"));
+    expect(modelRow).toContain("· edit");
   });
 
   it("shows fast markers only when priority mode applies to the resolved model", () => {

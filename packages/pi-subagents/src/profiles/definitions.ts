@@ -65,7 +65,7 @@ export const PROFILE_DEFINITIONS: Readonly<Record<ProfileId, ProfileDefinition>>
   },
 };
 
-/** Built-ins preserve the v3 behavior through explicit local Pi parent candidates. */
+/** Every built-in is an explicit local Pi parent candidate using the profile's defaults. */
 const builtinRoute = (id: ProfileId): ProfileRoute => {
   const definition = PROFILE_DEFINITIONS[id];
   return {

@@ -384,17 +384,6 @@ export function declaredRouteForDraft(draft: ProfileRouteDraft): RouteDeclaratio
   };
 }
 
-const boundedMiddle = (value: string, maximum: number): string => {
-  const characters = [...value];
-  if (characters.length <= maximum) return value;
-  const left = Math.max(1, Math.floor((maximum - 1) / 2));
-  return `${characters.slice(0, left).join("")}…${characters.slice(characters.length - (maximum - left - 1)).join("")}`;
-};
-
-/** Bounded one-line summary that still names every product field. */
-export const candidateMenuSummary = (candidate: ProfileCandidate, index: number): string =>
-  `${String(index + 1).padStart(2, "0")} · ${candidate.host}/${candidate.runtime} · ${boundedMiddle(candidate.model, 56)} · ${candidate.effort} · ${candidate.context} · ${candidate.writeIntent} · ${candidate.fastMode ? "fast" : "standard"} · ${candidate.closeOnReport ? "close" : "retain"}`;
-
 export const completeRouteSummary = (
   draft: ProfileRouteDraft,
   scope: ProfileSettingsScope,

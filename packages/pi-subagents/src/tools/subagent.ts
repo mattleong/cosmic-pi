@@ -16,7 +16,6 @@ import type {
 } from "../run/model.ts";
 import { SubagentService } from "../run/service.ts";
 import { decodeStartAwaitCardDetails } from "./details-decode.ts";
-import type { CompactSubagentToolDetails, SubagentStartAwaitCardDetails } from "./details.ts";
 import { executeSubagentAction } from "./execute.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
@@ -100,8 +99,6 @@ export interface SubagentProfileView {
   readonly defaultEffort?: SubagentEffort | undefined;
   readonly candidates: ReadonlyArray<ProfileCandidateDiscovery>;
 }
-
-export type SubagentToolDetails = CompactSubagentToolDetails | SubagentStartAwaitCardDetails;
 
 export interface SubagentToolRuntime {
   readonly environment: SubagentSessionEnvironment;

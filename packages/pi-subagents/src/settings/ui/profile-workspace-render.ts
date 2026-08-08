@@ -405,6 +405,9 @@ const candidatePage = (
     : [];
   const visibleCount = Math.max(1, availableHeight - 9 - notices.length);
   const start = windowStart(fields.length, state.fieldIndex, visibleCount);
+  // The label column is sized from the actual field labels so a long label like
+  // "OpenAI fast mode" and the trailing action survive narrow widths intact.
+  const labelWidth = fields.reduce((widest, row) => Math.max(widest, visibleWidth(row.label)), 0);
   const rows = candidate
     ? fields.slice(start, start + visibleCount).map((row, offset) => {
         const index = start + offset;
@@ -413,9 +416,9 @@ const candidatePage = (
         const compactAction = row.fixed ? "fixed" : "edit";
         const showAction = width >= 46;
         const actionLabel = showAction ? action : compactAction;
-        const valueWidth = Math.max(1, width - 17 - actionLabel.length - 3);
+        const valueWidth = Math.max(1, width - labelWidth - 6 - actionLabel.length);
         const value = boundedMiddle(row.value, valueWidth);
-        return `${marker} ${row.label.padEnd(14)} ${value.padEnd(valueWidth)} · ${actionLabel}`;
+        return `${marker} ${row.label.padEnd(labelWidth)} ${value.padEnd(valueWidth)} · ${actionLabel}`;
       })
     : ["No candidate exists. Return to the route and add one."];
   return [

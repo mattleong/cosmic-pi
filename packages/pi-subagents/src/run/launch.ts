@@ -171,12 +171,14 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           });
         const requestedName = sanitizeName(request.name ?? "");
         const now = yield* Clock.currentTimeMillis;
-        // Reclaim-before-admit eviction transaction. Phase A claims one eligible
-        // terminal candidate under the lock without deleting it; phase B reclaims
-        // its private run state outside the lock; phase C revalidates under the
-        // lock and atomically deletes the evicted record, admits the new record,
-        // and creates its scopes. Reclaim failure clears the claim, keeps the
-        // candidate registered, and admits nothing.
+        // Reclaim-before-admit eviction transaction. Phase A (`reserveOrClaim`)
+        // claims one eligible terminal candidate under the lock without deleting
+        // it while reserving the prospective process/writer admission; phase B
+        // reclaims its private run state outside the lock; phase C
+        // (`admitReclaimed`) revalidates under the lock and atomically deletes
+        // the evicted record, admits the new record, and creates its scopes.
+        // Reclaim failure clears the claim, keeps the candidate registered, and
+        // admits nothing.
         const evictionEligible = (record: RunRecord): boolean =>
           !record.cleanupPending &&
           record.process === undefined &&
@@ -186,41 +188,157 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         const clearEvictionClaim = (candidate: RunRecord) =>
           withLock(
             Effect.sync(() => {
-              if (records.get(candidate.view.id) === candidate) {
-                candidate.evictionReclaimClaim = false;
-                candidate.evictionAdmission = undefined;
-              }
+              if (records.get(candidate.view.id) === candidate) candidate.evictionClaim = undefined;
             }),
           );
-        const reservePhase = (claimedCandidate?: RunRecord) =>
+        const runtimeClosedError = () =>
+          new SubagentRuntimeClosedError({
+            message: "The subagent session runtime is closed.",
+          });
+        /**
+         * Shared locked final admission and record construction. Rechecks every
+         * admission constraint before deleting history; `ownReservation` is this
+         * start's own claimed candidate (excluded from the recheck because every
+         * concurrent admission already counted its reservation while reclamation
+         * ran), while a fresh admission excludes nothing. Caller must hold the
+         * service lock, and every eviction reclaim must already have definitely
+         * succeeded before this deletes the evicted record.
+         */
+        const admitLocked = (evicted: RunRecord | undefined, ownReservation?: RunRecord) =>
+          Effect.gen(function* () {
+            const capacityFailure = processCapacityError(records, ownReservation);
+            if (capacityFailure) return yield* capacityFailure;
+            if (canonicalWriterCwd) {
+              const writerFailure = writerConflictError(
+                records,
+                canonicalWriterCwd,
+                ownReservation,
+              );
+              if (writerFailure) return yield* writerFailure;
+            }
+            if (evicted) {
+              evicted.evictionClaim = undefined;
+              records.delete(evicted.view.id);
+              delivery.discardRunQuestionsLocked(evicted.view.id);
+            }
+            // Run scopes are service-owned rather than automatically parent-closed so shutdown
+            // can observe backend cleanup before authorizing the separately scoped writer lease
+            // release. They are created only after every eviction reclaim already succeeded.
+            const scope = yield* Scope.make();
+            // Lease scope is detached from the owner scope so the service finalizer can first
+            // close every backend scope, then authorize and close the corresponding lease scope.
+            const writerLeaseScope = canonicalWriterCwd ? yield* Scope.make() : undefined;
+            const writerLeaseReleaseState = writerLeaseScope ? { authorized: false } : undefined;
+            const settlement = yield* Deferred.make<SubagentRunView>();
+            const { id, name } = allocateRunIdentity(requestedName);
+            const assignmentAttemptToken = allocateAssignmentAttemptToken();
+            const view: SubagentRunView = {
+              id,
+              name,
+              task: request.task.trim(),
+              ...(request.profile ? { profile: request.profile } : {}),
+              selection: request.selection ?? {
+                source: "profile-candidate",
+                host: request.host,
+                runtime: request.runtime,
+                closeOnReport: request.closeOnReport,
+                reason: "Profile route selection.",
+                skippedCandidates: [],
+              },
+              cwd: canonicalWriterCwd?.path ?? request.cwd,
+              state: "starting",
+              context: request.context,
+              writeIntent: request.writeIntent,
+              fastMode: request.fastMode,
+              host: request.host,
+              runtime: request.runtime,
+              closeOnReport: request.closeOnReport,
+              reportGeneration: 0,
+              capabilities: driver.capabilities,
+              model: request.model,
+              effort: request.effort,
+              startedAt: now,
+              lastActivityAt: now,
+              sessionEvents: [],
+              usage: emptyUsage(),
+            };
+            const launch: BackendLaunchRequest = {
+              runId: id,
+              name,
+              closeOnReport: request.closeOnReport,
+              cwd: canonicalWriterCwd?.path ?? request.cwd,
+              context: request.context,
+              writeIntent: request.writeIntent,
+              fastMode: request.fastMode,
+              model: request.model,
+              effort: request.effort,
+              ...(request.runtimeApiKey ? { runtimeApiKey: request.runtimeApiKey } : {}),
+              activeTools: request.activeTools,
+              projectTrusted: request.projectTrusted,
+              parentSessionId: request.parentSessionId,
+              ...(request.parentSessionFile
+                ? { parentSessionFile: request.parentSessionFile }
+                : {}),
+              ...(request.parentLeafId ? { parentLeafId: request.parentLeafId } : {}),
+              systemPrompt: childSystemPrompt(request),
+            };
+            const record: RunRecord = {
+              view,
+              scope,
+              driver,
+              launch,
+              activeTools: new Map(),
+              settlement,
+              pauseRequested: false,
+              stoppedByParent: false,
+              cleanupPending: false,
+              runStateReclaimState: "pending",
+              ...(canonicalWriterCwd ? { canonicalWriterCwd } : {}),
+              ...(writerLeaseScope
+                ? {
+                    writerLeaseScope,
+                    writerLeasePreparationState: "pending" as const,
+                    writerLeaseReleaseState,
+                  }
+                : {}),
+              initializationPending: true,
+              notificationGeneration: 0,
+              completionGeneration: 0,
+              warningSlots: emptyRunWarningSlots(),
+              completionGenerations: new Map(),
+              completionClaims: new Map(),
+              assignment: {
+                epoch: 1,
+                phase: "preparing",
+                attemptToken: assignmentAttemptToken,
+                startedObserved: false,
+                outcomeUncertain: false,
+                pendingRunSettled: false,
+              },
+              nextAssignmentEpoch: 2,
+            };
+            records.set(id, record);
+            publish();
+            return record;
+          });
+        /**
+         * Phase A: admit immediately when no destructive reclamation is needed,
+         * or exclusively claim one eligible candidate whose private state must
+         * still be reclaimed. The claim reserves the prospective process/writer
+         * slot before reclamation, so phase C cannot fail after resumable
+         * private state was removed.
+         */
+        const reserveOrClaim = () =>
           withLock(
             Effect.gen(function* () {
-              if (isClosed())
-                return yield* new SubagentRuntimeClosedError({
-                  message: "The subagent session runtime is closed.",
-                });
-              let candidate = claimedCandidate;
-              if (candidate) {
-                const stillOwned =
-                  records.get(candidate.view.id) === candidate &&
-                  candidate.evictionReclaimClaim === true &&
-                  candidate.evictionAdmission !== undefined &&
-                  candidate.runStateReclaimState === "reclaimed" &&
-                  evictionEligible(candidate);
-                if (!stillOwned)
-                  return yield* new SubagentHistoryCapacityError({
-                    limit: MAX_RETAINED_RUNS,
-                    code: "history_outbox_capacity",
-                    message:
-                      "Subagent history eviction ownership changed before admission completed; retry the start after inspecting current run state.",
-                  });
-              } else if (records.size >= MAX_RETAINED_RUNS) {
+              if (isClosed()) return yield* runtimeClosedError();
+              let candidate: RunRecord | undefined;
+              if (records.size >= MAX_RETAINED_RUNS) {
                 candidate = [...records.values()]
                   .filter(
                     (record) =>
                       evictionEligible(record) &&
-                      record.evictionReclaimClaim !== true &&
-                      record.evictionAdmission === undefined &&
+                      record.evictionClaim === undefined &&
                       record.runStateReclaimState !== "running",
                   )
                   .sort(
@@ -235,144 +353,47 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                     message: `Subagent history/outbox capacity reached (${MAX_RETAINED_RUNS}); unresolved or claimed reports or cleanup ownership must be resolved before another run can start.`,
                   });
                 if (candidate.runStateReclaimState !== "reclaimed") {
-                  // Reserve the prospective process/writer slot before destructive
-                  // reclamation. Concurrent admissions count this reservation, so
-                  // phase C cannot fail after resumable private state was removed.
                   const capacityFailure = processCapacityError(records);
                   if (capacityFailure) return yield* capacityFailure;
                   if (canonicalWriterCwd) {
                     const writerFailure = writerConflictError(records, canonicalWriterCwd);
                     if (writerFailure) return yield* writerFailure;
                   }
-                  candidate.evictionReclaimClaim = true;
-                  candidate.evictionAdmission = canonicalWriterCwd
+                  candidate.evictionClaim = canonicalWriterCwd
                     ? { writerCwdDigest: canonicalWriterCwd.digest }
                     : {};
                   return { kind: "reclaim" as const, candidate };
                 }
               }
-              // Recheck all admission constraints before deleting history. The
-              // claimed candidate owns this start's reservation and is excluded;
-              // every concurrent admission counted it while reclamation ran.
-              const capacityFailure = processCapacityError(records, claimedCandidate);
-              if (capacityFailure) return yield* capacityFailure;
-              if (canonicalWriterCwd) {
-                const writerFailure = writerConflictError(
-                  records,
-                  canonicalWriterCwd,
-                  claimedCandidate,
-                );
-                if (writerFailure) return yield* writerFailure;
-              }
-              if (candidate) {
-                candidate.evictionReclaimClaim = false;
-                candidate.evictionAdmission = undefined;
-                records.delete(candidate.view.id);
-                delivery.discardRunQuestionsLocked(candidate.view.id);
-              }
-              // Run scopes are service-owned rather than automatically parent-closed so shutdown
-              // can observe backend cleanup before authorizing the separately scoped writer lease
-              // release. They are created only after every eviction reclaim already succeeded.
-              const scope = yield* Scope.make();
-              // Lease scope is detached from the owner scope so the service finalizer can first
-              // close every backend scope, then authorize and close the corresponding lease scope.
-              const writerLeaseScope = canonicalWriterCwd ? yield* Scope.make() : undefined;
-              const writerLeaseReleaseState = writerLeaseScope ? { authorized: false } : undefined;
-              const settlement = yield* Deferred.make<SubagentRunView>();
-              const { id, name } = allocateRunIdentity(requestedName);
-              const assignmentAttemptToken = allocateAssignmentAttemptToken();
-              const view: SubagentRunView = {
-                id,
-                name,
-                task: request.task.trim(),
-                ...(request.profile ? { profile: request.profile } : {}),
-                selection: request.selection ?? {
-                  source: "profile-candidate",
-                  host: request.host,
-                  runtime: request.runtime,
-                  closeOnReport: request.closeOnReport,
-                  reason: "Profile route selection.",
-                  skippedCandidates: [],
-                },
-                cwd: canonicalWriterCwd?.path ?? request.cwd,
-                state: "starting",
-                context: request.context,
-                writeIntent: request.writeIntent,
-                fastMode: request.fastMode,
-                host: request.host,
-                runtime: request.runtime,
-                closeOnReport: request.closeOnReport,
-                reportGeneration: 0,
-                capabilities: driver.capabilities,
-                model: request.model,
-                effort: request.effort,
-                startedAt: now,
-                lastActivityAt: now,
-                sessionEvents: [],
-                usage: emptyUsage(),
-              };
-              const launch: BackendLaunchRequest = {
-                runId: id,
-                name,
-                closeOnReport: request.closeOnReport,
-                cwd: canonicalWriterCwd?.path ?? request.cwd,
-                context: request.context,
-                writeIntent: request.writeIntent,
-                fastMode: request.fastMode,
-                model: request.model,
-                effort: request.effort,
-                ...(request.runtimeApiKey ? { runtimeApiKey: request.runtimeApiKey } : {}),
-                activeTools: request.activeTools,
-                projectTrusted: request.projectTrusted,
-                parentSessionId: request.parentSessionId,
-                ...(request.parentSessionFile
-                  ? { parentSessionFile: request.parentSessionFile }
-                  : {}),
-                ...(request.parentLeafId ? { parentLeafId: request.parentLeafId } : {}),
-                systemPrompt: childSystemPrompt(request),
-              };
-              const record: RunRecord = {
-                view,
-                scope,
-                driver,
-                launch,
-                activeTools: new Map(),
-                settlement,
-                pauseRequested: false,
-                stoppedByParent: false,
-                cleanupPending: false,
-                runStateReclaimState: "pending",
-                ...(canonicalWriterCwd ? { canonicalWriterCwd } : {}),
-                ...(writerLeaseScope
-                  ? {
-                      writerLeaseScope,
-                      writerLeasePreparationState: "pending" as const,
-                      writerLeaseReleaseState,
-                    }
-                  : {}),
-                initializationPending: true,
-                notificationGeneration: 0,
-                questionNotificationGeneration: 0,
-                completionGeneration: 0,
-                warningSlots: emptyRunWarningSlots(),
-                completionGenerations: new Map(),
-                completionClaims: new Map(),
-                assignment: {
-                  epoch: 1,
-                  phase: "preparing",
-                  attemptToken: assignmentAttemptToken,
-                  startedObserved: false,
-                  outcomeUncertain: false,
-                  pendingRunSettled: false,
-                },
-                nextAssignmentEpoch: 2,
-              };
-              records.set(id, record);
-              publish();
-              return { kind: "reserved" as const, record };
+              return { kind: "reserved" as const, record: yield* admitLocked(candidate) };
             }),
           );
-        const attempt = yield* reservePhase();
+        /**
+         * Phase C: after a definite reclaim success, revalidate this start's
+         * exclusive claim and the candidate's eligibility under the lock, then
+         * perform the atomic delete+insert. Admission is the only outcome; a
+         * second reclamation phase is impossible by construction.
+         */
+        const admitReclaimed = (candidate: RunRecord): Effect.Effect<RunRecord, SubagentError> =>
+          withLock(
+            Effect.gen(function* () {
+              if (isClosed()) return yield* runtimeClosedError();
+              const stillOwned =
+                records.get(candidate.view.id) === candidate &&
+                candidate.evictionClaim !== undefined &&
+                candidate.runStateReclaimState === "reclaimed" &&
+                evictionEligible(candidate);
+              if (!stillOwned)
+                return yield* new SubagentHistoryCapacityError({
+                  limit: MAX_RETAINED_RUNS,
+                  code: "history_outbox_capacity",
+                  message:
+                    "Subagent history eviction ownership changed before admission completed; retry the start after inspecting current run state.",
+                });
+              return yield* admitLocked(candidate, candidate);
+            }),
+          );
+        const attempt = yield* reserveOrClaim();
         const reserved =
           attempt.kind === "reserved"
             ? attempt.record
@@ -383,21 +404,9 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                   ),
                 ),
                 Effect.andThen(
-                  reservePhase(attempt.candidate).pipe(
+                  admitReclaimed(attempt.candidate).pipe(
                     Effect.onError(() => clearEvictionClaim(attempt.candidate)),
                   ),
-                ),
-                Effect.flatMap((admitted) =>
-                  admitted.kind === "reserved"
-                    ? Effect.succeed(admitted.record)
-                    : Effect.fail(
-                        new SubagentHistoryCapacityError({
-                          limit: MAX_RETAINED_RUNS,
-                          code: "history_outbox_capacity",
-                          message:
-                            "Subagent history eviction unexpectedly requested a second reclamation phase.",
-                        }),
-                      ),
                 ),
               );
         const peerNotice = peerNoticeText(records.values(), reserved.view.id);

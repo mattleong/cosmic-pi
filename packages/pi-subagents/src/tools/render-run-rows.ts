@@ -9,7 +9,7 @@ import {
 } from "../ui/run-state.ts";
 import { sanitizeTerminalLine } from "../ui/sanitize.ts";
 import type { SubagentRunCard } from "./details.ts";
-import { formatCost, formatDuration, formatTokenCount, formatUsage } from "./format.ts";
+import { formatCost, formatDuration, formatTokenCount, formatUsage } from "../ui/metrics.ts";
 
 const MAX_SESSION_DISPLAY_AGE = 7 * 24 * 60 * 60 * 1_000;
 

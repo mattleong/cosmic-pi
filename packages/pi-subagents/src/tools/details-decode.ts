@@ -25,6 +25,8 @@ import {
 } from "../profiles/model.ts";
 import {
   SUBAGENT_CARD_DETAILS_VERSION,
+  boundedNonNegative,
+  boundedUsage,
   makeStartAwaitCardDetails,
   type CompactSubagentToolDetails,
   type CompactToolActionFailure,
@@ -43,18 +45,6 @@ const MAX_CARD_SKIPS = 8;
 
 const clean = (value: string, maximum: number): string =>
   safeTextPrefix(stripTerminalControls(value).replaceAll("\u0000", ""), maximum);
-
-const boundedNonNegative = (value: number): number =>
-  Number.isFinite(value) ? Math.max(0, value) : 0;
-
-const boundedUsage = (usage: SubagentUsage): SubagentUsage => ({
-  input: boundedNonNegative(usage.input),
-  output: boundedNonNegative(usage.output),
-  cacheRead: boundedNonNegative(usage.cacheRead),
-  cacheWrite: boundedNonNegative(usage.cacheWrite),
-  totalTokens: boundedNonNegative(usage.totalTokens),
-  ...(usage.cost === undefined ? {} : { cost: boundedNonNegative(usage.cost) }),
-});
 
 const RUN_STATES: ReadonlySet<string> = new Set(SUBAGENT_RUN_STATES);
 const EFFORTS: ReadonlySet<string> = new Set(SUBAGENT_EFFORTS);

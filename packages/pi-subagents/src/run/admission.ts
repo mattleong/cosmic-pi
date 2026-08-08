@@ -8,7 +8,7 @@ const ownsProcessSlot = (record: RunRecord): boolean =>
   record.cleanupPending ||
   record.process !== undefined ||
   record.view.state === "starting" ||
-  record.evictionAdmission !== undefined;
+  record.evictionClaim !== undefined;
 
 const ownsWriterSlot = (record: RunRecord): boolean =>
   record.view.writeIntent === "writer" &&
@@ -39,10 +39,10 @@ export const writerConflictError = (
     (record) =>
       record !== excluded &&
       ((ownsWriterSlot(record) && record.canonicalWriterCwd?.digest === canonicalCwd.digest) ||
-        record.evictionAdmission?.writerCwdDigest === canonicalCwd.digest),
+        record.evictionClaim?.writerCwdDigest === canonicalCwd.digest),
   );
   if (!conflictingRecord) return undefined;
-  const reserved = conflictingRecord.evictionAdmission?.writerCwdDigest === canonicalCwd.digest;
+  const reserved = conflictingRecord.evictionClaim?.writerCwdDigest === canonicalCwd.digest;
   return new SubagentWriterConflictError({
     activeId: conflictingRecord.view.id,
     activeName: conflictingRecord.view.name,

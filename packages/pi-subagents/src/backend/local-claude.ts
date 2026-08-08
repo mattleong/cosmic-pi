@@ -8,16 +8,14 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import {
-  LocalCliProcess,
-  type LocalCliHandle,
-  type LocalCliProcessShape,
-  type LocalCliWireEvent,
+import type {
+  LocalCliHandle,
+  LocalCliProcessShape,
+  LocalCliWireEvent,
 } from "../boundary/local-cli-process.ts";
-import {
-  SupervisorChannel,
-  type SupervisorChannelHandle,
-  type SupervisorChannelShape,
+import type {
+  SupervisorChannelHandle,
+  SupervisorChannelShape,
 } from "../boundary/supervisor-channel.ts";
 import {
   SubagentProcessError,
@@ -26,6 +24,17 @@ import {
 } from "../run/errors.ts";
 import type { SupervisorEvent } from "../supervisor/protocol.ts";
 import type { BackendDriver, BackendEvent, BackendLaunchRequest } from "./model.ts";
+import {
+  addUsageComponents,
+  componentwiseMax,
+  cumulativeUsageDelta,
+  isInternalReplayOrigin,
+  makeClaudeResultCorrelation,
+  usageComponentsTotal,
+  zeroUsageComponents,
+  type UsageComponents,
+} from "./local-claude-correlation.ts";
+import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
 import { withLocalSupervisorInstructions } from "./local-supervisor-prompt.ts";
 import {
   CLAUDE_INTERRUPT_MARKER,
@@ -47,12 +56,7 @@ const CONTROL_TIMEOUT = "10 seconds";
 const RESULT_REPORT_GRACE = "10 seconds";
 const MCP_READY_ATTEMPTS = 100;
 const INITIALIZATION_PROBE = "pi-subagents native initialization probe";
-const SENT_UUID_LIMIT = 64;
 const ASSISTANT_USAGE_MESSAGE_LIMIT = 32;
-const INTERNAL_REPLAY_ORIGINS: ReadonlySet<string> = new Set([
-  "task-notification",
-  "auto-continuation",
-]);
 
 const processError = (operation: string, code: string, message: string) =>
   new SubagentProcessError({ operation, code, message });
@@ -92,73 +96,25 @@ interface PendingInterrupt {
   abandoned: boolean;
 }
 
-/** Correlates a native result to the exact user input that started its query. */
-interface ResultExpectation {
-  readonly uuid: string;
-  readonly kind: "initialization" | "assignment" | "synthetic";
-  readonly epoch: number;
-  /** Global emitted-usage watermark when this exact native query was registered. */
-  readonly usageBaseline: UsageComponents;
-}
-
-interface UsageComponents {
-  readonly input: number;
-  readonly output: number;
-  readonly cacheRead: number;
-  readonly cacheWrite: number;
-}
-
-const zeroComponents: UsageComponents = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-
-const componentwiseMax = (left: UsageComponents, right: UsageComponents): UsageComponents => ({
-  input: Math.max(left.input, right.input),
-  output: Math.max(left.output, right.output),
-  cacheRead: Math.max(left.cacheRead, right.cacheRead),
-  cacheWrite: Math.max(left.cacheWrite, right.cacheWrite),
-});
-
-/**
- * Nonnegative componentwise delta between cumulative native usage snapshots.
- * A regressing native total is reported as inconsistent and never subtracted.
- */
-const cumulativeUsageDelta = (
-  previous: UsageComponents,
-  next: UsageComponents,
-): { readonly delta: UsageComponents; readonly inconsistent: boolean } => ({
-  delta: {
-    input: Math.max(0, next.input - previous.input),
-    output: Math.max(0, next.output - previous.output),
-    cacheRead: Math.max(0, next.cacheRead - previous.cacheRead),
-    cacheWrite: Math.max(0, next.cacheWrite - previous.cacheWrite),
-  },
-  inconsistent:
-    next.input < previous.input ||
-    next.output < previous.output ||
-    next.cacheRead < previous.cacheRead ||
-    next.cacheWrite < previous.cacheWrite,
-});
-
-const componentsTotal = (components: UsageComponents): number =>
-  components.input + components.output + components.cacheRead + components.cacheWrite;
-
 const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(function* (
   request: BackendLaunchRequest,
   child: LocalCliHandle,
   supervisor: SupervisorChannelHandle,
 ) {
   const events = yield* Queue.bounded<BackendEvent, Cause.Done>(EVENT_CAPACITY);
-  const rawOwners = new Map<BackendEvent, LocalCliWireEvent>();
+  const { offer, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
+    events,
+    child.acknowledge,
+  );
   const controlResponses = new Map<string, PendingControl>();
   const nativeInitialization = Deferred.makeUnsafe<ClaudeNativeInitialization, SubagentError>();
   const toolNames = new Map<string, string>();
   // Bounded identity of every confirmed outbound input so delayed or duplicate
-  // replays of a known UUID stay nonfatal while unknown replays fail closed.
-  const sentUserUuids = new Set<string>();
-  const resultExpectations = new Map<string, ResultExpectation>();
-  /** FIFO used only when the current protocol legitimately omits user_message_uuid. */
-  const resultOrder: ResultExpectation[] = [];
+  // replays of a known UUID stay nonfatal while unknown replays fail closed,
+  // plus the owned result-expectation map/FIFO for exact result correlation.
+  const correlation = makeClaudeResultCorrelation();
   const assistantUsageByMessage = new Map<string, UsageComponents>();
-  let emittedUsageTotals: UsageComponents = zeroComponents;
+  let emittedUsageTotals: UsageComponents = zeroUsageComponents;
   const bufferedReports = new Map<number, Extract<BackendEvent, { readonly type: "report" }>>();
   const nativeResultEpochs = new Set<number>();
   const forwardingReports = new Map<number, Deferred.Deferred<boolean>>();
@@ -170,55 +126,6 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   let initializationStarted = false;
   let nativeSessionId: string | undefined;
 
-  const rememberSentUuid = (uuid: string) => {
-    sentUserUuids.delete(uuid);
-    sentUserUuids.add(uuid);
-    while (sentUserUuids.size > SENT_UUID_LIMIT) {
-      const oldest = sentUserUuids.values().next().value;
-      if (oldest === undefined) break;
-      sentUserUuids.delete(oldest);
-    }
-  };
-  const registerResultExpectation = (expectation: Omit<ResultExpectation, "usageBaseline">) => {
-    const owned = { ...expectation, usageBaseline: { ...emittedUsageTotals } };
-    resultExpectations.set(owned.uuid, owned);
-    resultOrder.push(owned);
-    while (resultOrder.length > SENT_UUID_LIMIT) {
-      const oldest = resultOrder.shift();
-      if (oldest) resultExpectations.delete(oldest.uuid);
-    }
-  };
-  const takeResultExpectation = (
-    userMessageUuid: string | undefined,
-    originKind: string | undefined,
-  ): ResultExpectation | undefined => {
-    if (userMessageUuid !== undefined) {
-      const expectation = resultExpectations.get(userMessageUuid);
-      if (!expectation) return undefined;
-      resultExpectations.delete(userMessageUuid);
-      const index = resultOrder.indexOf(expectation);
-      if (index >= 0) resultOrder.splice(index, 1);
-      return expectation;
-    }
-    const index = INTERNAL_REPLAY_ORIGINS.has(originKind ?? "")
-      ? resultOrder.findIndex((candidate) => candidate.kind === "synthetic")
-      : 0;
-    if (index < 0) return undefined;
-    const [expectation] = resultOrder.splice(index, 1);
-    if (expectation) resultExpectations.delete(expectation.uuid);
-    return expectation;
-  };
-
-  const acknowledge = (event: BackendEvent) => {
-    const raw = rawOwners.get(event);
-    if (!raw) return;
-    rawOwners.delete(event);
-    child.acknowledge(raw);
-  };
-  const acknowledgeAll = () => {
-    for (const raw of rawOwners.values()) child.acknowledge(raw);
-    rawOwners.clear();
-  };
   const cancelPending = (error: SubagentError) => {
     if (pendingUserReplay) {
       Deferred.doneUnsafe(pendingUserReplay.acknowledgement, Effect.fail(error));
@@ -234,9 +141,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       pendingInterrupt = undefined;
     }
     toolNames.clear();
-    sentUserUuids.clear();
-    resultExpectations.clear();
-    resultOrder.length = 0;
+    correlation.clear();
     assistantUsageByMessage.clear();
     supervisor.cancelPending(error.message);
   };
@@ -249,21 +154,6 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       Queue.endUnsafe(events);
     }),
   );
-
-  const offer = (event: BackendEvent, raw?: LocalCliWireEvent) =>
-    Effect.suspend(() => {
-      if (raw) rawOwners.set(event, raw);
-      let offered = false;
-      return Queue.offer(events, event).pipe(
-        Effect.tap(() => Effect.sync(() => void (offered = true))),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (!offered && raw) acknowledge(event);
-          }),
-        ),
-        Effect.asVoid,
-      );
-    });
 
   function forwardReport(
     report: Extract<BackendEvent, { readonly type: "report" }>,
@@ -357,13 +247,16 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                 event.sessionId === nativeSessionId)
             ) {
               pendingUserReplay = undefined;
-              rememberSentUuid(pending.uuid);
+              correlation.rememberSentUuid(pending.uuid);
               if (pending.resultKind)
-                registerResultExpectation({
-                  uuid: pending.uuid,
-                  kind: pending.resultKind,
-                  epoch: pending.epoch,
-                });
+                correlation.register(
+                  {
+                    uuid: pending.uuid,
+                    kind: pending.resultKind,
+                    epoch: pending.epoch,
+                  },
+                  emittedUsageTotals,
+                );
               Deferred.doneUnsafe(pending.acknowledgement, Effect.void);
               return pending.emitRunStarted
                 ? offer({ type: "run_started", assignmentEpoch: pending.epoch }, raw)
@@ -393,19 +286,22 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
             }
             if (
               event.uuid !== undefined &&
-              !sentUserUuids.has(event.uuid) &&
-              INTERNAL_REPLAY_ORIGINS.has(event.originKind ?? "") &&
+              !correlation.hasSentUuid(event.uuid) &&
+              isInternalReplayOrigin(event.originKind) &&
               assignmentEpoch > 0
             ) {
               // Claude-owned task notifications/auto-continuations are causal
               // subturns of the active assignment, not foreign parent input.
               // Their required UUID owns only their synthetic result lifecycle.
-              rememberSentUuid(event.uuid);
-              registerResultExpectation({
-                uuid: event.uuid,
-                kind: "synthetic",
-                epoch: assignmentEpoch,
-              });
+              correlation.rememberSentUuid(event.uuid);
+              correlation.register(
+                {
+                  uuid: event.uuid,
+                  kind: "synthetic",
+                  epoch: assignmentEpoch,
+                },
+                emittedUsageTotals,
+              );
               return offer({ type: "activity", assignmentEpoch }, raw);
             }
             if (event.toolResults.length > 0)
@@ -429,8 +325,8 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
             // confirmed is safely acknowledged without further effect.
             if (
               event.uuid !== undefined &&
-              sentUserUuids.has(event.uuid) &&
-              (event.isReplay || INTERNAL_REPLAY_ORIGINS.has(event.originKind ?? ""))
+              correlation.hasSentUuid(event.uuid) &&
+              (event.isReplay || isInternalReplayOrigin(event.originKind))
             ) {
               child.acknowledge(raw);
               return Effect.void;
@@ -483,14 +379,14 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                 ? assistantUsageByMessage.get(event.messageId)
                 : undefined;
               const { delta, inconsistent } = cumulativeUsageDelta(
-                previous ?? zeroComponents,
+                previous ?? zeroUsageComponents,
                 event.usage,
               );
               if (event.messageId) {
                 assistantUsageByMessage.delete(event.messageId);
                 assistantUsageByMessage.set(
                   event.messageId,
-                  componentwiseMax(previous ?? zeroComponents, event.usage),
+                  componentwiseMax(previous ?? zeroUsageComponents, event.usage),
                 );
                 while (assistantUsageByMessage.size > ASSISTANT_USAGE_MESSAGE_LIMIT) {
                   const oldest = assistantUsageByMessage.keys().next().value;
@@ -498,12 +394,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                   assistantUsageByMessage.delete(oldest);
                 }
               }
-              emittedUsageTotals = {
-                input: emittedUsageTotals.input + delta.input,
-                output: emittedUsageTotals.output + delta.output,
-                cacheRead: emittedUsageTotals.cacheRead + delta.cacheRead,
-                cacheWrite: emittedUsageTotals.cacheWrite + delta.cacheWrite,
-              };
+              emittedUsageTotals = addUsageComponents(emittedUsageTotals, delta);
               if (inconsistent)
                 yield* offer({
                   type: "warning",
@@ -516,7 +407,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                   type: "assistant_message",
                   assignmentEpoch,
                   ...(event.text ? { text: event.text } : {}),
-                  usage: { ...delta, totalTokens: componentsTotal(delta) },
+                  usage: { ...delta, totalTokens: usageComponentsTotal(delta) },
                 },
                 raw,
               );
@@ -525,7 +416,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
             // Correlate to the exact originating input: the native
             // user_message_uuid when reported, otherwise the owned issue-order
             // FIFO for a pinned protocol frame that legitimately omits it.
-            const expectation = takeResultExpectation(event.userMessageUuid, event.originKind);
+            const expectation = correlation.take(event.userMessageUuid, event.originKind);
             // Result-level cumulative usage/cost reconciliation: emit only the
             // nonnegative remainder over already-accounted assistant deltas so
             // nothing is double-counted, and surface the known cost estimate.
@@ -536,27 +427,16 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                 (event.usage === undefined && event.totalCostUsd === undefined)
               )
                 return Effect.void;
-              const emittedForQuery: UsageComponents = {
-                input: Math.max(0, emittedUsageTotals.input - expectation.usageBaseline.input),
-                output: Math.max(0, emittedUsageTotals.output - expectation.usageBaseline.output),
-                cacheRead: Math.max(
-                  0,
-                  emittedUsageTotals.cacheRead - expectation.usageBaseline.cacheRead,
-                ),
-                cacheWrite: Math.max(
-                  0,
-                  emittedUsageTotals.cacheWrite - expectation.usageBaseline.cacheWrite,
-                ),
-              };
+              // The nonnegative already-emitted amount for this exact query is
+              // the componentwise floor delta over its registration baseline.
+              const emittedForQuery: UsageComponents = cumulativeUsageDelta(
+                expectation.usageBaseline,
+                emittedUsageTotals,
+              ).delta;
               const { delta, inconsistent } = event.usage
                 ? cumulativeUsageDelta(emittedForQuery, event.usage)
-                : { delta: zeroComponents, inconsistent: false };
-              emittedUsageTotals = {
-                input: emittedUsageTotals.input + delta.input,
-                output: emittedUsageTotals.output + delta.output,
-                cacheRead: emittedUsageTotals.cacheRead + delta.cacheRead,
-                cacheWrite: emittedUsageTotals.cacheWrite + delta.cacheWrite,
-              };
+                : { delta: zeroUsageComponents, inconsistent: false };
+              emittedUsageTotals = addUsageComponents(emittedUsageTotals, delta);
               // total_cost_usd is cumulative within one native query, but each
               // result/query reports independently. Consume it once by UUID.
               const costDelta = event.totalCostUsd;
@@ -569,13 +449,13 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                   })
                 : Effect.void;
               const emit =
-                componentsTotal(delta) > 0 || costDelta !== undefined
+                usageComponentsTotal(delta) > 0 || costDelta !== undefined
                   ? offer({
                       type: "assistant_message",
                       assignmentEpoch: expectation.epoch,
                       usage: {
                         ...delta,
-                        totalTokens: componentsTotal(delta),
+                        totalTokens: usageComponentsTotal(delta),
                         ...(costDelta === undefined ? {} : { cost: costDelta }),
                       },
                     })
@@ -1114,10 +994,4 @@ export const makeLocalClaudeBackendDriver = (
       });
       return yield* makeLocalClaudeHandle(launch, child, supervisor);
     }),
-});
-
-export const localClaudeBackendDriver = Effect.gen(function* () {
-  const processes = yield* LocalCliProcess;
-  const supervisors = yield* SupervisorChannel;
-  return makeLocalClaudeBackendDriver(processes, supervisors);
 });

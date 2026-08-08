@@ -5,16 +5,14 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import {
-  LocalCliProcess,
-  type LocalCliHandle,
-  type LocalCliProcessShape,
-  type LocalCliWireEvent,
+import type {
+  LocalCliHandle,
+  LocalCliProcessShape,
+  LocalCliWireEvent,
 } from "../boundary/local-cli-process.ts";
-import {
-  SupervisorChannel,
-  type SupervisorChannelHandle,
-  type SupervisorChannelShape,
+import type {
+  SupervisorChannelHandle,
+  SupervisorChannelShape,
 } from "../boundary/supervisor-channel.ts";
 import {
   SubagentProcessError,
@@ -41,6 +39,7 @@ import {
   type CodexRequest,
 } from "./local-codex-protocol.ts";
 import type { BackendDriver, BackendEvent, BackendLaunchRequest } from "./model.ts";
+import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
 import { withLocalSupervisorInstructions } from "./local-supervisor-prompt.ts";
 
 const EVENT_CAPACITY = 512;
@@ -137,8 +136,11 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   supervisor: SupervisorChannelHandle,
 ) {
   const events = yield* Queue.bounded<BackendEvent, Cause.Done>(EVENT_CAPACITY);
+  const { offer, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
+    events,
+    child.acknowledge,
+  );
   const responses = new Map<string, PendingResponse>();
-  const rawOwners = new Map<BackendEvent, LocalCliWireEvent>();
   let nextRequestId = 1;
   let assignmentEpoch = 0;
   let threadId: string | undefined;
@@ -154,16 +156,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     totalTokens: 0,
   };
 
-  const acknowledge = (event: BackendEvent) => {
-    const raw = rawOwners.get(event);
-    if (!raw) return;
-    rawOwners.delete(event);
-    child.acknowledge(raw);
-  };
-  const acknowledgeAll = () => {
-    for (const raw of rawOwners.values()) child.acknowledge(raw);
-    rawOwners.clear();
-  };
   const cancelPending = (error: SubagentError) => {
     for (const pending of responses.values())
       Deferred.doneUnsafe(pending.deferred, Effect.fail(error));
@@ -181,21 +173,6 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
       Queue.endUnsafe(events);
     }),
   );
-
-  const offer = (event: BackendEvent, raw?: LocalCliWireEvent) =>
-    Effect.suspend(() => {
-      if (raw) rawOwners.set(event, raw);
-      let offered = false;
-      return Queue.offer(events, event).pipe(
-        Effect.tap(() => Effect.sync(() => void (offered = true))),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (!offered && raw) acknowledge(event);
-          }),
-        ),
-        Effect.asVoid,
-      );
-    });
 
   const consumeNotification = (
     raw: LocalCliWireEvent,
@@ -815,10 +792,4 @@ export const makeLocalCodexBackendDriver = (
       });
       return yield* makeLocalCodexHandle(launch, child, supervisor);
     }),
-});
-
-export const localCodexBackendDriver = Effect.gen(function* () {
-  const processes = yield* LocalCliProcess;
-  const supervisors = yield* SupervisorChannel;
-  return makeLocalCodexBackendDriver(processes, supervisors);
 });

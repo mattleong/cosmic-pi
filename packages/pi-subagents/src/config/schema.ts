@@ -31,7 +31,6 @@ export interface DecodedSubagentConfig {
   readonly unsupportedVersion: boolean;
 }
 
-export const ProfileIdSchema = Schema.Literals(PROFILE_IDS);
 export const ProfileHostSchema = Schema.Literals(["local", "herdr"] as const);
 export const ProfileRuntimeSchema = Schema.Literals(["pi", "claude", "codex"] as const);
 export const ProfileEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
