@@ -30,7 +30,6 @@ export function parseBoolean(value: string | undefined): boolean | undefined {
 }
 
 const ENVIRONMENT_KEYS = [
-  "HOME",
   "CODE_PREVIEW_THEME",
   "CODE_PREVIEW_DIFF_INTENSITY",
   "CODE_PREVIEW_WORD_EMPHASIS",

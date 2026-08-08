@@ -9,6 +9,7 @@ import type { AdvisorCheckpoint, AdvisorCheckpointRequest } from "../src/runtime
 import { ADVISOR_REVIEW_ACTION_TYPE, ADVISOR_REVIEW_CARD_TYPE } from "../src/ui/review-card.ts";
 import { tick } from "./support/async.ts";
 import { finalTurn, passCheckpoint } from "./support/checkpoints.ts";
+import { configStoreLayerFromLoad } from "./support/layers.ts";
 import {
   advisorExtensionApi,
   advisorExtensionContext,
@@ -140,13 +141,14 @@ function harness(
     },
   });
   createAdvisorExtension({
-    loadConfig: () =>
+    configStore: configStoreLayerFromLoad(() =>
       normalizeAdvisorConfig(
         options.configured === false
           ? { enabled: options.enabled ?? false, setupDismissed: false }
           : { enabled: true, provider: "p", model: "m", setupDismissed: true },
         "/config",
       ),
+    ),
     createRuntime: () => driver,
     catchUpTimeoutMs: 25,
   })(pi);

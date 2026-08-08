@@ -308,7 +308,8 @@ it.effect("interruption after JSON commit cannot leave authoritative settings st
     const releaseAfterCommit = yield* Deferred.make<void>();
     let persistedDocument: JsonObject = {
       owner: "keep",
-      codePreview: { futureSetting: { enabled: true }, readCollapsedLines: 17 },
+      futureSetting: { enabled: true },
+      readCollapsedLines: 17,
     };
     const documents = JsonDocumentStore.of({
       exists: () => Effect.succeed(false),
@@ -346,7 +347,8 @@ it.effect("interruption after JSON commit cannot leave authoritative settings st
         yield* Deferred.await(committed);
         assert.deepEqual(persistedDocument, {
           owner: "keep",
-          codePreview: { futureSetting: { enabled: true }, readCollapsedLines: 42 },
+          futureSetting: { enabled: true },
+          readCollapsedLines: 42,
         });
         assert.equal((yield* service.snapshot).settings.readCollapsedLines, 17);
         assert.equal(codePreviewSettings.readCollapsedLines, 17);
@@ -358,11 +360,7 @@ it.effect("interruption after JSON commit cannot leave authoritative settings st
 
         const committedState = yield* service.snapshot;
         assert.deepEqual(committedState.saveContext.globalDocument, persistedDocument);
-        assert.deepEqual(committedState.saveContext.globalOverrides, {
-          futureSetting: { enabled: true },
-          readCollapsedLines: 42,
-        });
-        assert.equal(committedState.saveContext.nested, true);
+        assert.deepEqual(committedState.saveContext.globalOverrides, { readCollapsedLines: 42 });
         assert.equal(committedState.saveContext.baseline.readCollapsedLines, 17);
         assert.equal(committedState.saveContext.loaded.readCollapsedLines, 42);
         assert.equal(committedState.settings.readCollapsedLines, 42);

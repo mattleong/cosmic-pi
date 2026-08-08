@@ -143,6 +143,7 @@ describe("advisor Effect clock boundaries", () => {
                 stateSummary: "",
                 verdict: "pass" as const,
                 summary: "pass",
+                suggestions: [],
                 findings: [],
               });
         },

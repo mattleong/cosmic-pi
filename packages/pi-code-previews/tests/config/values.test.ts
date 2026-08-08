@@ -10,7 +10,6 @@ test("settings normalization and reset preserve defaults", () => {
     secretWarnings: false,
     bashWarnings: false,
     bashResultPreview: false,
-    toolCallBackground: false,
     toolCallTiming: false,
     readContentPreview: false,
     writeContentPreview: false,
@@ -19,6 +18,7 @@ test("settings normalization and reset preserve defaults", () => {
     findResultPreview: false,
     lsResultPreview: false,
     readCollapsedLines: -1,
+    toolCallBackground: "off",
     tools: ["bash", "not-a-tool", "write", "bash"],
   });
   assert.equal(normalized.syntaxHighlighting, false);
@@ -83,7 +83,16 @@ test("settings normalization falls back to accumulated settings for invalid over
     normalizeSettings({ toolCallBackground: "border" }, fallback).toolCallBackground,
     "border",
   );
-  assert.deepEqual(normalizeSettings({ tools: "read,grep" }, fallback).tools, ["read", "grep"]);
+  assert.deepEqual(normalizeSettings({ tools: ["read", "grep"] }, fallback).tools, [
+    "read",
+    "grep",
+  ]);
+  // Legacy value shapes (boolean toolCallBackground, CSV tools) are invalid, not coerced.
+  assert.equal(
+    normalizeSettings({ toolCallBackground: true }, fallback).toolCallBackground,
+    fallback.toolCallBackground,
+  );
+  assert.deepEqual(normalizeSettings({ tools: "read,grep" }, fallback).tools, [...fallback.tools]);
 });
 
 test("setCodePreviewSettings publishes a new frozen snapshot", () => {

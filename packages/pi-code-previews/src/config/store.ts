@@ -4,13 +4,14 @@ import {
   hasCodePreviewSessionCapability,
   runCodePreviewSessionEffect,
 } from "../application/capability";
+import { nodeJoin } from "../boundary/node";
 import { runOneShotSettingsEffect } from "../boundary/settings-one-shot";
-import { getSettingsPathFrom, type LoadSettingsOptions } from "./document-store";
+import type { LoadSettingsOptions } from "./document-store";
 import type { CodePreviewSettings } from "./schema";
 import { CodePreviewSettingsService } from "./service";
 import { cloneCodePreviewSettings } from "./state";
 
-export { extractCodePreviewSettings, type LoadSettingsOptions } from "./document-store";
+export type { LoadSettingsOptions } from "./document-store";
 /** Effect settings persistence service — preferred session door. */
 export {
   CodePreviewSettingsService,
@@ -26,9 +27,9 @@ function runSettingsEffect<A, E>(effect: Effect.Effect<A, E, CodePreviewSettings
     : runOneShotSettingsEffect(effect);
 }
 
-/** Synchronous health-panel compatibility; persistence resolves AgentDirectory in Effect. */
+/** Synchronous health-panel projection; persistence resolves AgentDirectory in Effect. */
 export function getSettingsPath(): string {
-  return getSettingsPathFrom(getAgentDir());
+  return nodeJoin(getAgentDir(), "code-previews.json");
 }
 
 /** Queue a settings save through the session runtime, or a one-shot runtime when idle. */

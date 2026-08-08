@@ -36,6 +36,7 @@ function review(severity: AdvisorSeverity, issue = "Missing timeout handling!"):
   return {
     verdict: "revise",
     summary: "A concrete issue remains.",
+    suggestions: [],
     findings: [
       {
         category: "correctness",
@@ -55,7 +56,12 @@ describe("advisor emission guard", () => {
 
   test("suppresses passes and content-free no-issue prose", () => {
     const guard = emissionGuard();
-    const pass: AdvisorReview = { verdict: "pass", summary: "NO ISSUES!!!", findings: [] };
+    const pass: AdvisorReview = {
+      verdict: "pass",
+      summary: "NO ISSUES!!!",
+      suggestions: [],
+      findings: [],
+    };
     expect(isContentFreeAdvisorReview(pass)).toBe(true);
     expect(guard.evaluate("one", pass)).toEqual({ accepted: false, reason: "pass" });
   });
@@ -64,6 +70,7 @@ describe("advisor emission guard", () => {
     const malformed: AdvisorReview = {
       verdict: "revise",
       summary: "pass",
+      suggestions: [],
       findings: [
         {
           category: "correctness",

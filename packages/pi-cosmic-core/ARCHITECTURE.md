@@ -17,7 +17,8 @@
 - `src/config/` contains reusable scoped-store, document-ops, and tolerant-field configuration infrastructure.
 - `src/projection.ts` publishes immutable synchronous snapshots.
 - `src/security.ts` owns shared redaction/sanitization.
-- `src/settings-completion.ts` owns pure `/…-settings` argument completion (`completeSettingsArguments`): descriptor-ordered id matching, caller-supplied extra verbs, case-insensitive prefixes, and the `null`-on-no-match host contract. It has no UI dependency.
+- `src/settings-completion.ts` owns pure `/…-settings` argument completion (`completeSettingsArguments`): descriptor-ordered id matching, caller-supplied extra verbs, case-insensitive prefixes (ids match case-insensitively in both stages), and the `null`-on-no-match host contract. It has no UI dependency.
+- `src/settings-dispatch.ts` owns pure `/…-settings` argument dispatch (`dispatchSettingsCommand`): a closed OpenInteractive/Help/Diagnostics/Apply/Invalid tagged result with exact finite-value matching and no hidden verb aliases. Hosts own all side effects and message wording; it has no host dependency.
 - `src/subscription-format.ts` owns shared subscription countdown/percent/token/status-line formatting helpers.
 - `src/host-session.ts` owns pure Pi host session capture helpers (UI mode, trust, cwd/signal). Trust fails closed unless a captured callback returns literal `true`; absent, malformed, false, or throwing host values are untrusted.
 - `src/usage-projection.ts` owns shared usage eligibility/clearing projection transitions.

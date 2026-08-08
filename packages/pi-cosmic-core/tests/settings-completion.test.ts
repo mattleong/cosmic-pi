@@ -54,6 +54,10 @@ describe("completeSettingsArguments", () => {
     expect(values("usage.enabled T")).toEqual(["usage.enabled true"]);
   });
 
+  it("matches the id case-insensitively when completing values", () => {
+    expect(values("FOOTER.MODE re")).toEqual(["FOOTER.MODE replace"]);
+  });
+
   it("labels and describes each completion", () => {
     const completions = completeSettingsArguments("footer.mode re", descriptors);
     expect(completions).toEqual([

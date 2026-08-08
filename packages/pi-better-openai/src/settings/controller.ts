@@ -3,16 +3,15 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, SettingsList } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Predicate from "effect/Predicate";
-import { completeSettingsArguments, redactDiagnosticValue } from "pi-cosmic-core";
 import {
-  settingsHintRenderer,
-  settingsSurfaceBridge,
-  VimSettingsAdapter,
-} from "pi-cosmic-ui/manager/keybindings";
+  completeSettingsArguments,
+  dispatchSettingsCommand,
+  redactDiagnosticValue,
+} from "pi-cosmic-core";
+import { createSettingsListSurface } from "pi-cosmic-ui/manager/settings-surface";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
 import {
   COMPACTION_SETTING_DESCRIPTORS,
@@ -191,7 +190,7 @@ export function registerSettingsController(
               const cfg = config(ctx);
               return [
                 {
-                  id: "debug",
+                  id: "diagnostics",
                   label: "Debug info",
                   currentValue: "open",
                   description: "Show Better OpenAI diagnostics.",
@@ -296,9 +295,8 @@ export function registerSettingsController(
                 },
               ];
             };
-            const container = new Container();
-            container.addChild(
-              new (class {
+            return createSettingsListSurface({
+              header: new (class {
                 render() {
                   return [
                     theme.fg("accent", theme.bold("Better OpenAI Settings")),
@@ -308,38 +306,26 @@ export function registerSettingsController(
                 }
                 invalidate() {}
               })(),
-            );
-            const settings = new SettingsList(
-              sections(),
-              8,
-              getSettingsListTheme(),
-              (id, value) => {
+              items: sections(),
+              height: 8,
+              listTheme: getSettingsListTheme(),
+              onChange: (id, value, list) => {
                 if (!id.startsWith("section.")) writeSetting(ctx, id, value);
-                settings.updateValue(
+                list.updateValue(
                   id,
                   sections().find((item) => item.id === id)?.currentValue ?? value,
                 );
                 safeHostUi(() => tui.requestRender());
               },
-              () => done(undefined),
-              { enableSearch: true },
-            );
-            const vimSettings = new VimSettingsAdapter(settings, {
-              search: true,
+              onCancel: () => done(undefined),
               matchesKeybinding:
                 typeof keyboard?.matches === "function"
                   ? (data, id) => keyboard.matches(data, id)
                   : undefined,
               requestRender: () => safeHostUi(() => tui.requestRender()),
-              renderHint: settingsHintRenderer({
-                search: true,
-                dim: (text) => theme.fg("dim", text),
-              }),
-            });
-            container.addChild(vimSettings);
-            return settingsSurfaceBridge(vimSettings, container, {
-              afterInput: () => safeHostUi(() => tui.requestRender()),
-            });
+              dim: (text) => theme.fg("dim", text),
+              bridge: { afterInput: () => safeHostUi(() => tui.requestRender()) },
+            }).surface;
           })
           .then(() => undefined);
       });
@@ -358,54 +344,45 @@ export function registerSettingsController(
       ]),
     handler: (args, ctx) => {
       updateContext(ctx);
-      const trimmed = args.trim();
-      if (!trimmed) return showPicker(ctx);
-      if (trimmed === "help") {
-        const cfg = config(ctx);
-        safeHostUi(() =>
-          ctx.ui.notify(
-            [
-              "Better OpenAI settings",
-              ...descriptors.map(
-                (descriptor) =>
-                  `  ${descriptor.id}=${descriptor.currentValue(cfg)}  — ${descriptor.description}`,
-              ),
-              "",
-              "Usage: /openai-settings <id> <value>",
-              "       /openai-settings diagnostics",
-            ].join("\n"),
-            "info",
-          ),
-        );
-        return run(Effect.void, safeHostSignal(ctx));
+      const dispatch = dispatchSettingsCommand(args, descriptors);
+      switch (dispatch._tag) {
+        case "OpenInteractive":
+          return showPicker(ctx);
+        case "Help": {
+          const cfg = config(ctx);
+          safeHostUi(() =>
+            ctx.ui.notify(
+              [
+                "Better OpenAI settings",
+                ...descriptors.map(
+                  (descriptor) =>
+                    `  ${descriptor.id}=${descriptor.currentValue(cfg)}  — ${descriptor.description}`,
+                ),
+                "",
+                "Usage: /openai-settings <id> <value>",
+                "       /openai-settings diagnostics",
+              ].join("\n"),
+              "info",
+            ),
+          );
+          return run(Effect.void, safeHostSignal(ctx));
+        }
+        case "Diagnostics":
+          safeHostUi(() => ctx.ui.notify(formatDebugStatus(ctx), "info"));
+          return run(Effect.void, safeHostSignal(ctx));
+        case "Invalid":
+          safeHostUi(() =>
+            ctx.ui.notify(
+              dispatch.reason === "invalid-value"
+                ? `Invalid value for ${dispatch.id}. Expected one of: ${dispatch.allowedValues.join(", ")}`
+                : `Unknown setting: ${dispatch.id}`,
+              "error",
+            ),
+          );
+          return run(Effect.void, safeHostSignal(ctx));
+        case "Apply":
+          return applySetting(ctx, dispatch.id, dispatch.value);
       }
-      if (trimmed === "diagnostics" || trimmed === "debug") {
-        safeHostUi(() => ctx.ui.notify(formatDebugStatus(ctx), "info"));
-        return run(Effect.void, safeHostSignal(ctx));
-      }
-      const [id, ...parts] = trimmed.split(/\s+/);
-      const value = parts.join(" ").trim();
-      const descriptor = descriptors.find((candidate) => candidate.id === id);
-      if (!id || !value || !descriptor) {
-        safeHostUi(() =>
-          ctx.ui.notify(
-            id ? `Unknown setting: ${id}` : "Usage: /openai-settings <id> <value>",
-            "error",
-          ),
-        );
-        return run(Effect.void, safeHostSignal(ctx));
-      }
-      const allowedValues = descriptor.values;
-      if (allowedValues && !(allowedValues as readonly string[]).includes(value)) {
-        safeHostUi(() =>
-          ctx.ui.notify(
-            `Invalid value for ${id}. Expected one of: ${allowedValues.join(", ")}`,
-            "error",
-          ),
-        );
-        return run(Effect.void, safeHostSignal(ctx));
-      }
-      return applySetting(ctx, id, value);
     },
   });
 }

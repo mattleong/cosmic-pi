@@ -132,6 +132,11 @@ export {
   type SettingsCompletionDescriptor,
 } from "./src/settings-completion.ts";
 export {
+  dispatchSettingsCommand,
+  type SettingsCommandDispatch,
+  type SettingsDispatchDescriptor,
+} from "./src/settings-dispatch.ts";
+export {
   clampPercent,
   formatCompactReset,
   formatPercent,

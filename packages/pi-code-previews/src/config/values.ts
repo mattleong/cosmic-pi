@@ -2,7 +2,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
   ALL_CODE_PREVIEW_TOOLS,
-  parseCodePreviewTools,
   parseToolToggleId,
   type CodePreviewToolName,
 } from "../tools/names";
@@ -59,22 +58,10 @@ function normalizeSetting<K extends keyof CodePreviewSettings>(
   const definition = CODE_PREVIEW_SETTING_DEFINITIONS[
     key
   ] as unknown as CodePreviewSettingDescriptor<K>;
-  const raw = legacySettingValue(key, data[key]);
-  const decoded = Schema.decodeUnknownOption(definition.schema)(raw);
+  const decoded = Schema.decodeUnknownOption(definition.schema)(data[key]);
   next[key] = Option.isSome(decoded)
     ? definition.normalize(decoded.value, fallback[key])
     : fallback[key];
-}
-
-function legacySettingValue<K extends keyof CodePreviewSettings>(key: K, value: unknown): unknown {
-  if (key === "toolCallBackground" && typeof value === "boolean") return value ? "on" : "off";
-  if (key === "tools" && typeof value === "string") return parseToolsForSchema(value);
-  return value;
-}
-
-function parseToolsForSchema(value: string): readonly CodePreviewToolName[] | undefined {
-  const parsed = parseCodePreviewTools(value);
-  return parsed ? [...parsed] : undefined;
 }
 
 export function updateSetting(

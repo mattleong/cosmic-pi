@@ -15,6 +15,7 @@ import {
 const review = {
   verdict: "revise" as const,
   summary: "A material issue remains.",
+  suggestions: [],
   findings: [
     {
       category: "correctness" as const,

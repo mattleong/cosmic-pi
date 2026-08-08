@@ -12,8 +12,7 @@ export function finalTurn(text = "candidate") {
 
 /**
  * A correlated pass checkpoint. Call sites keep their exact asserted
- * stateSummary/summary values via explicit options; the `suggestions` key is
- * present only when a call site provides one.
+ * stateSummary/summary values via explicit options.
  */
 export function passCheckpoint(
   request: AdvisorCheckpointRequest,
@@ -29,7 +28,7 @@ export function passCheckpoint(
     stateSummary: options.stateSummary ?? "compact",
     verdict: "pass",
     summary: options.summary ?? "No issue.",
-    ...(options.suggestions === undefined ? {} : { suggestions: options.suggestions }),
+    suggestions: options.suggestions ?? [],
     findings: [],
   };
 }

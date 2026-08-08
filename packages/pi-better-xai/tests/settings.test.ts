@@ -113,6 +113,16 @@ describe("Better xAI settings surface", () => {
     expect(complete?.("help ")).toBeNull();
   });
 
+  test("rejects the removed debug alias; diagnostics is the only diagnostics verb", async () => {
+    const h = harness();
+
+    await h.commands.get("xai-settings")?.handler("debug", h.ctx);
+    expect(h.notify).toHaveBeenCalledWith("Usage: /xai-settings <id> <value>", "error");
+
+    await h.commands.get("xai-settings")?.handler("debug now", h.ctx);
+    expect(h.notify).toHaveBeenCalledWith("Unknown setting: debug", "error");
+  });
+
   test("opens a modeless interactive settings list for bare /xai-settings in TUI mode", async () => {
     const h = harness();
     initTheme(undefined, false);

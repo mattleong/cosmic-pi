@@ -20,6 +20,7 @@ const runtime: AdvisorRuntimeServiceShape = {
       stateSummary: "",
       verdict: "pass" as const,
       summary: "pass",
+      suggestions: [],
       findings: [],
     }),
   steer: () => Effect.succeed(false),

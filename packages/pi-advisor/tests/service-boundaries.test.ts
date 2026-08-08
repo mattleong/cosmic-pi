@@ -1,19 +1,18 @@
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import { ConfigStore, configStoreTestLayer } from "../src/config/store.ts";
-import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
-import { FailureLogger, failureLoggerTestLayer } from "../src/logging/logger.ts";
+import { ConfigStore } from "../src/config/store.ts";
+import { advisorPlatformLayer } from "../src/boundary/executor.ts";
+import { FailureLogger } from "../src/logging/logger.ts";
 import { PiCommandAdapter } from "../src/boundary/host-commands.ts";
 import { HostNotifier, hostNotifierLayer } from "../src/boundary/host-notifier.ts";
 import { normalizeAdvisorConfig } from "../src/config/options.ts";
+import { configStoreLayerFromLoad, failureLoggerLayerFromLog } from "./support/layers.ts";
 
-it.effect("converts the Promise config seam into a typed ConfigStore test Layer", () => {
+it.effect("composes a typed ConfigStore test Layer without Promise seams", () => {
   const paths: string[] = [];
-  const layer = configStoreTestLayer((path) => {
+  const layer = configStoreLayerFromLoad((path) => {
     paths.push(path ?? "");
     return normalizeAdvisorConfig({ provider: "p", model: "m" }, path);
   }).pipe(Layer.provideMerge(advisorPlatformLayer));
@@ -28,36 +27,35 @@ it.effect("converts the Promise config seam into a typed ConfigStore test Layer"
   );
 });
 
-it.effect("awaits the Promise logging seam instead of detaching it", () =>
+it.effect("fails a throwing test config load as a typed ConfigStore error", () => {
+  const layer = configStoreLayerFromLoad(() => {
+    throw new Error("unreadable");
+  }).pipe(Layer.provideMerge(advisorPlatformLayer));
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const context = yield* Layer.build(layer);
+      const store = Context.get(context, ConfigStore);
+      const failure = yield* store.load("/tmp/advisor.json").pipe(Effect.flip);
+      expect(failure).toMatchObject({ _tag: "AdvisorConfigStoreError", operation: "load" });
+    }),
+  );
+});
+
+it.effect("keeps the failure logger fail-open when the test log callback throws", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const pending = yield* Deferred.make<string | undefined>();
-      const layer = failureLoggerTestLayer(() =>
-        standaloneAdvisorExecutor.run(Deferred.await(pending)),
-      );
+      const layer = failureLoggerLayerFromLog(() => {
+        throw new Error("hostile log sink");
+      });
       const context = yield* Layer.build(layer);
       const logger = Context.get(context, FailureLogger);
-      let finished = false;
-      const logging = logger
-        .log("/tmp/advisor.json", {
-          contextChars: 1,
-          durationMs: 2,
-          error: "expected",
-          timeoutMs: 3,
-        })
-        .pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              finished = true;
-            }),
-          ),
-        );
-      const fiber = yield* logging.pipe(Effect.forkChild({ startImmediately: true }));
-      yield* Effect.yieldNow;
-      expect(finished).toBe(false);
-      yield* Deferred.succeed(pending, "/tmp/pi-advisor.jsonl");
-      expect(yield* Fiber.join(fiber)).toBe("/tmp/pi-advisor.jsonl");
-      expect(finished).toBe(true);
+      const logged = yield* logger.log("/tmp/advisor.json", {
+        contextChars: 1,
+        durationMs: 2,
+        error: "expected",
+        timeoutMs: 3,
+      });
+      expect(logged).toBeUndefined();
     }),
   ),
 );

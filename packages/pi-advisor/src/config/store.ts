@@ -140,26 +140,3 @@ export const configStoreLayer = Layer.effect(
     });
   }),
 );
-
-/** Converts the legacy Promise-shaped test seam once at the application boundary. */
-export const configStoreTestLayer = (
-  load: (path?: string) => ResolvedAdvisorConfig | Promise<ResolvedAdvisorConfig>,
-) =>
-  Layer.effect(
-    ConfigStore,
-    Effect.gen(function* () {
-      const platform = yield* Effect.context<AdvisorPlatform>();
-      return ConfigStore.of({
-        load: (path = getAdvisorConfigPath()) =>
-          Effect.tryPromise({
-            try: () => Promise.resolve(load(path)),
-            catch: storeError("load"),
-          }),
-        patch: (patch, path = getAdvisorConfigPath(), afterCommit) =>
-          writeAdvisorConfigPatchEffect(patch, path, afterCommit).pipe(
-            Effect.mapError(storeError("update")),
-            Effect.provide(platform),
-          ),
-      });
-    }),
-  );

@@ -69,20 +69,14 @@ export const AdvisorFindingWireSchema = Schema.Struct({
   evidence: boundedNonEmpty(MAX_ADVISOR_EVIDENCE_CHARS),
   recommendation: boundedNonEmpty(MAX_ADVISOR_RECOMMENDATION_CHARS),
 });
-const ReviewFields = {
+export const AdvisorReviewWireSchema = Schema.Struct({
   verdict: Schema.Literals(ADVISOR_VERDICTS),
   summary: boundedNonEmpty(MAX_ADVISOR_SUMMARY_CHARS),
+  suggestions: Schema.Array(AdvisorSuggestionWireSchema).check(
+    Schema.isMaxLength(MAX_ADVISOR_SUGGESTIONS),
+  ),
   findings: Schema.Array(AdvisorFindingWireSchema).check(Schema.isMaxLength(MAX_ADVISOR_FINDINGS)),
-};
-export const AdvisorReviewWireSchema = Schema.Union([
-  Schema.Struct({
-    ...ReviewFields,
-    suggestions: Schema.Array(AdvisorSuggestionWireSchema).check(
-      Schema.isMaxLength(MAX_ADVISOR_SUGGESTIONS),
-    ),
-  }),
-  Schema.Struct(ReviewFields),
-]);
+});
 export interface AdvisorSuggestion {
   fingerprint?: string;
   kind: AdvisorSuggestionKind;
@@ -107,8 +101,7 @@ export interface AdvisorFinding {
 export interface AdvisorReview {
   verdict: AdvisorVerdict;
   summary: string;
-  /** Optional for compatibility with reviews recorded before perspective guidance. */
-  suggestions?: AdvisorSuggestion[];
+  suggestions: AdvisorSuggestion[];
   findings: AdvisorFinding[];
 }
 

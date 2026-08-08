@@ -141,6 +141,9 @@ describe("Better OpenAI session boundary", () => {
       expect.stringContaining("usage.enabled = false"),
       "info",
     );
+    // The removed hidden alias: diagnostics is the only diagnostics verb.
+    await h.commands.get("openai-settings")?.("debug", h.ctx);
+    expect(h.ctx.ui.notify).toHaveBeenCalledWith("Unknown setting: debug", "error");
     await h.commands.get("openai-usage")?.("", h.ctx);
     expect(h.ctx.ui.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");
     await h.emit("session_shutdown");

@@ -3,14 +3,10 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, SettingsList, Text, type SettingItem } from "@earendil-works/pi-tui";
+import { Text, type SettingItem } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
-import { completeSettingsArguments } from "pi-cosmic-core";
-import {
-  settingsHintRenderer,
-  settingsSurfaceBridge,
-  VimSettingsAdapter,
-} from "pi-cosmic-ui/manager/keybindings";
+import { completeSettingsArguments, dispatchSettingsCommand } from "pi-cosmic-core";
+import { createSettingsListSurface } from "pi-cosmic-ui/manager/settings-surface";
 import { notifyAtHostBoundary, type HostNotificationLevel } from "../boundary/host-notifier.ts";
 import { recoverHostUi } from "../boundary/host-ui.ts";
 import { SETTINGS_OPTION_DESCRIPTORS, type ResolvedConfig } from "../config/index.ts";
@@ -115,42 +111,35 @@ export function registerSettingsController(
       description: descriptor.description,
     }));
     return ctx.ui
-      .custom<undefined>((tui, theme, keybindings, done) => {
-        const container = new Container();
-        container.addChild(new Text(theme.fg("accent", theme.bold("Better xAI Settings")), 1, 1));
-        // SettingsList displays the cycled value optimistically, so both apply outcomes route
-        // through the same display update: success shows the committed value and failure
-        // restores the persisted projection value.
-        const showCurrentValue = (id: string) => (currentValue: string) => {
-          list.updateValue(id, currentValue);
-          tui.requestRender();
-        };
-        const list = new SettingsList(
-          items,
-          Math.min(12, items.length + 2),
-          getSettingsListTheme(),
-          (id, value) => {
-            const show = showCurrentValue(id);
-            void applySetting(ctx, id, value, capturedSignal.signal, {
-              applied: show,
-              reverted: show,
-            });
-          },
-          () => done(undefined),
-          { enableSearch: true },
-        );
-        const vimList = new VimSettingsAdapter(list, {
-          search: true,
-          matchesKeybinding:
-            typeof keybindings?.matches === "function"
-              ? (data, id) => keybindings.matches(data, id)
-              : undefined,
-          requestRender: () => tui.requestRender(),
-          renderHint: settingsHintRenderer({ search: true, dim: (text) => theme.fg("dim", text) }),
-        });
-        container.addChild(vimList);
-        return settingsSurfaceBridge(vimList, container);
-      })
+      .custom<undefined>(
+        (tui, theme, keybindings, done) =>
+          createSettingsListSurface({
+            header: new Text(theme.fg("accent", theme.bold("Better xAI Settings")), 1, 1),
+            items,
+            height: Math.min(12, items.length + 2),
+            listTheme: getSettingsListTheme(),
+            // SettingsList displays the cycled value optimistically, so both apply outcomes route
+            // through the same display update: success shows the committed value and failure
+            // restores the persisted projection value.
+            onChange: (id, value, list) => {
+              const show = (currentValue: string) => {
+                list.updateValue(id, currentValue);
+                tui.requestRender();
+              };
+              void applySetting(ctx, id, value, capturedSignal.signal, {
+                applied: show,
+                reverted: show,
+              });
+            },
+            onCancel: () => done(undefined),
+            matchesKeybinding:
+              typeof keybindings?.matches === "function"
+                ? (data, id) => keybindings.matches(data, id)
+                : undefined,
+            requestRender: () => tui.requestRender(),
+            dim: (text) => theme.fg("dim", text),
+          }).surface,
+      )
       .then(
         () => undefined,
         () => notifyAtHostBoundary(ctx, "Unable to open Better xAI settings.", "warning"),
@@ -169,10 +158,8 @@ export function registerSettingsController(
         },
       ]),
     handler: (args, ctx) => {
-      const trimmed = args.trim();
-      if (!trimmed && ctx.mode === "tui" && typeof ctx.ui.custom === "function")
-        return openInteractiveSettings(ctx);
-      if (!trimmed || trimmed === "help") {
+      const dispatch = dispatchSettingsCommand(args, SETTINGS_OPTION_DESCRIPTORS);
+      const showHelp = () => {
         let cfg: ResolvedConfig | undefined;
         try {
           cfg = config(ctx);
@@ -196,39 +183,37 @@ export function registerSettingsController(
           "  /xai-settings usage.showResetTimes true",
         ];
         return completeHostFeedback(ctx, lines.join("\n"), "info");
-      }
-
-      if (trimmed === "diagnostics" || trimmed === "debug") {
-        try {
-          return completeHostFeedback(ctx, formatDebugStatus(ctx), "info");
-        } catch {
-          return completeHostFeedback(ctx, "Better xAI diagnostics are unavailable.", "warning");
+      };
+      switch (dispatch._tag) {
+        case "OpenInteractive":
+          return ctx.mode === "tui" && typeof ctx.ui.custom === "function"
+            ? openInteractiveSettings(ctx)
+            : showHelp();
+        case "Help":
+          return showHelp();
+        case "Diagnostics":
+          try {
+            return completeHostFeedback(ctx, formatDebugStatus(ctx), "info");
+          } catch {
+            return completeHostFeedback(ctx, "Better xAI diagnostics are unavailable.", "warning");
+          }
+        case "Invalid":
+          if (dispatch.reason === "missing-value")
+            return completeHostFeedback(ctx, "Usage: /xai-settings <id> <value>", "error");
+          if (dispatch.reason === "unknown-setting")
+            return completeHostFeedback(ctx, `Unknown setting: ${dispatch.id}`, "error");
+          return completeHostFeedback(
+            ctx,
+            `Invalid value for ${dispatch.id}. Expected one of: ${dispatch.allowedValues.join(", ")}`,
+            "error",
+          );
+        case "Apply": {
+          const capturedSignal = captureSignal(ctx);
+          if (capturedSignal._tag === "Unavailable")
+            return completeHostFeedback(ctx, "Better xAI settings are unavailable.", "warning");
+          return applySetting(ctx, dispatch.id, dispatch.value, capturedSignal.signal);
         }
       }
-
-      const [id, ...valueParts] = trimmed.split(/\s+/);
-      const value = valueParts.join(" ").trim();
-      if (!id || !value) {
-        return completeHostFeedback(ctx, "Usage: /xai-settings <id> <value>", "error");
-      }
-      const descriptor = SETTINGS_OPTION_DESCRIPTORS.find((entry) => entry.id === id);
-      if (!descriptor) {
-        return completeHostFeedback(ctx, `Unknown setting: ${id}`, "error");
-      }
-      const allowedValues = descriptor.values;
-      if (allowedValues && !(allowedValues as readonly string[]).includes(value)) {
-        return completeHostFeedback(
-          ctx,
-          `Invalid value for ${id}. Expected one of: ${allowedValues.join(", ")}`,
-          "error",
-        );
-      }
-
-      const capturedSignal = captureSignal(ctx);
-      if (capturedSignal._tag === "Unavailable")
-        return completeHostFeedback(ctx, "Better xAI settings are unavailable.", "warning");
-
-      return applySetting(ctx, id, value, capturedSignal.signal);
     },
   });
 }

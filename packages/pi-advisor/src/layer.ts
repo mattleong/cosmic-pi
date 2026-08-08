@@ -6,8 +6,8 @@ import { advisorPlatformLayer, type AdvisorEffectExecutor } from "./boundary/exe
 import type { AdvisorHostBindings } from "./boundary/host-bindings.ts";
 import { PiCommandAdapter } from "./boundary/host-commands.ts";
 import { HostNotifier, hostNotifierLayer } from "./boundary/host-notifier.ts";
-import { ConfigStore, configStoreLayer, configStoreTestLayer } from "./config/store.ts";
-import { FailureLogger, failureLoggerLayer, failureLoggerTestLayer } from "./logging/logger.ts";
+import { ConfigStore, configStoreLayer } from "./config/store.ts";
+import { FailureLogger, failureLoggerLayer } from "./logging/logger.ts";
 import { AdvisorReviewQueueService, advisorReviewQueueServiceLayer } from "./queue/service.ts";
 import { AdvisorRuntimeService, advisorRuntimeServiceLayer } from "./runtime/runtime.ts";
 
@@ -20,12 +20,8 @@ export interface AdvisorApplicationLayerOptions {
 
 /** Sole composition root for one Advisor session application. */
 export const makeAdvisorApplicationLayer = (options: AdvisorApplicationLayerOptions) => {
-  const resolvedConfigStoreLayer = options.dependencies.loadConfig
-    ? configStoreTestLayer(options.dependencies.loadConfig)
-    : configStoreLayer;
-  const loggerLayer = options.dependencies.logFailure
-    ? failureLoggerTestLayer(options.dependencies.logFailure)
-    : failureLoggerLayer;
+  const resolvedConfigStoreLayer = options.dependencies.configStore ?? configStoreLayer;
+  const loggerLayer = options.dependencies.failureLogger ?? failureLoggerLayer;
   const dependenciesLayer = Layer.mergeAll(
     advisorRuntimeServiceLayer(options.executor),
     advisorReviewQueueServiceLayer,

@@ -81,8 +81,7 @@ function finishAdvisorReview(gated: unknown): AdvisorReview {
 function normalizeAdvisorReview(parsed: unknown): AdvisorReview {
   if (
     !isRecord(parsed) ||
-    (!hasExactKeys(parsed, ["verdict", "summary", "suggestions", "findings"]) &&
-      !hasExactKeys(parsed, ["verdict", "summary", "findings"]))
+    !hasExactKeys(parsed, ["verdict", "summary", "suggestions", "findings"])
   ) {
     throw reviewError(
       "Advisor review must contain exactly verdict, summary, suggestions, and findings.",
@@ -92,7 +91,7 @@ function normalizeAdvisorReview(parsed: unknown): AdvisorReview {
     throw reviewError('Advisor verdict must be "pass", "suggest", or "revise".');
   }
   const summary = requireBoundedString(parsed.summary, "summary", MAX_ADVISOR_SUMMARY_CHARS);
-  const rawSuggestions = parsed.suggestions ?? [];
+  const rawSuggestions = parsed.suggestions;
   if (!Array.isArray(rawSuggestions)) {
     throw reviewError("Advisor suggestions must be an array.");
   }
@@ -140,7 +139,7 @@ function normalizeAdvisorReview(parsed: unknown): AdvisorReview {
   return {
     verdict: parsed.verdict,
     summary,
-    ...(parsed.suggestions !== undefined || suggestions.length > 0 ? { suggestions } : {}),
+    suggestions,
     findings: parsedFindings,
   };
 }

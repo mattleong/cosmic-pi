@@ -26,7 +26,6 @@ import * as Effect from "effect/Effect";
 import { runOneShotSettingsEffect } from "../../src/boundary/settings-one-shot";
 import {
   CodePreviewSettingsService,
-  extractCodePreviewSettings,
   getSettingsPath,
   queueSettingsSave,
   type LoadSettingsOptions,
@@ -79,66 +78,57 @@ test("saveSettingsToDisk and loadSettingsFromDisk respect PI_CODING_AGENT_DIR", 
   assert.equal(loaded?.readCollapsedLines, 37);
 });
 
-test("extractCodePreviewSettings accepts nested, prefixed, and saved raw settings", () => {
-  assert.deepEqual(extractCodePreviewSettings({ codePreview: { readCollapsedLines: 20 } }), {
-    readCollapsedLines: 20,
+test("legacy prefixed and nested shapes in code-previews.json are ignored, not migrated", async () => {
+  const root = await createTestTempDirectory("pi-code-previews-legacy-shapes-");
+  process.env.PI_CODING_AGENT_DIR = root;
+  await writeJson(join(root, "code-previews.json"), {
+    codePreviewReadCollapsedLines: 30,
+    codePreview: { readCollapsedLines: 12 },
+    toolCallBackground: true,
+    tools: "bash,write",
+    grepCollapsedLines: 44,
   });
-  assert.deepEqual(extractCodePreviewSettings({ codePreviewReadCollapsedLines: 30 }), {
-    readCollapsedLines: 30,
-  });
-  assert.deepEqual(extractCodePreviewSettings({ codePreviewReadContentPreview: false }), {
-    readContentPreview: false,
-  });
-  assert.deepEqual(extractCodePreviewSettings({ codePreviewWriteContentPreview: false }), {
-    writeContentPreview: false,
-  });
-  assert.deepEqual(extractCodePreviewSettings({ codePreviewEditDiffPreview: false }), {
-    editDiffPreview: false,
-  });
-  assert.deepEqual(extractCodePreviewSettings({ codePreviewGrepResultPreview: false }), {
-    grepResultPreview: false,
-  });
-  assert.deepEqual(extractCodePreviewSettings({ codePreviewFindResultPreview: false }), {
-    findResultPreview: false,
-  });
-  assert.deepEqual(extractCodePreviewSettings({ codePreviewLsResultPreview: false }), {
-    lsResultPreview: false,
-  });
-  assert.deepEqual(extractCodePreviewSettings({ codePreviewBashResultPreview: false }), {
-    bashResultPreview: false,
-  });
-  assert.deepEqual(extractCodePreviewSettings({ codePreviewToolCallBackground: false }), {
-    toolCallBackground: false,
-  });
-  assert.deepEqual(extractCodePreviewSettings({ codePreviewToolCallTiming: false }), {
-    toolCallTiming: false,
-  });
-  assert.deepEqual(extractCodePreviewSettings({ codePreviewTools: ["bash", "write"] }), {
-    tools: ["bash", "write"],
-  });
-  assert.deepEqual(
-    extractCodePreviewSettings({ ...defaultCodePreviewSettings, readCollapsedLines: 40 })
-      .readCollapsedLines,
-    40,
-  );
-  assert.deepEqual(extractCodePreviewSettings({ pathIcons: "off" }), { pathIcons: "off" });
-  assert.deepEqual(extractCodePreviewSettings({ theme: "dark" }), {});
+
+  const loaded = await loadSettingsFromDisk();
+  assert.ok(loaded);
+  // Only flat current keys with current value shapes apply; everything else keeps defaults.
+  assert.equal(loaded.readCollapsedLines, defaultCodePreviewSettings.readCollapsedLines);
+  assert.equal(loaded.toolCallBackground, defaultCodePreviewSettings.toolCallBackground);
+  assert.deepEqual(loaded.tools, [...defaultCodePreviewSettings.tools]);
+  assert.equal(loaded.grepCollapsedLines, 44);
 });
 
-test("saving preserves unknown root and nested settings fields", async () => {
+test("settings.json baselines accept only the nested codePreview object", async () => {
+  const root = await createTestTempDirectory("pi-code-previews-nested-only-");
+  const agentDir = join(root, "agent");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  await writeJson(join(agentDir, "settings.json"), {
+    readCollapsedLines: 55,
+    codePreviewReadCollapsedLines: 56,
+    codePreview: { readCollapsedLines: 21 },
+  });
+
+  const loaded = await loadSettingsFromDisk();
+  assert.equal(loaded?.readCollapsedLines, 21);
+});
+
+test("saving preserves unknown root fields and legacy blocks without migrating them", async () => {
   const root = await createTestTempDirectory("pi-code-previews-unknown-");
   process.env.PI_CODING_AGENT_DIR = root;
   await writeJson(join(root, "code-previews.json"), {
     owner: "keep",
     codePreview: { readCollapsedLines: 12, futureSetting: { enabled: true } },
+    readCollapsedLines: 14,
   });
   const loaded = await loadSettingsFromDisk();
   assert.ok(loaded);
+  assert.equal(loaded.readCollapsedLines, 14);
   await saveSettingsToDisk({ ...loaded, readCollapsedLines: 20 });
   const saved = JSON.parse(await readFile(join(root, "code-previews.json"), "utf8"));
   assert.equal(saved.owner, "keep");
-  assert.equal(saved.codePreview.readCollapsedLines, 20);
-  assert.deepEqual(saved.codePreview.futureSetting, { enabled: true });
+  assert.equal(saved.readCollapsedLines, 20);
+  // The legacy nested block is an unknown root field: preserved verbatim, never read or rewritten.
+  assert.deepEqual(saved.codePreview, { readCollapsedLines: 12, futureSetting: { enabled: true } });
 });
 
 test("concurrent queued saves publish in invocation order", async () => {
@@ -152,7 +142,7 @@ test("concurrent queued saves publish in invocation order", async () => {
   assert.equal(saved.readCollapsedLines, 42);
 });
 
-test("loadSettingsFromDisk merges settings in precedence order", async () => {
+test("loadSettingsFromDisk merges only current locations in precedence order", async () => {
   const root = await createTestTempDirectory("pi-code-previews-precedence-");
   const home = join(root, "home");
   const agentDir = join(root, "agent");
@@ -163,25 +153,22 @@ test("loadSettingsFromDisk merges settings in precedence order", async () => {
   await mkdir(agentDir, { recursive: true });
   await mkdir(join(project, ".pi"), { recursive: true });
 
+  // Legacy HOME-derived locations must be ignored entirely, never merged or migrated.
   await writeJson(join(home, ".pi", "settings.json"), {
-    codePreview: {
-      readCollapsedLines: 11,
-      writeCollapsedLines: 21,
-      writeContentPreview: false,
-    },
+    codePreview: { readCollapsedLines: 11, writeCollapsedLines: 21, writeContentPreview: false },
   });
   await writeJson(join(home, ".pi", "agent", "settings.json"), {
     codePreview: { readCollapsedLines: 12, editDiffPreview: false, grepCollapsedLines: 22 },
+  });
+  await writeJson(join(home, ".pi", "agent", "code-previews.json"), {
+    readCollapsedLines: 15,
+    bashResultPreview: false,
   });
   await writeJson(join(agentDir, "settings.json"), {
     codePreview: { readCollapsedLines: 13, findResultPreview: false },
   });
   await writeJson(join(project, ".pi", "settings.json"), {
     codePreview: { readCollapsedLines: 14, lsResultPreview: false },
-  });
-  await writeJson(join(home, ".pi", "agent", "code-previews.json"), {
-    readCollapsedLines: 15,
-    bashResultPreview: false,
   });
   await writeJson(join(agentDir, "code-previews.json"), {
     readCollapsedLines: 16,
@@ -190,14 +177,15 @@ test("loadSettingsFromDisk merges settings in precedence order", async () => {
 
   const loaded = await loadSettingsFromDisk({ projectCwd: project, projectTrusted: true });
   assert.equal(loaded?.readCollapsedLines, 16);
-  assert.equal(loaded?.writeCollapsedLines, 21);
-  assert.equal(loaded?.writeContentPreview, false);
-  assert.equal(loaded?.editDiffPreview, false);
-  assert.equal(loaded?.grepCollapsedLines, 22);
   assert.equal(loaded?.findResultPreview, false);
   assert.equal(loaded?.lsResultPreview, false);
-  assert.equal(loaded?.bashResultPreview, false);
   assert.equal(loaded?.pathListCollapsedLines, 44);
+  // Values that existed only in legacy locations stay at their defaults.
+  assert.equal(loaded?.writeCollapsedLines, defaultCodePreviewSettings.writeCollapsedLines);
+  assert.equal(loaded?.writeContentPreview, defaultCodePreviewSettings.writeContentPreview);
+  assert.equal(loaded?.editDiffPreview, defaultCodePreviewSettings.editDiffPreview);
+  assert.equal(loaded?.grepCollapsedLines, defaultCodePreviewSettings.grepCollapsedLines);
+  assert.equal(loaded?.bashResultPreview, defaultCodePreviewSettings.bashResultPreview);
 });
 
 test("saving a global change does not copy project defaults into other projects", async () => {
@@ -402,20 +390,14 @@ test("loadCodePreviewSettings resets to defaults when no settings files exist", 
 
 test("loadSettingsFromDisk skips invalid JSON and continues", async () => {
   const root = await createTestTempDirectory("pi-code-previews-invalid-settings-");
-  const home = join(root, "home");
   const agentDir = join(root, "agent");
-  process.env.HOME = home;
   process.env.PI_CODING_AGENT_DIR = agentDir;
-  await mkdir(join(home, ".pi", "agent"), { recursive: true });
   await mkdir(agentDir, { recursive: true });
-  await writeJson(join(home, ".pi", "settings.json"), {
-    codePreview: { readCollapsedLines: 18 },
-  });
-  await writeFile(join(home, ".pi", "agent", "settings.json"), "{invalid", "utf8");
+  await writeFile(join(agentDir, "settings.json"), "{invalid", "utf8");
   await writeJson(join(agentDir, "code-previews.json"), { grepCollapsedLines: 31 });
 
   const loaded = await loadSettingsFromDisk();
-  assert.equal(loaded?.readCollapsedLines, 18);
+  assert.equal(loaded?.readCollapsedLines, defaultCodePreviewSettings.readCollapsedLines);
   assert.equal(loaded?.grepCollapsedLines, 31);
 });
 

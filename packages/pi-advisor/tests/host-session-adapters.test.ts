@@ -24,6 +24,7 @@ import { createAdvisorExtension } from "../src/extension.ts";
 import { tick } from "./support/async.ts";
 import { finalTurn, passCheckpoint as pass } from "./support/checkpoints.ts";
 import { resolvedAdvisorConfig } from "./support/config.ts";
+import { configStoreLayerFromLoad } from "./support/layers.ts";
 import {
   advisorExtensionApi,
   advisorExtensionContext,
@@ -50,6 +51,7 @@ function revise(
     stateSummary: "compact",
     verdict: "revise",
     summary: "A material issue remains.",
+    suggestions: [],
     findings: [
       {
         fingerprint: "host-boundary-finding",
@@ -83,7 +85,7 @@ function makeHarness() {
   });
 
   createAdvisorExtension({
-    loadConfig: resolvedConfig,
+    configStore: configStoreLayerFromLoad(resolvedConfig),
     createRuntime: () => driver,
   })(pi);
 

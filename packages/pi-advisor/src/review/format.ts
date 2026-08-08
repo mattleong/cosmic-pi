@@ -3,9 +3,9 @@ import type { AdvisorReview } from "./schema.ts";
 
 export function formatAdvisorReview(review: AdvisorReview): string {
   const lines = [`Verdict: ${review.verdict.toUpperCase()}`, "", review.summary];
-  if ((review.suggestions?.length ?? 0) > 0) {
+  if (review.suggestions.length > 0) {
     lines.push("", "Possible angles:");
-    review.suggestions?.forEach((suggestion, index) => {
+    review.suggestions.forEach((suggestion, index) => {
       lines.push(
         `${index + 1}. [${suggestion.kind.toUpperCase()}] ${suggestion.suggestion}`,
         `   Relevance: ${suggestion.relevance}`,
@@ -35,9 +35,9 @@ export function formatAdvisorReview(review: AdvisorReview): string {
 
 export function formatAdvisorReviewForInjection(review: AdvisorReview): string {
   const lines = [`Summary: ${review.summary}`];
-  if ((review.suggestions?.length ?? 0) > 0) {
+  if (review.suggestions.length > 0) {
     lines.push("Possible angles:");
-    review.suggestions?.forEach((suggestion, index) => {
+    review.suggestions.forEach((suggestion, index) => {
       lines.push(
         `${index + 1}. [${suggestion.kind.toUpperCase()}] ${suggestion.suggestion}`,
         `   Why it may help: ${suggestion.rationale}`,
@@ -60,15 +60,11 @@ export function sanitizeAdvisorReview(review: AdvisorReview): AdvisorReview {
   return {
     ...review,
     summary: redactSensitiveText(review.summary),
-    ...(review.suggestions
-      ? {
-          suggestions: review.suggestions.map(({ fingerprint: _fingerprint, ...suggestion }) => ({
-            ...suggestion,
-            suggestion: redactSensitiveText(suggestion.suggestion),
-            rationale: redactSensitiveText(suggestion.rationale),
-          })),
-        }
-      : {}),
+    suggestions: review.suggestions.map(({ fingerprint: _fingerprint, ...suggestion }) => ({
+      ...suggestion,
+      suggestion: redactSensitiveText(suggestion.suggestion),
+      rationale: redactSensitiveText(suggestion.rationale),
+    })),
     findings: review.findings.map(({ fingerprint: _fingerprint, ...finding }) => ({
       ...finding,
       issue: redactSensitiveText(finding.issue),

@@ -106,6 +106,7 @@ function result(request: AdvisorCheckpointRequest): AdvisorCheckpoint {
     stateSummary: "compact state",
     verdict: "pass",
     summary: "No issue.",
+    suggestions: [],
     findings: [],
   };
 }

@@ -18,8 +18,8 @@ import { makeAdvisorHostBindings } from "../src/boundary/host-bindings.ts";
 import { captureAdvisorSessionInputEffect } from "../src/boundary/host-context.ts";
 import { PiCommandAdapter } from "../src/boundary/host-commands.ts";
 import { hostNotifierLayer } from "../src/boundary/host-notifier.ts";
-import { configStoreTestLayer } from "../src/config/store.ts";
 import { failureLoggerLayer } from "../src/logging/logger.ts";
+import { configStoreLayerFromLoad } from "./support/layers.ts";
 import { advisorReviewQueueServiceLayer } from "../src/queue/service.ts";
 import { advisorRuntimeServiceLayer, type AdvisorRuntimeDriver } from "../src/runtime/runtime.ts";
 
@@ -148,18 +148,19 @@ describe("AdvisorController", () => {
         getSessionId: () => "session",
       },
     } as unknown as ExtensionContext;
+    const configStore = configStoreLayerFromLoad(() => ({
+      configPath: "/tmp/pi-advisor-controller-test.json",
+      enabled: true,
+      provider: "provider",
+      model: "model",
+      setupDismissed: true,
+      configured: true,
+    }));
     const options: AdvisorControllerApplicationOptions = {
       pi,
       executor: standaloneAdvisorExecutor,
       dependencies: {
-        loadConfig: () => ({
-          configPath: "/tmp/pi-advisor-controller-test.json",
-          enabled: true,
-          provider: "provider",
-          model: "model",
-          setupDismissed: true,
-          configured: true,
-        }),
+        configStore,
         createRuntime: () => driver,
       },
       hostBindings: makeAdvisorHostBindings(),
@@ -168,7 +169,7 @@ describe("AdvisorController", () => {
       advisorRuntimeServiceLayer(standaloneAdvisorExecutor),
       advisorReviewQueueServiceLayer,
       PiCommandAdapter.layer,
-      configStoreTestLayer(options.dependencies.loadConfig!),
+      configStore,
       failureLoggerLayer,
       hostNotifierLayer,
     ).pipe(Layer.provideMerge(advisorPlatformLayer));

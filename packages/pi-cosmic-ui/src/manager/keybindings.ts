@@ -356,6 +356,13 @@ const translatedSettingsInput = (action: FullScreenAction): string | undefined =
   }
 };
 
+/**
+ * Structural view of the *private* pi-tui SettingsList/SelectList internals the adapter
+ * deliberately couples to: `searchInput` (search focus), `submenuComponent` (submenu focus
+ * and trailing-blank-line handling), and an optional `focused` field. This is an explicit
+ * contract with the pinned pi-tui version; `tests/settings-surface.test.ts` probes the real
+ * SettingsList so a pi-tui upgrade that changes these internals fails loudly there.
+ */
 type SettingsFocusableBridge = {
   focused?: boolean;
   searchInput?: Focusable | undefined;

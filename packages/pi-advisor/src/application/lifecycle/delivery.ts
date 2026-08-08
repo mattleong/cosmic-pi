@@ -102,7 +102,7 @@ export const makeDeliver =
     const review: AdvisorReview = {
       verdict: checkpoint.verdict,
       summary: checkpoint.summary,
-      suggestions: checkpoint.suggestions ?? [],
+      suggestions: checkpoint.suggestions,
       findings: checkpoint.findings,
     };
     const explicitlyRequested = source === "last";
@@ -126,8 +126,8 @@ export const makeDeliver =
       )
         return suppress();
       const suggestion = manualSuggestion
-        ? review.suggestions?.[0]
-        : selectAdvisorPerspective(d.getState().perspectiveBudget, review.suggestions ?? []);
+        ? review.suggestions[0]
+        : selectAdvisorPerspective(d.getState().perspectiveBudget, review.suggestions);
       if (!suggestion) {
         if (explicitlyRequested)
           d.notifyBestEffort(ctx, "Advisor found no useful suggestion.", "info");

@@ -71,7 +71,7 @@ export function makeAdvisorReviewCard(
     .filter(validItem);
   if (findings.length > 0)
     return { version: 1, cardId: id, kind: "issues", summary, items: findings };
-  const suggestion = review.suggestions?.[0];
+  const suggestion = review.suggestions[0];
   if (!suggestion) return undefined;
   const item = {
     issue: clip(sanitizeCardText(suggestion.suggestion), MAX_FIELD),

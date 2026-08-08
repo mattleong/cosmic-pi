@@ -25,21 +25,3 @@ export const failureLoggerLayer = Layer.effect(
     });
   }),
 );
-
-/** Converts the legacy Promise-shaped test seam once at the application boundary. */
-export const failureLoggerTestLayer = (
-  log: (
-    configPath: string,
-    details: AdvisorFailureDetails,
-  ) => string | undefined | Promise<string | undefined>,
-) =>
-  Layer.succeed(
-    FailureLogger,
-    FailureLogger.of({
-      log: (configPath, details) =>
-        Effect.tryPromise({
-          try: () => Promise.resolve(log(configPath, details)),
-          catch: () => undefined,
-        }).pipe(Effect.catch(() => Effect.sync((): string | undefined => undefined))),
-    }),
-  );

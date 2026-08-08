@@ -3,7 +3,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, SettingsList, Text, type SettingItem } from "@earendil-works/pi-tui";
+import { Text, type SettingItem } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -20,11 +20,7 @@ import {
   type HostCallbackBoundaryShape,
 } from "../boundary/host-callback.ts";
 import { CosmicUiService } from "../protocol/service.ts";
-import {
-  settingsHintRenderer,
-  settingsSurfaceBridge,
-  VimSettingsAdapter,
-} from "../manager/keybindings.ts";
+import { createSettingsListSurface } from "../manager/settings-surface.ts";
 
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
 const VisibilityIdSchema = Schema.Literals(DEFAULT_FOOTER_ORDER);
@@ -144,68 +140,59 @@ export function registerSettingsCommand(
       let opened: Promise<unknown> | undefined;
       const invoked = hostQuery(() => {
         opened = ctx.ui.custom((tui, theme, keybindings, done) =>
-          hostQuery(() => {
-            const container = new Container();
-            container.addChild(new Text(theme.fg("accent", theme.bold("Cosmic UI")), 1, 1));
-            const list = new SettingsList(
-              items,
-              Math.min(14, items.length + 2),
-              getSettingsListTheme(),
-              (id, value) => {
-                const change = decodeCosmicUiSettingChange(id, value);
-                if (!change) return;
-                const update =
-                  change._tag === "SetVisibility"
-                    ? CosmicUiService.use((service) =>
-                        service.setFooterVisibility(change.id, change.visible),
-                      )
-                    : CosmicUiService.use((service) => service.updateFooterConfig(change.patch));
-                const pending = hostQuery<Promise<unknown> | undefined>(
-                  () => options.run(update, signal),
-                  undefined,
-                );
-                if (!pending) {
-                  notify("Unable to update Cosmic UI configuration.", "error");
-                  return;
-                }
-                void recoverSettingsUpdate(
-                  pending.then(() => {
-                    options.callbacks.invoke(
-                      "request-render",
-                      () => {
-                        list.updateValue(id, value);
-                        options.update(ctx);
-                        tui.requestRender();
-                      },
-                      undefined,
-                    );
-                  }),
-                  options.callbacks,
-                  () => ctx.ui.notify("Unable to update Cosmic UI configuration.", "error"),
-                );
-              },
-              () => hostQuery(() => done(undefined), undefined),
-              { enableSearch: true },
-            );
-            const vimList = new VimSettingsAdapter(list, {
-              search: true,
-              matchesKeybinding:
-                typeof keybindings?.matches === "function"
-                  ? (data, id) => keybindings.matches(data, id)
-                  : undefined,
-              requestRender: () => tui.requestRender(),
-              renderHint: settingsHintRenderer({
-                search: true,
+          hostQuery(
+            () =>
+              createSettingsListSurface({
+                header: new Text(theme.fg("accent", theme.bold("Cosmic UI")), 1, 1),
+                items,
+                height: Math.min(14, items.length + 2),
+                listTheme: getSettingsListTheme(),
+                onChange: (id, value, list) => {
+                  const change = decodeCosmicUiSettingChange(id, value);
+                  if (!change) return;
+                  const update =
+                    change._tag === "SetVisibility"
+                      ? CosmicUiService.use((service) =>
+                          service.setFooterVisibility(change.id, change.visible),
+                        )
+                      : CosmicUiService.use((service) => service.updateFooterConfig(change.patch));
+                  const pending = hostQuery<Promise<unknown> | undefined>(
+                    () => options.run(update, signal),
+                    undefined,
+                  );
+                  if (!pending) {
+                    notify("Unable to update Cosmic UI configuration.", "error");
+                    return;
+                  }
+                  void recoverSettingsUpdate(
+                    pending.then(() => {
+                      options.callbacks.invoke(
+                        "request-render",
+                        () => {
+                          list.updateValue(id, value);
+                          options.update(ctx);
+                          tui.requestRender();
+                        },
+                        undefined,
+                      );
+                    }),
+                    options.callbacks,
+                    () => ctx.ui.notify("Unable to update Cosmic UI configuration.", "error"),
+                  );
+                },
+                onCancel: () => hostQuery(() => done(undefined), undefined),
+                matchesKeybinding:
+                  typeof keybindings?.matches === "function"
+                    ? (data, id) => keybindings.matches(data, id)
+                    : undefined,
+                requestRender: () => tui.requestRender(),
                 dim: (text) => theme.fg("dim", text),
-              }),
-            });
-            container.addChild(vimList);
-            // hostQuery keeps its fallbacks: hostile render/input callbacks stay contained
-            // behind this package's host-callback boundary.
-            return settingsSurfaceBridge(vimList, container, {
-              invoke: (callback, fallback) => hostQuery(callback, fallback),
-            });
-          }, inertComponent()),
+                // hostQuery keeps its fallbacks: hostile render/input callbacks stay contained
+                // behind this package's host-callback boundary.
+                bridge: { invoke: (callback, fallback) => hostQuery(callback, fallback) },
+              }).surface,
+            inertComponent(),
+          ),
         );
         return true;
       }, false);

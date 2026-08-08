@@ -3,11 +3,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import type * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import type { AdvisorEffectExecutor } from "../boundary/executor.ts";
+import type { AdvisorEffectExecutor, AdvisorPlatform } from "../boundary/executor.ts";
 import type { AdvisorAbortInput, AdvisorSessionInput } from "../boundary/host-context.ts";
-import type { ResolvedAdvisorConfig } from "../config/options.ts";
-import type { AdvisorFailureDetails } from "../logging/log.ts";
+import type { ConfigStore } from "../config/store.ts";
+import type { FailureLogger } from "../logging/logger.ts";
 import type { AdvisorRuntimeDriver } from "../runtime/runtime.ts";
 import type { AdvisorControllerSnapshot } from "../ui/projection.ts";
 import type { AdvisorHostBindings } from "../boundary/host-bindings.ts";
@@ -107,11 +108,10 @@ export class AdvisorController extends Context.Service<AdvisorController, Adviso
 ) {}
 
 export interface AdvisorExtensionDependencies {
-  loadConfig?: (path?: string) => ResolvedAdvisorConfig | Promise<ResolvedAdvisorConfig>;
-  logFailure?: (
-    configPath: string,
-    details: AdvisorFailureDetails,
-  ) => string | undefined | Promise<string | undefined>;
+  /** Effect-typed ConfigStore override; production composition uses `configStoreLayer`. */
+  configStore?: Layer.Layer<ConfigStore, never, AdvisorPlatform> | undefined;
+  /** Effect-typed FailureLogger override; production composition uses `failureLoggerLayer`. */
+  failureLogger?: Layer.Layer<FailureLogger, never, AdvisorPlatform> | undefined;
   createRuntime?: (executor: AdvisorEffectExecutor) => AdvisorRuntimeDriver;
   /** Test seam only. Production always uses the hard exported cap. */
   catchUpTimeoutMs?: number | undefined;

@@ -13,6 +13,7 @@ import {
 import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import {
   FullScreenKeymap,
+  fullScreenSettingsHint,
   pageSteps,
   type FullScreenSelectionKeybindingId,
   type PageSteps,
@@ -325,7 +326,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
         ...noticeLines,
         theme.fg(
           "dim",
-          this.searchMode ? "Type to filter · Enter select · Esc done" : "Press / to filter",
+          this.searchMode ? fullScreenSettingsHint({ searching: true }) : "Press / to filter",
         ),
         ...inputLines,
         "",

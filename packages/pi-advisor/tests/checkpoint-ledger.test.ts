@@ -38,6 +38,7 @@ function reviewSummary() {
   return summarizeAdvisorReview({
     verdict: "revise",
     summary: "model prose is never retained",
+    suggestions: [],
     findings: [
       {
         category: "correctness",
@@ -158,6 +159,7 @@ describe("checkpoint ledger", () => {
     const summary = summarizeAdvisorReview({
       verdict: "revise",
       summary: copiedTranscript,
+      suggestions: [],
       findings: [
         {
           category: "evidence",

@@ -37,7 +37,8 @@ export const completeSettingsArguments = (
     const matches = choices.filter((choice) => choice.value.toLowerCase().startsWith(query));
     return matches.length > 0 ? matches : null;
   }
-  const descriptor = descriptors.find((entry) => entry.id === head);
+  const headId = head.toLowerCase();
+  const descriptor = descriptors.find((entry) => entry.id.toLowerCase() === headId);
   if (!descriptor) return null;
   const valuePrefix = (rest[0] ?? "").toLowerCase();
   const matches = (descriptor.values ?? [])

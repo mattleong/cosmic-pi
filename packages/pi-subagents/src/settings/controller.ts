@@ -2,7 +2,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { isProjectTrusted } from "pi-cosmic-core";
+import { completeSettingsArguments, isProjectTrusted } from "pi-cosmic-core";
 import {
   fullScreenKeybindingLabel,
   type FullScreenSelectionKeybindingId,
@@ -434,29 +434,14 @@ export function registerSubagentManagerCommand(
 ): void {
   pi.registerCommand("subagents", {
     description: "Open the subagent fleet or configure profiles",
-    getArgumentCompletions: (prefix) => {
-      const query = prefix.trim().toLowerCase();
-      const choices = [
-        { value: "profiles", label: "profiles", description: "Configure profile routes" },
+    getArgumentCompletions: (prefix) =>
+      completeSettingsArguments(prefix, [
         {
-          value: "profiles session",
-          label: "profiles session",
-          description: "Configure temporary routes for this session",
+          id: "profiles",
+          description: "Configure profile routes (optionally scoped session/global/project)",
+          values: ["session", "global", "project"],
         },
-        {
-          value: "profiles global",
-          label: "profiles global",
-          description: "Configure global profile routes",
-        },
-        {
-          value: "profiles project",
-          label: "profiles project",
-          description: "Configure trusted-project profile routes",
-        },
-      ];
-      const matches = choices.filter((choice) => choice.value.startsWith(query));
-      return matches.length > 0 ? matches : null;
-    },
+      ]),
     handler: (args, ctx) => {
       const command = args.trim().toLowerCase();
       if (!command) return openFleetManager(ctx, bridge, actions);

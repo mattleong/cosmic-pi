@@ -38,13 +38,13 @@ Visible results are strict version-1 custom entries, not messages. Review cards 
 - `src/settings/controller.ts` — exact `/advisor` parser.
 - `src/settings/panels.ts` — contextual dashboard, setup, internal state summary, and usage report.
 - `src/config/schema.ts`, `options.ts`, `store.ts` — strict shape/defaults, path/options, and sole persistence door.
-- `src/review/` — concern/blocker schema, prompts, evidence gates, routing, dedupe, lifecycle, budgets, trajectory detection, and bounded observations.
+- `src/review/` — concern/blocker schema, prompts, evidence gates, routing, dedupe, lifecycle, budgets, trajectory detection, and bounded observations. The review/checkpoint wire contract is single-shape: `suggestions` is a required array (no dual key sets or downstream fallbacks); a missing array fails the typed parse error path and the advisor fails open.
 - `src/checkpoint/` — compact ledger and checkpoint orchestrator.
 - `src/runtime/` — persistent child Advisor conversation, strict response decoding, no-discovery resource loader, and read-only tools.
 - `src/queue/` — bounded observation/checkpoint queue.
 - `src/status/` — Effect-owned spinner resource.
 - `src/logging/` and `src/domain/` — redacted diagnostics and plain domain contracts.
-- `tests/support/` — direct-import test fixtures (no barrel): Promise deferred/tick, resolved config, final-turn/pass checkpoints, the controllable runtime driver, and composable extension host doubles. Semantically local seams (Effect deferreds, hostile accessors, spy harnesses) stay in their test files.
+- `tests/support/` — direct-import test fixtures (no barrel): Promise deferred/tick, resolved config, final-turn/pass checkpoints, the controllable runtime driver, composable extension host doubles, and Effect-typed ConfigStore/FailureLogger test layers (`layers.ts`; production code carries no Promise-shaped test seams — `AdvisorExtensionDependencies` accepts Layer overrides only). Semantically local seams (Effect deferreds, hostile accessors, spy harnesses) stay in their test files.
 
 ## State and resource boundaries
 

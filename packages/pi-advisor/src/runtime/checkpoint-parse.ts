@@ -83,14 +83,10 @@ function normalizeCheckpoint(parsed: unknown): AdvisorCheckpoint {
     "suggestions",
     "findings",
   ].sort();
-  const legacyExpected = expected.filter((key) => key !== "suggestions");
   const keys = Object.keys(parsed).sort();
   const exact =
     keys.length === expected.length && expected.every((key, index) => key === keys[index]);
-  const legacy =
-    keys.length === legacyExpected.length &&
-    legacyExpected.every((key, index) => key === keys[index]);
-  if (!exact && !legacy) {
+  if (!exact) {
     throw new AdvisorModelError({ message: "Advisor checkpoint fields are invalid." });
   }
   if (
@@ -112,7 +108,7 @@ function normalizeCheckpoint(parsed: unknown): AdvisorCheckpoint {
   const review = parseAdvisorReviewValue({
     verdict: parsed.verdict,
     summary: parsed.summary,
-    ...(parsed.suggestions !== undefined ? { suggestions: parsed.suggestions } : {}),
+    suggestions: parsed.suggestions,
     findings: parsed.findings,
   });
   return {

@@ -126,6 +126,7 @@ function checkpointJson(request: AdvisorCheckpointRequest) {
     stateSummary: `state-${request.checkpointId}`,
     verdict: "pass",
     summary: "No issue.",
+    suggestions: [],
     findings: [],
   });
 }
@@ -1166,7 +1167,13 @@ describe("AdvisorRuntime", () => {
       parseCheckpoint(
         JSON.stringify({ ...JSON.parse(checkpointJson(request)), suggestions: null }),
       ),
-    ).toThrow("schema validation");
+    ).toThrow("suggestions must be an array");
+    // The dual key set is gone: a checkpoint without suggestions is invalid, never accepted.
+    const missingSuggestions: Record<string, unknown> = JSON.parse(checkpointJson(request));
+    delete missingSuggestions.suggestions;
+    expect(() => parseCheckpoint(JSON.stringify(missingSuggestions))).toThrow(
+      "checkpoint fields are invalid",
+    );
     expect(() => parseCheckpoint("x".repeat(MAX_ADVISOR_CHECKPOINT_CHARS + 1))).toThrow(
       "maximum response size",
     );

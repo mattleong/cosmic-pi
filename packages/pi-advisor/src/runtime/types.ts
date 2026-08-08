@@ -27,7 +27,7 @@ export const MAX_ADVISOR_CHECKPOINT_ID_CHARS = 256;
 export const MAX_ADVISOR_TOOL_ROUNDS = 12;
 export const MAX_ADVISOR_STREAM_CHARS = 128_000;
 export const DEFAULT_ADVISOR_SESSION_ABORT_TIMEOUT_MS = 30_000;
-const CheckpointBaseFields = {
+const CheckpointFields = {
   checkpointId: Schema.String.check(
     Schema.isNonEmpty(),
     Schema.isMaxLength(MAX_ADVISOR_CHECKPOINT_ID_CHARS),
@@ -36,6 +36,7 @@ const CheckpointBaseFields = {
   stateSummary: Schema.String.check(Schema.isMaxLength(MAX_ADVISOR_STATE_SUMMARY_CHARS)),
   verdict: Schema.Literals(["pass", "suggest", "revise"]),
   summary: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(2_000)),
+  suggestions: Schema.Array(AdvisorSuggestionWireSchema).check(Schema.isMaxLength(2)),
   findings: Schema.Array(AdvisorFindingWireSchema).check(Schema.isMaxLength(5)),
 };
 const UsageNumberSchema = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0));
@@ -47,13 +48,7 @@ export const AdvisorUsageWireSchema = Schema.Struct({
   totalTokens: Schema.optional(UsageNumberSchema),
   cost: Schema.optional(Schema.Struct({ total: Schema.optional(UsageNumberSchema) })),
 });
-export const AdvisorCheckpointWireSchema = Schema.Union([
-  Schema.Struct({
-    ...CheckpointBaseFields,
-    suggestions: Schema.Array(AdvisorSuggestionWireSchema).check(Schema.isMaxLength(2)),
-  }),
-  Schema.Struct(CheckpointBaseFields),
-]);
+export const AdvisorCheckpointWireSchema = Schema.Struct(CheckpointFields);
 export class AdvisorRuntimeResetRequiredError extends AdvisorModelError {}
 export interface AdvisorCheckpoint extends AdvisorReview {
   checkpointId: string;

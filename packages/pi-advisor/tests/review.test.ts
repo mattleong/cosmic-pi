@@ -47,6 +47,7 @@ const perspective: AdvisorReview = {
 const revision: AdvisorReview = {
   verdict: "revise",
   summary: "The response misses a material requirement.",
+  suggestions: [],
   findings: [
     {
       fingerprint: "unsupported-test-claim",
@@ -75,9 +76,20 @@ describe("parseAdvisorReview", () => {
   test("parses a strict pass response and trims its strings", () => {
     expect(
       parseAdvisorReview(
-        JSON.stringify({ verdict: "pass", summary: "  The answer is sound.  ", findings: [] }),
+        JSON.stringify({
+          verdict: "pass",
+          summary: "  The answer is sound.  ",
+          suggestions: [],
+          findings: [],
+        }),
       ),
-    ).toEqual({ verdict: "pass", summary: "The answer is sound.", findings: [] });
+    ).toEqual({ verdict: "pass", summary: "The answer is sound.", suggestions: [], findings: [] });
+  });
+
+  test("rejects a review missing the required suggestions array", () => {
+    expect(() =>
+      parseAdvisorReview(JSON.stringify({ verdict: "pass", summary: "Fine", findings: [] })),
+    ).toThrow("Advisor review must contain exactly verdict, summary, suggestions, and findings.");
   });
 
   test("parses a strict complementary perspective", () => {
@@ -108,6 +120,7 @@ describe("parseAdvisorReview", () => {
     const lowFinding = JSON.stringify({
       verdict: "revise",
       summary: "Minor polish only.",
+      suggestions: [],
       findings: [
         {
           fingerprint: "minor-wording",
@@ -141,7 +154,12 @@ describe("parseAdvisorReview", () => {
 
     expect(() =>
       parseAdvisorReview(
-        JSON.stringify({ verdict: "revise", summary: "Several material issues.", findings }),
+        JSON.stringify({
+          verdict: "revise",
+          summary: "Several material issues.",
+          suggestions: [],
+          findings,
+        }),
       ),
     ).toThrow(`Advisor review must contain at most ${MAX_ADVISOR_FINDINGS} findings.`);
   });
@@ -167,6 +185,7 @@ describe("parseAdvisorReview", () => {
       JSON.stringify({
         verdict: "pass",
         summary: "x".repeat(MAX_ADVISOR_SUMMARY_CHARS + 1),
+        suggestions: [],
         findings: [],
       }),
     ],
@@ -198,16 +217,33 @@ describe("parseAdvisorReview", () => {
     ["prose around JSON", `Here is the review:\n${JSON.stringify(revision)}`],
     ["a non-JSON fence", `\`\`\`text\n${JSON.stringify(revision)}\n\`\`\``],
     [
-      "an extra root field",
-      JSON.stringify({ verdict: "pass", summary: "Fine", findings: [], confidence: 1 }),
+      "a missing suggestions array",
+      JSON.stringify({ verdict: "pass", summary: "Fine", findings: [] }),
     ],
-    ["an invalid verdict", JSON.stringify({ verdict: "maybe", summary: "Fine", findings: [] })],
-    ["an empty summary", JSON.stringify({ verdict: "pass", summary: " ", findings: [] })],
+    [
+      "an extra root field",
+      JSON.stringify({
+        verdict: "pass",
+        summary: "Fine",
+        suggestions: [],
+        findings: [],
+        confidence: 1,
+      }),
+    ],
+    [
+      "an invalid verdict",
+      JSON.stringify({ verdict: "maybe", summary: "Fine", suggestions: [], findings: [] }),
+    ],
+    [
+      "an empty summary",
+      JSON.stringify({ verdict: "pass", summary: " ", suggestions: [], findings: [] }),
+    ],
     [
       "an invalid finding",
       JSON.stringify({
         verdict: "revise",
         summary: "Needs work",
+        suggestions: [],
         findings: [{ severity: "urgent", issue: "Bad", recommendation: "Fix" }],
       }),
     ],
@@ -216,6 +252,7 @@ describe("parseAdvisorReview", () => {
       JSON.stringify({
         verdict: "revise",
         summary: "Needs work",
+        suggestions: [],
         findings: [
           {
             category: "correctness",
@@ -230,7 +267,7 @@ describe("parseAdvisorReview", () => {
     ],
     [
       "revise without findings",
-      JSON.stringify({ verdict: "revise", summary: "Needs work", findings: [] }),
+      JSON.stringify({ verdict: "revise", summary: "Needs work", suggestions: [], findings: [] }),
     ],
   ])("rejects %s", (_label, raw) => {
     expect(() => parseAdvisorReview(raw)).toThrow(AdvisorReviewParseError);
@@ -239,17 +276,28 @@ describe("parseAdvisorReview", () => {
   test.each([
     [
       "an extra root field",
-      JSON.stringify({ verdict: "pass", summary: "Fine", findings: [], confidence: 1 }),
+      JSON.stringify({
+        verdict: "pass",
+        summary: "Fine",
+        suggestions: [],
+        findings: [],
+        confidence: 1,
+      }),
+      "Advisor review must contain exactly verdict, summary, suggestions, and findings.",
+    ],
+    [
+      "a missing suggestions array",
+      JSON.stringify({ verdict: "pass", summary: "Fine", findings: [] }),
       "Advisor review must contain exactly verdict, summary, suggestions, and findings.",
     ],
     [
       "an invalid verdict",
-      JSON.stringify({ verdict: "maybe", summary: "Fine", findings: [] }),
+      JSON.stringify({ verdict: "maybe", summary: "Fine", suggestions: [], findings: [] }),
       'Advisor verdict must be "pass", "suggest", or "revise".',
     ],
     [
       "an empty summary",
-      JSON.stringify({ verdict: "pass", summary: " ", findings: [] }),
+      JSON.stringify({ verdict: "pass", summary: " ", suggestions: [], findings: [] }),
       "Advisor summary must be a non-empty string.",
     ],
     ["malformed JSON", "{", "Advisor returned malformed JSON."],
@@ -258,14 +306,12 @@ describe("parseAdvisorReview", () => {
     expect(() => parseAdvisorReview(raw)).toThrow(message);
   });
 
-  test("fails closed when manual normalization accepts a wire-schema rejection", () => {
+  test("rejects a non-array suggestions value with the granular diagnostic", () => {
     const value = { verdict: "pass", summary: "Fine", suggestions: null, findings: [] };
     expect(() => parseAdvisorReview(JSON.stringify(value))).toThrow(
-      "Advisor review failed schema validation.",
+      "Advisor suggestions must be an array.",
     );
-    expect(() => parseAdvisorReviewValue(value)).toThrow(
-      "Advisor review failed schema validation.",
-    );
+    expect(() => parseAdvisorReviewValue(value)).toThrow("Advisor suggestions must be an array.");
   });
 
   test("applies the same diagnostics to already-decoded review values", () => {

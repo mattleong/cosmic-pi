@@ -2,6 +2,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 import * as Effect from "effect/Effect";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { completeSettingsArguments } from "pi-cosmic-core";
 import { PiCommandAdapter, type PiCommandError } from "../boundary/host-commands.ts";
 import {
   openAdvisorDashboard,
@@ -31,6 +32,16 @@ export type {
 const ADVISOR_COMMAND = "advisor";
 export const ADVISOR_COMMAND_DESCRIPTION = "Advisor controls, review, and usage";
 const SUBCOMMANDS = ["on", "off", "review", "fix", "dismiss", "cancel", "setup", "usage"] as const;
+const SUBCOMMAND_DESCRIPTIONS: Readonly<Record<(typeof SUBCOMMANDS)[number], string>> = {
+  on: "Enable the advisor",
+  off: "Disable the advisor",
+  review: "Review the last completed response",
+  fix: "Send guidance for the open advisor card",
+  dismiss: "Dismiss the open advisor card",
+  cancel: "Cancel pending advisor work",
+  setup: "Choose the advisor model",
+  usage: "Show advisor usage and outcomes",
+};
 
 export function registerAdvisorCommands(
   pi: AdvisorCommandRegistrar,
@@ -49,16 +60,16 @@ export function registerAdvisorCommands(
       : operation();
   pi.registerCommand(ADVISOR_COMMAND, {
     description: ADVISOR_COMMAND_DESCRIPTION,
-    getArgumentCompletions: (prefix) => {
-      const normalizedPrefix = prefix.toLowerCase();
-      const matches = SUBCOMMANDS.filter((value) => value.startsWith(normalizedPrefix)).map(
-        (value) => ({
+    getArgumentCompletions: (prefix) =>
+      completeSettingsArguments(
+        prefix,
+        [],
+        SUBCOMMANDS.map((value) => ({
           value,
           label: value,
-        }),
-      );
-      return matches.length > 0 ? matches : null;
-    },
+          description: SUBCOMMAND_DESCRIPTIONS[value],
+        })),
+      ),
     handler: (args, ctx) => execute(() => handleAdvisorCommand(args, ctx, state, actions)),
   });
 }

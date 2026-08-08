@@ -12,6 +12,7 @@ import { createAdvisorExtension } from "../src/extension.ts";
 import { deferred, tick } from "./support/async.ts";
 import { finalTurn, passCheckpoint as pass } from "./support/checkpoints.ts";
 import { resolvedAdvisorConfig } from "./support/config.ts";
+import { configStoreLayerFromLoad, failureLoggerLayerFromLog } from "./support/layers.ts";
 import {
   advisorExtensionApi,
   advisorExtensionContext,
@@ -117,9 +118,9 @@ function harness(
   });
   const logFailure = vi.fn();
   createAdvisorExtension({
-    loadConfig: () => resolvedAdvisorConfig(overrides),
+    configStore: configStoreLayerFromLoad(() => resolvedAdvisorConfig(overrides)),
     createRuntime,
-    logFailure,
+    failureLogger: failureLoggerLayerFromLog(logFailure),
     catchUpTimeoutMs: options.catchUpTimeoutMs,
   })(pi);
   const emitWithContext = registry.emitWithContext;

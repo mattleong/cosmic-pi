@@ -117,8 +117,8 @@ describe("Advisor commands", () => {
       "usage",
     ]);
     expect(value.commands.get("advisor")?.getArgumentCompletions?.("O")).toEqual([
-      { value: "on", label: "on" },
-      { value: "off", label: "off" },
+      { value: "on", label: "on", description: "Enable the advisor" },
+      { value: "off", label: "off", description: "Disable the advisor" },
     ]);
   });
 
