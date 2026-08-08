@@ -80,13 +80,42 @@ describe("responsive footer layout", () => {
         plainTheme,
         false,
       ),
-    ).toBe("Ctx     ━━━━━━╸─── 62% · 62k/100k");
+    ).toBe("Ctx     ━━━━━━╸─── 62% used · 62k/100k");
     expect(
       renderProviderUsageLine("OpenAI", "Usage: 5h: 72% | 7d: 31%", 80, plainTheme, false),
-    ).toBe("OpenAI  5h ━━━━━━━╸── 72% | 7d ━━━╸────── 31%");
+    ).toBe("OpenAI  5h ━━━━━━━╸── 72% left | 7d ━━━╸────── 31% left");
     expect(renderProviderUsageLine("xAI", "Usage: 7d: 84% | mo: 53%", 80, plainTheme, false)).toBe(
-      "xAI     7d ━━━━━━━━╸─ 84% | mo ━━━━━╸──── 53%",
+      "xAI     7d ━━━━━━━━╸─ 84% left | mo ━━━━━╸──── 53% left",
     );
+  });
+
+  test("keeps explicit used/left labels fitted and safely truncated in narrow compact footers", () => {
+    const plainTheme = { fg: (_color: string, text: string) => text };
+    const usage = { contextWindow: 100_000, tokens: 62_000, percent: 62 };
+
+    // Compact tracks (6 cells) with the full "% used" / "% left" semantics at their exact fit.
+    expect(renderContextLine(usage, [], 34, plainTheme, true)).toBe(
+      "Ctx     ━━━╸── 62% used · 62k/100k",
+    );
+    expect(renderProviderUsageLine("OpenAI", "Usage: 5h: 72%", 26, plainTheme, true)).toBe(
+      "OpenAI  5h ━━━━╸─ 72% left",
+    );
+
+    // Below the fit width the semantics truncate from the right without overflowing.
+    expect(renderContextLine(usage, [], 28, plainTheme, true)).toBe(
+      "Ctx     ━━━╸── 62% used · 62[0m",
+    );
+    expect(renderProviderUsageLine("OpenAI", "Usage: 5h: 72%", 20, plainTheme, true)).toBe(
+      "OpenAI  5h ━━━━╸─ 72[0m",
+    );
+    for (const width of [10, 14, 18, 22, 26, 30, 34]) {
+      expect(
+        visibleWidth(renderContextLine(usage, [], width, plainTheme, true)),
+      ).toBeLessThanOrEqual(width);
+      expect(
+        visibleWidth(renderProviderUsageLine("OpenAI", "Usage: 5h: 72%", width, plainTheme, true)),
+      ).toBeLessThanOrEqual(width);
+    }
   });
 
   test("colors context consumption green through 50% and orange through 75%", () => {
@@ -104,14 +133,14 @@ describe("responsive footer layout", () => {
     renderProviderUsageLine("OpenAI", "Usage: 5h: 75% | 7d: 25%", 80, thresholdTheme, false);
     renderProviderUsageLine("xAI", "Usage: 7d: 75% | mo: 25%", 80, thresholdTheme, false);
 
-    expect(fg.mock.calls).toContainEqual(["error", " 76% · 76k/100k"]);
-    expect(fg.mock.calls).toContainEqual(["warning", " 75% · 75k/100k"]);
-    expect(fg.mock.calls).toContainEqual(["warning", " 51% · 51k/100k"]);
-    expect(fg.mock.calls).toContainEqual(["success", " 50% · 50k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["error", " 76% used · 76k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["warning", " 75% used · 75k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["warning", " 51% used · 51k/100k"]);
+    expect(fg.mock.calls).toContainEqual(["success", " 50% used · 50k/100k"]);
     expect(fg.mock.calls).toContainEqual(["success", "5h "]);
-    expect(fg.mock.calls).toContainEqual(["success", " 75%"]);
+    expect(fg.mock.calls).toContainEqual(["success", " 75% left"]);
     expect(fg.mock.calls).toContainEqual(["warning", "7d "]);
-    expect(fg.mock.calls).toContainEqual(["warning", " 25%"]);
+    expect(fg.mock.calls).toContainEqual(["warning", " 25% left"]);
     expect(fg.mock.calls).toContainEqual(["warning", "mo "]);
   });
 

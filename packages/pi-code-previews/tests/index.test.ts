@@ -154,6 +154,7 @@ test("health command renders current settings", async () => {
   setCodePreviewSettings({ ...defaultCodePreviewSettings, syntaxHighlighting: false });
   let rendered = "";
   await commands.get("code-preview-health")?.handler("", {
+    mode: "tui",
     ui: {
       custom: async (factory: CustomFactory) => {
         const component = factory(undefined, testTheme(), undefined, () => undefined);
@@ -167,6 +168,25 @@ test("health command renders current settings", async () => {
   assert.match(rendered, /Settings file:/);
 });
 
+test("health command falls back to notify outside interactive TUI mode", async () => {
+  const root = await createTestTempDirectory("pi-code-previews-health-rpc-");
+  process.env.PI_CODING_AGENT_DIR = root;
+  process.env.HOME = join(root, "home");
+  const commands = await loadCommandsOnly();
+  setCodePreviewSettings({ ...defaultCodePreviewSettings, syntaxHighlighting: false });
+  const notifications: string[] = [];
+  await commands.get("code-preview-health")?.handler("", {
+    mode: "rpc",
+    hasUI: true,
+    ui: {
+      notify: (message: string) => notifications.push(message),
+      custom: async () => assert.fail("custom UI must not open outside TUI mode"),
+    },
+  });
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0] ?? "", /Syntax highlighting: off/);
+});
+
 test("settings command updates, saves, and notifies", async () => {
   const root = await createTestTempDirectory("pi-code-previews-settings-command-");
   process.env.PI_CODING_AGENT_DIR = root;
@@ -178,6 +198,7 @@ test("settings command updates, saves, and notifies", async () => {
   setCodePreviewSettings({ ...defaultCodePreviewSettings, syntaxHighlighting: false });
   const notifications: string[] = [];
   await commands.get("code-preview-settings")?.handler("", {
+    mode: "tui",
     ui: {
       notify: (message: string) => notifications.push(message),
       custom: async (factory: CustomFactory) =>
@@ -195,6 +216,7 @@ test("settings command updates, saves, and notifies", async () => {
   assert.equal(notifications.length, 0);
 
   await commands.get("code-preview-settings")?.handler("", {
+    mode: "tui",
     ui: {
       notify: (message: string) => notifications.push(message),
       custom: async (factory: CustomFactory) =>
@@ -207,6 +229,16 @@ test("settings command updates, saves, and notifies", async () => {
     },
   });
   assert.ok(notifications.some((message) => message.includes("reset to defaults")));
+
+  await commands.get("code-preview-settings")?.handler("", {
+    mode: "rpc",
+    hasUI: true,
+    ui: {
+      notify: (message: string) => notifications.push(message),
+      custom: async () => assert.fail("custom UI must not open outside TUI mode"),
+    },
+  });
+  assert.ok(notifications.some((message) => message.includes("interactive TUI mode")));
 });
 
 type CustomFactory = (
@@ -230,17 +262,19 @@ function restoreEnv(name: string, value: string | undefined): void {
   else process.env[name] = value;
 }
 
+type CommandContext = { mode?: string; hasUI?: boolean; ui: unknown };
+
 async function loadCommandsOnly(): Promise<
-  Map<string, { handler: (args: string, ctx: { ui: unknown }) => Promise<void> }>
+  Map<string, { handler: (args: string, ctx: CommandContext) => Promise<void> }>
 > {
   const commands = new Map<
     string,
-    { handler: (args: string, ctx: { ui: unknown }) => Promise<void> }
+    { handler: (args: string, ctx: CommandContext) => Promise<void> }
   >();
   await codePreviews({
     registerCommand: (
       name: string,
-      command: { handler: (args: string, ctx: { ui: unknown }) => Promise<void> },
+      command: { handler: (args: string, ctx: CommandContext) => Promise<void> },
     ) => {
       commands.set(name, command);
     },

@@ -89,6 +89,12 @@ describe("/ps process manager", () => {
     expect(component.render(42).join("\n")).not.toBe(tail);
     component.handleInput("\u0004");
     expect(component.render(42).join("\n")).toBe(tail);
+
+    component.handleInput("\u001b[5~");
+    const paged = component.render(42).join("\n");
+    expect(paged).not.toBe(tail);
+    component.handleInput("\u001b[6~");
+    expect(component.render(42).join("\n")).toBe(tail);
   });
 
   it("supports gg/G endpoints, h/l panes, and q close", () => {

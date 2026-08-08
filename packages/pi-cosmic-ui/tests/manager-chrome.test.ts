@@ -2,6 +2,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import {
   brailleSpinnerFrame,
+  managerLayoutTier,
+  managerNoticeGlyph,
   renderResponsiveManagerFooter,
   startingSpinnerFrame,
 } from "../src/manager/chrome.ts";
@@ -22,5 +24,20 @@ describe("shared manager chrome", () => {
     const narrow = renderResponsiveManagerFooter(30, variants);
     expect(narrow).toContain("↑↓ · C-u/d │ x Stop");
     expect(visibleWidth(narrow)).toBeLessThanOrEqual(30);
+  });
+
+  it("shares responsive layout tiers across managers", () => {
+    expect(managerLayoutTier(0)).toBe("narrow");
+    expect(managerLayoutTier(59)).toBe("narrow");
+    expect(managerLayoutTier(60)).toBe("stacked");
+    expect(managerLayoutTier(99)).toBe("stacked");
+    expect(managerLayoutTier(100)).toBe("wide");
+  });
+
+  it("keeps a consistent notice glyph vocabulary", () => {
+    expect(managerNoticeGlyph("info")).toBe("ℹ");
+    expect(managerNoticeGlyph("success")).toBe("✓");
+    expect(managerNoticeGlyph("warning")).toBe("⚠");
+    expect(managerNoticeGlyph("error")).toBe("×");
   });
 });

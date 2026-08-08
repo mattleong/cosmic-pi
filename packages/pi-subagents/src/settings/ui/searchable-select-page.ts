@@ -64,6 +64,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   private listHeight: number;
   private feedback: string | undefined;
   private searchMode: boolean;
+  private alternateHelp = false;
   private _focused = false;
   private readonly keymap = new FullScreenKeymap();
 
@@ -166,6 +167,8 @@ export class SearchableSelectPage<A> implements Component, Focusable {
         case "down":
         case "half-page-up":
         case "half-page-down":
+        case "full-page-up":
+        case "full-page-down":
         case "first":
         case "last":
           if (length > 0) {
@@ -180,14 +183,20 @@ export class SearchableSelectPage<A> implements Component, Focusable {
                     ? Math.max(0, current - halfStep)
                     : resolution.action === "half-page-down"
                       ? Math.min(length - 1, current + halfStep)
-                      : resolution.action === "up"
-                        ? (current - 1 + length) % length
-                        : (current + 1) % length;
+                      : resolution.action === "full-page-up"
+                        ? Math.max(0, current - pageStep)
+                        : resolution.action === "full-page-down"
+                          ? Math.min(length - 1, current + pageStep)
+                          : resolution.action === "up"
+                            ? (current - 1 + length) % length
+                            : (current + 1) % length;
             this.list.setSelectedIndex(next);
           }
           this.feedback = undefined;
           break;
         case "help":
+          this.alternateHelp = !this.alternateHelp;
+          break;
         case "pending-first":
         case "previous-pane":
         case "next-pane":
@@ -283,7 +292,10 @@ export class SearchableSelectPage<A> implements Component, Focusable {
         theme.fg("accent", theme.bold(this.options.title)),
         ...subtitleLines,
         ...noticeLines,
-        theme.fg("dim", this.searchMode ? "Search: INSERT" : "Search: NORMAL · press / to edit"),
+        theme.fg(
+          "dim",
+          this.searchMode ? "Type to filter · Enter select · Esc done" : "Press / to filter",
+        ),
         ...inputLines,
         "",
       ];
@@ -321,20 +333,30 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     const normalNavigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
     const footer = this.searchMode
       ? renderResponsiveManagerFooter(inner, [
-          ["INSERT · type to search", "↑/↓ Navigate", "Enter Select · Esc Normal"],
-          ["INSERT · ↑/↓", "Enter Select", "Esc Normal"],
-          ["Enter Select", "Esc Normal"],
+          ["Type to filter", "↑/↓ Navigate", `${confirm} Select · ${cancel} Done`],
+          ["↑/↓ Navigate", `${confirm} Select · ${cancel} Done`],
+          [`${confirm} Select`, `${cancel} Done`],
         ])
-      : renderResponsiveManagerFooter(inner, [
-          [
-            `${normalNavigation} Navigate · C-u/d · gg/G`,
-            "/ Search",
-            `l/${confirm} Select · h/q/${cancel} Back`,
-          ],
-          [`${normalNavigation} · C-u/d · gg/G`, "/ Search", `${confirm} Select · q Back`],
-          ["q Back", "l Select"],
-          ["q Back"],
-        ]);
+      : this.alternateHelp
+        ? renderResponsiveManagerFooter(inner, [
+            [
+              `${normalNavigation} Navigate · C-u/d Half · PgUp/PgDn Page · gg/G Ends`,
+              "/ Filter",
+              `l/${confirm} Select · h/q/${cancel} Back · ? Less`,
+            ],
+            [`${normalNavigation} · C-u/d · PgUp/PgDn · gg/G`, `? Less · q Back`],
+            ["? Less · q Back"],
+          ])
+        : renderResponsiveManagerFooter(inner, [
+            [
+              `${normalNavigation} Navigate · C-u/d · gg/G`,
+              "/ Filter",
+              `l/${confirm} Select · h/q/${cancel} Back · ? Help`,
+            ],
+            [`${normalNavigation} · C-u/d · gg/G`, "/ Filter", `${confirm} Select · q Back`],
+            ["q Back", "l Select"],
+            ["q Back"],
+          ]);
     const bottom = `${theme.fg("borderAccent", "╰")}${theme.fg(
       "borderAccent",
       "─".repeat(Math.max(0, inner - visibleWidth(footer))),

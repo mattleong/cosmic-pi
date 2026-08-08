@@ -1,5 +1,9 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import {
+  managerLayoutTier,
+  managerNoticeGlyph,
+  renderResponsiveManagerFooter,
+} from "pi-cosmic-ui/manager";
 import {
   Input,
   truncateToWidth,
@@ -10,6 +14,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   decodeFullScreenPrintable,
+  filterReservedKeyLabel,
   FullScreenKeymap,
   type FullScreenSelectionKeybindingId,
 } from "pi-cosmic-ui/manager/keybindings";
@@ -409,6 +414,14 @@ export class SubagentFleetComponent implements Component, Focusable {
           );
         break;
       }
+      case "full-page-up":
+        if (browsingDetail) this.scrollDetail(pageSize);
+        else this.select(this.selected - Math.max(1, this.options.getHeight() - 3), runs);
+        break;
+      case "full-page-down":
+        if (browsingDetail) this.scrollDetail(-pageSize);
+        else this.select(this.selected + Math.max(1, this.options.getHeight() - 3), runs);
+        break;
       case "first":
         if (browsingDetail) this.scrollDetail(this.detailMaxScroll);
         else this.select(0, runs);
@@ -435,7 +448,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     const safeWidth = Math.max(0, Math.floor(width));
     const height = Math.max(0, Math.floor(this.options.getHeight()));
     if (safeWidth === 0 || height === 0) return [];
-    const nextLayout = safeWidth >= 100 ? "wide" : safeWidth >= 60 ? "stacked" : "narrow";
+    const nextLayout = managerLayoutTier(safeWidth);
     if (nextLayout !== this.layout) {
       this.layout = nextLayout;
       this.keymap.resetChord();
@@ -475,9 +488,9 @@ export class SubagentFleetComponent implements Component, Focusable {
       const showNotice = this.notice !== undefined && bodyHeight > 0;
       const contentHeight = Math.max(0, bodyHeight - (showNotice ? 1 : 0));
       const content =
-        safeWidth >= 100
+        this.layout === "wide"
           ? this.renderWide(safeWidth, contentHeight, runs, selected)
-          : safeWidth >= 60
+          : this.layout === "stacked"
             ? this.renderStacked(safeWidth, contentHeight, runs, selected)
             : this.renderNarrow(safeWidth, contentHeight, runs, selected);
       body = showNotice ? [this.renderNotice(safeWidth, this.notice!), ...content] : content;
@@ -495,7 +508,7 @@ export class SubagentFleetComponent implements Component, Focusable {
 
   private renderNotice(width: number, notice: FleetNotice): string {
     const inner = Math.max(0, width - 2);
-    const glyph = notice.kind === "error" ? "×" : notice.kind === "success" ? "✓" : "ℹ";
+    const glyph = managerNoticeGlyph(notice.kind);
     const color =
       notice.kind === "error" ? "error" : notice.kind === "success" ? "success" : "muted";
     return `${this.outerBorder("│")}${pad(
@@ -617,7 +630,11 @@ export class SubagentFleetComponent implements Component, Focusable {
   private helpText(width: number, selected: SubagentRunView | undefined): string {
     const contentWidth = Math.max(0, width - 2);
     const key = (id: FleetKeybindingId, fallback: string): string =>
-      this.options.keybindingLabel?.(id, fallback) || fallback;
+      filterReservedKeyLabel(
+        this.options.keybindingLabel?.(id, fallback) || fallback,
+        FLEET_SHORTCUTS,
+        fallback,
+      );
     const configuredNavigation = this.options.keybindingLabel
       ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
       : undefined;

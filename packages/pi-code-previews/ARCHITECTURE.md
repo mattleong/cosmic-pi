@@ -6,7 +6,7 @@ Provides syntax-highlighted previews, structured diffs, safer write/edit present
 
 ## Host surface
 
-- Commands: preview health and settings (`settings/controller.ts`, `commands/health.ts`).
+- Commands: preview health and settings (`settings/controller.ts`, `commands/health.ts`); both guard non-TUI hosts and fall back to plain notifications instead of opening custom UI.
 - Events: `session_start` and `session_shutdown`.
 - Tool surface: renderer registration for supported built-in tools and the public cooperative shell wrapper.
 

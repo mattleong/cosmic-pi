@@ -12,6 +12,24 @@ export const brailleSpinnerFrame = (frame: number): string =>
 export const startingSpinnerFrame = (frame: number): string =>
   frameAt(STARTING_SPINNER_FRAMES, frame, "◌");
 
+export type ManagerLayoutTier = "narrow" | "stacked" | "wide";
+
+/** Shared responsive manager tiers: narrow below 60, stacked 60–99, wide at 100+ columns. */
+export const managerLayoutTier = (width: number): ManagerLayoutTier =>
+  width >= 100 ? "wide" : width >= 60 ? "stacked" : "narrow";
+
+export type ManagerNoticeKind = "info" | "success" | "warning" | "error";
+
+const MANAGER_NOTICE_GLYPHS: Readonly<Record<ManagerNoticeKind, string>> = {
+  info: "ℹ",
+  success: "✓",
+  warning: "⚠",
+  error: "×",
+};
+
+/** Shared status glyph vocabulary for manager notices and feedback lines. */
+export const managerNoticeGlyph = (kind: ManagerNoticeKind): string => MANAGER_NOTICE_GLYPHS[kind];
+
 export type ManagerFooterGroup = string | undefined;
 
 export const managerFooterLine = (groups: ReadonlyArray<ManagerFooterGroup>): string =>

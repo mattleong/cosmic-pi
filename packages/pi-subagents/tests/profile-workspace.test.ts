@@ -544,6 +544,36 @@ describe("profile settings workspace", () => {
     expect(candidatePage).toContain("Q      Back to ordered route");
   });
 
+  it("filters configured key labels that collide with workspace shortcuts from help", () => {
+    const { component } = makeComponent(undefined, {
+      keybindingLabel: (id, fallback) =>
+        (
+          ({
+            "tui.select.up": "⇧K/↑",
+            "tui.select.down": "s/↓",
+          }) as Readonly<Record<string, string>>
+        )[id] ?? fallback,
+    });
+    const footer = component.render(140).at(-1) ?? "";
+    expect(footer).toContain("j/k · ↑/↓ Select");
+    expect(footer).not.toContain("⇧K");
+    expect(footer).not.toContain("s/↓");
+  });
+
+  it("advertises the ? key reference from candidate and field panes", () => {
+    const { component } = makeComponent();
+    component.handleInput(input.enter);
+    expect(component.render(140).at(-1)).toContain("Tab/⇧Tab Pages · ? Help");
+    component.handleInput(input.enter);
+    expect(component.render(140).at(-1)).toContain("⇧Tab Back · ? Help");
+    component.handleInput("?");
+    const expanded = component.render(140).at(-1) ?? "";
+    expect(expanded).toContain("PgUp/PgDn Page");
+    expect(expanded).toContain("? Back");
+    component.handleInput("?");
+    expect(component.render(140).at(-1)).toContain("⇧Tab Back · ? Help");
+  });
+
   it("navigates Profiles → Route → Candidate with scope and effective context", () => {
     const value = inspection(
       { version: 4, profiles: { reviewer: candidate("openai/global") } },
@@ -779,7 +809,7 @@ describe("profile settings workspace", () => {
     }
     const page = component.render(130).join("\n");
     expect(page).toContain("Choose model");
-    expect(page).toContain("Search:");
+    expect(page).toContain("Press / to filter");
     expect(page).toContain("Claude Opus");
     expect(page).toContain("Claude Sonnet");
     component.handleInput("/");

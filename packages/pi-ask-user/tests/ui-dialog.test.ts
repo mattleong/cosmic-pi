@@ -64,6 +64,23 @@ const make = (
 };
 
 describe("ask-user TUI", () => {
+  it("toggles expanded contextual help with ? and never cancels on q", () => {
+    const { dialog, done } = make();
+    expect(dialog.render(120).join("\n")).toContain("? help");
+
+    dialog.handleInput("?");
+    const expanded = dialog.render(120).join("\n");
+    expect(expanded).toContain("? less");
+    expect(expanded).toContain("j/k or ↑↓ move");
+    expect(expanded).not.toMatch(/NORMAL|INSERT/);
+
+    dialog.handleInput("?");
+    expect(dialog.render(120).join("\n")).toContain("? help");
+
+    dialog.handleInput("q");
+    expect(done).not.toHaveBeenCalled();
+  });
+
   it("renders width-safe layouts and submits a selected value", () => {
     const { dialog, done } = make();
     for (const width of [120, 48, 12]) {

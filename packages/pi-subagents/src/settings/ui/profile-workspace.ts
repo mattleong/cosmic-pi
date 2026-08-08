@@ -25,6 +25,7 @@ import {
 import { ProfileModelPickerPage } from "./model-picker.ts";
 import {
   PROFILE_WORKSPACE_FIELDS,
+  PROFILE_WORKSPACE_SHORTCUTS,
   candidateFieldRows,
   draftKindLabel,
   profileRouteDraftSummary,
@@ -94,19 +95,6 @@ type WorkspaceMessage = {
 };
 
 const paneOrder: ReadonlyArray<ProfileWorkspacePane> = ["profiles", "candidates", "fields"];
-const PROFILE_WORKSPACE_SHORTCUTS = new Set([
-  "/",
-  "J",
-  "K",
-  "X",
-  "a",
-  "c",
-  "d",
-  "i",
-  "r",
-  "s",
-  "x",
-]);
 const confirmationKey = (action: PendingAction): string =>
   action === "remove" ? "x" : action === "disable" ? "d" : action === "reset" ? "i" : "X";
 const saveScopeLabel = (scope: ProfileSettingsScope): string =>
@@ -136,6 +124,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
   private refreshBlocked = false;
   private reloadRequired = false;
   private message: WorkspaceMessage | undefined;
+  private alternateHelp = false;
   private pendingAction: PendingAction | undefined;
   private catalogLoad: AbortController | undefined;
   private modelPicker: ProfileModelPickerPage | undefined;
@@ -888,6 +877,12 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       case "half-page-down":
         moveSelection(halfStep);
         break;
+      case "full-page-up":
+        moveSelection(-pageStep);
+        break;
+      case "full-page-down":
+        moveSelection(pageStep);
+        break;
       case "first":
         if (this.pane === "profiles") this.profileIndex = 0;
         else if (this.pane === "candidates") this.candidateIndex = 0;
@@ -905,6 +900,8 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         if (this.pane === "profiles") this.openProfileSearch();
         return;
       case "help":
+        this.alternateHelp = !this.alternateHelp;
+        break;
       case "pending-first":
         break;
     }
@@ -943,6 +940,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         busy: this.busy,
         cancellableBusy: this.catalogLoad !== undefined,
         reloadRequired: this.reloadRequired,
+        alternateHelp: this.alternateHelp,
         message: this.message,
         pendingConfirmation:
           this.pendingAction === "clear-session"

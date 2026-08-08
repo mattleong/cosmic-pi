@@ -23,7 +23,7 @@ Adds OpenAI subscription usage, fast-mode request injection, provider-native com
 - `src/config/`, `src/fast/controller.ts`, `src/fast/models.ts`, `src/usage/format.ts`, and `src/image/protocol.ts` contain schemas and deterministic policy/protocol logic.
 - `src/boundary/` isolates Pi UI, model registry, OpenAI compaction HTTP, and Sharp.
 - `src/ui/primitives.ts` and `src/footer/` consume synchronous frozen projections; the image tool renders through the `pi-code-previews` cooperative shell.
-- `src/settings/controller.ts` registers settings commands/pickers and wraps the hierarchical settings surface with the pure mode-aware `pi-cosmic-ui/manager/keybindings` Vim adapter.
+- `src/settings/controller.ts` registers settings commands/pickers with finite argument completions and wraps the hierarchical settings surface with the modeless `pi-cosmic-ui/manager/keybindings` Vim adapter (shared contextual `?` hint copy).
 
 ## State and resources
 

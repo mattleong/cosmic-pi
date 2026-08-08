@@ -47,6 +47,30 @@ const page = (
   });
 
 describe("searchable settings selector", () => {
+  it("shows modeless filter hints without mode labels", () => {
+    const selector = page([choice("a", "Model alpha", "alpha")]);
+    const idle = selector.render(80).join("\n");
+    expect(idle).toContain("Press / to filter");
+    expect(idle).not.toMatch(/NORMAL|INSERT/);
+
+    selector.handleInput("/");
+    const searching = selector.render(80).join("\n");
+    expect(searching).toContain("Type to filter · Enter select · Esc done");
+    expect(searching).toContain("Esc Done");
+    expect(searching).not.toMatch(/NORMAL|INSERT/);
+  });
+
+  it("toggles expanded contextual help with ?", () => {
+    const selector = page([choice("a", "Model alpha", "alpha")]);
+    expect(selector.render(90).at(-1)).toContain("? Help");
+    selector.handleInput("?");
+    const expanded = selector.render(90).at(-1) ?? "";
+    expect(expanded).toContain("PgUp/PgDn");
+    expect(expanded).toContain("? Less");
+    selector.handleInput("?");
+    expect(selector.render(90).at(-1)).toContain("? Help");
+  });
+
   it("selects the exact filtered item when values collide", () => {
     const select = vi.fn();
     const selector = page(
@@ -107,7 +131,7 @@ describe("searchable settings selector", () => {
     expect(oneRow.render(30)).toHaveLength(1);
   });
 
-  it("supports Home, End, and half-page navigation while ignoring PageUp and PageDown", () => {
+  it("supports Home, End, half-page, and full-page navigation", () => {
     const select = vi.fn();
     const choices = Array.from({ length: 20 }, (_, index) =>
       choice(String(index), `Model ${index}`, String(index)),
@@ -116,16 +140,21 @@ describe("searchable settings selector", () => {
     selector.handleInput("\u001b[H");
     selector.handleInput("\u001b[6~");
     selector.handleInput("\r");
-    expect(select).toHaveBeenLastCalledWith("0");
+    expect(select).toHaveBeenLastCalledWith("9");
 
     selector.handleInput("\u0004");
     selector.handleInput("\r");
-    expect(select).toHaveBeenLastCalledWith("4");
+    expect(select).toHaveBeenLastCalledWith("13");
 
     selector.handleInput("\u001b[F");
     selector.handleInput("\u001b[5~");
     selector.handleInput("\r");
-    expect(select).toHaveBeenLastCalledWith("19");
+    expect(select).toHaveBeenLastCalledWith("10");
+
+    selector.handleInput("\u001b[H");
+    selector.handleInput("\u0004");
+    selector.handleInput("\r");
+    expect(select).toHaveBeenLastCalledWith("4");
   });
 
   it("renders configured keybinding labels instead of fixed defaults", () => {

@@ -20,7 +20,7 @@ import {
   type HostCallbackBoundaryShape,
 } from "../boundary/host-callback.ts";
 import { CosmicUiService } from "../protocol/service.ts";
-import { VimSettingsAdapter } from "../manager/keybindings.ts";
+import { fullScreenSettingsHint, VimSettingsAdapter } from "../manager/keybindings.ts";
 
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
 const VisibilityIdSchema = Schema.Literals(DEFAULT_FOOTER_ORDER);
@@ -190,12 +190,14 @@ export function registerSettingsCommand(
                   ? (data, id) => keybindings.matches(data, id)
                   : undefined,
               requestRender: () => tui.requestRender(),
-              renderHint: (mode) =>
+              renderHint: (mode, helpExpanded) =>
                 theme.fg(
                   "dim",
-                  mode === "search"
-                    ? " SEARCH · type to filter · Esc returns to NORMAL "
-                    : " NORMAL · j/k move · l select · h/q back · / search ",
+                  ` ${fullScreenSettingsHint({
+                    searching: mode === "search",
+                    search: true,
+                    helpExpanded,
+                  })} `,
                 ),
             });
             container.addChild(vimList);

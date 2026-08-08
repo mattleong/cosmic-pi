@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import { managerNoticeGlyph, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/keybindings";
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
 
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
@@ -17,6 +18,7 @@ import {
   candidateFieldRows,
   draftKindLabel,
   effectiveProfileSummary,
+  PROFILE_WORKSPACE_SHORTCUTS,
   type ProfileWorkspacePane,
 } from "./profile-workspace-model.ts";
 import type { SettingsSelectKeybindingId } from "./searchable-select-page.ts";
@@ -42,6 +44,7 @@ export interface ProfileWorkspaceRenderState {
   readonly busy: boolean;
   readonly cancellableBusy: boolean;
   readonly reloadRequired: boolean;
+  readonly alternateHelp?: boolean | undefined;
   readonly message?:
     | { readonly kind: "info" | "success" | "warning" | "error"; readonly text: string }
     | undefined;
@@ -185,15 +188,13 @@ const commonNotices = (
           : state.message.kind === "success"
             ? "success"
             : "muted";
-    const glyph =
-      state.message.kind === "error"
-        ? "×"
-        : state.message.kind === "warning"
-          ? "!"
-          : state.message.kind === "success"
-            ? "✓"
-            : "ℹ";
-    lines.push(...wrapped(theme.fg(color, `${glyph} ${state.message.text}`), width), "");
+    lines.push(
+      ...wrapped(
+        theme.fg(color, `${managerNoticeGlyph(state.message.kind)} ${state.message.text}`),
+        width,
+      ),
+      "",
+    );
   }
   return lines;
 };
@@ -445,7 +446,11 @@ const helpText = (
   keybindingLabel?: ((id: SettingsSelectKeybindingId, fallback: string) => string) | undefined,
 ): string => {
   const key = (id: SettingsSelectKeybindingId, fallback: string): string =>
-    keybindingLabel?.(id, fallback) || fallback;
+    filterReservedKeyLabel(
+      keybindingLabel?.(id, fallback) || fallback,
+      PROFILE_WORKSPACE_SHORTCUTS,
+      fallback,
+    );
   const configuredNavigation = keybindingLabel
     ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
     : undefined;
@@ -463,13 +468,23 @@ const helpText = (
         state.cancellableBusy ? `${escape} Cancel` : `${escape} Wait`,
       ],
     ]);
+  if (state.alternateHelp)
+    return renderResponsiveManagerFooter(Math.max(0, width), [
+      [
+        `${navigation} Move · C-u/d Half · PgUp/PgDn Page · gg/G Ends`,
+        `h/l Panes · Tab/⇧Tab Pages · s Scope`,
+        `? Back · ${escape}/q Close`,
+      ],
+      [`${navigation} · C-u/d · PgUp/PgDn · gg/G`, `h/l · Tab · s`, `? Back · ${escape}/q`],
+      [`? Back · ${escape}/q`],
+    ]);
   if (state.pane === "profiles") {
     const canReset = routeActions(state).reset;
     return renderResponsiveManagerFooter(Math.max(0, width), [
       [
         `${navigation} Select · C-u/d · gg/G`,
         `${enter}/l Route · / Search · s Next scope`,
-        `${canReset ? "i Reset · " : ""}Tab Next`,
+        `${canReset ? "i Reset · " : ""}Tab Next · ? Help`,
         state.reloadRequired ? `r Reload · ${escape} Close` : `${escape} Close`,
       ],
       [
@@ -494,7 +509,7 @@ const helpText = (
       [
         `${navigation} Select · C-u/d · gg/G · ${enter}/l Candidate`,
         actionLabels.join(" · ") || "No route changes available",
-        `${escape} Profiles · Tab/⇧Tab Pages`,
+        `${escape} Profiles · Tab/⇧Tab Pages · ? Help`,
         state.reloadRequired ? "r Reload" : "",
       ],
       [
@@ -505,6 +520,11 @@ const helpText = (
     ]);
   }
   return renderResponsiveManagerFooter(Math.max(0, width), [
+    [
+      `${navigation} Field · C-u/d · gg/G · ${enter}/l Choose`,
+      `s Scope · h/${escape} Route · ⇧Tab Back · ? Help`,
+      state.reloadRequired ? "r Reload" : "",
+    ],
     [
       `${navigation} Field · C-u/d · gg/G · ${enter}/l Choose`,
       `s Scope · h/${escape} Route · ⇧Tab Back`,

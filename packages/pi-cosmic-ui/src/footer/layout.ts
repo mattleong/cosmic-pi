@@ -76,7 +76,7 @@ export function renderContextLine(
       progressBar(percent, cells, theme, color),
       theme.fg(
         color,
-        ` ${Math.round(percent)}% · ${formatTokens(tokens)}/${formatTokens(contextWindow)}`,
+        ` ${Math.round(percent)}% used · ${formatTokens(tokens)}/${formatTokens(contextWindow)}`,
       ),
     ].join("");
   }
@@ -110,7 +110,7 @@ export function renderProviderUsageLine(
     const color = remainingCapacityTone(percent);
     pieces.push(theme.fg(color, `${match[1]?.toLowerCase()} `));
     pieces.push(progressBar(percent, cells, theme, color));
-    pieces.push(theme.fg(color, ` ${Math.round(percent)}%`));
+    pieces.push(theme.fg(color, ` ${Math.round(percent)}% left`));
     cursor = index + match[0].length;
   }
   if (!matched) {

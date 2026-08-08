@@ -303,13 +303,14 @@ describe("/subagents fleet UI", () => {
     expect(bottom).toContain("Final report");
 
     component.handleInput("\u001b[5~");
+    const paged = component.render(42).join("\n");
+    expect(paged).not.toBe(bottom);
+    component.handleInput("\u001b[6~");
     expect(component.render(42).join("\n")).toBe(bottom);
 
     component.handleInput("\u0015");
     const top = component.render(42).join("\n");
     expect(top).not.toBe(bottom);
-    component.handleInput("\u001b[6~");
-    expect(component.render(42).join("\n")).toBe(top);
     component.handleInput("\u0004");
     expect(component.render(42).join("\n")).toBe(bottom);
   });

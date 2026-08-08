@@ -37,6 +37,21 @@ export const PROFILE_WORKSPACE_FIELDS: ReadonlyArray<ProfileWorkspaceField> = [
   "closeOnReport",
 ];
 
+/** Screen-owned printable shortcuts that win over configured movement keys. */
+export const PROFILE_WORKSPACE_SHORTCUTS: ReadonlySet<string> = new Set([
+  "/",
+  "J",
+  "K",
+  "X",
+  "a",
+  "c",
+  "d",
+  "i",
+  "r",
+  "s",
+  "x",
+]);
+
 export interface ProfileWorkspaceFieldRow {
   readonly field: ProfileWorkspaceField;
   readonly label: string;

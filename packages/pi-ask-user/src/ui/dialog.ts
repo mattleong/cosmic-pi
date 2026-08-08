@@ -57,6 +57,7 @@ export class AskUserDialog implements Focusable {
   private state: QuestionnaireState;
   private input: DialogInputMode | undefined;
   private inputError: string | undefined;
+  private alternateHelp = false;
   private externalEditorBusy = false;
   private readonly editor: Editor;
   private readonly preview: PreviewPane;
@@ -276,6 +277,11 @@ export class AskUserDialog implements Focusable {
         if (draft) this.setCursor(draft.cursor + (resolution.action === "up" ? -1 : 1));
         return;
       }
+      if (resolution.action === "help") {
+        this.alternateHelp = !this.alternateHelp;
+        this.refresh();
+        return;
+      }
       if (resolution.action === "quit") return;
     }
 
@@ -373,6 +379,7 @@ export class AskUserDialog implements Focusable {
         state: this.state,
         ...(this.input ? { input: this.input } : {}),
         ...(this.inputError ? { inputError: this.inputError } : {}),
+        alternateHelp: this.alternateHelp,
         externalEditorBusy: this.externalEditorBusy,
         editor: this.editor,
         preview: this.preview,

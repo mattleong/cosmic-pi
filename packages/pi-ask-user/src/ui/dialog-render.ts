@@ -22,6 +22,7 @@ export interface QuestionnaireRenderModel {
   readonly state: QuestionnaireState;
   readonly input?: DialogInputMode;
   readonly inputError?: string;
+  readonly alternateHelp?: boolean;
   readonly externalEditorBusy: boolean;
   readonly editor: Editor;
   readonly preview: PreviewPane;
@@ -242,11 +243,13 @@ export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: 
   if (!model.input) {
     const onReview = model.state.currentTab === model.request.questions.length;
     const question = onReview ? undefined : model.request.questions[model.state.currentTab];
-    const help = onReview
-      ? `↑↓ move • Enter ${isQuestionnaireComplete(model.state) ? "confirm" : "open unanswered"} • h/l or Tab/←→ questions • b hide • Esc cancel`
-      : question?.mode === "multiple"
-        ? `1–${question.choices.length} toggle • ↑↓ move • Space toggle • Enter activate • h/l or Tab/←→ questions • b hide • Esc cancel`
-        : `1–${question?.choices.length ?? 0} choose • ↑↓ move • Enter activate • h/l or Tab/←→ questions • b hide • Esc cancel`;
+    const help = model.alternateHelp
+      ? "j/k or ↑↓ move • h/l or Tab/←→ questions • n note • b hide (resume from footer) • Esc cancel • ? less"
+      : onReview
+        ? `↑↓ move • Enter ${isQuestionnaireComplete(model.state) ? "confirm" : "open unanswered"} • h/l or Tab/←→ questions • b hide • Esc cancel • ? help`
+        : question?.mode === "multiple"
+          ? `1–${question.choices.length} toggle • ↑↓ move • Space toggle • Enter activate • h/l or Tab/←→ questions • b hide • Esc cancel • ? help`
+          : `1–${question?.choices.length ?? 0} choose • ↑↓ move • Enter activate • h/l or Tab/←→ questions • b hide • Esc cancel • ? help`;
     appendWrapped(lines, " ", model.theme.fg("dim", help), renderWidth);
   }
   lines.push(borderLine(renderWidth, model.theme));

@@ -23,11 +23,15 @@ import { makeResolvedConfig } from "./helpers.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => void | Promise<void>;
 type CommandHandler = (args: string, ctx: ExtensionContext) => void | Promise<void>;
+type CommandCompletion = (
+  prefix: string,
+) => Array<{ value: string; label: string; description?: string }> | null;
 
 type Harness = {
   ctx: ExtensionContext;
   handlers: Map<string, EventHandler[]>;
   commands: Map<string, CommandHandler>;
+  completions: Map<string, CommandCompletion | undefined>;
   custom: ReturnType<typeof vi.fn>;
   notify: ReturnType<typeof vi.fn>;
   getEntries: ReturnType<typeof vi.fn>;
@@ -79,6 +83,7 @@ function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Har
   const eventHandlers = new Map<string, Set<(data: unknown) => void>>();
   const cosmicEvents: Array<{ channel: string; data: unknown }> = [];
   const commands = new Map<string, CommandHandler>();
+  const completions = new Map<string, CommandCompletion | undefined>();
   const custom = vi.fn();
   const notify = vi.fn();
   const getEntries = vi.fn((): unknown[] => []);
@@ -109,8 +114,12 @@ function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Har
       handlers.set(event, currentHandlers);
     },
     registerFlag: vi.fn(),
-    registerCommand(name: string, command: { handler: CommandHandler }) {
+    registerCommand(
+      name: string,
+      command: { handler: CommandHandler; getArgumentCompletions?: CommandCompletion },
+    ) {
       commands.set(name, command.handler);
+      completions.set(name, command.getArgumentCompletions);
     },
     registerTool: vi.fn(),
     registerMessageRenderer: vi.fn(),
@@ -162,6 +171,7 @@ function createHarness(cwd: string, options: { cosmicHost?: boolean } = {}): Har
     ctx,
     handlers,
     commands,
+    completions,
     custom,
     notify,
     getEntries,
@@ -631,6 +641,34 @@ describe("footer mode ownership", () => {
       "Better OpenAI settings require interactive TUI mode.",
       "warning",
     );
+  });
+
+  test("completes /openai-settings ids, help/diagnostics, and finite values", () => {
+    const cwd = createTempProject();
+    const harness = createHarness(cwd);
+    const complete = harness.completions.get("openai-settings");
+    expect(complete).toBeTypeOf("function");
+    const values = (prefix: string) => complete?.(prefix)?.map((entry) => entry.value) ?? null;
+
+    expect(values("")).toEqual(
+      expect.arrayContaining([
+        "fast.enabled",
+        "footer.mode",
+        "usage.enabled",
+        "help",
+        "diagnostics",
+      ]),
+    );
+    expect(values("fast.e")).toEqual(["fast.enabled"]);
+    expect(values("fast.enabled ")).toEqual(["fast.enabled true", "fast.enabled false"]);
+    expect(values("fast.enabled f")).toEqual(["fast.enabled false"]);
+    expect(values("usage.s")).toEqual([
+      "usage.showOnlyOnSubscriptionModels",
+      "usage.showResetTimes",
+    ]);
+    expect(values("HELP")).toEqual(["help"]);
+    expect(complete?.("zzz")).toBeNull();
+    expect(complete?.("unknown ")).toBeNull();
   });
 
   test("off mode leaves existing footer customizations untouched on session start", async () => {

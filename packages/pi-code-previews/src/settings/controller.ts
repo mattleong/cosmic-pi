@@ -1,13 +1,18 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isProjectTrusted } from "pi-cosmic-core";
-import { VimSettingsAdapter } from "pi-cosmic-ui/manager/keybindings";
+import { fullScreenSettingsHint, VimSettingsAdapter } from "pi-cosmic-ui/manager/keybindings";
 import { createCodePreviewSettingsList } from "./panel";
 
 export function registerSettingsCommand(pi: ExtensionAPI): void {
   pi.registerCommand("code-preview-settings", {
     description: "Configure code preview settings",
-    handler: (_args, ctx) =>
-      ctx.ui.custom((tui, theme, keybindings, done) => {
+    handler: (_args, ctx) => {
+      if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
+        if (ctx.hasUI)
+          ctx.ui.notify("Code preview settings require interactive TUI mode.", "warning");
+        return Promise.resolve();
+      }
+      return ctx.ui.custom((tui, theme, keybindings, done) => {
         const list = createCodePreviewSettingsList({
           notify: (message, level) => ctx.ui.notify(message, level),
           done: () => done(undefined),
@@ -22,9 +27,11 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
             typeof tui?.requestRender === "function" ? () => tui.requestRender() : undefined,
           renderHint:
             typeof theme?.fg === "function"
-              ? () => theme.fg("dim", " NORMAL · j/k move · l select · h/q back ")
+              ? (_mode, helpExpanded) =>
+                  theme.fg("dim", ` ${fullScreenSettingsHint({ searching: false, helpExpanded })} `)
               : undefined,
         });
-      }),
+      });
+    },
   });
 }

@@ -2,11 +2,13 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import {
   brailleSpinnerFrame,
+  managerLayoutTier,
   renderResponsiveManagerFooter,
   startingSpinnerFrame,
 } from "pi-cosmic-ui/manager";
 import {
   decodeFullScreenPrintable,
+  filterReservedKeyLabel,
   FullScreenKeymap,
   type FullScreenSelectionKeybindingId,
 } from "pi-cosmic-ui/manager/keybindings";
@@ -224,6 +226,14 @@ export class ProcessManagerComponent implements Component {
           );
         break;
       }
+      case "full-page-up":
+        if (browsingDetail) this.scrollDetail(pageSize);
+        else this.select(this.selected - Math.max(1, this.options.getHeight() - 3), jobs);
+        break;
+      case "full-page-down":
+        if (browsingDetail) this.scrollDetail(-pageSize);
+        else this.select(this.selected + Math.max(1, this.options.getHeight() - 3), jobs);
+        break;
       case "first":
         if (browsingDetail) this.scrollDetail(this.detailMaxScroll);
         else this.select(0, jobs);
@@ -252,7 +262,7 @@ export class ProcessManagerComponent implements Component {
     const safeWidth = Math.max(0, Math.floor(width));
     const height = Math.max(0, Math.floor(this.options.getHeight()));
     if (safeWidth === 0 || height === 0) return [];
-    const nextLayout = safeWidth >= 100 ? "wide" : safeWidth >= 60 ? "stacked" : "narrow";
+    const nextLayout = managerLayoutTier(safeWidth);
     if (nextLayout !== this.layout) {
       this.layout = nextLayout;
       this.keymap.resetChord();
@@ -305,7 +315,11 @@ export class ProcessManagerComponent implements Component {
   ): string {
     const contentWidth = Math.max(0, width - 2);
     const key = (id: FullScreenSelectionKeybindingId, fallback: string): string =>
-      this.options.keybindingLabel?.(id, fallback) || fallback;
+      filterReservedKeyLabel(
+        this.options.keybindingLabel?.(id, fallback) || fallback,
+        PROCESS_MANAGER_SHORTCUTS,
+        fallback,
+      );
     const configuredNavigation = this.options.keybindingLabel
       ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
       : undefined;

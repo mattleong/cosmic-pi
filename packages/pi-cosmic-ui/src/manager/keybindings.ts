@@ -14,6 +14,8 @@ export type FullScreenMode = "navigation" | "search" | "text-input" | "confirmat
 export type FullScreenSelectionKeybindingId =
   | "tui.select.up"
   | "tui.select.down"
+  | "tui.select.pageUp"
+  | "tui.select.pageDown"
   | "tui.select.confirm"
   | "tui.select.cancel";
 
@@ -24,6 +26,8 @@ export type FullScreenAction =
   | "down"
   | "half-page-up"
   | "half-page-down"
+  | "full-page-up"
+  | "full-page-down"
   | "first"
   | "last"
   | "back"
@@ -139,6 +143,14 @@ export class FullScreenKeymap {
       this.resetChord();
       return action("last");
     }
+    if (selectionMatch(data, "tui.select.pageUp", Key.pageUp, matchesKeybinding)) {
+      this.resetChord();
+      return action("full-page-up");
+    }
+    if (selectionMatch(data, "tui.select.pageDown", Key.pageDown, matchesKeybinding)) {
+      this.resetChord();
+      return action("full-page-down");
+    }
 
     if (mode === "search") {
       this.resetChord();
@@ -205,11 +217,55 @@ export const fullScreenKeybindingLabel = (
   getKeys?: ((id: FullScreenSelectionKeybindingId) => ReadonlyArray<string>) | undefined,
 ): string => getKeys?.(id).map(formatFullScreenKeyId).join("/") || fallback;
 
+const SHIFT_LABEL_PREFIX = "⇧";
+
+/**
+ * Drops configured key labels that collide with screen-reserved printable actions, so hints
+ * never advertise a reserved shortcut as movement. Bare printable labels ("m") and
+ * shift-modified printable labels ("⇧J") are matched against their effective printable
+ * (case-sensitively, mirroring the keymap's reserved-key check). A label that is exactly the
+ * "/" key is treated as that printable. Multi-key labels that contain a "/" key cannot be
+ * distinguished from the "/" separators of this display representation without an API
+ * redesign, so such labels are deliberately returned unchanged instead of being parsed
+ * unsafely. Returns the fallback when nothing is left to show.
+ */
+export const filterReservedKeyLabel = (
+  label: string,
+  reservedKeys: ReadonlySet<string>,
+  fallback: string,
+): string => {
+  if (label === "/") return reservedKeys.has("/") ? fallback : label;
+  const parts = label.split("/");
+  // An empty segment means a literal "/" key inside a multi-key label; deferred as ambiguous.
+  if (parts.some((part) => part.length === 0)) return label;
+  const collides = (part: string): boolean =>
+    (part.length === 1 && reservedKeys.has(part)) ||
+    (part.length === 2 &&
+      part.startsWith(SHIFT_LABEL_PREFIX) &&
+      reservedKeys.has(part.slice(SHIFT_LABEL_PREFIX.length)));
+  return parts.filter((part) => !collides(part)).join("/") || fallback;
+};
+
+/** Shared modeless hint copy for settings-style lists driven by the full-screen keymap. */
+export const fullScreenSettingsHint = (context: {
+  readonly searching: boolean;
+  readonly search?: boolean | undefined;
+  readonly helpExpanded?: boolean | undefined;
+}): string => {
+  if (context.searching) return "Type to filter · Enter select · Esc done";
+  const filter = context.search ? " · / filter" : "";
+  return context.helpExpanded
+    ? `j/k or ↑/↓ move · gg/G ends · C-u/d half-page · PgUp/PgDn page${filter} · Enter/l select · h/q/Esc back · ? less`
+    : `j/k move · Enter/l select · h/q back${filter} · ? help`;
+};
+
 export interface VimSettingsAdapterOptions {
   readonly search?: boolean | undefined;
   readonly matchesKeybinding?: FullScreenKeymapOptions["matchesKeybinding"];
   readonly requestRender?: (() => void) | undefined;
-  readonly renderHint?: ((mode: "navigation" | "search") => string) | undefined;
+  readonly renderHint?:
+    | ((mode: "navigation" | "search", helpExpanded?: boolean) => string)
+    | undefined;
 }
 
 const selectionIdForAction = (
@@ -220,6 +276,10 @@ const selectionIdForAction = (
       return "tui.select.up";
     case "down":
       return "tui.select.down";
+    case "full-page-up":
+      return "tui.select.pageUp";
+    case "full-page-down":
+      return "tui.select.pageDown";
     case "confirm":
       return "tui.select.confirm";
     case "cancel":
@@ -236,8 +296,10 @@ const translatedSettingsInput = (action: FullScreenAction): string | undefined =
     case "down":
       return "\u001b[B";
     case "half-page-up":
+    case "full-page-up":
       return "\u001b[5~";
     case "half-page-down":
+    case "full-page-down":
       return "\u001b[6~";
     case "first":
       return "\u001b[H";
@@ -268,6 +330,7 @@ type SettingsFocusableBridge = {
 /** Modal adapter for pi-tui SettingsList/SelectList without changing their global key manager. */
 export class VimSettingsAdapter implements Component, Focusable {
   private mode: "navigation" | "search" = "navigation";
+  private helpExpanded = false;
   private _focused = false;
   private readonly keymap = new FullScreenKeymap();
   private readonly child: Component;
@@ -320,8 +383,14 @@ export class VimSettingsAdapter implements Component, Focusable {
     }
 
     if (resolution?._tag !== "Action") return;
+    if (resolution.action === "help") {
+      this.helpExpanded = !this.helpExpanded;
+      this.options.requestRender?.();
+      return;
+    }
     if (resolution.action === "search" && this.options.search) {
       this.mode = "search";
+      this.helpExpanded = false;
       this.keymap.resetChord();
       this.syncChildFocus();
       this.options.requestRender?.();
@@ -338,7 +407,7 @@ export class VimSettingsAdapter implements Component, Focusable {
   render(width: number): string[] {
     this.syncChildFocus();
     const lines = [...this.child.render(width)];
-    const hint = this.options.renderHint?.(this.mode);
+    const hint = this.options.renderHint?.(this.mode, this.helpExpanded);
     const bridge = this.child as Component & SettingsFocusableBridge;
     if (hint && bridge.submenuComponent === null && lines.at(-2) === "") lines.pop();
     return hint ? [...lines, truncateToWidth(hint, Math.max(0, width), "")] : lines;
