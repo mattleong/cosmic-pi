@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { managerNoticeGlyph, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
-import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/keybindings";
+import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
 
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";

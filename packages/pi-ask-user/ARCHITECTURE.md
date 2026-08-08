@@ -13,7 +13,7 @@
 - `src/boundary/host-commands.ts` — `/ask-user` host command registration.
 - `src/questionnaire/` — immutable answer/state contracts, semantic validation, pure reducer, typed errors, and serialized Effect service.
 - `src/tools/` — TypeBox schema, LLM-facing response projection, and `ask_user` registration through the `pi-code-previews` cooperative shell.
-- `src/ui/` — synchronous dialog presentation, responsive layout, input routing, markdown preview projection, a `?` contextual help toggle, and navigation-only Vim aliases from `pi-cosmic-ui/manager/keybindings`; embedded editors retain ordinary text input, and `q` never cancels the dialog.
+- `src/ui/` — synchronous dialog presentation, responsive layout, input routing, markdown preview projection, a `?` contextual help toggle, and navigation-only Vim aliases from `pi-cosmic-ui/manager/keymap`; embedded editors retain ordinary text input, and `q` never cancels the dialog.
 - `tests/` — lifecycle, host-boundary, reducer, schema, tool, bridge, and width-safety coverage.
 
 ## Ownership

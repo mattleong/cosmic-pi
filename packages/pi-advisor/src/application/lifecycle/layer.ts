@@ -58,12 +58,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
   Layer.effect(
     AdvisorController,
     Effect.gen(function* () {
-      const { pi, dependencies } = options;
-      const createRuntime = dependencies.createRuntime;
-      const catchUpTimeoutMs = Math.min(
-        ADVISOR_CATCH_UP_TIMEOUT_MS,
-        Math.max(1, dependencies.catchUpTimeoutMs ?? ADVISOR_CATCH_UP_TIMEOUT_MS),
-      );
+      const { pi } = options;
       const productionRuntimeService = yield* AdvisorRuntimeService;
       const productionQueueService = yield* AdvisorReviewQueueService;
       const commandAdapter = yield* PiCommandAdapter;
@@ -234,7 +229,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         productionController,
         productionRuntimeService,
         productionQueueService,
-        createRuntime,
         notifyBestEffort,
         seedFromMessages,
         activeSeed,
@@ -298,7 +292,7 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         lifecycleScope,
         branchContains,
         recordReviewDuration,
-        catchUpTimeoutMs,
+        catchUpTimeoutMs: ADVISOR_CATCH_UP_TIMEOUT_MS,
       });
 
       const { commandActions, applyCommittedConfigEffect } = makeCommandWorkflows({

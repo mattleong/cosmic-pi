@@ -24,17 +24,37 @@ import {
   makeAdvisorControlMailbox,
   NoDiscoveryAdvisorResourceLoader,
   parseAdvisorCheckpointEffect,
+  type AdvisorCheckpoint,
   type AdvisorCheckpointRequest,
-  type AdvisorRuntimeDriver,
   type AdvisorRuntimeStartOptions,
 } from "../src/runtime/runtime.ts";
-import { ADVISOR_TOOL_NAMES, createAdvisorTools } from "../src/runtime/tools.ts";
-import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
+import { ADVISOR_TOOL_NAMES } from "../src/runtime/tools.ts";
+import { advisorPlatformLayer } from "../src/boundary/executor.ts";
 import { AdvisorModelError, type AdvisorUsageTelemetry } from "../src/runtime/client.ts";
 import { makeCapturedTracer } from "pi-cosmic-core/testing";
 import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
+import {
+  childFactoryLayerFrom,
+  makeTestChildFactory,
+  type TestChildFactoryOverrides,
+} from "./support/child-factory.ts";
+import { standaloneAdvisorExecutor } from "./support/executor.ts";
 
-type TestRuntime = AdvisorRuntime & AdvisorRuntimeDriver;
+/** Promise-shaped assertion facade layered over the Effect runtime by the harness below. */
+type TestRuntime = AdvisorRuntime & {
+  start(options: AdvisorRuntimeStartOptions): Promise<void>;
+  checkpoint(request: AdvisorCheckpointRequest): Promise<AdvisorCheckpoint>;
+  steer(observations: string): Promise<boolean>;
+  reprime(seed: string, stateSummary?: string): Promise<void>;
+  abort(): Promise<void>;
+  dispose(): Promise<void>;
+};
+
+const runtimeServiceTestLayer = (overrides: TestChildFactoryOverrides) =>
+  advisorRuntimeServiceLayer(standaloneAdvisorExecutor).pipe(
+    Layer.provide(childFactoryLayerFrom(overrides)),
+    Layer.provideMerge(advisorPlatformLayer),
+  );
 
 const promiseLatch = <T>() => {
   const value = Deferred.makeUnsafe<T>();
@@ -52,11 +72,11 @@ afterEach(async () => {
   await Promise.all([...activeRuntimeCleanups].map((cleanup) => cleanup()));
 });
 
-const makeTestRuntime = (dependencies: ConstructorParameters<typeof AdvisorRuntime>[0]) => {
+const makeTestRuntime = (overrides: TestChildFactoryOverrides) => {
   const scope = Scope.makeUnsafe();
   let runtime!: TestRuntime;
   runtime = new AdvisorRuntime(
-    dependencies,
+    makeTestChildFactory(overrides),
     standaloneAdvisorExecutor,
     scope,
     {
@@ -218,7 +238,6 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
       model: { provider: "p", id: "m" } as never,
       thinkingLevel: "medium" as const,
     })),
-    createTools: createAdvisorTools,
     createSession: vi.fn(async (next) => {
       options = next;
       return { session: session as unknown as AgentSession, extensionsResult: {} as never };
@@ -603,7 +622,7 @@ describe("AdvisorRuntime", () => {
       abort: vi.fn(async () => undefined),
       dispose: vi.fn(),
     } as unknown as AgentSession;
-    const layer = advisorRuntimeServiceLayer(standaloneAdvisorExecutor, {
+    const layer = runtimeServiceTestLayer({
       createChildModel: vi.fn(() => {
         modelCalls += 1;
         return modelCalls === 1
@@ -616,7 +635,7 @@ describe("AdvisorRuntime", () => {
       }),
       createTools: vi.fn(async () => []),
       createSession: vi.fn(async () => ({ session, extensionsResult: {} as never })),
-    }).pipe(Layer.provideMerge(advisorPlatformLayer));
+    });
     const managed = ManagedRuntime.make(layer);
     try {
       const service = await managed.runPromise(AdvisorRuntimeService);
@@ -674,7 +693,7 @@ describe("AdvisorRuntime", () => {
       );
       const restartedSession = makeSession();
       const sessions = [firstSession, restartedSession];
-      const layer = advisorRuntimeServiceLayer(standaloneAdvisorExecutor, {
+      const layer = runtimeServiceTestLayer({
         createChildModel: vi.fn(async () => ({
           modelRuntime: {} as never,
           model: { provider: "p", id: "m" } as never,
@@ -685,7 +704,7 @@ describe("AdvisorRuntime", () => {
           session: sessions.shift() as unknown as AgentSession,
           extensionsResult: {} as never,
         })),
-      }).pipe(Layer.provideMerge(advisorPlatformLayer));
+      });
       const managed = ManagedRuntime.make(layer);
       try {
         const service = await managed.runPromise(AdvisorRuntimeService);
@@ -758,7 +777,7 @@ describe("AdvisorRuntime", () => {
       session: sessions.shift() as unknown as AgentSession,
       extensionsResult: {} as never,
     }));
-    const layer = advisorRuntimeServiceLayer(standaloneAdvisorExecutor, {
+    const layer = runtimeServiceTestLayer({
       createChildModel: vi.fn(async () => ({
         modelRuntime: {} as never,
         model: { provider: "p", id: "m" } as never,
@@ -766,7 +785,7 @@ describe("AdvisorRuntime", () => {
       })),
       createTools: vi.fn(async () => []),
       createSession,
-    }).pipe(Layer.provideMerge(advisorPlatformLayer));
+    });
     const managed = ManagedRuntime.make(layer);
     try {
       const service = await managed.runPromise(AdvisorRuntimeService);
@@ -899,7 +918,7 @@ describe("AdvisorRuntime", () => {
       abort: vi.fn(async () => undefined),
       dispose: vi.fn(),
     } as unknown as AgentSession;
-    const layer = advisorRuntimeServiceLayer(standaloneAdvisorExecutor, {
+    const layer = runtimeServiceTestLayer({
       createChildModel: vi.fn(async () => ({
         modelRuntime: {} as never,
         model: { provider: "p", id: "m" } as never,
@@ -907,7 +926,7 @@ describe("AdvisorRuntime", () => {
       })),
       createTools: vi.fn(async () => []),
       createSession: vi.fn(async () => ({ session, extensionsResult: {} as never })),
-    }).pipe(Layer.provideMerge(advisorPlatformLayer));
+    });
     const managed = ManagedRuntime.make(layer);
     const service = await managed.runPromise(AdvisorRuntimeService);
     await managed.runPromise(

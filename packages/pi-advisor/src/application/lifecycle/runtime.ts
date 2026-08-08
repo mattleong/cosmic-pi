@@ -29,13 +29,7 @@ import { emptyAdvisorRoutingState, sanitizeAdvisorRoutingState } from "../../rev
 import type { AdvisorUsageTelemetry } from "../../runtime/client.ts";
 import type { AdvisorRuntimeServiceShape } from "../../runtime/runtime.ts";
 import { PiCommandAdapter } from "../../boundary/host-commands.ts";
-import {
-  advisorRuntimeEffectsFromDriver,
-  classifyFailure,
-  incrementBounded,
-  makeCancellationLatch,
-} from "../controller-helpers.ts";
-import type { AdvisorRuntimeDriver } from "../../runtime/types.ts";
+import { classifyFailure, incrementBounded, makeCancellationLatch } from "../controller-helpers.ts";
 import { AdvisorExtensionError, extensionError, type ParentAnchor } from "../controller-types.ts";
 import type { AdvisorApplicationState } from "../state.ts";
 import type { SessionRefs } from "./session-refs.ts";
@@ -73,7 +67,6 @@ export interface RuntimeDeps {
   };
   readonly productionRuntimeService: AdvisorRuntimeServiceShape;
   readonly productionQueueService: AdvisorReviewQueueServiceShape;
-  readonly createRuntime: ((executor: AdvisorEffectExecutor) => AdvisorRuntimeDriver) | undefined;
   readonly notifyBestEffort: (
     ctx: Pick<ExtensionContext, "ui">,
     message: string,
@@ -147,9 +140,7 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
           return undefined;
         const sessionInput = refs.activeSessionInput;
         if (!sessionInput) return undefined;
-        nextRuntime = d.createRuntime
-          ? advisorRuntimeEffectsFromDriver(d.createRuntime(d.parentExecutor))
-          : d.productionRuntimeService;
+        nextRuntime = d.productionRuntimeService;
         refs.runtime = nextRuntime;
         const branch =
           restoration === "restore-branch"

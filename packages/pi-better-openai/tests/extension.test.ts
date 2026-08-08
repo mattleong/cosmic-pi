@@ -141,8 +141,14 @@ describe("Better OpenAI session boundary", () => {
       expect.stringContaining("usage.enabled = false"),
       "info",
     );
-    // The removed hidden alias: diagnostics is the only diagnostics verb.
+    // The removed hidden alias: diagnostics is the only diagnostics verb, so a bare
+    // "debug" is a setting id without a value, distinct from an unknown setting.
     await h.commands.get("openai-settings")?.("debug", h.ctx);
+    expect(h.ctx.ui.notify).toHaveBeenCalledWith(
+      "Missing value for debug. Usage: /openai-settings <id> <value>",
+      "error",
+    );
+    await h.commands.get("openai-settings")?.("debug on", h.ctx);
     expect(h.ctx.ui.notify).toHaveBeenCalledWith("Unknown setting: debug", "error");
     await h.commands.get("openai-usage")?.("", h.ctx);
     expect(h.ctx.ui.notify).toHaveBeenCalledWith("Usage display is disabled.", "warning");

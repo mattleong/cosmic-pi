@@ -12,7 +12,7 @@ import {
 import {
   FullScreenKeymap,
   type FullScreenSelectionKeybindingId,
-} from "pi-cosmic-ui/manager/keybindings";
+} from "pi-cosmic-ui/manager/keymap";
 import {
   cancelQuestionnaire,
   createQuestionnaireState,

@@ -3,10 +3,8 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { completeSettingsArguments, isProjectTrusted } from "pi-cosmic-core";
-import {
-  fullScreenKeybindingLabel,
-  type FullScreenSelectionKeybindingId,
-} from "pi-cosmic-ui/manager/keybindings";
+import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
+import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { startHostUiTicker, type SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";

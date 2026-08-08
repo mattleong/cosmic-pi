@@ -6,7 +6,7 @@ import {
   decodeFullScreenPrintable,
   FullScreenKeymap,
   pageSteps,
-} from "pi-cosmic-ui/manager/keybindings";
+} from "pi-cosmic-ui/manager/keymap";
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../run/model.ts";

@@ -31,7 +31,10 @@
     ".": "./index.ts",
     "./client": "./src/footer/client.ts",
     "./manager": "./src/manager/chrome.ts",
-    "./manager/keybindings": "./src/manager/keybindings.ts",
+    "./manager/key-labels": "./src/manager/key-labels.ts",
+    "./manager/keymap": "./src/manager/keymap.ts",
+    "./manager/list-detail": "./src/manager/list-detail.ts",
+    "./manager/settings-adapter": "./src/manager/settings-adapter.ts",
     "./manager/settings-surface": "./src/manager/settings-surface.ts",
     "./protocol": "./src/protocol/protocol.ts"
   },

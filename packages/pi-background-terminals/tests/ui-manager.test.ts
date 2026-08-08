@@ -187,4 +187,27 @@ describe("/ps process manager", () => {
     component.handleInput("t");
     expect(component.render(42).join("\n")).toContain("ID term-1");
   });
+
+  it("uses Esc as back from the detail pane before closing the manager", () => {
+    const escape = String.fromCharCode(27);
+    const close = vi.fn();
+    const component = new ProcessManagerComponent({
+      theme,
+      getProjection: () => projection,
+      getHeight: () => 12,
+      getNow: () => 0,
+      requestRender: vi.fn(),
+      close,
+      stop: vi.fn(),
+      clear: vi.fn(),
+    });
+    component.render(42);
+    component.handleInput("\r");
+    expect(component.render(42).join("\n")).not.toContain("dev-server · running");
+    component.handleInput(escape);
+    expect(component.render(42).join("\n")).toContain("dev-server · running");
+    expect(close).not.toHaveBeenCalled();
+    component.handleInput(escape);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
 });

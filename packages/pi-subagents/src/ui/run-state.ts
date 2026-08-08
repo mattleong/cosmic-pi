@@ -1,4 +1,4 @@
-import { brailleSpinnerFrame, startingSpinnerFrame } from "pi-cosmic-ui/manager";
+import { brailleSpinnerFrame, managerStateGlyph, startingSpinnerFrame } from "pi-cosmic-ui/manager";
 import type { SubagentRunState } from "../run/model.ts";
 
 export const runStateGlyph = (state: SubagentRunState): string => {
@@ -12,15 +12,14 @@ export const runStateGlyph = (state: SubagentRunState): string => {
     case "paused":
       return "‖";
     case "reported":
-      return "✓";
     case "completed":
-      return "✓";
+      return managerStateGlyph("done");
     case "failed":
-      return "×";
+      return managerStateGlyph("failed");
     case "stopping":
-      return "◐";
+      return managerStateGlyph("stopping");
     case "stopped":
-      return "■";
+      return managerStateGlyph("stopped");
   }
 };
 

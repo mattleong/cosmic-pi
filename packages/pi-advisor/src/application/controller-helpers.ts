@@ -4,12 +4,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { AdvisorModelError } from "../runtime/client.ts";
-import {
-  type AdvisorCheckpoint,
-  type AdvisorRuntimeDriver,
-  type AdvisorRuntimeServiceShape,
-} from "../runtime/runtime.ts";
+import { type AdvisorCheckpoint } from "../runtime/runtime.ts";
 import {
   appendAdvisorReviewCardAtHostBoundary,
   sendCompactAdvisorGuidanceAtHostBoundary,
@@ -24,37 +19,6 @@ import {
   type AdvisorReview,
 } from "../review/index.ts";
 import { readAdvisorContextEntriesAtHostBoundary } from "../boundary/host-context.ts";
-
-export const advisorRuntimeEffectsFromDriver = (
-  driver: AdvisorRuntimeDriver,
-): AdvisorRuntimeServiceShape => {
-  const modelError = (operation: string) => (error: unknown) =>
-    error instanceof AdvisorModelError
-      ? error
-      : new AdvisorModelError({
-          message: error instanceof Error ? error.message : `Advisor ${operation} failed.`,
-        });
-  const bestEffortCleanup = (operation: string, cleanup: () => Promise<void>) =>
-    Effect.tryPromise({ try: () => cleanup(), catch: modelError(operation) }).pipe(
-      Effect.catch(() => Effect.void),
-    );
-  return {
-    activeToolNames: () => driver.activeToolNames,
-    start: (options) =>
-      Effect.tryPromise({ try: () => driver.start(options), catch: modelError("child startup") }),
-    checkpoint: (request) =>
-      Effect.tryPromise({ try: () => driver.checkpoint(request), catch: modelError("checkpoint") }),
-    steer: (observations) =>
-      Effect.tryPromise({ try: () => driver.steer(observations), catch: modelError("steering") }),
-    reprime: (seed, stateSummary) =>
-      Effect.tryPromise({
-        try: () => driver.reprime(seed, stateSummary),
-        catch: modelError("re-prime"),
-      }),
-    abort: () => bestEffortCleanup("abort", () => driver.abort()),
-    dispose: () => bestEffortCleanup("dispose", () => driver.dispose()),
-  };
-};
 
 export interface CancellationLatch {
   readonly await: Effect.Effect<void>;

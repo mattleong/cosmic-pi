@@ -9,7 +9,7 @@ import type { AdvisorEffectExecutor, AdvisorPlatform } from "../boundary/executo
 import type { AdvisorAbortInput, AdvisorSessionInput } from "../boundary/host-context.ts";
 import type { ConfigStore } from "../config/store.ts";
 import type { FailureLogger } from "../logging/logger.ts";
-import type { AdvisorRuntimeDriver } from "../runtime/runtime.ts";
+import type { AdvisorRuntimeService } from "../runtime/runtime.ts";
 import type { AdvisorControllerSnapshot } from "../ui/projection.ts";
 import type { AdvisorHostBindings } from "../boundary/host-bindings.ts";
 
@@ -112,9 +112,11 @@ export interface AdvisorExtensionDependencies {
   configStore?: Layer.Layer<ConfigStore, never, AdvisorPlatform> | undefined;
   /** Effect-typed FailureLogger override; production composition uses `failureLoggerLayer`. */
   failureLogger?: Layer.Layer<FailureLogger, never, AdvisorPlatform> | undefined;
-  createRuntime?: (executor: AdvisorEffectExecutor) => AdvisorRuntimeDriver;
-  /** Test seam only. Production always uses the hard exported cap. */
-  catchUpTimeoutMs?: number | undefined;
+  /**
+   * Effect-typed runtime-service override; production composition uses
+   * `advisorRuntimeServiceLayer` with the production `AdvisorChildFactory`.
+   */
+  runtimeService?: Layer.Layer<AdvisorRuntimeService, never, AdvisorPlatform> | undefined;
 }
 
 export interface AdvisorControllerApplicationOptions {

@@ -3,7 +3,6 @@ import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { Type } from "typebox";
-import { standaloneAdvisorExecutor } from "../boundary/executor.ts";
 import { ReadOnlyFileSystem, type AdvisorProjectRoot } from "../boundary/read-only-fs.ts";
 
 // Stable file reads use isSymbolicLink checks and O_NOFOLLOW in the capability-narrow adapter.
@@ -54,9 +53,6 @@ export const createAdvisorToolsEffect = Effect.fn("AdvisorTools.create")(functio
     createLsTool(root, executor),
   ]);
 });
-export function createAdvisorTools(cwd: string): Promise<readonly AdvisorToolDefinition[]> {
-  return standaloneAdvisorExecutor.run(createAdvisorToolsEffect(cwd, standaloneAdvisorExecutor));
-}
 export function isPackageAdvisorTool(value: ToolDefinition | undefined): boolean {
   return Boolean(value && PACKAGE_TOOL_IDENTITY in value);
 }

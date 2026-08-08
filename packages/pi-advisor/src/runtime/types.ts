@@ -1,19 +1,10 @@
-import {
-  createAgentSession,
-  type AgentSession,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { type AgentSession, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import type { SynchronousIngress } from "pi-cosmic-core";
 import type { ResolvedAdvisorConfig } from "../config/options.ts";
-import {
-  AdvisorModelError,
-  createAdvisorChildModel,
-  type AdvisorUsageTelemetry,
-} from "./client.ts";
-import { createAdvisorTools } from "./tools.ts";
+import { AdvisorModelError, type AdvisorUsageTelemetry } from "./client.ts";
 import {
   AdvisorFindingWireSchema,
   AdvisorSuggestionWireSchema,
@@ -70,20 +61,6 @@ export interface AdvisorRuntimeStartOptions {
   instructions?: string | undefined;
   onUsage?: ((usage: AdvisorUsageTelemetry) => void) | undefined;
   onDiagnostic?: ((message: string) => void) | undefined;
-}
-export interface AdvisorRuntimeDriver {
-  readonly activeToolNames: readonly string[];
-  start(options: AdvisorRuntimeStartOptions): Promise<void>;
-  checkpoint(request: AdvisorCheckpointRequest): Promise<AdvisorCheckpoint>;
-  steer(observations: string): Promise<boolean>;
-  reprime(seed: string, stateSummary?: string): Promise<void>;
-  abort(): Promise<void>;
-  dispose(): Promise<void>;
-}
-export interface AdvisorRuntimeDependencies {
-  createChildModel?: typeof createAdvisorChildModel;
-  createSession?: typeof createAgentSession;
-  createTools?: typeof createAdvisorTools;
 }
 export interface ActiveCheckpointFinalization {
   epoch: number;

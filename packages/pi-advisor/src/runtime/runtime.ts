@@ -6,12 +6,12 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import { makeSynchronousIngress } from "pi-cosmic-core";
 import type { AdvisorPlatform } from "../boundary/executor.ts";
 import type { AdvisorToolRunner } from "./tools.ts";
+import { AdvisorChildFactory } from "./child-factory.ts";
 import { AdvisorRuntime } from "./session-runtime.ts";
 import {
   type ActiveAdvisorChild,
   type AdvisorCheckpoint,
   type AdvisorCheckpointRequest,
-  type AdvisorRuntimeDependencies,
   type AdvisorRuntimeStartOptions,
 } from "./types.ts";
 import { AdvisorModelError } from "./client.ts";
@@ -28,9 +28,12 @@ export {
   type AdvisorCheckpoint,
   type AdvisorCheckpointRequest,
   type AdvisorRuntimeStartOptions,
-  type AdvisorRuntimeDriver,
-  type AdvisorRuntimeDependencies,
 } from "./types.ts";
+export {
+  AdvisorChildFactory,
+  advisorChildFactoryLayer,
+  type AdvisorChildFactoryShape,
+} from "./child-factory.ts";
 export { parseAdvisorCheckpointEffect } from "./checkpoint-parse.ts";
 export { AdvisorRuntime } from "./session-runtime.ts";
 export { NoDiscoveryAdvisorResourceLoader } from "./resource-loader.ts";
@@ -59,15 +62,13 @@ export class AdvisorRuntimeService extends Context.Service<
   AdvisorRuntimeServiceShape
 >()("pi-advisor/runtime/runtime/AdvisorRuntimeService") {}
 
-export const advisorRuntimeServiceLayer = (
-  toolRunner: AdvisorToolRunner,
-  dependencies: AdvisorRuntimeDependencies = {},
-) =>
+export const advisorRuntimeServiceLayer = (toolRunner: AdvisorToolRunner) =>
   Layer.effect(
     AdvisorRuntimeService,
     Effect.acquireRelease(
       Effect.gen(function* () {
         const scope = yield* Effect.scope;
+        const childFactory = yield* AdvisorChildFactory;
         const platform = yield* Effect.context<AdvisorPlatform>();
         let handleControl: () => Effect.Effect<void, never, AdvisorPlatform> = () => Effect.void;
         const controlMailbox = yield* makeAdvisorControlMailbox(() =>
@@ -76,7 +77,7 @@ export const advisorRuntimeServiceLayer = (
         const activeChild = yield* SynchronizedRef.make<ActiveAdvisorChild | undefined>(undefined);
         const lifecycleLock = yield* Semaphore.make(1);
         const runtime = new AdvisorRuntime(
-          dependencies,
+          childFactory,
           toolRunner,
           scope,
           controlMailbox,

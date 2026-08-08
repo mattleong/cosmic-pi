@@ -12,13 +12,26 @@ import {
   type Component,
   type Focusable,
 } from "@earendil-works/pi-tui";
+import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
 import {
-  decodeFullScreenPrintable,
-  filterReservedKeyLabel,
   FullScreenKeymap,
   pageSteps,
   type FullScreenSelectionKeybindingId,
-} from "pi-cosmic-ui/manager/keybindings";
+} from "pi-cosmic-ui/manager/keymap";
+import {
+  computeDetailWindow,
+  confirmedReservedShortcut,
+  detailWindowPositionLabel,
+  listDetailMotion,
+  listDetailMotionFromAction,
+  listWindowStart,
+  padListDetailRow,
+  reconcileListSelection,
+  selectListIndex,
+  stackedListHeight,
+  wideListDetailGeometry,
+  type ListDetailPane,
+} from "pi-cosmic-ui/manager/list-detail";
 import {
   hasSubagentCapability,
   isActiveRunState,
@@ -85,7 +98,6 @@ const canStop = (run: SubagentRunView | undefined): boolean =>
   Boolean(run && isActiveRunState(run.state) && run.state !== "stopping");
 
 type FleetLayout = "wide" | "stacked" | "narrow";
-type FleetPane = "list" | "detail";
 type FleetPromptKind = "guidance" | "reply" | "next-assignment" | "resume" | "rename";
 
 const FLEET_SHORTCUTS = new Set(["i", "m", "n", "r", "t", "x"]);
@@ -97,11 +109,6 @@ type FleetPrompt = {
   readonly input: Input;
   readonly context?: string | undefined;
   feedback?: string | undefined;
-};
-
-const pad = (text: string, width: number): string => {
-  const clipped = truncateToWidth(text, Math.max(0, width));
-  return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
 };
 
 export class SubagentFleetComponent implements Component, Focusable {
@@ -119,7 +126,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   private notice: FleetNotice | undefined;
   private busyAction: string | undefined;
   private layout: FleetLayout = "narrow";
-  private pane: FleetPane = "list";
+  private pane: ListDetailPane = "list";
   private _focused = false;
   private readonly keymap = new FullScreenKeymap();
   private readonly options: FleetOptions;
@@ -137,19 +144,32 @@ export class SubagentFleetComponent implements Component, Focusable {
     if (this.prompt) this.prompt.input.focused = value;
   }
 
-  private select(index: number, runs: ReadonlyArray<SubagentRunView>): void {
-    const previousId = this.selectedId;
-    this.selected = Math.max(0, Math.min(Math.max(0, runs.length - 1), index));
-    this.selectedId = runs[this.selected]?.id;
-    if (previousId !== this.selectedId) {
+  private applySelection(next: ReturnType<typeof selectListIndex>): void {
+    this.selected = next.selected;
+    this.selectedId = next.selectedId;
+    if (next.changed) {
       this.detailScroll = 0;
       this.pendingStop = undefined;
     }
   }
 
+  private select(index: number, runs: ReadonlyArray<SubagentRunView>): void {
+    this.applySelection(
+      selectListIndex(
+        { selected: this.selected, selectedId: this.selectedId },
+        index,
+        runs.map((run) => run.id),
+      ),
+    );
+  }
+
   private reconcile(runs: ReadonlyArray<SubagentRunView>): void {
-    const existing = this.selectedId ? runs.findIndex((run) => run.id === this.selectedId) : -1;
-    this.select(existing >= 0 ? existing : this.selected, runs);
+    this.applySelection(
+      reconcileListSelection(
+        { selected: this.selected, selectedId: this.selectedId },
+        runs.map((run) => run.id),
+      ),
+    );
     const selected = runs[this.selected];
     if (this.pendingStop && (this.pendingStop !== selected?.id || !canStop(selected)))
       this.pendingStop = undefined;
@@ -271,16 +291,7 @@ export class SubagentFleetComponent implements Component, Focusable {
       });
       const run = selected && this.pendingStop === selected.id ? selected : undefined;
       this.pendingStop = undefined;
-      if (resolution?._tag === "Action" && resolution.action === "cancel") {
-        this.notice = { kind: "info", text: "Stop canceled." };
-        this.options.requestRender();
-      } else if (
-        resolution?._tag === "Shortcut" &&
-        resolution.key === "x" &&
-        decodeFullScreenPrintable(data) === "x" &&
-        run &&
-        canStop(run)
-      )
+      if (confirmedReservedShortcut(resolution, data, "x") && run && canStop(run))
         this.performAction(
           `Stopping ${sanitizeTerminalLine(run.name)}…`,
           `Stopped ${sanitizeTerminalLine(run.name)}.`,
@@ -349,89 +360,49 @@ export class SubagentFleetComponent implements Component, Focusable {
       return;
     }
 
-    const browsingDetail = this.pane === "detail" || (this.layout === "narrow" && this.details);
-    const detailSteps = pageSteps(this.detailPageSize);
-    const listSteps = pageSteps(this.options.getHeight() - 3);
-    switch (resolution.action) {
-      case "cancel":
-        if (browsingDetail) {
-          this.pane = "list";
-          this.details = false;
-          this.detailScroll = 0;
-          this.options.requestRender();
-        } else this.options.close();
-        return;
-      case "quit":
+    if (resolution.action === "confirm") {
+      if (selected) {
+        if (this.layout === "narrow") this.details = !this.details;
+        this.pane = this.layout === "narrow" && !this.details ? "list" : "detail";
+        this.detailScroll = 0;
+        this.keymap.resetChord();
+      }
+      this.options.requestRender();
+      return;
+    }
+    if (resolution.action === "help") this.alternateHelp = !this.alternateHelp;
+    const motion = listDetailMotionFromAction(resolution.action);
+    if (motion) {
+      const result = listDetailMotion(
+        {
+          pane: this.pane,
+          details: this.details,
+          selected: this.selected,
+          detailScroll: this.detailScroll,
+        },
+        motion,
+        {
+          layout: this.layout,
+          rowCount: runs.length,
+          hasSelection: selected !== undefined,
+          detailMaxScroll: this.detailMaxScroll,
+          detailSteps: pageSteps(this.detailPageSize),
+          listSteps: pageSteps(this.options.getHeight() - 3),
+        },
+      );
+      if (result._tag === "Close") {
         this.options.close();
         return;
-      case "back":
-        if (browsingDetail) {
-          this.pane = "list";
-          this.details = false;
-          this.detailScroll = 0;
-          this.keymap.resetChord();
-        }
-        break;
-      case "forward":
-        if (selected) {
-          this.pane = "detail";
-          if (this.layout === "narrow") this.details = true;
-          this.keymap.resetChord();
-        }
-        break;
-      case "confirm":
-        if (selected) {
-          if (this.layout === "narrow") this.details = !this.details;
-          else this.pane = "detail";
-          this.pane = this.layout === "narrow" && !this.details ? "list" : "detail";
-          this.detailScroll = 0;
-          this.keymap.resetChord();
-        }
-        break;
-      case "up":
-        if (browsingDetail) this.scrollDetail(1);
-        else this.select(this.selected - 1, runs);
-        break;
-      case "down":
-        if (browsingDetail) this.scrollDetail(-1);
-        else this.select(this.selected + 1, runs);
-        break;
-      case "half-page-up":
-        if (browsingDetail) this.scrollDetail(detailSteps.half);
-        else this.select(this.selected - listSteps.half, runs);
-        break;
-      case "half-page-down":
-        if (browsingDetail) this.scrollDetail(-detailSteps.half);
-        else this.select(this.selected + listSteps.half, runs);
-        break;
-      case "full-page-up":
-        if (browsingDetail) this.scrollDetail(detailSteps.page);
-        else this.select(this.selected - listSteps.page, runs);
-        break;
-      case "full-page-down":
-        if (browsingDetail) this.scrollDetail(-detailSteps.page);
-        else this.select(this.selected + listSteps.page, runs);
-        break;
-      case "first":
-        if (browsingDetail) this.scrollDetail(this.detailMaxScroll);
-        else this.select(0, runs);
-        break;
-      case "last":
-        if (browsingDetail) this.scrollDetail(-this.detailMaxScroll);
-        else this.select(runs.length - 1, runs);
-        break;
-      case "help":
-        this.alternateHelp = !this.alternateHelp;
-        break;
-      case "pending-first":
-      case "search":
-        break;
+      }
+      if (result._tag === "Update") {
+        this.pane = result.state.pane;
+        this.details = result.state.details;
+        this.detailScroll = result.state.detailScroll;
+        if (result.movedSelection) this.select(result.state.selected, runs);
+        if (result.resetChord) this.keymap.resetChord();
+      }
     }
     this.options.requestRender();
-  }
-
-  private scrollDetail(delta: number): void {
-    this.detailScroll = Math.max(0, Math.min(this.detailMaxScroll, this.detailScroll + delta));
   }
 
   render(width: number): string[] {
@@ -501,7 +472,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     const glyph = managerNoticeGlyph(notice.kind);
     const color =
       notice.kind === "error" ? "error" : notice.kind === "success" ? "success" : "muted";
-    return `${this.outerBorder("│")}${pad(
+    return `${this.outerBorder("│")}${padListDetailRow(
       this.options.theme.fg(color, `${glyph} ${sanitizeTerminalLine(notice.text)}`),
       inner,
     )}${this.outerBorder("│")}`;
@@ -559,7 +530,7 @@ export class SubagentFleetComponent implements Component, Focusable {
                 ...feedback,
               ];
     const frame = (line: string) =>
-      `${this.outerBorder("│")}${pad(line, inner)}${this.outerBorder("│")}`;
+      `${this.outerBorder("│")}${padListDetailRow(line, inner)}${this.outerBorder("│")}`;
     const rendered = rows.slice(0, height).map(frame);
     while (rendered.length < height) rendered.push(frame(""));
     return rendered;
@@ -592,19 +563,17 @@ export class SubagentFleetComponent implements Component, Focusable {
     const label = sanitizeTerminalLine(
       `${identity} · ${state} · ${run.writeIntent}${run.fastMode ? " · ⚡ fast" : ""}`,
     );
-    return pad(
+    return padListDetailRow(
       `${prefix} ${glyph} ${selected ? this.options.theme.fg("accent", label) : label}`,
       width,
     );
   }
 
   private visibleRuns(runs: ReadonlyArray<SubagentRunView>, limit: number) {
-    const size = Math.max(1, limit);
-    const start = Math.max(
-      0,
-      Math.min(Math.max(0, runs.length - size), this.selected - Math.floor(size / 2)),
-    );
-    return runs.slice(start, start + size).map((run, offset) => ({ run, index: start + offset }));
+    const start = listWindowStart(runs.length, this.selected, limit);
+    return runs
+      .slice(start, start + Math.max(1, limit))
+      .map((run, offset) => ({ run, index: start + offset }));
   }
 
   private listHeading(
@@ -719,29 +688,18 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   private detailWindow(lines: string[], height: number, width: number): string[] {
-    if (height <= 0) {
-      this.detailMaxScroll = 0;
-      this.detailPageSize = 1;
-      return [];
-    }
-    const hasOverflow = lines.length > height;
-    const bodyHeight = hasOverflow && height > 1 ? height - 1 : height;
-    this.detailPageSize = Math.max(1, bodyHeight);
-    if (this.detailScroll > 0 && lines.length > this.detailLineCount) {
-      this.detailScroll += lines.length - this.detailLineCount;
-    }
-    this.detailLineCount = lines.length;
-    this.detailMaxScroll = Math.max(0, lines.length - bodyHeight);
-    this.detailScroll = Math.min(this.detailScroll, this.detailMaxScroll);
-    const start = Math.max(0, lines.length - bodyHeight - this.detailScroll);
-    const visible = lines.slice(start, start + bodyHeight);
-    if (!hasOverflow) return visible;
-    const end = Math.min(lines.length, start + bodyHeight);
-    const position = this.options.theme.fg(
-      "dim",
-      ` ${start + 1}–${end} of ${lines.length} · C-u/d half-page `,
-    );
-    return [pad(position, width), ...visible];
+    const window = computeDetailWindow({
+      lines,
+      height,
+      previous: { scroll: this.detailScroll, lineCount: this.detailLineCount },
+    });
+    this.detailScroll = window.scroll;
+    this.detailMaxScroll = window.maxScroll;
+    this.detailPageSize = window.pageSize;
+    this.detailLineCount = window.lineCount;
+    if (!window.overflow) return [...window.visible];
+    const position = this.options.theme.fg("dim", detailWindowPositionLabel(window.overflow));
+    return [padListDetailRow(position, width), ...window.visible];
   }
 
   private renderWide(
@@ -750,9 +708,11 @@ export class SubagentFleetComponent implements Component, Focusable {
     runs: ReadonlyArray<SubagentRunView>,
     selected: SubagentRunView | undefined,
   ): string[] {
-    const inner = width - 2;
-    const leftWidth = Math.max(38, Math.floor(inner * 0.42));
-    const rightWidth = inner - leftWidth - 1;
+    const { listWidth: leftWidth, detailWidth: rightWidth } = wideListDetailGeometry(
+      width,
+      38,
+      0.42,
+    );
     const visible = this.visibleRuns(runs, Math.max(1, height - 1));
     const left = [
       this.options.theme.fg(
@@ -765,9 +725,9 @@ export class SubagentFleetComponent implements Component, Focusable {
     return Array.from(
       { length: height },
       (_, index) =>
-        `${this.outerBorder("│")}${pad(left[index] ?? "", leftWidth)}${this.innerBorder(
+        `${this.outerBorder("│")}${padListDetailRow(left[index] ?? "", leftWidth)}${this.innerBorder(
           "│",
-        )}${pad(detail[index] ?? "", rightWidth)}${this.outerBorder("│")}`,
+        )}${padListDetailRow(detail[index] ?? "", rightWidth)}${this.outerBorder("│")}`,
     );
   }
 
@@ -778,7 +738,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     selected: SubagentRunView | undefined,
   ): string[] {
     const inner = width - 2;
-    const listHeight = Math.max(3, Math.min(runs.length + 1, Math.floor(height * 0.4)));
+    const listHeight = stackedListHeight(height, runs.length);
     const visible = this.visibleRuns(runs, listHeight - 1);
     const list = [
       this.options.theme.fg(
@@ -791,7 +751,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     const remaining = Math.max(0, height - list.length - 1);
     const detail = this.detailWindow(this.detailLines(selected, inner), remaining, inner);
     const frame = (line: string) =>
-      `${this.outerBorder("│")}${pad(line, inner)}${this.outerBorder("│")}`;
+      `${this.outerBorder("│")}${padListDetailRow(line, inner)}${this.outerBorder("│")}`;
     const lines = [...list.map(frame), divider, ...detail.map(frame)];
     while (lines.length < height) lines.push(frame(""));
     return lines.slice(0, height);
@@ -828,7 +788,7 @@ export class SubagentFleetComponent implements Component, Focusable {
       this.detailLineCount = 0;
     }
     const frame = (line: string) =>
-      `${this.outerBorder("│")}${pad(line, inner)}${this.outerBorder("│")}`;
+      `${this.outerBorder("│")}${padListDetailRow(line, inner)}${this.outerBorder("│")}`;
     const rendered = lines.slice(0, height).map(frame);
     while (rendered.length < height) rendered.push(frame(""));
     return rendered;

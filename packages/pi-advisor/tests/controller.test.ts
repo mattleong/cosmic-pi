@@ -7,21 +7,22 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { advisorControllerLayer } from "../src/application/controller.ts";
-import { advisorRuntimeEffectsFromDriver } from "../src/application/controller-helpers.ts";
 import {
   AdvisorController,
   type AdvisorControllerApplicationOptions,
 } from "../src/application/controller-types.ts";
 import { advisorControllerApplicationLayer } from "../src/application/lifecycle.ts";
-import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
+import { advisorPlatformLayer } from "../src/boundary/executor.ts";
 import { makeAdvisorHostBindings } from "../src/boundary/host-bindings.ts";
 import { captureAdvisorSessionInputEffect } from "../src/boundary/host-context.ts";
 import { PiCommandAdapter } from "../src/boundary/host-commands.ts";
 import { hostNotifierLayer } from "../src/boundary/host-notifier.ts";
 import { failureLoggerLayer } from "../src/logging/logger.ts";
+import { standaloneAdvisorExecutor } from "./support/executor.ts";
 import { configStoreLayerFromLoad } from "./support/layers.ts";
 import { advisorReviewQueueServiceLayer } from "../src/queue/service.ts";
-import { advisorRuntimeServiceLayer, type AdvisorRuntimeDriver } from "../src/runtime/runtime.ts";
+import { AdvisorModelError } from "../src/runtime/client.ts";
+import { AdvisorRuntimeService } from "../src/runtime/runtime.ts";
 
 describe("AdvisorController", () => {
   it.effect("interrupts replacement acquisition and releases its scoped resource", () =>
@@ -68,62 +69,27 @@ describe("AdvisorController", () => {
     ).pipe(Effect.andThen(Effect.sync(() => expect(releases).toBe(1))));
   });
 
-  it.effect("keeps scoped finalization running when dependency driver cleanup rejects", () => {
-    const events: string[] = [];
-    const runtime = advisorRuntimeEffectsFromDriver({
-      activeToolNames: [],
-      start: () => Promise.resolve(),
-      checkpoint: () => Promise.reject(new Error("unused")),
-      steer: () => Promise.resolve(true),
-      reprime: () => Promise.resolve(),
-      abort: () => {
-        events.push("abort");
-        return Promise.reject(new Error("abort rejected"));
-      },
-      dispose: () => {
-        events.push("dispose");
-        return Promise.reject(new Error("dispose rejected"));
-      },
-    });
-
-    return Effect.scoped(
-      Effect.acquireRelease(Effect.void, () =>
-        runtime.abort().pipe(
-          Effect.andThen(runtime.dispose()),
-          Effect.andThen(
-            Effect.sync(() => {
-              events.push("finalizer continued");
-            }),
-          ),
-        ),
-      ),
-    ).pipe(
-      Effect.andThen(
-        Effect.sync(() => expect(events).toEqual(["abort", "dispose", "finalizer continued"])),
-      ),
-    );
-  });
-
   it.effect("owns real session config, child replacement, and shutdown state", () => {
     let starts = 0;
     let disposals = 0;
-    const driver: AdvisorRuntimeDriver = {
-      get activeToolNames() {
-        return [];
-      },
-      start: () => {
-        starts += 1;
-        return Promise.resolve();
-      },
-      checkpoint: () => Promise.reject(new Error("unused")),
-      steer: () => Promise.resolve(true),
-      reprime: () => Promise.resolve(),
-      abort: () => Promise.resolve(),
-      dispose: () => {
-        disposals += 1;
-        return Promise.resolve();
-      },
-    };
+    const runtimeServiceStub = Layer.succeed(
+      AdvisorRuntimeService,
+      AdvisorRuntimeService.of({
+        activeToolNames: () => [],
+        start: () =>
+          Effect.sync(() => {
+            starts += 1;
+          }),
+        checkpoint: () => Effect.fail(new AdvisorModelError({ message: "unused" })),
+        steer: () => Effect.succeed(true),
+        reprime: () => Effect.void,
+        abort: () => Effect.void,
+        dispose: () =>
+          Effect.sync(() => {
+            disposals += 1;
+          }),
+      }),
+    );
     const pi = {
       on: () => undefined,
       registerCommand: () => undefined,
@@ -161,12 +127,12 @@ describe("AdvisorController", () => {
       executor: standaloneAdvisorExecutor,
       dependencies: {
         configStore,
-        createRuntime: () => driver,
+        runtimeService: runtimeServiceStub,
       },
       hostBindings: makeAdvisorHostBindings(),
     };
     const dependencies = Layer.mergeAll(
-      advisorRuntimeServiceLayer(standaloneAdvisorExecutor),
+      runtimeServiceStub,
       advisorReviewQueueServiceLayer,
       PiCommandAdapter.layer,
       configStore,

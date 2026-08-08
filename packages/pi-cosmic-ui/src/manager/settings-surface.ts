@@ -11,13 +11,13 @@ import {
   type Focusable,
   type SettingItem,
 } from "@earendil-works/pi-tui";
+import type { FullScreenKeymapOptions } from "./keymap.ts";
 import {
   settingsHintRenderer,
   settingsSurfaceBridge,
   VimSettingsAdapter,
-  type FullScreenKeymapOptions,
   type SettingsSurfaceBridgeOptions,
-} from "./keybindings.ts";
+} from "./settings-adapter.ts";
 
 type SettingsListTheme = ConstructorParameters<typeof SettingsList>[2];
 

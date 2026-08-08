@@ -16,7 +16,7 @@ import {
   commandRegistry,
   handlerRegistry,
 } from "./support/extension-host.ts";
-import { controllableRuntimeDriver } from "./support/runtime-driver.ts";
+import { controllableRuntimeService } from "./support/runtime-service.ts";
 
 function finding(
   request: AdvisorCheckpointRequest,
@@ -93,7 +93,7 @@ function harness(
   const { commands, registerCommand } = commandRegistry<{
     handler: (args: string, ctx: never) => unknown;
   }>();
-  const { driver, pending, requests } = controllableRuntimeDriver();
+  const { layer: runtimeServiceLayer, pending, requests } = controllableRuntimeService();
   const entries: Array<Record<string, unknown>> = [
     {
       id: "anchor",
@@ -149,8 +149,7 @@ function harness(
         "/config",
       ),
     ),
-    createRuntime: () => driver,
-    catchUpTimeoutMs: 25,
+    runtimeService: runtimeServiceLayer,
   })(pi);
   const emit = async (name: string, event: unknown) => registry.emitWithContext(name, event, ctx);
   return { pi, ctx, commands, requests, pending, entries, sent, emit };

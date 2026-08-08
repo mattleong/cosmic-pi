@@ -32,7 +32,7 @@ import {
   commandRegistry,
   handlerRegistry,
 } from "./support/extension-host.ts";
-import { controllableRuntimeDriver } from "./support/runtime-driver.ts";
+import { controllableRuntimeService } from "./support/runtime-service.ts";
 
 const resolvedConfig = (): ResolvedAdvisorConfig =>
   resolvedAdvisorConfig({
@@ -72,7 +72,11 @@ function makeHarness() {
   const { commands, registerCommand } = commandRegistry();
   const sendMessage = vi.fn();
   const branch = anchorUserBranch();
-  const { driver, pending, requests } = controllableRuntimeDriver({ activeToolNames: ["read"] });
+  const {
+    layer: runtimeServiceLayer,
+    pending,
+    requests,
+  } = controllableRuntimeService({ activeToolNames: ["read"] });
   const pi = advisorExtensionApi({
     on: registry.on,
     registerCommand,
@@ -86,7 +90,7 @@ function makeHarness() {
 
   createAdvisorExtension({
     configStore: configStoreLayerFromLoad(resolvedConfig),
-    createRuntime: () => driver,
+    runtimeService: runtimeServiceLayer,
   })(pi);
 
   const emit = async (name: string, event: unknown): Promise<void> =>
@@ -95,7 +99,6 @@ function makeHarness() {
   return {
     commands,
     ctx,
-    driver,
     emit,
     pending,
     requests,

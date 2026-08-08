@@ -2,8 +2,14 @@
 // @effect-diagnostics effect/asyncFunction:off
 import { ModelRuntime, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AdvisorModelError, createAdvisorChildModel } from "../src/runtime/client.ts";
+import { AdvisorModelError, createAdvisorChildModelEffect } from "../src/runtime/client.ts";
 import type { ResolvedAdvisorConfig } from "../src/config/options.ts";
+import { standaloneAdvisorExecutor } from "./support/executor.ts";
+
+const createAdvisorChildModel = (
+  ctx: Pick<ExtensionContext, "modelRegistry">,
+  resolved: ResolvedAdvisorConfig,
+) => standaloneAdvisorExecutor.run(createAdvisorChildModelEffect(ctx, resolved));
 
 function config(overrides: Partial<ResolvedAdvisorConfig> = {}): ResolvedAdvisorConfig {
   return {

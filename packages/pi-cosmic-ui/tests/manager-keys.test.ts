@@ -2,16 +2,20 @@ import { describe, expect, it } from "vitest";
 import {
   filterReservedKeyLabel,
   formatFullScreenKeyId,
-  FullScreenKeymap,
   fullScreenKeybindingLabel,
-  fullScreenSettingsHint,
+} from "../src/manager/key-labels.ts";
+import {
+  FullScreenKeymap,
   pageSteps,
+  type FullScreenResolution,
+  type FullScreenSelectionKeybindingId,
+} from "../src/manager/keymap.ts";
+import {
+  fullScreenSettingsHint,
   settingsHintRenderer,
   settingsSurfaceBridge,
   VimSettingsAdapter,
-  type FullScreenResolution,
-  type FullScreenSelectionKeybindingId,
-} from "../src/manager/keybindings.ts";
+} from "../src/manager/settings-adapter.ts";
 
 const resolvedAction = (resolution: FullScreenResolution | undefined) =>
   resolution?._tag === "Action" ? resolution.action : resolution?._tag;

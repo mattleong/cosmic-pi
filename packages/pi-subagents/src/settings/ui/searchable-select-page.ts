@@ -13,11 +13,11 @@ import {
 import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import {
   FullScreenKeymap,
-  fullScreenSettingsHint,
   pageSteps,
   type FullScreenSelectionKeybindingId,
   type PageSteps,
-} from "pi-cosmic-ui/manager/keybindings";
+} from "pi-cosmic-ui/manager/keymap";
+import { fullScreenSettingsHint } from "pi-cosmic-ui/manager/settings-adapter";
 
 export interface SearchableSelectPageChoice<A> {
   readonly value: string;

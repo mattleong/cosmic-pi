@@ -375,7 +375,9 @@ export function registerSettingsController(
             ctx.ui.notify(
               dispatch.reason === "invalid-value"
                 ? `Invalid value for ${dispatch.id}. Expected one of: ${dispatch.allowedValues.join(", ")}`
-                : `Unknown setting: ${dispatch.id}`,
+                : dispatch.reason === "missing-value"
+                  ? `Missing value for ${dispatch.id}. Usage: /openai-settings <id> <value>`
+                  : `Unknown setting: ${dispatch.id}`,
               "error",
             ),
           );

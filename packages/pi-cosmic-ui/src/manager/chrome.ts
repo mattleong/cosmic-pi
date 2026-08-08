@@ -30,6 +30,19 @@ const MANAGER_NOTICE_GLYPHS: Readonly<Record<ManagerNoticeKind, string>> = {
 /** Shared status glyph vocabulary for manager notices and feedback lines. */
 export const managerNoticeGlyph = (kind: ManagerNoticeKind): string => MANAGER_NOTICE_GLYPHS[kind];
 
+export type ManagerStateGlyphKind = "done" | "failed" | "stopped" | "stopping";
+
+const MANAGER_STATE_GLYPHS: Readonly<Record<ManagerStateGlyphKind, string>> = {
+  done: "✓",
+  failed: "×",
+  stopped: "■",
+  stopping: "◐",
+};
+
+/** Shared terminal-state glyph pairs for manager rows (`/subagents`, `/ps`). */
+export const managerStateGlyph = (kind: ManagerStateGlyphKind): string =>
+  MANAGER_STATE_GLYPHS[kind];
+
 export type ManagerFooterGroup = string | undefined;
 
 export const managerFooterLine = (groups: ReadonlyArray<ManagerFooterGroup>): string =>

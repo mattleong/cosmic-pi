@@ -1,6 +1,5 @@
 /* oxlint-disable typescript/no-this-alias -- Effect.gen uses an explicit stable class receiver. */
 import {
-  createAgentSession,
   SessionManager,
   SettingsManager,
   type AgentSession,
@@ -15,9 +14,10 @@ import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { makeSynchronousIngress, type SynchronousIngress } from "pi-cosmic-core";
 import { ADVISOR_OPERATION_TIMEOUT_MS, ADVISOR_RECENT_CONTEXT_CHARS } from "../config/options.ts";
-import { AdvisorTrajectoryDetector } from "../review/trajectory.ts";
-import { createAdvisorChildModelEffect, AdvisorModelError } from "./client.ts";
-import { ADVISOR_TOOL_NAMES, createAdvisorToolsEffect, type AdvisorToolRunner } from "./tools.ts";
+import { emptyAdvisorTrajectoryDetector, pushAdvisorTrajectory } from "../review/trajectory.ts";
+import { AdvisorModelError } from "./client.ts";
+import type { AdvisorChildFactoryShape } from "./child-factory.ts";
+import { ADVISOR_TOOL_NAMES, type AdvisorToolRunner } from "./tools.ts";
 import { parseAdvisorCheckpointEffect } from "./checkpoint-parse.ts";
 import {
   buildCheckpointFinalizationPrompt,
@@ -47,7 +47,6 @@ import {
   type AdvisorChildEvent,
   type AdvisorFinalizationCompletion,
   type AdvisorForcedDetach,
-  type AdvisorRuntimeDependencies,
   type AdvisorRuntimeStartOptions,
 } from "./types.ts";
 import { NoDiscoveryAdvisorResourceLoader } from "./resource-loader.ts";
@@ -60,12 +59,12 @@ export class AdvisorRuntime {
   private options: AdvisorRuntimeStartOptions | undefined;
   private toolRounds = 0;
   private streamedChars = 0;
-  private childStreamDetector = new AdvisorTrajectoryDetector();
+  private childStreamState = emptyAdvisorTrajectoryDetector();
   private resetRequiredReason: string | undefined;
   private lastStopError: string | undefined;
   private pendingSeed: { seed: string; stateSummary?: string; maxContextChars: number } | undefined;
   private activeCheckpoint: ActiveCheckpointFinalization | undefined;
-  private readonly dependencies: AdvisorRuntimeDependencies;
+  private readonly childFactory: AdvisorChildFactoryShape;
   private readonly toolRunner: AdvisorToolRunner;
   private readonly resourceScope: Scope.Scope;
   private readonly controlMailbox: SynchronousIngress<void>;
@@ -75,14 +74,14 @@ export class AdvisorRuntime {
   private readonly sessionSafety: ReturnType<typeof makeAdvisorSessionSafety>;
   private pendingStartCleanup: Deferred.Deferred<void> | undefined;
   constructor(
-    dependencies: AdvisorRuntimeDependencies,
+    childFactory: AdvisorChildFactoryShape,
     toolRunner: AdvisorToolRunner,
     resourceScope: Scope.Scope,
     controlMailbox: SynchronousIngress<void>,
     activeChild: SynchronizedRef.SynchronizedRef<ActiveAdvisorChild | undefined>,
     lifecycleLock: Semaphore.Semaphore,
   ) {
-    this.dependencies = dependencies;
+    this.childFactory = childFactory;
     this.toolRunner = toolRunner;
     this.resourceScope = resourceScope;
     this.controlMailbox = controlMailbox;
@@ -104,8 +103,10 @@ export class AdvisorRuntime {
         if (this.streamedChars > MAX_ADVISOR_STREAM_CHARS)
           this.invalidateForReprime("Advisor child stream exceeded the maximum response size.");
         if (kind === "thinking" || kind === "text") {
-          const signal = this.childStreamDetector.push(kind, text);
-          if (signal) this.invalidateForReprime(`Advisor child stream loop: ${signal.reason}.`);
+          const result = pushAdvisorTrajectory(this.childStreamState, kind, text);
+          this.childStreamState = result.state;
+          if (result.signal)
+            this.invalidateForReprime(`Advisor child stream loop: ${result.signal.reason}.`);
         }
       },
       recordToolRound: () => {
@@ -151,20 +152,10 @@ export class AdvisorRuntime {
         return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
       self.options = options;
       const initialize = Effect.gen(function* () {
-        const child = self.dependencies.createChildModel
-          ? yield* Effect.tryPromise({
-              try: () => self.dependencies.createChildModel!(options.ctx, options.config),
-              catch: toModelError("Advisor model initialization failed."),
-            })
-          : yield* createAdvisorChildModelEffect(options.ctx, options.config);
+        const child = yield* self.childFactory.createChildModel(options.ctx, options.config);
         if (startEpoch !== self.epoch)
           return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
-        const tools = self.dependencies.createTools
-          ? yield* Effect.tryPromise({
-              try: () => self.dependencies.createTools!(options.ctx.cwd),
-              catch: toModelError("Advisor tools could not be created."),
-            })
-          : yield* createAdvisorToolsEffect(options.ctx.cwd, self.toolRunner);
+        const tools = yield* self.childFactory.createTools(options.ctx.cwd, self.toolRunner);
         if (startEpoch !== self.epoch)
           return yield* new AdvisorModelError({ message: "Advisor runtime start became stale." });
         const createOptions: CreateAgentSessionOptions = {
@@ -189,7 +180,7 @@ export class AdvisorRuntime {
         const result = yield* Effect.uninterruptibleMask(() =>
           Effect.interruptible(
             createChildSessionEffect(
-              () => (self.dependencies.createSession ?? createAgentSession)(createOptions),
+              () => self.childFactory.createSession(createOptions),
               startCleanup,
             ),
           ).pipe(
@@ -246,7 +237,7 @@ export class AdvisorRuntime {
       const checkpointEpoch = self.epoch;
       self.toolRounds = 0;
       self.streamedChars = 0;
-      self.childStreamDetector.reset();
+      self.childStreamState = emptyAdvisorTrajectoryDetector();
       self.resetRequiredReason = undefined;
       self.lastStopError = undefined;
       const seed = self.pendingSeed;

@@ -7,23 +7,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
-  loadAdvisorInstructions,
-  loadAdvisorInstructionsAsync,
+  loadAdvisorInstructionsEffect,
   MAX_INSTRUCTION_BYTES,
 } from "../src/review/instructions.ts";
+import { standaloneAdvisorExecutor } from "./support/executor.ts";
 
-function withTempDir<T>(run: (directory: string) => T): T {
+const load = (configPath: string, cwd: string, projectTrusted: boolean) =>
+  standaloneAdvisorExecutor.run(loadAdvisorInstructionsEffect(configPath, cwd, projectTrusted));
+
+async function withTempDir<T>(run: (directory: string) => Promise<T>): Promise<T> {
   const directory = mkdtempSync(join(tmpdir(), "pi-advisor-instructions-"));
   try {
-    return run(directory);
+    return await run(directory);
   } finally {
     rmSync(directory, { force: true, recursive: true });
   }
 }
 
 describe("advisor instructions", () => {
-  test("loads global guidance before trusted project guidance", () => {
-    withTempDir((directory) => {
+  test("loads global guidance before trusted project guidance", async () => {
+    await withTempDir(async (directory) => {
       const agentDir = join(directory, "agent");
       const projectDir = join(directory, "project");
       const configPath = join(agentDir, "extensions", "pi-advisor.json");
@@ -32,7 +35,7 @@ describe("advisor instructions", () => {
       writeFileSync(join(agentDir, "ADVISOR.md"), "Watch global invariants.", "utf8");
       writeFileSync(join(projectDir, ".pi", "ADVISOR.md"), "Watch the project queue.", "utf8");
 
-      const loaded = loadAdvisorInstructions(configPath, projectDir, true);
+      const loaded = await load(configPath, projectDir, true);
 
       expect(loaded.paths).toEqual([
         join(agentDir, "ADVISOR.md"),
@@ -46,15 +49,15 @@ describe("advisor instructions", () => {
     });
   });
 
-  test("does not load project guidance for an untrusted project", () => {
-    withTempDir((directory) => {
+  test("does not load project guidance for an untrusted project", async () => {
+    await withTempDir(async (directory) => {
       const agentDir = join(directory, "agent");
       const projectDir = join(directory, "project");
       const configPath = join(agentDir, "extensions", "pi-advisor.json");
       mkdirSync(join(projectDir, ".pi"), { recursive: true });
       writeFileSync(join(projectDir, ".pi", "ADVISOR.md"), "Untrusted guidance.", "utf8");
 
-      expect(loadAdvisorInstructions(configPath, projectDir, false)).toEqual({ paths: [] });
+      expect(await load(configPath, projectDir, false)).toEqual({ paths: [] });
     });
   });
 
@@ -66,7 +69,7 @@ describe("advisor instructions", () => {
       mkdirSync(agentDir, { recursive: true });
       writeFileSync(join(agentDir, "ADVISOR.md"), "é".repeat(MAX_INSTRUCTION_BYTES), "utf8");
 
-      const loaded = await loadAdvisorInstructionsAsync(configPath, directory, false);
+      const loaded = await load(configPath, directory, false);
       expect(loaded.content).toContain("[Advisor guidance truncated]");
       expect(loaded.content?.length).toBeLessThan(40_000);
     } finally {
@@ -83,15 +86,12 @@ describe("advisor instructions", () => {
       const outside = join(directory, "outside.md");
       writeFileSync(outside, "outside guidance");
       symlinkSync(outside, join(agentDir, "ADVISOR.md"));
-      expect(loadAdvisorInstructions(configPath, directory, false)).toEqual({ paths: [] });
-      expect(await loadAdvisorInstructionsAsync(configPath, directory, false)).toEqual({
-        paths: [],
-      });
+      expect(await load(configPath, directory, false)).toEqual({ paths: [] });
       rmSync(join(agentDir, "ADVISOR.md"));
       if (process.platform !== "win32") {
         expect(spawnSync("mkfifo", [join(agentDir, "ADVISOR.md")]).status).toBe(0);
         const started = performance.now();
-        expect(await loadAdvisorInstructionsAsync(configPath, directory, false)).toEqual({
+        expect(await load(configPath, directory, false)).toEqual({
           paths: [],
         });
         expect(performance.now() - started).toBeLessThan(1_000);
@@ -101,13 +101,13 @@ describe("advisor instructions", () => {
     }
   });
 
-  test("ignores missing, empty, and unreadable-looking guidance paths", () => {
-    withTempDir((directory) => {
+  test("ignores missing, empty, and unreadable-looking guidance paths", async () => {
+    await withTempDir(async (directory) => {
       const configPath = join(directory, "agent", "extensions", "pi-advisor.json");
       mkdirSync(join(directory, "agent"), { recursive: true });
       writeFileSync(join(directory, "agent", "ADVISOR.md"), "   ", "utf8");
 
-      expect(loadAdvisorInstructions(configPath, join(directory, "project"), true)).toEqual({
+      expect(await load(configPath, join(directory, "project"), true)).toEqual({
         paths: [],
       });
     });

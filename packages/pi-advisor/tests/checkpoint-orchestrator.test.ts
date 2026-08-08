@@ -3,11 +3,8 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import {
-  advisorPlatformLayer,
-  standaloneAdvisorExecutor,
-  type AdvisorEffectExecutor,
-} from "../src/boundary/executor.ts";
+import { advisorPlatformLayer, type AdvisorEffectExecutor } from "../src/boundary/executor.ts";
+import { standaloneAdvisorExecutor } from "./support/executor.ts";
 import { makeCheckpointOrchestrator } from "../src/checkpoint/orchestrator.ts";
 
 const makeTestCheckpointOrchestrator = (

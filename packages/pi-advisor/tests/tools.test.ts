@@ -11,10 +11,14 @@ import {
   ADVISOR_TOOL_LIMITS,
   ADVISOR_TOOL_NAMES,
   AdvisorToolSafetyError,
-  createAdvisorTools,
+  createAdvisorToolsEffect,
   isPackageAdvisorTool,
 } from "../src/runtime/tools.ts";
 import { _readOnlyFileSystemTest } from "../src/boundary/read-only-fs.ts";
+import { standaloneAdvisorExecutor } from "./support/executor.ts";
+
+const createAdvisorTools = (cwd: string) =>
+  standaloneAdvisorExecutor.run(createAdvisorToolsEffect(cwd, standaloneAdvisorExecutor));
 
 const directories: string[] = [];
 

@@ -1,10 +1,8 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
 // @effect-diagnostics effect/asyncFunction:off
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import {
-  fullScreenKeybindingLabel,
-  type FullScreenSelectionKeybindingId,
-} from "pi-cosmic-ui/manager/keybindings";
+import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
+import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import { startHostUiTicker, type BackgroundTerminalProjectionBridge } from "../boundary/host-ui.ts";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { ProcessManagerComponent } from "../ui/manager.ts";

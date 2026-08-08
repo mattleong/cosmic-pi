@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { pageSteps } from "pi-cosmic-ui/manager/keybindings";
+import { pageSteps } from "pi-cosmic-ui/manager/keymap";
 import { describe, expect, it, vi } from "vitest";
 import {
   nextSearchableSelectIndex,

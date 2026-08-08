@@ -1,30 +1,48 @@
 import { describe, expect, test } from "vitest";
 import {
-  AdvisorToolTrajectoryDetector,
-  AdvisorTrajectoryDetector,
+  advisorActiveToolCount,
+  emptyAdvisorToolTrajectoryDetector,
+  emptyAdvisorTrajectoryDetector,
+  endAdvisorToolTrajectory,
+  isMateriallyNovelAdvisorTerminal,
+  markConcreteAdvisorProgress,
+  pushAdvisorTrajectory,
+  startAdvisorToolTrajectory,
+  type AdvisorToolTrajectoryDetectorState,
+  type AdvisorTrajectoryDetectorState,
+  type TrajectoryChannel,
+  type TrajectorySignal,
+  type ToolTrajectorySignal,
 } from "../src/review/trajectory.ts";
 
 const repeatedParagraph =
   "I am reconsidering the same implementation approach while checking the identical constraints and reaching the same conclusion without taking a concrete action.";
 
-describe("AdvisorTrajectoryDetector", () => {
-  test("detects a long verbatim streamed repetition", () => {
-    const detector = new AdvisorTrajectoryDetector();
-    const unit = "repeat-this-unit";
+describe("advisor stream trajectory state", () => {
+  const push = (
+    state: AdvisorTrajectoryDetectorState,
+    channel: TrajectoryChannel,
+    delta: string,
+  ): { state: AdvisorTrajectoryDetectorState; signal?: TrajectorySignal | undefined } =>
+    pushAdvisorTrajectory(state, channel, delta);
 
-    expect(detector.push("thinking", unit.repeat(12))).toMatchObject({
-      channel: "thinking",
-    });
+  test("detects a long verbatim streamed repetition", () => {
+    const unit = "repeat-this-unit";
+    const result = push(emptyAdvisorTrajectoryDetector(), "thinking", unit.repeat(12));
+    expect(result.signal).toMatchObject({ channel: "thinking" });
   });
 
   test("detects a cluster of highly similar substantial segments", () => {
-    const detector = new AdvisorTrajectoryDetector();
-    let signal;
+    let state = emptyAdvisorTrajectoryDetector();
+    let signal: TrajectorySignal | undefined;
     for (let index = 0; index < 5; index += 1) {
-      signal = detector.push(
+      const result = push(
+        state,
         "thinking",
         `${repeatedParagraph} Iteration ${index} considers the same facts again.\n\n`,
       );
+      state = result.state;
+      signal = result.signal;
     }
 
     expect(signal).toMatchObject({ channel: "thinking" });
@@ -32,7 +50,7 @@ describe("AdvisorTrajectoryDetector", () => {
   });
 
   test("does not flag varied concrete progress", () => {
-    const detector = new AdvisorTrajectoryDetector();
+    let state = emptyAdvisorTrajectoryDetector();
     const segments = [
       "Inspecting src/config.ts revealed the normalization boundary and the exact default values used by the settings controller.",
       "The extension tests now show how turn_end is detached from the provider request and how stale generations are rejected.",
@@ -42,33 +60,40 @@ describe("AdvisorTrajectoryDetector", () => {
     ];
 
     for (const segment of segments) {
-      expect(detector.push("text", `${segment}\n\n`)).toBeUndefined();
+      const result = push(state, "text", `${segment}\n\n`);
+      state = result.state;
+      expect(result.signal).toBeUndefined();
     }
   });
 
   test("keeps reasoning and visible prose histories separate and resets", () => {
-    const detector = new AdvisorTrajectoryDetector();
+    let state = emptyAdvisorTrajectoryDetector();
     for (let index = 0; index < 3; index += 1) {
-      expect(detector.push("thinking", `${repeatedParagraph}\n\n`)).toBeUndefined();
+      const result = push(state, "thinking", `${repeatedParagraph}\n\n`);
+      state = result.state;
+      expect(result.signal).toBeUndefined();
     }
-    expect(detector.push("text", `${repeatedParagraph}\n\n`)).toBeUndefined();
+    const text = push(state, "text", `${repeatedParagraph}\n\n`);
+    state = text.state;
+    expect(text.signal).toBeUndefined();
 
-    detector.reset();
-    expect(detector.push("thinking", `${repeatedParagraph}\n\n`)).toBeUndefined();
+    // A fresh empty state is the reset; the prior history no longer contributes.
+    const fresh = push(emptyAdvisorTrajectoryDetector(), "thinking", `${repeatedParagraph}\n\n`);
+    expect(fresh.signal).toBeUndefined();
   });
 });
 
-describe("AdvisorToolTrajectoryDetector", () => {
+describe("advisor tool trajectory state", () => {
+  type ToolState = AdvisorToolTrajectoryDetectorState;
   const end = (
-    detector: AdvisorToolTrajectoryDetector,
+    state: ToolState,
     id: string,
     args: unknown,
     result: unknown,
     isError = false,
     toolName = "read",
-  ) => {
-    detector.start(id);
-    return detector.end({
+  ): { state: ToolState; signal?: ToolTrajectorySignal | undefined } =>
+    endAdvisorToolTrajectory(startAdvisorToolTrajectory(state, id), {
       parentTurnId: 7,
       toolCallId: id,
       toolName,
@@ -76,55 +101,60 @@ describe("AdvisorToolTrajectoryDetector", () => {
       result,
       isError,
     });
-  };
 
   test("detects repeated identical calls/results with bounded redacted evidence", () => {
-    const detector = new AdvisorToolTrajectoryDetector();
-    expect(
-      end(detector, "1", { path: "src/a.ts", token: "sk-secretsecretsecret" }, "same"),
-    ).toBeUndefined();
-    expect(end(detector, "2", { token: "different", path: "src/a.ts" }, "same")).toBeUndefined();
-    const signal = end(detector, "3", { path: "src/a.ts", token: "third" }, "same");
-    expect(signal).toMatchObject({
+    let state = emptyAdvisorToolTrajectoryDetector();
+    const first = end(state, "1", { path: "src/a.ts", token: "sk-secretsecretsecret" }, "same");
+    state = first.state;
+    expect(first.signal).toBeUndefined();
+    const second = end(state, "2", { token: "different", path: "src/a.ts" }, "same");
+    state = second.state;
+    expect(second.signal).toBeUndefined();
+    const third = end(state, "3", { path: "src/a.ts", token: "third" }, "same");
+    expect(third.signal).toMatchObject({
       kind: "repeated-inspection",
       confidence: "strong",
       abortSafe: true,
     });
-    expect(signal?.evidence.length).toBeLessThan(200);
-    expect(signal?.evidence).not.toContain("secret");
+    expect(third.signal?.evidence.length).toBeLessThan(200);
+    expect(third.signal?.evidence).not.toContain("secret");
   });
 
   test("detects repeated failures", () => {
-    const detector = new AdvisorToolTrajectoryDetector();
-    end(detector, "1", { path: "missing" }, "ENOENT", true);
-    end(detector, "2", { path: "missing" }, "ENOENT", true);
-    expect(end(detector, "3", { path: "missing" }, "ENOENT", true)).toMatchObject({
+    let state = emptyAdvisorToolTrajectoryDetector();
+    state = end(state, "1", { path: "missing" }, "ENOENT", true).state;
+    state = end(state, "2", { path: "missing" }, "ENOENT", true).state;
+    expect(end(state, "3", { path: "missing" }, "ENOENT", true).signal).toMatchObject({
       kind: "repeated-error",
     });
   });
 
   test("detects A/B oscillation", () => {
-    const detector = new AdvisorToolTrajectoryDetector();
+    let state = emptyAdvisorToolTrajectoryDetector();
     for (let index = 0; index < 5; index += 1) {
       const side = index % 2 === 0 ? "a" : "b";
-      expect(end(detector, String(index), { path: side }, side)).toBeUndefined();
+      const result = end(state, String(index), { path: side }, side);
+      state = result.state;
+      expect(result.signal).toBeUndefined();
     }
-    expect(end(detector, "5", { path: "b" }, "b")).toMatchObject({ kind: "oscillation" });
+    expect(end(state, "5", { path: "b" }, "b").signal).toMatchObject({ kind: "oscillation" });
   });
 
   test("changed results and concrete progress reset suspicion", () => {
-    const detector = new AdvisorToolTrajectoryDetector();
-    end(detector, "1", { path: "a" }, "v1");
-    end(detector, "2", { path: "a" }, "v2");
-    expect(end(detector, "3", { path: "a" }, "v3")).toBeUndefined();
-    end(detector, "4", { path: "a" }, "same");
-    end(detector, "5", { path: "a" }, "same");
-    detector.markConcreteProgress();
-    expect(end(detector, "6", { path: "a" }, "same")).toBeUndefined();
+    let state = emptyAdvisorToolTrajectoryDetector();
+    state = end(state, "1", { path: "a" }, "v1").state;
+    state = end(state, "2", { path: "a" }, "v2").state;
+    const varied = end(state, "3", { path: "a" }, "v3");
+    state = varied.state;
+    expect(varied.signal).toBeUndefined();
+    state = end(state, "4", { path: "a" }, "same").state;
+    state = end(state, "5", { path: "a" }, "same").state;
+    state = markConcreteAdvisorProgress(state);
+    expect(end(state, "6", { path: "a" }, "same").signal).toBeUndefined();
   });
 
   test("recognizes novel successful terminal evidence only after a confirmed loop", () => {
-    const detector = new AdvisorToolTrajectoryDetector();
+    let state = emptyAdvisorToolTrajectoryDetector();
     const input = {
       parentTurnId: 7,
       toolCallId: "novel",
@@ -133,40 +163,40 @@ describe("AdvisorToolTrajectoryDetector", () => {
       result: "new evidence",
       isError: false,
     };
-    expect(detector.isMateriallyNovelTerminal(input)).toBe(false);
-    end(detector, "1", { path: "a" }, "same");
-    end(detector, "2", { path: "a" }, "same");
-    end(detector, "3", { path: "a" }, "same");
-    expect(detector.isMateriallyNovelTerminal(input)).toBe(true);
-    detector.markConcreteProgress();
-    expect(detector.isMateriallyNovelTerminal(input)).toBe(false);
+    expect(isMateriallyNovelAdvisorTerminal(state, input)).toBe(false);
+    state = end(state, "1", { path: "a" }, "same").state;
+    state = end(state, "2", { path: "a" }, "same").state;
+    state = end(state, "3", { path: "a" }, "same").state;
+    expect(isMateriallyNovelAdvisorTerminal(state, input)).toBe(true);
+    state = markConcreteAdvisorProgress(state);
+    expect(isMateriallyNovelAdvisorTerminal(state, input)).toBe(false);
   });
 
   test("an active concurrent tool makes abort unsafe until its matching terminal event", () => {
-    const detector = new AdvisorToolTrajectoryDetector();
-    end(detector, "1", { path: "a" }, "same");
-    end(detector, "2", { path: "a" }, "same");
-    detector.start("concurrent");
-    detector.start("3");
-    expect(
-      detector.end({
-        parentTurnId: 7,
-        toolCallId: "3",
-        toolName: "read",
-        args: { path: "a" },
-        result: "same",
-        isError: false,
-      }),
-    ).toMatchObject({ abortSafe: false });
-    expect(detector.activeToolCount).toBe(1);
-    detector.end({
+    let state = emptyAdvisorToolTrajectoryDetector();
+    state = end(state, "1", { path: "a" }, "same").state;
+    state = end(state, "2", { path: "a" }, "same").state;
+    state = startAdvisorToolTrajectory(state, "concurrent");
+    state = startAdvisorToolTrajectory(state, "3");
+    const looped = endAdvisorToolTrajectory(state, {
+      parentTurnId: 7,
+      toolCallId: "3",
+      toolName: "read",
+      args: { path: "a" },
+      result: "same",
+      isError: false,
+    });
+    state = looped.state;
+    expect(looped.signal).toMatchObject({ abortSafe: false });
+    expect(advisorActiveToolCount(state)).toBe(1);
+    state = endAdvisorToolTrajectory(state, {
       parentTurnId: 7,
       toolCallId: "concurrent",
       toolName: "grep",
       args: { pattern: "x" },
       result: "new",
       isError: false,
-    });
-    expect(detector.activeToolCount).toBe(0);
+    }).state;
+    expect(advisorActiveToolCount(state)).toBe(0);
   });
 });

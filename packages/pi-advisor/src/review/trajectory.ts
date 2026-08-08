@@ -213,45 +213,6 @@ export const endAdvisorToolTrajectory = (
     : { state: next };
 };
 
-/** Compatibility facades; application state stores the immutable states above. */
-export class AdvisorTrajectoryDetector {
-  #state = emptyAdvisorTrajectoryDetector();
-  push(channel: TrajectoryChannel, delta: string): TrajectorySignal | undefined {
-    const result = pushAdvisorTrajectory(this.#state, channel, delta);
-    this.#state = result.state;
-    return result.signal;
-  }
-  reset(): void {
-    this.#state = emptyAdvisorTrajectoryDetector();
-  }
-}
-export class AdvisorToolTrajectoryDetector {
-  #state = emptyAdvisorToolTrajectoryDetector();
-  get activeToolCount(): number {
-    return advisorActiveToolCount(this.#state);
-  }
-  start(toolCallId: string): void {
-    this.#state = startAdvisorToolTrajectory(this.#state, toolCallId);
-  }
-  end(input: ToolTrajectoryEndInput): ToolTrajectorySignal | undefined {
-    const result = endAdvisorToolTrajectory(this.#state, input);
-    this.#state = result.state;
-    return result.signal;
-  }
-  isMateriallyNovelTerminal(
-    input: ToolTrajectoryEndInput,
-    loopSuspicionActive = this.#state.loopDetected,
-  ): boolean {
-    return isMateriallyNovelAdvisorTerminal(this.#state, input, loopSuspicionActive);
-  }
-  markConcreteProgress(): void {
-    this.#state = markConcreteAdvisorProgress(this.#state);
-  }
-  reset(): void {
-    this.#state = emptyAdvisorToolTrajectoryDetector();
-  }
-}
-
 export interface ToolEventFingerprint {
   toolName: string;
   call: string;
@@ -371,9 +332,3 @@ function repeatedTailUnit(value: string): string | undefined {
   }
   return undefined;
 }
-
-export const _trajectoryTest = {
-  jaccardSimilarity,
-  normalizeSegment,
-  repeatedTailUnit,
-};

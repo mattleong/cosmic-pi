@@ -1,0 +1,60 @@
+// Test harness boundary: session/model stubs are Promise-shaped Pi fixtures.
+// @effect-diagnostics effect/strictEffectProvide:off
+import type {
+  createAgentSession,
+  ExtensionContext,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { advisorPlatformLayer } from "../../src/boundary/executor.ts";
+import type { ResolvedAdvisorConfig } from "../../src/config/options.ts";
+import type { AdvisorChildModel } from "../../src/runtime/client.ts";
+import {
+  AdvisorChildFactory,
+  type AdvisorChildFactoryShape,
+} from "../../src/runtime/child-factory.ts";
+import { toModelError } from "../../src/runtime/session.ts";
+import { createAdvisorToolsEffect } from "../../src/runtime/tools.ts";
+
+export interface TestChildFactoryOverrides {
+  readonly createChildModel?: (
+    ctx: Pick<ExtensionContext, "modelRegistry">,
+    config: ResolvedAdvisorConfig,
+  ) => Promise<AdvisorChildModel>;
+  readonly createTools?: (cwd: string) => Promise<readonly ToolDefinition[]>;
+  readonly createSession?: typeof createAgentSession;
+}
+
+/**
+ * Effect-shaped AdvisorChildFactory around Promise-shaped test fixtures. Tool creation
+ * defaults to the production read-only tool Effects over the real platform.
+ */
+export const makeTestChildFactory = (
+  overrides: TestChildFactoryOverrides = {},
+): AdvisorChildFactoryShape => ({
+  createChildModel: (ctx, config) =>
+    overrides.createChildModel
+      ? Effect.tryPromise({
+          try: () => overrides.createChildModel!(ctx, config),
+          catch: toModelError("Advisor model initialization failed."),
+        })
+      : Effect.fail(toModelError("Advisor test child model is not stubbed.")(undefined)),
+  createTools: (cwd, runner) =>
+    overrides.createTools
+      ? Effect.tryPromise({
+          try: () => overrides.createTools!(cwd),
+          catch: toModelError("Advisor tools could not be created."),
+        })
+      : createAdvisorToolsEffect(cwd, runner).pipe(Effect.provide(advisorPlatformLayer)),
+  createSession: (options) =>
+    overrides.createSession
+      ? overrides.createSession(options)
+      : Promise.reject(new Error("Advisor test child session is not stubbed.")),
+});
+
+/** Layer form of the Effect-shaped test child factory. */
+export const childFactoryLayerFrom = (
+  overrides: TestChildFactoryOverrides = {},
+): Layer.Layer<AdvisorChildFactory> =>
+  Layer.succeed(AdvisorChildFactory, AdvisorChildFactory.of(makeTestChildFactory(overrides)));

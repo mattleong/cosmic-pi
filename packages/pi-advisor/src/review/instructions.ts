@@ -1,8 +1,6 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import { standaloneAdvisorExecutor } from "../boundary/executor.ts";
-import { nodeDirname, nodeJoin, readTextFileBoundedStableOptionalSync } from "../boundary/node.ts";
 import { ReadOnlyFileSystem, type AdvisorProjectRoot } from "../boundary/read-only-fs.ts";
 
 export const ADVISOR_INSTRUCTIONS_BASENAME = "ADVISOR.md";
@@ -74,46 +72,3 @@ export const loadAdvisorInstructionsEffect = Effect.fn("AdvisorInstructions.load
   }
   return { ...(blocks.length > 0 ? { content: blocks.join("\n\n---\n\n") } : {}), paths };
 });
-
-export function loadAdvisorInstructionsAsync(
-  configPath: string,
-  cwd: string,
-  projectTrusted: boolean,
-): Promise<LoadedAdvisorInstructions> {
-  return standaloneAdvisorExecutor.run(
-    loadAdvisorInstructionsEffect(configPath, cwd, projectTrusted),
-  );
-}
-
-export function loadAdvisorInstructions(
-  configPath: string,
-  cwd: string,
-  projectTrusted: boolean,
-): LoadedAdvisorInstructions {
-  const agentDir = nodeDirname(nodeDirname(configPath));
-  const candidates = [{ path: nodeJoin(agentDir, ADVISOR_INSTRUCTIONS_BASENAME), root: agentDir }];
-  if (projectTrusted) {
-    candidates.push({
-      path: nodeJoin(cwd, CONFIG_DIR_NAME, ADVISOR_INSTRUCTIONS_BASENAME),
-      root: cwd,
-    });
-  }
-  const blocks: string[] = [];
-  const paths: string[] = [];
-  for (const candidate of candidates) {
-    const result = readTextFileBoundedStableOptionalSync(
-      candidate.path,
-      candidate.root,
-      MAX_INSTRUCTION_BYTES,
-    );
-    const content = result?.text.trim();
-    if (!content) continue;
-    const bounded =
-      content.length <= MAX_INSTRUCTION_CHARS && result !== undefined && !result.truncated
-        ? content
-        : `${content.slice(0, MAX_INSTRUCTION_CHARS)}\n\n[Advisor guidance truncated]`;
-    paths.push(candidate.path);
-    blocks.push(`Advisor guidance from ${candidate.path}:\n\n${bounded}`);
-  }
-  return { ...(blocks.length > 0 ? { content: blocks.join("\n\n---\n\n") } : {}), paths };
-}

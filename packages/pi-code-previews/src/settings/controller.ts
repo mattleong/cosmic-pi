@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isProjectTrusted } from "pi-cosmic-core";
-import { settingsHintRenderer, VimSettingsAdapter } from "pi-cosmic-ui/manager/keybindings";
+import { settingsHintRenderer, VimSettingsAdapter } from "pi-cosmic-ui/manager/settings-adapter";
 import { createCodePreviewSettingsList } from "./panel";
 
 export function registerSettingsCommand(pi: ExtensionAPI): void {

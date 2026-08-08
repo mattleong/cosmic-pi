@@ -10,9 +10,20 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type {
   AdvisorCheckpoint,
   AdvisorCheckpointRequest,
-  AdvisorRuntimeDriver,
   AdvisorRuntimeServiceShape,
+  AdvisorRuntimeStartOptions,
 } from "../src/runtime/runtime.ts";
+
+/** Test-local Promise-shaped harness driver wrapped into the Effect service below. */
+interface AdvisorRuntimeDriver {
+  readonly activeToolNames: readonly string[];
+  start(options: AdvisorRuntimeStartOptions): Promise<void>;
+  checkpoint(request: AdvisorCheckpointRequest): Promise<AdvisorCheckpoint>;
+  steer(observations: string): Promise<boolean>;
+  reprime(seed: string, stateSummary?: string): Promise<void>;
+  abort(): Promise<void>;
+  dispose(): Promise<void>;
+}
 import {
   AdvisorQueueBatchDroppedError,
   AdvisorQueueCancelledError,

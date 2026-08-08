@@ -1,0 +1,195 @@
+import {
+  decodeKittyPrintable,
+  isKeyRepeat,
+  Key,
+  matchesKey,
+  type KeyId,
+} from "@earendil-works/pi-tui";
+
+export type FullScreenMode = "navigation" | "search" | "text-input" | "confirmation" | "busy";
+
+export type FullScreenSelectionKeybindingId =
+  | "tui.select.up"
+  | "tui.select.down"
+  | "tui.select.pageUp"
+  | "tui.select.pageDown"
+  | "tui.select.confirm"
+  | "tui.select.cancel";
+
+export type FullScreenAction =
+  | "cancel"
+  | "confirm"
+  | "up"
+  | "down"
+  | "half-page-up"
+  | "half-page-down"
+  | "full-page-up"
+  | "full-page-down"
+  | "first"
+  | "last"
+  | "back"
+  | "forward"
+  | "previous-pane"
+  | "next-pane"
+  | "search"
+  | "quit"
+  | "help"
+  | "pending-first";
+
+export type FullScreenResolution =
+  | { readonly _tag: "Action"; readonly action: FullScreenAction }
+  | { readonly _tag: "Shortcut"; readonly key: string };
+
+export interface FullScreenKeymapOptions {
+  readonly mode: FullScreenMode;
+  readonly matchesKeybinding?:
+    | ((data: string, id: FullScreenSelectionKeybindingId) => boolean)
+    | undefined;
+  /** Screen-owned printable commands that must remain reachable before configured movement keys. */
+  readonly reservedKeys?: ReadonlySet<string> | undefined;
+}
+
+export const decodeFullScreenPrintable = (data: string): string | undefined =>
+  data.length === 1 && data.charCodeAt(0) >= 32 ? data : decodeKittyPrintable(data);
+
+const action = (value: FullScreenAction): FullScreenResolution => ({
+  _tag: "Action",
+  action: value,
+});
+
+const configuredMatch = (
+  data: string,
+  id: FullScreenSelectionKeybindingId,
+  matchesKeybinding: FullScreenKeymapOptions["matchesKeybinding"],
+): boolean => Boolean(matchesKeybinding?.(data, id));
+
+const selectionMatch = (
+  data: string,
+  id: FullScreenSelectionKeybindingId,
+  key: KeyId,
+  matchesKeybinding: FullScreenKeymapOptions["matchesKeybinding"],
+): boolean => configuredMatch(data, id, matchesKeybinding) || matchesKey(data, key);
+
+/** Stateful, synchronous resolver for extension-owned full-screen navigation. */
+export class FullScreenKeymap {
+  private pendingFirst = false;
+
+  resetChord(): void {
+    this.pendingFirst = false;
+  }
+
+  resolve(data: string, options: FullScreenKeymapOptions): FullScreenResolution | undefined {
+    const { mode, matchesKeybinding } = options;
+    const printable = decodeFullScreenPrintable(data);
+
+    const textOwnsPrintable =
+      (mode === "search" || mode === "text-input") && printable !== undefined;
+    if (
+      (mode === "navigation" || mode === "confirmation") &&
+      printable !== undefined &&
+      options.reservedKeys?.has(printable)
+    ) {
+      this.resetChord();
+      return isKeyRepeat(data) ? undefined : { _tag: "Shortcut", key: printable };
+    }
+    if (
+      matchesKey(data, Key.escape) ||
+      (!textOwnsPrintable && configuredMatch(data, "tui.select.cancel", matchesKeybinding))
+    ) {
+      this.resetChord();
+      return action("cancel");
+    }
+
+    if (mode === "busy") return undefined;
+
+    if (mode === "confirmation") {
+      this.resetChord();
+      if (printable?.toLowerCase() === "q") return action("cancel");
+      return selectionMatch(data, "tui.select.confirm", Key.enter, matchesKeybinding)
+        ? action("confirm")
+        : undefined;
+    }
+
+    if (
+      matchesKey(data, Key.enter) ||
+      (!textOwnsPrintable && configuredMatch(data, "tui.select.confirm", matchesKeybinding))
+    ) {
+      this.resetChord();
+      return action("confirm");
+    }
+
+    if (mode === "text-input" || textOwnsPrintable) {
+      this.resetChord();
+      return undefined;
+    }
+
+    if (selectionMatch(data, "tui.select.up", Key.up, matchesKeybinding)) {
+      this.resetChord();
+      return action("up");
+    }
+    if (selectionMatch(data, "tui.select.down", Key.down, matchesKeybinding)) {
+      this.resetChord();
+      return action("down");
+    }
+
+    if (matchesKey(data, Key.home)) {
+      this.resetChord();
+      return action("first");
+    }
+    if (matchesKey(data, Key.end)) {
+      this.resetChord();
+      return action("last");
+    }
+    if (selectionMatch(data, "tui.select.pageUp", Key.pageUp, matchesKeybinding)) {
+      this.resetChord();
+      return action("full-page-up");
+    }
+    if (selectionMatch(data, "tui.select.pageDown", Key.pageDown, matchesKeybinding)) {
+      this.resetChord();
+      return action("full-page-down");
+    }
+
+    if (mode === "search") {
+      this.resetChord();
+      return undefined;
+    }
+
+    if (this.pendingFirst && printable === "g" && isKeyRepeat(data)) return undefined;
+    if (this.pendingFirst) {
+      this.pendingFirst = false;
+      if (printable === "g") return action("first");
+    }
+
+    if (printable === "g") {
+      if (isKeyRepeat(data)) return undefined;
+      this.pendingFirst = true;
+      return action("pending-first");
+    }
+    if (printable === "G") return action("last");
+    if (printable === "k") return action("up");
+    if (printable === "j") return action("down");
+    if (matchesKey(data, Key.shift("tab"))) return action("previous-pane");
+    if (matchesKey(data, Key.tab)) return action("next-pane");
+    if (printable === "h" || matchesKey(data, Key.left)) return action("back");
+    if (printable === "l" || matchesKey(data, Key.right)) return action("forward");
+    if (matchesKey(data, Key.ctrl("u"))) return action("half-page-up");
+    if (matchesKey(data, Key.ctrl("d"))) return action("half-page-down");
+    if (printable === "/") return action("search");
+    if (printable?.toLowerCase() === "q") return action("quit");
+    if (printable === "?") return action("help");
+
+    this.resetChord();
+    return undefined;
+  }
+}
+
+export interface PageSteps {
+  readonly page: number;
+  readonly half: number;
+}
+
+/** Pure page-step arithmetic shared by full-screen list surfaces; both steps are at least 1. */
+export const pageSteps = (pageSize: number): PageSteps => {
+  const page = Math.max(1, pageSize);
+  return { page, half: Math.max(1, Math.floor(page / 2)) };
+};

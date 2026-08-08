@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, test } from "vitest";
-import { standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
+import { standaloneAdvisorExecutor } from "./support/executor.ts";
 import {
   getAdvisorFailureLogPath,
   logAdvisorFailureEffect,

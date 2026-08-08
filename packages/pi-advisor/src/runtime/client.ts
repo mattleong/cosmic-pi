@@ -8,7 +8,6 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { standaloneAdvisorExecutor } from "../boundary/executor.ts";
 import { snapshotData } from "../domain/safe-data.ts";
 import { ADVISOR_THINKING_LEVEL, type ResolvedAdvisorConfig } from "../config/options.ts";
 
@@ -150,11 +149,5 @@ export const createAdvisorChildModelEffect = Effect.fn("AdvisorClient.createChil
     thinkingLevel,
   } satisfies AdvisorChildModel;
 });
-export function createAdvisorChildModel(
-  ctx: Pick<ExtensionContext, "modelRegistry">,
-  config: ResolvedAdvisorConfig,
-): Promise<AdvisorChildModel> {
-  return standaloneAdvisorExecutor.run(createAdvisorChildModelEffect(ctx, config));
-}
 const tryModelSync = <A>(message: string, operation: () => A) =>
   Effect.try({ try: operation, catch: () => modelError(message) });

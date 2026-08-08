@@ -12,7 +12,9 @@ import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as TestClock from "effect/testing/TestClock";
 import { advisorDelayEffect, advisorIntervalEffect } from "../src/boundary/clock.ts";
-import { advisorPlatformLayer, standaloneAdvisorExecutor } from "../src/boundary/executor.ts";
+import { advisorPlatformLayer } from "../src/boundary/executor.ts";
+import { makeTestChildFactory, type TestChildFactoryOverrides } from "./support/child-factory.ts";
+import { standaloneAdvisorExecutor } from "./support/executor.ts";
 import { ADVISOR_CATCH_UP_TIMEOUT_MS, awaitAdvisorCatchUpEffect } from "../src/extension.ts";
 import { LONG_TURN_REVIEW_MS } from "../src/review/trajectory.ts";
 import {
@@ -43,12 +45,12 @@ const runtimeOptions = () => ({
 });
 
 const makeRuntime = (
-  dependencies: ConstructorParameters<typeof AdvisorRuntime>[0],
+  overrides: TestChildFactoryOverrides,
 ): Effect.Effect<AdvisorRuntime, never, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
     return new AdvisorRuntime(
-      dependencies,
+      makeTestChildFactory(overrides),
       standaloneAdvisorExecutor,
       scope,
       { offer: () => "accepted", shutdown: Effect.void, awaitShutdown: Effect.void },
@@ -371,7 +373,7 @@ describe("advisor Effect clock boundaries", () => {
         dispose: vi.fn(),
       } as unknown as AgentSession;
       const runtime = new AdvisorRuntime(
-        {
+        makeTestChildFactory({
           createChildModel: () =>
             Promise.resolve({
               modelRuntime: {} as never,
@@ -380,7 +382,7 @@ describe("advisor Effect clock boundaries", () => {
             }),
           createTools: () => Promise.resolve([]),
           createSession: () => Promise.resolve({ session, extensionsResult: {} as never }),
-        },
+        }),
         standaloneAdvisorExecutor,
         scope,
         { offer: () => "accepted", shutdown: Effect.void, awaitShutdown: Effect.void },
@@ -444,7 +446,7 @@ describe("advisor Effect clock boundaries", () => {
       const fresh = makeSession(() => Promise.resolve());
       const sessions = [stuck, fresh];
       const runtime = new AdvisorRuntime(
-        {
+        makeTestChildFactory({
           createChildModel: () =>
             Promise.resolve({
               modelRuntime: {} as never,
@@ -457,7 +459,7 @@ describe("advisor Effect clock boundaries", () => {
               session: sessions.shift()!,
               extensionsResult: {} as never,
             }),
-        },
+        }),
         standaloneAdvisorExecutor,
         scope,
         { offer: () => "accepted", shutdown: Effect.void, awaitShutdown: Effect.void },

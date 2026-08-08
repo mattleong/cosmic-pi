@@ -20,7 +20,7 @@ import {
   commandRegistry,
   handlerRegistry,
 } from "./support/extension-host.ts";
-import { controllableRuntimeDriver, type ControllableRuntime } from "./support/runtime-driver.ts";
+import { controllableRuntimeService } from "./support/runtime-service.ts";
 
 type TrackedAbortListener = EventListenerOrEventListenerObject;
 
@@ -75,7 +75,6 @@ function harness(
     runtimeStartError?: Error;
     runtimeStartPromises?: Array<Promise<void> | undefined>;
     runtimeDisposePromises?: Array<Promise<void> | undefined>;
-    catchUpTimeoutMs?: number;
     branch?: Array<Record<string, unknown>>;
     withoutSessionId?: boolean;
   } = {},
@@ -84,17 +83,12 @@ function harness(
   const { commands, registerCommand } = commandRegistry();
   const sendMessage = vi.fn();
   const appended: unknown[] = [];
-  const runtimes: ControllableRuntime[] = [];
-  const createRuntime = () => {
-    const runtimeIndex = runtimes.length;
-    const runtime = controllableRuntimeDriver({
-      startError: options.runtimeStartError,
-      startPromise: options.runtimeStartPromises?.[runtimeIndex],
-      disposePromise: options.runtimeDisposePromises?.[runtimeIndex],
-    });
-    runtimes.push(runtime);
-    return runtime.driver;
-  };
+  const runtimeService = controllableRuntimeService({
+    startError: options.runtimeStartError,
+    startPromises: options.runtimeStartPromises,
+    disposePromises: options.runtimeDisposePromises,
+  });
+  const runtimes = runtimeService.runtimes;
   const branch = options.branch ?? anchorUserBranch();
   const pi = advisorExtensionApi({
     on: registry.on,
@@ -119,9 +113,8 @@ function harness(
   const logFailure = vi.fn();
   createAdvisorExtension({
     configStore: configStoreLayerFromLoad(() => resolvedAdvisorConfig(overrides)),
-    createRuntime,
+    runtimeService: runtimeService.layer,
     failureLogger: failureLoggerLayerFromLog(logFailure),
-    catchUpTimeoutMs: options.catchUpTimeoutMs,
   })(pi);
   const emitWithContext = registry.emitWithContext;
   const emitAwait = async (name: string, event: unknown) => emitWithContext(name, event, ctx);

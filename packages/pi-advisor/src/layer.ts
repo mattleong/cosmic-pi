@@ -9,7 +9,11 @@ import { HostNotifier, hostNotifierLayer } from "./boundary/host-notifier.ts";
 import { ConfigStore, configStoreLayer } from "./config/store.ts";
 import { FailureLogger, failureLoggerLayer } from "./logging/logger.ts";
 import { AdvisorReviewQueueService, advisorReviewQueueServiceLayer } from "./queue/service.ts";
-import { AdvisorRuntimeService, advisorRuntimeServiceLayer } from "./runtime/runtime.ts";
+import {
+  AdvisorRuntimeService,
+  advisorChildFactoryLayer,
+  advisorRuntimeServiceLayer,
+} from "./runtime/runtime.ts";
 
 export interface AdvisorApplicationLayerOptions {
   readonly pi: ExtensionAPI;
@@ -22,8 +26,11 @@ export interface AdvisorApplicationLayerOptions {
 export const makeAdvisorApplicationLayer = (options: AdvisorApplicationLayerOptions) => {
   const resolvedConfigStoreLayer = options.dependencies.configStore ?? configStoreLayer;
   const loggerLayer = options.dependencies.failureLogger ?? failureLoggerLayer;
+  const runtimeServiceLayer =
+    options.dependencies.runtimeService ??
+    advisorRuntimeServiceLayer(options.executor).pipe(Layer.provide(advisorChildFactoryLayer));
   const dependenciesLayer = Layer.mergeAll(
-    advisorRuntimeServiceLayer(options.executor),
+    runtimeServiceLayer,
     advisorReviewQueueServiceLayer,
     PiCommandAdapter.layer,
     resolvedConfigStoreLayer,
