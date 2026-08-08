@@ -1392,6 +1392,169 @@ describe("SubagentService", () => {
     },
   );
 
+  it.effect("rejects a reused report sequence with a conflicting delivery identity", () => {
+    const backend = fakeRetainedBackendLayer();
+    const projections: SubagentProjection[] = [];
+    const layer = retainedServiceLayer(backend, {
+      publish: (projection) => projections.push(projection),
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(
+        request({
+          host: "herdr",
+          runtime: "claude",
+          closeOnReport: false,
+          model: "claude-retained",
+          effortWasExplicit: false,
+        }),
+      );
+      backend.controls[0]?.offer({
+        type: "report",
+        runId: run.id,
+        sequence: 1,
+        deliveryId: "first-delivery",
+        text: "First assignment.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
+
+      yield* service.send(run.id, "Begin the second assignment.");
+      backend.controls[0]?.offer({
+        type: "report",
+        assignmentEpoch: 2,
+        runId: run.id,
+        sequence: 1,
+        deliveryId: "conflicting-delivery",
+        text: "Conflicting delivery-identity reuse.",
+      });
+      yield* yieldUntil(() =>
+        Boolean(projections.at(-1)?.runs[0]?.warning?.includes("reused delivery identity")),
+      );
+      expect(projections.at(-1)?.runs[0]).toMatchObject({
+        state: "running",
+        reportGeneration: 1,
+      });
+
+      backend.controls[0]?.offer({
+        type: "report",
+        assignmentEpoch: 2,
+        runId: run.id,
+        sequence: 2,
+        deliveryId: "second-delivery",
+        text: "Second assignment.",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.reportGeneration === 2);
+      expect((yield* service.status(run.id)).finalText).toBe("Second assignment.");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect(
+    "rejects a second differing in-flight report while the start command is issuing",
+    () => {
+      const initialStartGate = Deferred.makeUnsafe<void>();
+      const backend = fakeRetainedBackendLayer({ initialStartGate });
+      const projections: SubagentProjection[] = [];
+      const layer = retainedServiceLayer(backend, {
+        publish: (projection) => projections.push(projection),
+      });
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const starting = yield* service
+          .start(
+            request({
+              host: "herdr",
+              runtime: "claude",
+              closeOnReport: false,
+              model: "claude-retained",
+              effortWasExplicit: false,
+            }),
+          )
+          .pipe(Effect.forkScoped);
+        yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
+        const id = projections.at(-1)?.runs[0]?.id;
+        expect(id).toBeDefined();
+        backend.controls[0]?.offer({
+          type: "report",
+          assignmentEpoch: 1,
+          runId: id!,
+          sequence: 1,
+          deliveryId: "buffered-in-flight",
+          text: "Buffered in-flight report.",
+        });
+        backend.controls[0]?.offer({
+          type: "report",
+          assignmentEpoch: 1,
+          runId: id!,
+          sequence: 2,
+          deliveryId: "second-in-flight",
+          text: "Second in-flight report.",
+        });
+        yield* yieldUntil(() =>
+          Boolean(projections.at(-1)?.runs[0]?.warning?.includes("more than one in-flight report")),
+        );
+        expect(projections.at(-1)?.runs[0]?.state).not.toBe("reported");
+        yield* Deferred.succeed(initialStartGate, undefined);
+        expect(yield* Fiber.join(starting)).toMatchObject({
+          state: "reported",
+          reportGeneration: 1,
+          finalText: "Buffered in-flight report.",
+        });
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("maps an uncertain writer start prompt to start_outcome_uncertain", () => {
+    const fake = fakeChildLayer(Effect.void, {
+      initialTransportFailures: [
+        { spawnIndex: 0, type: "prompt", code: "transport_outcome_uncertain" },
+      ],
+    });
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failure = yield* service
+        .start(request({ name: "uncertain-writer", writeIntent: "writer" }))
+        .pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "SubagentProcessError",
+        code: "start_outcome_uncertain",
+      });
+      expect(failure.message).toContain("The writer task may have been accepted");
+      expect((yield* service.list)[0]?.state).toBe("failed");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("fails an explicit-effort start when the backend resolves another effort", () => {
+    const fake = fakeChildLayer(Effect.void, { stateThinkingLevel: "medium" });
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failure = yield* service
+        .start(request({ name: "effort-mismatch", effort: "high", effortWasExplicit: true }))
+        .pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "pi_effort_unsupported",
+      });
+      expect(failure.message).toContain("does not support requested effort high");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("rejects retained reports outside Herdr read-only backends before admission", () => {
+    const fake = fakeChildLayer();
+    const layer = serviceLayer().pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failure = yield* service.start(request({ closeOnReport: false })).pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "InvalidSubagentRequestError",
+        code: "retained_report_capability_invalid",
+      });
+      expect(fake.controls).toHaveLength(0);
+      expect(yield* service.list).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
   it.effect("caps one retained run at 64 unresolved report generations", () => {
     const backend = fakeRetainedBackendLayer();
     const projections: SubagentProjection[] = [];
@@ -2707,11 +2870,13 @@ describe("SubagentService", () => {
       expect(yield* service.list).toHaveLength(50);
 
       expect((yield* service.status(firstId)).finalText).toBe("Report 1");
+      expect(fake.reclaimedRunIds).toEqual([]);
       const recovered = yield* service.start(request({ name: "capacity-recovered" }));
       expect(recovered.state).toBe("running");
       const retained = yield* service.list;
       expect(retained).toHaveLength(50);
       expect(retained.some((run) => run.id === firstId)).toBe(false);
+      expect(fake.reclaimedRunIds).toEqual([firstId]);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 
@@ -2745,6 +2910,36 @@ describe("SubagentService", () => {
       yield* TestClock.adjust("500 millis");
       expect(attempts).toBe(2);
       expect(notifications).toHaveLength(2);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.effect("redelivers a completion after the completed-notification callback throws", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    let attempts = 0;
+    const layer = serviceLayer({
+      notify: (notification) => {
+        if (notification.type !== "completed") return undefined;
+        attempts += 1;
+        if (attempts === 1) throw new Error("completed delivery boundary failure");
+        return {
+          deliveredCompletionKeys: notification.runs.map((run) => `${run.id}:${run.generation}`),
+        };
+      },
+      publish: (projection) => projections.push(projection),
+    }).pipe(Layer.provide(fake.layer));
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      yield* service.start(request({ name: "throwing-completion" }));
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => attempts === 1);
+      yield* TestClock.adjust("200 millis");
+      yield* yieldUntil(() => attempts === 2);
+      yield* TestClock.adjust("30 seconds");
+      expect(attempts).toBe(2);
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

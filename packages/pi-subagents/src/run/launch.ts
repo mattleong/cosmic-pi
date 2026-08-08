@@ -1,0 +1,446 @@
+import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
+import type { BackendLaunchRequest, BackendStartupState } from "../backend/model.ts";
+import type { SubagentBackendRegistryShape } from "../backend/service.ts";
+import type { WriterLeaseShape } from "../boundary/writer-lease.ts";
+import { processCapacityError, writerConflictError } from "./admission.ts";
+import { childSystemPrompt, peerNoticeText, taskPrompt } from "./coordination.ts";
+import {
+  InvalidSubagentRequestError,
+  type SubagentError,
+  SubagentHistoryCapacityError,
+  SubagentRuntimeClosedError,
+  UnsupportedSafeWriterOwnershipError,
+} from "./errors.ts";
+import type { RunRecord } from "./internal.ts";
+import { MAX_RETAINED_RUNS } from "./limits.ts";
+import {
+  emptyUsage,
+  isTerminalRunState,
+  type StartSubagentRequest,
+  type SubagentRunView,
+} from "./model.ts";
+import type { RunNotificationDelivery } from "./notification-delivery.ts";
+import {
+  MAX_ERROR_CHARS,
+  MAX_TASK_CHARS,
+  sanitizeDiagnosticText,
+  sanitizeName,
+  snapshotView,
+} from "./state.ts";
+import { emptyRunWarningSlots } from "./warnings.ts";
+
+export interface RunLaunchDependencies {
+  readonly ownerScope: Scope.Scope;
+  readonly backendRegistry: SubagentBackendRegistryShape;
+  readonly writerLeases: WriterLeaseShape;
+  /** The service-owned run registry; launch admission inserts and evicts under the lock. */
+  readonly records: Map<string, RunRecord>;
+  /** The shared service lock guarding every RunRecord mutation. */
+  readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  readonly publish: () => void;
+  readonly delivery: RunNotificationDelivery;
+  readonly redactCompletionReport: (view: SubagentRunView) => SubagentRunView;
+  /** Service-owned shutdown flag, observed under the admission lock. */
+  readonly isClosed: () => boolean;
+  /** Service-owned run ordinal/name allocation, invoked under the admission lock. */
+  readonly allocateRunIdentity: (requestedName: string) => {
+    readonly id: string;
+    readonly name: string;
+  };
+  /** Service-owned assignment-attempt token allocation, invoked under the admission lock. */
+  readonly allocateAssignmentAttemptToken: () => string;
+  readonly reclaimRecordRunState: (record: RunRecord) => Effect.Effect<void, SubagentError>;
+  readonly markCleanupPending: (record: RunRecord) => Effect.Effect<void>;
+  readonly closeRecordScope: (record: RunRecord) => Effect.Effect<void>;
+  readonly settle: (
+    record: RunRecord,
+    state: "completed" | "failed" | "stopped",
+    error?: string,
+  ) => Effect.Effect<SubagentRunView>;
+  readonly failRun: (
+    record: RunRecord,
+    message: string,
+    pendingError?: SubagentError,
+  ) => Effect.Effect<SubagentRunView>;
+  readonly submitPrompt: (
+    record: RunRecord,
+    message: string,
+    operation: "start" | "resume",
+    attemptToken: string,
+  ) => Effect.Effect<SubagentRunView, SubagentError>;
+  /** Late-bound process-lifecycle initializer; resolved at call time. */
+  readonly initializeProcess: (
+    record: RunRecord,
+  ) => Effect.Effect<BackendStartupState, SubagentError>;
+  /** Late-bound process-lifecycle peer notifier; resolved at call time. */
+  readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
+}
+
+/**
+ * Owns run launch: request validation, admission/eviction under history and
+ * process/writer capacity, record construction, backend initialization, prompt
+ * issue, and the uninterruptible stopped/failed compensation block. Run
+ * identity/token allocators remain service-owned and are invoked under the
+ * same admission lock.
+ */
+export function makeRunLaunch(dependencies: RunLaunchDependencies) {
+  const {
+    ownerScope,
+    backendRegistry,
+    writerLeases,
+    records,
+    withLock,
+    publish,
+    delivery,
+    redactCompletionReport,
+    isClosed,
+    allocateRunIdentity,
+    allocateAssignmentAttemptToken,
+    reclaimRecordRunState,
+    markCleanupPending,
+    closeRecordScope,
+    settle,
+    failRun,
+    submitPrompt,
+    initializeProcess,
+    sendPeerNotices,
+  } = dependencies;
+
+  const start = (request: StartSubagentRequest): Effect.Effect<SubagentRunView, SubagentError> =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        if (!request.task.trim())
+          return yield* new InvalidSubagentRequestError({
+            code: "task_required",
+            message: "Subagent task is required.",
+          });
+        if (
+          request.closeOnReport === false &&
+          (request.host !== "herdr" || request.writeIntent !== "read-only")
+        )
+          return yield* new InvalidSubagentRequestError({
+            code: "retained_report_capability_invalid",
+            message: "closeOnReport=false requires a Herdr-hosted read-only backend.",
+          });
+        if (request.writeIntent === "writer" && writerLeases.platform === "win32")
+          return yield* new UnsupportedSafeWriterOwnershipError({
+            code: "unsupported_safe_writer_ownership",
+            platform: writerLeases.platform,
+            message:
+              "Writer subagents are disabled on Windows because descendant termination cannot yet be proven without Job Object ownership. Read-only subagents remain available.",
+          });
+        const driver = yield* backendRegistry.resolve({
+          host: request.host,
+          runtime: request.runtime,
+          context: request.context,
+        });
+        const canonicalWriterCwd =
+          request.writeIntent === "writer"
+            ? yield* writerLeases.canonicalize(request.cwd).pipe(
+                Effect.mapError(
+                  (error) =>
+                    new InvalidSubagentRequestError({
+                      code: "writer_cwd_canonicalization_failed",
+                      message: error.message,
+                    }),
+                ),
+              )
+            : undefined;
+        // Public profile routing already preflights for ordered fallback. Recheck at the service
+        // admission boundary with the canonical writer cwd to close readiness races and protect
+        // direct internal callers; failure belongs to the selected candidate and never falls through.
+        yield* driver.preflight({
+          context: request.context,
+          writeIntent: request.writeIntent,
+          closeOnReport: request.closeOnReport,
+          model: request.model,
+          effort: request.effort,
+          cwd: canonicalWriterCwd?.path ?? request.cwd,
+        });
+        if (request.task.length > MAX_TASK_CHARS)
+          return yield* new InvalidSubagentRequestError({
+            code: "task_too_large",
+            message: "Subagent task is too large.",
+          });
+        const requestedName = sanitizeName(request.name ?? "");
+        const now = yield* Clock.currentTimeMillis;
+        // Run scopes are service-owned rather than automatically parent-closed so shutdown can
+        // observe backend cleanup before authorizing the separately scoped writer lease release.
+        const scope = yield* Scope.make();
+        // Lease scope is detached from the owner scope so the service finalizer can first close
+        // every backend scope, then authorize and close the corresponding lease scope.
+        const writerLeaseScope = canonicalWriterCwd ? yield* Scope.make() : undefined;
+        const writerLeaseReleaseState = writerLeaseScope ? { authorized: false } : undefined;
+        const settlement = yield* Deferred.make<SubagentRunView>();
+        let evictedRecord: RunRecord | undefined;
+        const reserved = yield* withLock(
+          Effect.gen(function* () {
+            if (isClosed())
+              return yield* new SubagentRuntimeClosedError({
+                message: "The subagent session runtime is closed.",
+              });
+            if (records.size >= MAX_RETAINED_RUNS) {
+              const candidate = [...records.values()]
+                .filter(
+                  (record) =>
+                    !record.cleanupPending &&
+                    record.process === undefined &&
+                    record.completionClaims.size === 0 &&
+                    record.completionGenerations.size === 0 &&
+                    isTerminalRunState(record.view.state),
+                )
+                .sort(
+                  (left, right) =>
+                    (left.view.endedAt ?? left.view.startedAt) -
+                    (right.view.endedAt ?? right.view.startedAt),
+                )[0];
+              if (!candidate)
+                return yield* new SubagentHistoryCapacityError({
+                  limit: MAX_RETAINED_RUNS,
+                  code: "history_outbox_capacity",
+                  message: `Subagent history/outbox capacity reached (${MAX_RETAINED_RUNS}); unresolved or claimed reports or cleanup ownership must be resolved before another run can start.`,
+                });
+              records.delete(candidate.view.id);
+              evictedRecord = candidate;
+              delivery.discardRunQuestionsLocked(candidate.view.id);
+              publish();
+            }
+            const capacityFailure = processCapacityError(records);
+            if (capacityFailure) return yield* capacityFailure;
+            if (canonicalWriterCwd) {
+              const writerFailure = writerConflictError(records, canonicalWriterCwd);
+              if (writerFailure) return yield* writerFailure;
+            }
+            const { id, name } = allocateRunIdentity(requestedName);
+            const assignmentAttemptToken = allocateAssignmentAttemptToken();
+            const view: SubagentRunView = {
+              id,
+              name,
+              task: request.task.trim(),
+              ...(request.profile ? { profile: request.profile } : {}),
+              selection: request.selection ?? {
+                source: "profile-candidate",
+                host: request.host,
+                runtime: request.runtime,
+                closeOnReport: request.closeOnReport,
+                reason: "Profile route selection.",
+                skippedCandidates: [],
+              },
+              cwd: canonicalWriterCwd?.path ?? request.cwd,
+              state: "starting",
+              context: request.context,
+              writeIntent: request.writeIntent,
+              fastMode: request.fastMode,
+              host: request.host,
+              runtime: request.runtime,
+              closeOnReport: request.closeOnReport,
+              reportGeneration: 0,
+              capabilities: driver.capabilities,
+              model: request.model,
+              effort: request.effort,
+              startedAt: now,
+              lastActivityAt: now,
+              sessionEvents: [],
+              usage: emptyUsage(),
+            };
+            const launch: BackendLaunchRequest = {
+              runId: id,
+              name,
+              closeOnReport: request.closeOnReport,
+              cwd: canonicalWriterCwd?.path ?? request.cwd,
+              context: request.context,
+              writeIntent: request.writeIntent,
+              fastMode: request.fastMode,
+              model: request.model,
+              effort: request.effort,
+              ...(request.runtimeApiKey ? { runtimeApiKey: request.runtimeApiKey } : {}),
+              activeTools: request.activeTools,
+              projectTrusted: request.projectTrusted,
+              parentSessionId: request.parentSessionId,
+              ...(request.parentSessionFile
+                ? { parentSessionFile: request.parentSessionFile }
+                : {}),
+              ...(request.parentLeafId ? { parentLeafId: request.parentLeafId } : {}),
+              systemPrompt: childSystemPrompt(request),
+            };
+            const record: RunRecord = {
+              view,
+              scope,
+              driver,
+              launch,
+              activeTools: new Map(),
+              settlement,
+              pauseRequested: false,
+              stoppedByParent: false,
+              cleanupPending: false,
+              runStateReclaimState: "pending",
+              ...(canonicalWriterCwd ? { canonicalWriterCwd } : {}),
+              ...(writerLeaseScope
+                ? {
+                    writerLeaseScope,
+                    writerLeasePreparationState: "pending" as const,
+                    writerLeaseReleaseState,
+                  }
+                : {}),
+              initializationPending: true,
+              notificationGeneration: 0,
+              questionNotificationGeneration: 0,
+              completionGeneration: 0,
+              warningSlots: emptyRunWarningSlots(),
+              completionGenerations: new Map(),
+              completionClaims: new Map(),
+              assignment: {
+                epoch: 1,
+                phase: "preparing",
+                attemptToken: assignmentAttemptToken,
+                startedObserved: false,
+                outcomeUncertain: false,
+                pendingRunSettled: false,
+              },
+              nextAssignmentEpoch: 2,
+            };
+            records.set(id, record);
+            publish();
+            return record;
+          }),
+        ).pipe(
+          Effect.onError(() =>
+            Scope.close(scope, Exit.void).pipe(
+              Effect.andThen(
+                writerLeaseScope ? Scope.close(writerLeaseScope, Exit.void) : Effect.void,
+              ),
+            ),
+          ),
+        );
+
+        if (evictedRecord) yield* reclaimRecordRunState(evictedRecord);
+        const peerNotice = peerNoticeText(records.values(), reserved.view.id);
+        const initialPrompt = taskPrompt(request, peerNotice);
+        const initialize = Effect.gen(function* () {
+          const state = yield* initializeProcess(reserved);
+          // Let a terminal frame already queued behind the initialization state
+          // commit its deferred settlement before this start result is returned.
+          yield* Effect.yieldNow;
+          if (request.effortWasExplicit && state.effort !== request.effort)
+            return yield* new InvalidSubagentRequestError({
+              code: "pi_effort_unsupported",
+              message: `Model ${request.model} does not support requested effort ${request.effort}; effective level was ${state.effort}.`,
+            });
+          const resolvedModel = state.model ?? reserved.view.model;
+          const startedAt = yield* Clock.currentTimeMillis;
+          const activated = yield* withLock(
+            Effect.sync(() => {
+              if (
+                reserved.stoppedByParent ||
+                reserved.view.state === "stopping" ||
+                reserved.view.state === "stopped"
+              )
+                return undefined;
+              reserved.initializationPending = false;
+              reserved.resumeToken = state.resumeToken;
+              const pendingSettlement = reserved.pendingInitializationSettlement;
+              reserved.pendingInitializationSettlement = undefined;
+              reserved.view = {
+                ...reserved.view,
+                effort: state.effort,
+                model: resolvedModel,
+                lastActivityAt: startedAt,
+                sessionId: state.sessionId,
+                ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
+              };
+              publish();
+              return {
+                view: snapshotView(reserved.view),
+                pendingSettlement,
+              };
+            }),
+          );
+          if (!activated)
+            return yield* new InvalidSubagentRequestError({
+              code: "start_cancelled",
+              message: `Subagent ${reserved.view.id} was stopped during startup.`,
+            });
+          if (activated.pendingSettlement) {
+            const pending = activated.pendingSettlement;
+            if (pending.state === "failed")
+              return yield* failRun(
+                reserved,
+                pending.error ?? "Subagent failed during startup.",
+              ).pipe(Effect.tap(() => closeRecordScope(reserved)));
+            return yield* settle(reserved, pending.state, pending.error);
+          }
+          const attemptToken = yield* withLock(
+            Effect.gen(function* () {
+              if (reserved.assignment.phase !== "preparing" || reserved.view.state !== "starting")
+                return yield* new InvalidSubagentRequestError({
+                  code: "start_cancelled",
+                  message: `Subagent ${reserved.view.id} changed state before its task could be issued.`,
+                });
+              reserved.assignment.phase = "issuing";
+              return reserved.assignment.attemptToken;
+            }),
+          );
+          const issued = yield* submitPrompt(reserved, initialPrompt, "start", attemptToken);
+          yield* sendPeerNotices(reserved.view.id);
+          return issued;
+        });
+
+        return yield* restore(initialize).pipe(
+          Effect.onError((cause) =>
+            Effect.gen(function* () {
+              const interruptedOnly =
+                cause.reasons.length > 0 && cause.reasons.every(Cause.isInterruptReason);
+              yield* withLock(
+                Effect.sync(() => {
+                  reserved.initializationPending = false;
+                  reserved.pendingInitializationSettlement = undefined;
+                }),
+              );
+              yield* markCleanupPending(reserved);
+              if (!reserved.stoppedByParent) {
+                if (interruptedOnly) yield* settle(reserved, "stopped");
+                else
+                  yield* settle(
+                    reserved,
+                    "failed",
+                    sanitizeDiagnosticText(Cause.pretty(cause), MAX_ERROR_CHARS),
+                  );
+              }
+              yield* closeRecordScope(reserved);
+            }),
+          ),
+        );
+      }),
+    );
+
+  const startSessionOwned = (
+    request: StartSubagentRequest,
+  ): Effect.Effect<SubagentRunView, SubagentError> =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const outcome = yield* Deferred.make<SubagentRunView, SubagentError>();
+        yield* start(request).pipe(
+          Effect.exit,
+          Effect.flatMap((exit) => Deferred.done(outcome, exit)),
+          Effect.forkIn(ownerScope, { startImmediately: true }),
+        );
+        // Public start is admission-only. A report racing prompt confirmation remains unresolved
+        // for exact-once await/notifier delivery and is never exposed or claimed here.
+        return redactCompletionReport(yield* restore(Deferred.await(outcome)));
+      }),
+    );
+
+  return {
+    /** Admission, eviction, record construction, initialization, prompt issue, compensation. */
+    start,
+    /** Session-owned launch; cancelling the waiter never abandons ownership. */
+    startSessionOwned,
+  };
+}
+
+export type RunLaunch = ReturnType<typeof makeRunLaunch>;
