@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isProjectTrusted } from "pi-cosmic-core";
-import { fullScreenSettingsHint, VimSettingsAdapter } from "pi-cosmic-ui/manager/keybindings";
+import { settingsHintRenderer, VimSettingsAdapter } from "pi-cosmic-ui/manager/keybindings";
 import { createCodePreviewSettingsList } from "./panel";
 
 export function registerSettingsCommand(pi: ExtensionAPI): void {
@@ -25,10 +25,11 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
               : undefined,
           requestRender:
             typeof tui?.requestRender === "function" ? () => tui.requestRender() : undefined,
+          // The shared renderer follows the adapter's focus/search mode instead of assuming
+          // a never-searching surface.
           renderHint:
             typeof theme?.fg === "function"
-              ? (_mode, helpExpanded) =>
-                  theme.fg("dim", ` ${fullScreenSettingsHint({ searching: false, helpExpanded })} `)
+              ? settingsHintRenderer({ dim: (text) => theme.fg("dim", text) })
               : undefined,
         });
       });

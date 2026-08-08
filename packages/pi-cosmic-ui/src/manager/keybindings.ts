@@ -246,7 +246,11 @@ export const filterReservedKeyLabel = (
   return parts.filter((part) => !collides(part)).join("/") || fallback;
 };
 
-/** Shared modeless hint copy for settings-style lists driven by the full-screen keymap. */
+/**
+ * Shared modeless hint copy for settings-style lists driven by the full-screen keymap.
+ * SettingsList has a single page motion, so `C-u/d` and `PgUp/PgDn` are advertised together
+ * rather than as a fake half/full-page distinction.
+ */
 export const fullScreenSettingsHint = (context: {
   readonly searching: boolean;
   readonly search?: boolean | undefined;
@@ -255,8 +259,39 @@ export const fullScreenSettingsHint = (context: {
   if (context.searching) return "Type to filter · Enter select · Esc done";
   const filter = context.search ? " · / filter" : "";
   return context.helpExpanded
-    ? `j/k or ↑/↓ move · gg/G ends · C-u/d half-page · PgUp/PgDn page${filter} · Enter/l select · h/q/Esc back · ? less`
+    ? `j/k or ↑/↓ move · gg/G ends · C-u/d/PgUp/PgDn page${filter} · Enter/l select · h/q/Esc back · ? less`
     : `j/k move · Enter/l select · h/q back${filter} · ? help`;
+};
+
+export interface SettingsHintRendererOptions {
+  /** Caller-owned dim styling; the renderer itself stays pure. */
+  readonly dim: (text: string) => string;
+  readonly search?: boolean | undefined;
+}
+
+/** Pure `renderHint` factory for settings surfaces sharing the modeless hint copy. */
+export const settingsHintRenderer =
+  (
+    options: SettingsHintRendererOptions,
+  ): ((mode: "navigation" | "search", helpExpanded?: boolean) => string) =>
+  (mode, helpExpanded) =>
+    options.dim(
+      ` ${fullScreenSettingsHint({
+        searching: mode === "search",
+        search: options.search,
+        helpExpanded,
+      })} `,
+    );
+
+export interface PageSteps {
+  readonly page: number;
+  readonly half: number;
+}
+
+/** Pure page-step arithmetic shared by full-screen list surfaces; both steps are at least 1. */
+export const pageSteps = (pageSize: number): PageSteps => {
+  const page = Math.max(1, pageSize);
+  return { page, half: Math.max(1, Math.floor(page / 2)) };
 };
 
 export interface VimSettingsAdapterOptions {
@@ -417,3 +452,40 @@ export class VimSettingsAdapter implements Component, Focusable {
     this.child.invalidate();
   }
 }
+
+export interface SettingsSurfaceBridgeOptions {
+  /**
+   * Caller-owned host guard wrapped around render/invalidate/input delegation. Ownership of
+   * host-boundary recovery (safeHostUi/hostQuery/…) stays with the calling package; the
+   * bridge only threads the guard through. Defaults to direct invocation.
+   */
+  readonly invoke?: (<A>(callback: () => A, fallback: A) => A) | undefined;
+  /** Caller-owned follow-up (typically a guarded render request) after each input. */
+  readonly afterInput?: (() => void) | undefined;
+}
+
+/**
+ * Minimal focus/render bridge for `ctx.ui.custom` settings surfaces: focus targets the
+ * adapter while rendering targets the composed container (title + adapter).
+ */
+export const settingsSurfaceBridge = (
+  adapter: VimSettingsAdapter,
+  container: Component,
+  options: SettingsSurfaceBridgeOptions = {},
+): Component & Focusable => {
+  const invoke = options.invoke ?? (<A>(callback: () => A, _fallback: A): A => callback());
+  return {
+    get focused(): boolean {
+      return adapter.focused;
+    },
+    set focused(value: boolean) {
+      adapter.focused = value;
+    },
+    render: (width: number): string[] => invoke(() => container.render(width), []),
+    invalidate: (): void => invoke(() => container.invalidate(), undefined),
+    handleInput: (data: string): void => {
+      invoke(() => adapter.handleInput(data), undefined);
+      options.afterInput?.();
+    },
+  };
+};

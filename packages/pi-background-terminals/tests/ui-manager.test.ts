@@ -97,6 +97,27 @@ describe("/ps process manager", () => {
     expect(component.render(42).join("\n")).toBe(tail);
   });
 
+  it("mentions PgUp/PgDn paging in the expanded ? help while collapsed help stays compact", () => {
+    const component = new ProcessManagerComponent({
+      theme,
+      getProjection: () => projection,
+      getHeight: () => 18,
+      getNow: () => 0,
+      requestRender: vi.fn(),
+      close: vi.fn(),
+      stop: vi.fn(),
+      clear: vi.fn(),
+    });
+    expect(component.render(120).at(-1) ?? "").not.toContain("PgUp/PgDn");
+    component.handleInput("?");
+    const expanded = component.render(120).at(-1) ?? "";
+    expect(expanded).toContain("C-u/d Half");
+    expect(expanded).toContain("PgUp/PgDn Page");
+    expect(expanded).toContain("? Back");
+    component.handleInput("?");
+    expect(component.render(120).at(-1) ?? "").not.toContain("PgUp/PgDn");
+  });
+
   it("supports gg/G endpoints, h/l panes, and q close", () => {
     const logs = Array.from({ length: 30 }, (_, index) => ({
       cursor: index + 1,

@@ -161,6 +161,25 @@ describe("/subagents fleet UI", () => {
     expect(footer).not.toContain("r Resume");
   });
 
+  it("mentions PgUp/PgDn paging in the expanded ? help while collapsed help stays compact", () => {
+    const { component } = makeComponent(120, 18);
+    expect(component.render(120).at(-1) ?? "").not.toContain("PgUp/PgDn");
+    component.handleInput("?");
+    const expanded = component.render(120).at(-1) ?? "";
+    expect(expanded).toContain("C-u/d Half");
+    expect(expanded).toContain("PgUp/PgDn Page");
+    expect(expanded).toContain("? Back");
+    component.handleInput("?");
+    expect(component.render(120).at(-1) ?? "").not.toContain("PgUp/PgDn");
+  });
+
+  it("mentions PgUp/PgDn detail paging in the expanded ? help of the detail pane", () => {
+    const { component } = makeComponent(120, 18);
+    component.handleInput("l");
+    component.handleInput("?");
+    expect(component.render(120).at(-1) ?? "").toContain("PgUp/PgDn Detail");
+  });
+
   it("does not advertise unreachable alternate help when the fleet is empty", () => {
     const empty: SubagentProjection = { revision: 3, runs: [] };
     const { component } = makeComponent(80, 18, empty);

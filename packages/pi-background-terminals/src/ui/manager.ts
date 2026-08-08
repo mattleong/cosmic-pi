@@ -10,6 +10,7 @@ import {
   decodeFullScreenPrintable,
   filterReservedKeyLabel,
   FullScreenKeymap,
+  pageSteps,
   type FullScreenSelectionKeybindingId,
 } from "pi-cosmic-ui/manager/keybindings";
 import type { BackgroundJobView, BackgroundTerminalProjection } from "../job/model.ts";
@@ -169,7 +170,8 @@ export class ProcessManagerComponent implements Component {
     }
 
     const browsingDetail = this.pane === "detail" || (this.layout === "narrow" && this.details);
-    const pageSize = Math.max(1, this.detailPageSize);
+    const detailSteps = pageSteps(this.detailPageSize);
+    const listSteps = pageSteps(this.options.getHeight() - 3);
     switch (resolution.action) {
       case "cancel":
       case "quit":
@@ -206,33 +208,21 @@ export class ProcessManagerComponent implements Component {
         if (browsingDetail) this.scrollDetail(-1);
         else this.select(this.selected + 1, jobs);
         break;
-      case "half-page-up": {
-        const step = Math.max(1, Math.floor(pageSize / 2));
-        if (browsingDetail) this.scrollDetail(step);
-        else
-          this.select(
-            this.selected - Math.max(1, Math.floor((this.options.getHeight() - 3) / 2)),
-            jobs,
-          );
+      case "half-page-up":
+        if (browsingDetail) this.scrollDetail(detailSteps.half);
+        else this.select(this.selected - listSteps.half, jobs);
         break;
-      }
-      case "half-page-down": {
-        const step = Math.max(1, Math.floor(pageSize / 2));
-        if (browsingDetail) this.scrollDetail(-step);
-        else
-          this.select(
-            this.selected + Math.max(1, Math.floor((this.options.getHeight() - 3) / 2)),
-            jobs,
-          );
+      case "half-page-down":
+        if (browsingDetail) this.scrollDetail(-detailSteps.half);
+        else this.select(this.selected + listSteps.half, jobs);
         break;
-      }
       case "full-page-up":
-        if (browsingDetail) this.scrollDetail(pageSize);
-        else this.select(this.selected - Math.max(1, this.options.getHeight() - 3), jobs);
+        if (browsingDetail) this.scrollDetail(detailSteps.page);
+        else this.select(this.selected - listSteps.page, jobs);
         break;
       case "full-page-down":
-        if (browsingDetail) this.scrollDetail(-pageSize);
-        else this.select(this.selected + Math.max(1, this.options.getHeight() - 3), jobs);
+        if (browsingDetail) this.scrollDetail(-detailSteps.page);
+        else this.select(this.selected + listSteps.page, jobs);
         break;
       case "first":
         if (browsingDetail) this.scrollDetail(this.detailMaxScroll);
@@ -336,18 +326,20 @@ export class ProcessManagerComponent implements Component {
       selected && isActiveJobState(selected.state) ? "x Stop" : undefined,
       jobs.some((job) => !isActiveJobState(job.state)) ? "c Clear" : undefined,
     ].filter((item): item is string => item !== undefined);
+    // The expanded ? overlay is the discoverable place for the full motion vocabulary.
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [
         [
-          `${navigation} Move · h/l Panes · gg/G Ends`,
+          `${navigation} Move · h/l Panes · C-u/d Half · PgUp/PgDn Page · gg/G Ends`,
           actions.length > 0 ? actions.join(" · ") : "No actions",
           "? Back · q Close",
         ],
         [
-          `${navigation} · h/l · gg/G`,
+          `${navigation} · h/l · C-u/d · PgUp/PgDn · gg/G`,
           actions.length > 0 ? actions.join(" · ") : "No actions",
           "? · q",
         ],
+        [`${navigation} · PgUp/PgDn · gg/G`, "? · q"],
       ]);
     return renderResponsiveManagerFooter(contentWidth, [
       [

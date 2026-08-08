@@ -127,6 +127,11 @@ export {
   type DiagnosticSanitizerOptions,
 } from "./src/security.ts";
 export {
+  completeSettingsArguments,
+  type SettingsCompletionChoice,
+  type SettingsCompletionDescriptor,
+} from "./src/settings-completion.ts";
+export {
   clampPercent,
   formatCompactReset,
   formatPercent,

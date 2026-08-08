@@ -2,7 +2,11 @@
 // @effect-diagnostics effect/asyncFunction:off
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type Focusable } from "@earendil-works/pi-tui";
-import { decodeFullScreenPrintable, FullScreenKeymap } from "pi-cosmic-ui/manager/keybindings";
+import {
+  decodeFullScreenPrintable,
+  FullScreenKeymap,
+  pageSteps,
+} from "pi-cosmic-ui/manager/keybindings";
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../run/model.ts";
@@ -839,8 +843,7 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
       return;
     }
 
-    const pageStep = Math.max(1, this.options.getHeight() - 10);
-    const halfStep = Math.max(1, Math.floor(pageStep / 2));
+    const steps = pageSteps(this.options.getHeight() - 10);
     const moveSelection = (offset: number) => {
       if (this.pane === "profiles") this.selectProfile(offset);
       else if (this.pane === "candidates") this.selectCandidate(offset);
@@ -872,16 +875,16 @@ export class ProfileWorkspaceComponent implements Component, Focusable {
         moveSelection(1);
         break;
       case "half-page-up":
-        moveSelection(-halfStep);
+        moveSelection(-steps.half);
         break;
       case "half-page-down":
-        moveSelection(halfStep);
+        moveSelection(steps.half);
         break;
       case "full-page-up":
-        moveSelection(-pageStep);
+        moveSelection(-steps.page);
         break;
       case "full-page-down":
-        moveSelection(pageStep);
+        moveSelection(steps.page);
         break;
       case "first":
         if (this.pane === "profiles") this.profileIndex = 0;

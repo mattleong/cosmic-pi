@@ -16,6 +16,7 @@ import {
   decodeFullScreenPrintable,
   filterReservedKeyLabel,
   FullScreenKeymap,
+  pageSteps,
   type FullScreenSelectionKeybindingId,
 } from "pi-cosmic-ui/manager/keybindings";
 import {
@@ -349,7 +350,8 @@ export class SubagentFleetComponent implements Component, Focusable {
     }
 
     const browsingDetail = this.pane === "detail" || (this.layout === "narrow" && this.details);
-    const pageSize = Math.max(1, this.detailPageSize);
+    const detailSteps = pageSteps(this.detailPageSize);
+    const listSteps = pageSteps(this.options.getHeight() - 3);
     switch (resolution.action) {
       case "cancel":
         if (browsingDetail) {
@@ -394,33 +396,21 @@ export class SubagentFleetComponent implements Component, Focusable {
         if (browsingDetail) this.scrollDetail(-1);
         else this.select(this.selected + 1, runs);
         break;
-      case "half-page-up": {
-        const step = Math.max(1, Math.floor(pageSize / 2));
-        if (browsingDetail) this.scrollDetail(step);
-        else
-          this.select(
-            this.selected - Math.max(1, Math.floor((this.options.getHeight() - 3) / 2)),
-            runs,
-          );
+      case "half-page-up":
+        if (browsingDetail) this.scrollDetail(detailSteps.half);
+        else this.select(this.selected - listSteps.half, runs);
         break;
-      }
-      case "half-page-down": {
-        const step = Math.max(1, Math.floor(pageSize / 2));
-        if (browsingDetail) this.scrollDetail(-step);
-        else
-          this.select(
-            this.selected + Math.max(1, Math.floor((this.options.getHeight() - 3) / 2)),
-            runs,
-          );
+      case "half-page-down":
+        if (browsingDetail) this.scrollDetail(-detailSteps.half);
+        else this.select(this.selected + listSteps.half, runs);
         break;
-      }
       case "full-page-up":
-        if (browsingDetail) this.scrollDetail(pageSize);
-        else this.select(this.selected - Math.max(1, this.options.getHeight() - 3), runs);
+        if (browsingDetail) this.scrollDetail(detailSteps.page);
+        else this.select(this.selected - listSteps.page, runs);
         break;
       case "full-page-down":
-        if (browsingDetail) this.scrollDetail(-pageSize);
-        else this.select(this.selected + Math.max(1, this.options.getHeight() - 3), runs);
+        if (browsingDetail) this.scrollDetail(-detailSteps.page);
+        else this.select(this.selected + listSteps.page, runs);
         break;
       case "first":
         if (browsingDetail) this.scrollDetail(this.detailMaxScroll);
@@ -677,15 +667,20 @@ export class SubagentFleetComponent implements Component, Focusable {
       canStop(selected) ? "x Stop" : undefined,
     ].filter((item): item is string => item !== undefined);
     const scrollHelp = this.pane === "list" ? "C-u/d Half-page · gg/G Ends" : "C-u/d Detail · gg/G";
+    // The expanded ? overlay is the discoverable place for the full motion vocabulary.
+    const expandedScrollHelp =
+      this.pane === "list"
+        ? "C-u/d Half · PgUp/PgDn Page · gg/G Ends"
+        : "C-u/d · PgUp/PgDn Detail · gg/G";
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [
         [
-          `${navigation} Move · h/l Panes · ${scrollHelp}`,
+          `${navigation} Move · h/l Panes · ${expandedScrollHelp}`,
           compactActions.length > 0 ? compactActions.join(" · ") : "No run actions",
           `t Technical · ? Back · ${escape}/q Close`,
         ],
         [
-          `${navigation} · h/l · ${scrollHelp}`,
+          `${navigation} · h/l · ${expandedScrollHelp}`,
           compactActions.length > 0 ? compactActions.join(" · ") : "No actions",
           `? Back · ${escape}/q`,
         ],

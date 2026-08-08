@@ -7,8 +7,12 @@ import { Container, SettingsList } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Predicate from "effect/Predicate";
-import { redactDiagnosticValue } from "pi-cosmic-core";
-import { fullScreenSettingsHint, VimSettingsAdapter } from "pi-cosmic-ui/manager/keybindings";
+import { completeSettingsArguments, redactDiagnosticValue } from "pi-cosmic-core";
+import {
+  settingsHintRenderer,
+  settingsSurfaceBridge,
+  VimSettingsAdapter,
+} from "pi-cosmic-ui/manager/keybindings";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
 import {
   COMPACTION_SETTING_DESCRIPTORS,
@@ -327,31 +331,15 @@ export function registerSettingsController(
                   ? (data, id) => keyboard.matches(data, id)
                   : undefined,
               requestRender: () => safeHostUi(() => tui.requestRender()),
-              renderHint: (mode, helpExpanded) =>
-                theme.fg(
-                  "dim",
-                  ` ${fullScreenSettingsHint({
-                    searching: mode === "search",
-                    search: true,
-                    helpExpanded,
-                  })} `,
-                ),
+              renderHint: settingsHintRenderer({
+                search: true,
+                dim: (text) => theme.fg("dim", text),
+              }),
             });
             container.addChild(vimSettings);
-            return {
-              get focused(): boolean {
-                return vimSettings.focused;
-              },
-              set focused(value: boolean) {
-                vimSettings.focused = value;
-              },
-              render: (width: number) => container.render(width),
-              invalidate: () => container.invalidate(),
-              handleInput(data: string) {
-                vimSettings.handleInput(data);
-                safeHostUi(() => tui.requestRender());
-              },
-            };
+            return settingsSurfaceBridge(vimSettings, container, {
+              afterInput: () => safeHostUi(() => tui.requestRender()),
+            });
           })
           .then(() => undefined);
       });
@@ -359,39 +347,15 @@ export function registerSettingsController(
 
   pi.registerCommand(OPENAI_SETTINGS_COMMAND, {
     description: "Configure Better OpenAI",
-    getArgumentCompletions: (prefix) => {
-      const normalized = prefix.replace(/^\s+/, "");
-      const [head = "", ...rest] = normalized.split(/\s+/);
-      if (rest.length === 0 && !/\s$/.test(normalized)) {
-        const query = head.toLowerCase();
-        const choices = [
-          ...descriptors.map((descriptor) => ({
-            value: descriptor.id,
-            label: descriptor.id,
-            description: descriptor.description,
-          })),
-          { value: "help", label: "help", description: "Show setting ids and usage" },
-          {
-            value: "diagnostics",
-            label: "diagnostics",
-            description: "Show Better OpenAI diagnostics",
-          },
-        ];
-        const matches = choices.filter((choice) => choice.value.toLowerCase().startsWith(query));
-        return matches.length > 0 ? matches : null;
-      }
-      const descriptor = descriptors.find((candidate) => candidate.id === head);
-      if (!descriptor) return null;
-      const valuePrefix = (rest[0] ?? "").toLowerCase();
-      const matches = (descriptor.values ?? [])
-        .filter((value) => value.toLowerCase().startsWith(valuePrefix))
-        .map((value) => ({
-          value: `${head} ${value}`,
-          label: `${head} ${value}`,
-          description: descriptor.description,
-        }));
-      return matches.length > 0 ? matches : null;
-    },
+    getArgumentCompletions: (prefix) =>
+      completeSettingsArguments(prefix, descriptors, [
+        { value: "help", label: "help", description: "Show setting ids and usage" },
+        {
+          value: "diagnostics",
+          label: "diagnostics",
+          description: "Show Better OpenAI diagnostics",
+        },
+      ]),
     handler: (args, ctx) => {
       updateContext(ctx);
       const trimmed = args.trim();

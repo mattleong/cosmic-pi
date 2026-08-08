@@ -5,6 +5,9 @@ import {
   FullScreenKeymap,
   fullScreenKeybindingLabel,
   fullScreenSettingsHint,
+  pageSteps,
+  settingsHintRenderer,
+  settingsSurfaceBridge,
   VimSettingsAdapter,
   type FullScreenResolution,
   type FullScreenSelectionKeybindingId,
@@ -252,13 +255,106 @@ describe("shared full-screen keymap", () => {
     const noSearch = fullScreenSettingsHint({ searching: false });
 
     expect(collapsed).toBe("j/k move · Enter/l select · h/q back · / filter · ? help");
-    expect(expanded).toContain("PgUp/PgDn page");
+    expect(expanded).toContain("C-u/d/PgUp/PgDn page");
     expect(expanded).toContain("? less");
     expect(searching).toBe("Type to filter · Enter select · Esc done");
     expect(noSearch).not.toContain("/ filter");
     for (const hint of [collapsed, expanded, searching, noSearch]) {
       expect(hint).not.toMatch(/NORMAL|INSERT|SEARCH|CONFIRM|BUSY/);
     }
+  });
+
+  it("does not advertise a half/full page distinction SettingsList cannot honor", () => {
+    const expanded = fullScreenSettingsHint({ searching: false, search: true, helpExpanded: true });
+    expect(expanded).not.toContain("half-page");
+    expect(expanded).not.toContain("C-u/d half");
+  });
+
+  it("renders shared settings hints from the adapter mode via settingsHintRenderer", () => {
+    const dim = (text: string) => `<${text}>`;
+    const withSearch = settingsHintRenderer({ dim, search: true });
+    const withoutSearch = settingsHintRenderer({ dim });
+
+    expect(withSearch("navigation")).toBe(
+      `< ${fullScreenSettingsHint({ searching: false, search: true })} >`,
+    );
+    expect(withSearch("navigation", true)).toBe(
+      `< ${fullScreenSettingsHint({ searching: false, search: true, helpExpanded: true })} >`,
+    );
+    expect(withSearch("search")).toBe("< Type to filter · Enter select · Esc done >");
+    expect(withoutSearch("navigation")).not.toContain("/ filter");
+  });
+
+  it("computes clamped page steps shared by full-screen list surfaces", () => {
+    expect(pageSteps(9)).toEqual({ page: 9, half: 4 });
+    expect(pageSteps(2)).toEqual({ page: 2, half: 1 });
+    expect(pageSteps(1)).toEqual({ page: 1, half: 1 });
+    expect(pageSteps(0)).toEqual({ page: 1, half: 1 });
+    expect(pageSteps(-5)).toEqual({ page: 1, half: 1 });
+  });
+
+  it("bridges focus to the adapter and rendering to the container", () => {
+    const received: string[] = [];
+    const child = {
+      render: () => ["settings"],
+      handleInput: (data: string) => received.push(data),
+      invalidate: () => undefined,
+    };
+    const adapter = new VimSettingsAdapter(child);
+    let invalidated = 0;
+    const container = {
+      render: (width: number) => [`title:${width}`, ...child.render()],
+      invalidate: () => {
+        invalidated += 1;
+      },
+    };
+    const afterInput: string[] = [];
+    const bridge = settingsSurfaceBridge(adapter, container, {
+      afterInput: () => afterInput.push("after"),
+    });
+
+    bridge.focused = true;
+    expect(adapter.focused).toBe(true);
+    expect(bridge.focused).toBe(true);
+    expect(bridge.render(12)).toEqual(["title:12", "settings"]);
+    bridge.handleInput?.("j");
+    expect(received).toEqual([`${String.fromCharCode(27)}[B`]);
+    expect(afterInput).toEqual(["after"]);
+    bridge.invalidate();
+    expect(invalidated).toBe(1);
+  });
+
+  it("routes bridged callbacks through the caller-owned host guard with fallbacks", () => {
+    const child = {
+      render: () => ["settings"],
+      handleInput: () => undefined,
+      invalidate: () => undefined,
+    };
+    const adapter = new VimSettingsAdapter(child);
+    const hostile = {
+      render: (): string[] => {
+        throw new Error("hostile render");
+      },
+      invalidate: (): void => {
+        throw new Error("hostile invalidate");
+      },
+    };
+    const guarded: string[] = [];
+    const bridge = settingsSurfaceBridge(adapter, hostile, {
+      invoke: (callback, fallback) => {
+        guarded.push("invoke");
+        try {
+          return callback();
+        } catch {
+          return fallback;
+        }
+      },
+    });
+
+    expect(bridge.render(10)).toEqual([]);
+    expect(() => bridge.invalidate()).not.toThrow();
+    expect(() => bridge.handleInput?.("j")).not.toThrow();
+    expect(guarded).toEqual(["invoke", "invoke", "invoke"]);
   });
 
   it("toggles expanded adapter help with ? and translates full-page motions", () => {

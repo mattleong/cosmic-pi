@@ -13,7 +13,9 @@ import {
 import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import {
   FullScreenKeymap,
+  pageSteps,
   type FullScreenSelectionKeybindingId,
+  type PageSteps,
 } from "pi-cosmic-ui/manager/keybindings";
 
 export interface SearchableSelectPageChoice<A> {
@@ -52,6 +54,46 @@ const padToWidth = (text: string, width: number): string => {
   const safeWidth = Math.max(0, width);
   const truncated = truncateToWidth(text, safeWidth, "");
   return truncated + " ".repeat(Math.max(0, safeWidth - visibleWidth(truncated)));
+};
+
+export type SearchableSelectMotion =
+  | "up"
+  | "down"
+  | "half-page-up"
+  | "half-page-down"
+  | "full-page-up"
+  | "full-page-down"
+  | "first"
+  | "last";
+
+/**
+ * Pure selection arithmetic for a non-empty dropdown: single-row motions wrap around the
+ * ends while page motions and endpoints clamp to the list bounds.
+ */
+export const nextSearchableSelectIndex = (
+  motion: SearchableSelectMotion,
+  current: number,
+  length: number,
+  steps: PageSteps,
+): number => {
+  switch (motion) {
+    case "up":
+      return (current - 1 + length) % length;
+    case "down":
+      return (current + 1) % length;
+    case "half-page-up":
+      return Math.max(0, current - steps.half);
+    case "half-page-down":
+      return Math.min(length - 1, current + steps.half);
+    case "full-page-up":
+      return Math.max(0, current - steps.page);
+    case "full-page-down":
+      return Math.min(length - 1, current + steps.page);
+    case "first":
+      return 0;
+    case "last":
+      return length - 1;
+  }
 };
 
 /** Responsive full-page fuzzy-search input and dropdown shared by settings selectors. */
@@ -172,25 +214,14 @@ export class SearchableSelectPage<A> implements Component, Focusable {
         case "first":
         case "last":
           if (length > 0) {
-            const pageStep = Math.max(1, this.listHeight - 1);
-            const halfStep = Math.max(1, Math.floor(pageStep / 2));
-            const next =
-              resolution.action === "first"
-                ? 0
-                : resolution.action === "last"
-                  ? length - 1
-                  : resolution.action === "half-page-up"
-                    ? Math.max(0, current - halfStep)
-                    : resolution.action === "half-page-down"
-                      ? Math.min(length - 1, current + halfStep)
-                      : resolution.action === "full-page-up"
-                        ? Math.max(0, current - pageStep)
-                        : resolution.action === "full-page-down"
-                          ? Math.min(length - 1, current + pageStep)
-                          : resolution.action === "up"
-                            ? (current - 1 + length) % length
-                            : (current + 1) % length;
-            this.list.setSelectedIndex(next);
+            this.list.setSelectedIndex(
+              nextSearchableSelectIndex(
+                resolution.action,
+                current,
+                length,
+                pageSteps(this.listHeight - 1),
+              ),
+            );
           }
           this.feedback = undefined;
           break;

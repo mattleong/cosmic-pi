@@ -1,6 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { pageSteps } from "pi-cosmic-ui/manager/keybindings";
 import { describe, expect, it, vi } from "vitest";
-import { SearchableSelectPage } from "../src/settings/ui/searchable-select-page.ts";
+import {
+  nextSearchableSelectIndex,
+  SearchableSelectPage,
+  type SearchableSelectMotion,
+} from "../src/settings/ui/searchable-select-page.ts";
 
 const theme = {
   fg: (_color: string, text: string) => text,
@@ -129,6 +134,27 @@ describe("searchable settings selector", () => {
 
     const oneRow = page([choice("a", "Model alpha", "alpha")], { height: 1, notice });
     expect(oneRow.render(30)).toHaveLength(1);
+  });
+
+  it("computes wrap-around row motions and clamped page motions purely", () => {
+    const steps = pageSteps(9);
+    const next = (motion: SearchableSelectMotion, current: number) =>
+      nextSearchableSelectIndex(motion, current, 20, steps);
+
+    expect(next("up", 0)).toBe(19);
+    expect(next("up", 5)).toBe(4);
+    expect(next("down", 19)).toBe(0);
+    expect(next("down", 5)).toBe(6);
+    expect(next("half-page-up", 2)).toBe(0);
+    expect(next("half-page-up", 10)).toBe(6);
+    expect(next("half-page-down", 18)).toBe(19);
+    expect(next("half-page-down", 10)).toBe(14);
+    expect(next("full-page-up", 4)).toBe(0);
+    expect(next("full-page-up", 15)).toBe(6);
+    expect(next("full-page-down", 15)).toBe(19);
+    expect(next("full-page-down", 5)).toBe(14);
+    expect(next("first", 12)).toBe(0);
+    expect(next("last", 3)).toBe(19);
   });
 
   it("supports Home, End, half-page, and full-page navigation", () => {

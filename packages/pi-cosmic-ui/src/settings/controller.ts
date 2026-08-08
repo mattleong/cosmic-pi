@@ -20,7 +20,11 @@ import {
   type HostCallbackBoundaryShape,
 } from "../boundary/host-callback.ts";
 import { CosmicUiService } from "../protocol/service.ts";
-import { fullScreenSettingsHint, VimSettingsAdapter } from "../manager/keybindings.ts";
+import {
+  settingsHintRenderer,
+  settingsSurfaceBridge,
+  VimSettingsAdapter,
+} from "../manager/keybindings.ts";
 
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
 const VisibilityIdSchema = Schema.Literals(DEFAULT_FOOTER_ORDER);
@@ -190,28 +194,17 @@ export function registerSettingsCommand(
                   ? (data, id) => keybindings.matches(data, id)
                   : undefined,
               requestRender: () => tui.requestRender(),
-              renderHint: (mode, helpExpanded) =>
-                theme.fg(
-                  "dim",
-                  ` ${fullScreenSettingsHint({
-                    searching: mode === "search",
-                    search: true,
-                    helpExpanded,
-                  })} `,
-                ),
+              renderHint: settingsHintRenderer({
+                search: true,
+                dim: (text) => theme.fg("dim", text),
+              }),
             });
             container.addChild(vimList);
-            return {
-              get focused(): boolean {
-                return vimList.focused;
-              },
-              set focused(value: boolean) {
-                vimList.focused = value;
-              },
-              render: (width: number) => hostQuery(() => container.render(width), []),
-              invalidate: () => hostQuery(() => container.invalidate(), undefined),
-              handleInput: (data: string) => hostQuery(() => vimList.handleInput(data), undefined),
-            };
+            // hostQuery keeps its fallbacks: hostile render/input callbacks stay contained
+            // behind this package's host-callback boundary.
+            return settingsSurfaceBridge(vimList, container, {
+              invoke: (callback, fallback) => hostQuery(callback, fallback),
+            });
           }, inertComponent()),
         );
         return true;
