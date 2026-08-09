@@ -15,6 +15,7 @@ import {
   type SubagentError,
 } from "../run/errors.ts";
 import type { SubagentRuntime } from "../run/model.ts";
+import { herdrAssignmentEpochLine } from "./herdr-assignment.ts";
 import type { BackendDriver, BackendEvent, BackendLaunchRequest } from "./model.ts";
 
 const EVENT_CAPACITY = 256;
@@ -54,7 +55,7 @@ export const withHerdrSupervisorInstructions = (
 
 const assignmentPrompt = (runtime: SubagentRuntime, message: string, epoch: number): string =>
   [
-    `Begin supervisor assignment epoch ${epoch}.`,
+    herdrAssignmentEpochLine(epoch),
     message,
     runtime === "pi"
       ? "Use supervisor_progress, supervisor_warning, supervisor_question, and supervisor_submit_report for parent communication."
