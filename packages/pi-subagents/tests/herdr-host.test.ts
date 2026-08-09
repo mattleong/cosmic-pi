@@ -5,259 +5,10 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
-import {
-  HerdrCli,
-  type HerdrAgent,
-  type HerdrCliShape,
-  type HerdrSnapshot,
-} from "../src/boundary/herdr-cli.ts";
-import { HerdrHarness, type HerdrHarnessShape } from "../src/boundary/herdr-harness.ts";
+import { HerdrCli } from "../src/boundary/herdr-cli.ts";
+import { HerdrHarness } from "../src/boundary/herdr-harness.ts";
 import { HerdrHost } from "../src/boundary/herdr-host.ts";
-import type { SupervisorConnectionMetadata } from "../src/boundary/supervisor-channel.ts";
-import type { BackendLaunchRequest } from "../src/backend/model.ts";
-import { SubagentProcessError } from "../src/run/errors.ts";
-
-const supervisor: SupervisorConnectionMetadata = {
-  runId: "agent-1",
-  host: "127.0.0.1",
-  port: 1,
-  stateDirectory: "/private",
-  connectionConfigPath: "/private/connection.json",
-  helperPath: "/private/helper.mjs",
-  claudeMcp: {
-    mcpServers: {
-      pi_subagents_supervisor: {
-        type: "stdio",
-        command: process.execPath,
-        args: ["/private/helper.mjs"],
-        env: {},
-      },
-    },
-  },
-  codexMcp: {
-    serverName: "pi_subagents_supervisor",
-    command: process.execPath,
-    args: ["/private/helper.mjs"],
-    enabledTools: [
-      "supervisor_progress",
-      "supervisor_warning",
-      "supervisor_question",
-      "supervisor_submit_report",
-    ],
-    tomlFragment: "[mcp_servers.pi_subagents_supervisor]",
-  },
-};
-
-const launch = (id: string): BackendLaunchRequest => ({
-  runId: id,
-  name: id,
-  closeOnReport: false,
-  cwd: "/project",
-  context: "fresh",
-  writeIntent: "read-only",
-  fastMode: false,
-  model: "openai-codex/gpt-5.6-sol",
-  effort: "xhigh",
-  activeTools: [],
-  projectTrusted: false,
-  parentSessionId: "019fd858-60cc-7d70-87fb-a88d44bbf8e6",
-  systemPrompt: "fixed",
-});
-
-const fakeTopology = () => {
-  let nextPane = 1;
-  let workspaceLabel = "";
-  let tabLive = false;
-  let workLive = false;
-  const panes = new Map<string, { terminalId: string; label?: string }>();
-  const agents = new Map<string, HerdrAgent>();
-  const closedPanes: string[] = [];
-  let closedWorkspaces = 0;
-  let failStartAfterApply = false;
-  let failRollbackSnapshot = false;
-  let startApplied = false;
-  let omitAgentSession = false;
-  let focusedTabId = "user:t";
-  let failFocusRestoration = false;
-  let invalidSecretAttestation = false;
-  const snapshot = (): HerdrSnapshot => {
-    return {
-      version: "0.8.0",
-      protocol: 19,
-      focusedTabId,
-      workspaces: workLive
-        ? [{ workspaceId: "w", label: workspaceLabel, focused: false, activeTabId: "w:t" }]
-        : [],
-      tabs: [
-        ...(tabLive
-          ? [{ tabId: "w:t", workspaceId: "w", label: "1", paneCount: panes.size, focused: false }]
-          : []),
-        {
-          tabId: "user:t",
-          workspaceId: "user",
-          label: "user",
-          paneCount: 0,
-          focused: focusedTabId === "user:t",
-        },
-      ],
-      panes: [...panes].map(([paneId, pane]) => ({
-        paneId,
-        terminalId: pane.terminalId,
-        workspaceId: "w",
-        tabId: "w:t",
-        cwd: "/project",
-        foregroundCwd: "/project",
-        ...(pane.label ? { label: pane.label } : {}),
-        focused: false,
-        agentStatus: agents.get(paneId)?.agentStatus ?? "unknown",
-      })),
-      agents: [...agents.values()].map((agent) => ({ ...agent })),
-    };
-  };
-  const cli: HerdrCliShape = {
-    sessionIdentity: "inherited",
-    preflight: () => Effect.void,
-    snapshot: Effect.suspend(() =>
-      startApplied && failRollbackSnapshot
-        ? Effect.fail(
-            new SubagentProcessError({
-              operation: "session snapshot",
-              code: "herdr_cli_failed",
-              message: "Fixture rollback snapshot failed.",
-            }),
-          )
-        : Effect.succeed(snapshot()),
-    ),
-    createWorkspace: (_cwd, label) =>
-      Effect.sync(() => {
-        workspaceLabel = label;
-        workLive = true;
-        tabLive = true;
-        panes.set("w:p1", { terminalId: "term-1" });
-        nextPane = 2;
-        return {
-          workspaceId: "w",
-          workspaceLabel: label,
-          tabId: "w:t",
-          tabLabel: "1",
-          rootPane: snapshot().panes[0]!,
-        };
-      }),
-    splitPane: () =>
-      Effect.sync(() => {
-        const paneId = `w:p${nextPane}`;
-        panes.set(paneId, { terminalId: `term-${nextPane}` });
-        nextPane += 1;
-        return snapshot().panes.find((pane) => pane.paneId === paneId)!;
-      }),
-    renamePane: (paneId, label) =>
-      Effect.sync(() => {
-        const pane = panes.get(paneId)!;
-        panes.set(paneId, { ...pane, label });
-      }),
-    runPaneCommand: () => Effect.void,
-    waitPaneOutput: () => Effect.void,
-    startAgent: ({ runtime, paneId, agentName }) =>
-      Effect.suspend(() => {
-        const pane = snapshot().panes.find((candidate) => candidate.paneId === paneId)!;
-        const agent: HerdrAgent = {
-          ...pane,
-          agentStatus: "working",
-          name: agentName,
-          runtime,
-          stateChangeSequence: 1,
-          interactiveReady: true,
-          ...(omitAgentSession
-            ? {}
-            : {
-                agentSession: {
-                  source: "fixture",
-                  agent: runtime,
-                  kind: "id" as const,
-                  value: `native-${paneId}`,
-                },
-                nativeSession: `native-${paneId}`,
-              }),
-        };
-        agents.set(paneId, agent);
-        startApplied = true;
-        if (failFocusRestoration) focusedTabId = "w:t";
-        return failStartAfterApply
-          ? Effect.fail(
-              new SubagentProcessError({
-                operation: "start agent",
-                code: "herdr_start_agent_outcome_uncertain",
-                message: "Fixture start applied before response failure.",
-              }),
-            )
-          : Effect.succeed(agent);
-      }),
-    prompt: (name) => Effect.sync(() => [...agents.values()].find((agent) => agent.name === name)!),
-    closePane: (paneId) =>
-      Effect.sync(() => {
-        closedPanes.push(paneId);
-        agents.delete(paneId);
-        panes.delete(paneId);
-      }),
-    closeWorkspace: () =>
-      Effect.sync(() => {
-        closedWorkspaces += 1;
-        agents.clear();
-        panes.clear();
-        tabLive = false;
-        workLive = false;
-      }),
-    focusTab: (tabId) =>
-      failFocusRestoration
-        ? Effect.fail(
-            new SubagentProcessError({
-              operation: "restore focus",
-              code: "herdr_restore_focus_outcome_uncertain",
-              message: "Fixture focus restoration failed.",
-            }),
-          )
-        : Effect.sync(() => {
-            focusedTabId = tabId;
-          }),
-  };
-  let cleanupAuthorizations = 0;
-  const harness: HerdrHarnessShape = {
-    preflight: () => Effect.void,
-    prepare: (runtime) =>
-      Effect.succeed({
-        directory: `/private/${runtime}`,
-        runtime,
-        argv: [],
-        environmentCommand: () => "fixed-env",
-        environmentReadyMarker: "fixture-env-ready",
-        ...(invalidSecretAttestation ? { secretCommand: "load-secret" } : {}),
-        authorizeCleanup: () => {
-          cleanupAuthorizations += 1;
-        },
-      }),
-  };
-  return {
-    cli,
-    harness,
-    agents,
-    closedPanes,
-    closedWorkspaces: () => closedWorkspaces,
-    cleanupAuthorizations: () => cleanupAuthorizations,
-    failAppliedStartAndRollbackSnapshot: () => {
-      failStartAfterApply = true;
-      failRollbackSnapshot = true;
-    },
-    omitNativeSession: () => {
-      omitAgentSession = true;
-    },
-    invalidateSecretAttestation: () => {
-      invalidSecretAttestation = true;
-    },
-    failRestoreFocus: () => {
-      failFocusRestoration = true;
-    },
-  };
-};
+import { fakeTopology, launch, supervisor } from "./fixtures/herdr-host-fixture.ts";
 
 describe("session-owned Herdr topology", () => {
   it.live(
@@ -281,23 +32,13 @@ describe("session-owned Herdr topology", () => {
         expect(first.agentName).toMatch(/^[a-z][a-z0-9_-]{0,31}$/u);
         expect(second.agentName).toMatch(/^[a-z][a-z0-9_-]{0,31}$/u);
         expect(first.agentName).not.toBe(second.agentName);
-
-        const exact = fake.agents.get(first.paneId)!;
-        fake.agents.set(first.paneId, {
-          ...exact,
-          agentSession: {
-            ...exact.agentSession!,
-            value: "native-restored-unowned",
-          },
-          nativeSession: "native-restored-unowned",
-        });
-        const mismatch = yield* first.close.pipe(Effect.flip);
-        expect(mismatch).toMatchObject({
-          _tag: "SubagentProcessError",
-          code: "herdr_ownership_mismatch",
-        });
-        expect(fake.closedPanes).toEqual([]);
-        fake.agents.set(first.paneId, exact);
+        expect(fake.activationConfirmations).toEqual(
+          new Map([
+            [first.paneId, 2],
+            [second.paneId, 2],
+          ]),
+        );
+        expect(fake.shellInspectedPanes).toEqual(new Set([first.paneId, second.paneId]));
 
         yield* first.close;
         expect(fake.closedPanes).toEqual([first.paneId]);
@@ -330,6 +71,100 @@ describe("session-owned Herdr topology", () => {
         yield* hosted.close;
       }
       expect(new Set(names).size).toBe(3);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.live("waits for a transient native pane occupant before spending activation probes", () => {
+    const fake = fakeTopology();
+    fake.delayInitialShellReadiness(3);
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const hosted = yield* host.launch("pi", launch("agent-delayed-shell"), {
+        ...supervisor,
+        runId: "agent-delayed-shell",
+      });
+      expect(fake.shellProcessInspections.get(hosted.paneId)).toBeGreaterThanOrEqual(5);
+      expect(fake.activationConfirmations.get(hosted.paneId)).toBe(2);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.live("rolls back when both harmless pane-input activation probes are dropped", () => {
+    const fake = fakeTopology();
+    fake.dropEveryActivationProbe();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const result = yield* Effect.result(
+        host.launch("pi", launch("agent-activation-failure"), {
+          ...supervisor,
+          runId: "agent-activation-failure",
+        }),
+      );
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { code: "herdr_pane_input_unavailable" },
+      });
+      expect(fake.activationConfirmations.get("w:p1")).toBe(2);
+      expect(fake.closedWorkspaces()).toBe(1);
+      expect(fake.cleanupAuthorizations()).toBe(1);
+      expect(fake.focusedTab()).toBe("user:t");
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.live("does not restore stale focus after rollback closes the owned tab", () => {
+    const fake = fakeTopology();
+    fake.dropEveryActivationProbe();
+    fake.moveFocusToOtherOnWorkspaceClose();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      yield* Effect.result(
+        host.launch("pi", launch("agent-newer-user-focus"), {
+          ...supervisor,
+          runId: "agent-newer-user-focus",
+        }),
+      );
+      expect(fake.focusedTab()).toBe("user:other");
+      expect(fake.focusOperations.filter((operation) => operation === "restore focus")).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+
+  it.live("rolls back a confirmed pre-application agent_pane_busy rejection", () => {
+    const fake = fakeTopology();
+    fake.rejectStartWithPaneBusy();
+    const layer = HerdrHost.layer.pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+      ),
+    );
+    return Effect.gen(function* () {
+      const host = yield* HerdrHost;
+      const result = yield* Effect.result(
+        host.launch("pi", launch("agent-pane-busy"), {
+          ...supervisor,
+          runId: "agent-pane-busy",
+        }),
+      );
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { code: "agent_pane_busy" },
+      });
+      expect(fake.closedWorkspaces()).toBe(1);
+      expect(fake.cleanupAuthorizations()).toBe(1);
+      expect(fake.focusedTab()).toBe("user:t");
     }).pipe(Effect.scoped, Effect.provide(layer));
   });
 

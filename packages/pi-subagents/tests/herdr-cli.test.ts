@@ -128,6 +128,18 @@ describe("bounded Herdr CLI boundary", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("preserves Herdr's wait-output timeout code for harmless activation recovery", async () => {
+    const test = await setup("wait-output-timeout");
+    await expect(
+      Effect.runPromise(
+        test.cli.waitPaneOutput("w-owned:p1", "activation-marker", "confirm pane input"),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "SubagentProcessError",
+      code: "timeout",
+    });
+  });
+
   it("uses the fixed Herdr 0.8 pane-output attestation argv", async () => {
     const test = await setup();
     await Effect.runPromise(
@@ -150,6 +162,21 @@ describe("bounded Herdr CLI boundary", () => {
       "--timeout",
       "5000",
     ]);
+  });
+
+  it("reads bounded pane process ownership before agent start", async () => {
+    const test = await setup();
+    await expect(Effect.runPromise(test.cli.paneProcessInfo("w-owned:p1"))).resolves.toEqual({
+      paneId: "w-owned:p1",
+      shellPid: 4242,
+      foregroundProcessGroupId: 4242,
+      foregroundProcesses: [{ pid: 4242, name: "zsh" }],
+    });
+    const calls = (await fs.readFile(test.log, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { args: string[] });
+    expect(calls.at(-1)?.args).toEqual(["pane", "process-info", "--pane", "w-owned:p1"]);
   });
 
   it("pins the inherited Herdr session environment at construction", async () => {
@@ -269,6 +296,12 @@ describe("bounded Herdr CLI boundary", () => {
     await expect(Effect.runPromise(rejected.cli.startAgent(input))).rejects.toMatchObject({
       _tag: "SubagentProcessError",
       code: "invalid_agent_name",
+    });
+
+    const busy = await setup("agent-pane-busy");
+    await expect(Effect.runPromise(busy.cli.startAgent(input))).rejects.toMatchObject({
+      _tag: "SubagentProcessError",
+      code: "agent_pane_busy",
     });
 
     const uncertain = await setup("agent-start-timeout");

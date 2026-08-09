@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type { HerdrPaneProcessInfo } from "../backend/herdr-shell-readiness.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors.ts";
 import type { SubagentRuntime } from "../run/model.ts";
 
@@ -27,6 +28,8 @@ const CONFIRMED_AGENT_START_REJECTION_CODES = new Set([
   "invalid_agent_argument",
   "invalid_agent_timeout",
   "agent_pane_not_found",
+  // Herdr rejects this before launch when the pane's interactive shell does not own the
+  // foreground. The host probes that precondition before issuing the one allowed start.
   "agent_pane_busy",
   // `agent_pane_unavailable` is intentionally absent: Herdr 0.8 can emit it
   // after runtime input dispatch when post-send agent evidence disappears.
@@ -37,12 +40,15 @@ const MUTATING_OPERATIONS = new Set([
   "create workspace",
   "split pane",
   "rename pane",
+  "activate pane input",
+  "confirm pane shell",
   "prepare pane environment",
   "load pane secrets",
   "start agent",
   "prompt agent",
   "close pane",
   "close workspace",
+  "activate herdr tab",
   "restore focus",
 ]);
 
@@ -110,6 +116,23 @@ const SchemaDocument = Schema.Struct({
   schema_version: Schema.Number.check(Schema.isInt()),
 });
 const ClaudeAuthStatusSchema = Schema.Struct({ loggedIn: Schema.Literal(true) });
+const PaneProcessInfoSchema = Schema.Struct({
+  pane_id: BoundedId,
+  shell_pid: Schema.optional(
+    Schema.NullOr(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))),
+  ),
+  foreground_process_group_id: Schema.optional(
+    Schema.NullOr(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))),
+  ),
+  foreground_processes: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        pid: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+        name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+      }),
+    ).check(Schema.isMaxLength(64)),
+  ),
+});
 
 export interface HerdrPane {
   readonly paneId: string;
@@ -189,13 +212,24 @@ export interface HerdrCliShape {
   readonly runPaneCommand: (
     paneId: string,
     command: string,
-    operation: "prepare pane environment" | "load pane secrets",
+    operation:
+      | "activate pane input"
+      | "confirm pane shell"
+      | "prepare pane environment"
+      | "load pane secrets",
   ) => Effect.Effect<void, SubagentProcessError>;
   readonly waitPaneOutput: (
     paneId: string,
     marker: string,
-    operation: "confirm pane environment" | "confirm pane secrets",
+    operation:
+      | "confirm pane input"
+      | "confirm pane shell"
+      | "confirm pane environment"
+      | "confirm pane secrets",
   ) => Effect.Effect<void, SubagentProcessError>;
+  readonly paneProcessInfo: (
+    paneId: string,
+  ) => Effect.Effect<HerdrPaneProcessInfo, SubagentProcessError>;
   readonly startAgent: (input: {
     readonly runtime: SubagentRuntime;
     readonly paneId: string;
@@ -208,7 +242,10 @@ export interface HerdrCliShape {
   ) => Effect.Effect<HerdrAgent, SubagentProcessError>;
   readonly closePane: (paneId: string) => Effect.Effect<void, SubagentProcessError>;
   readonly closeWorkspace: (workspaceId: string) => Effect.Effect<void, SubagentProcessError>;
-  readonly focusTab: (tabId: string) => Effect.Effect<void, SubagentProcessError>;
+  readonly focusTab: (
+    tabId: string,
+    operation: "activate herdr tab" | "restore focus",
+  ) => Effect.Effect<void, SubagentProcessError>;
 }
 
 export interface HerdrCliLayerOptions {
@@ -796,6 +833,38 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliShape 
         Effect.flatMap((source) => decodeEnvelope(operation, source)),
         Effect.asVoid,
       ),
+    paneProcessInfo: (paneId) =>
+      runCommand(
+        fixedOptions,
+        ["pane", "process-info", "--pane", paneId],
+        "inspect pane shell",
+      ).pipe(
+        Effect.flatMap((source) => decodeEnvelope("inspect pane shell", source)),
+        Effect.flatMap((result) =>
+          Schema.decodeUnknownEffect(Schema.Struct({ process_info: PaneProcessInfoSchema }))(
+            result,
+          ).pipe(
+            Effect.mapError(() =>
+              processError(
+                "inspect pane shell",
+                "herdr_protocol_invalid",
+                "Herdr returned invalid bounded pane process information.",
+              ),
+            ),
+          ),
+        ),
+        Effect.map(({ process_info: info }) => ({
+          paneId: info.pane_id,
+          ...(info.shell_pid ? { shellPid: info.shell_pid } : {}),
+          ...(info.foreground_process_group_id
+            ? { foregroundProcessGroupId: info.foreground_process_group_id }
+            : {}),
+          foregroundProcesses: (info.foreground_processes ?? []).map((process) => ({
+            pid: process.pid,
+            name: process.name,
+          })),
+        })),
+      ),
     startAgent: (input) =>
       runCommand(
         fixedOptions,
@@ -823,7 +892,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliShape 
       ),
     closePane: (paneId) => ok(["pane", "close", paneId], "close pane"),
     closeWorkspace: (workspaceId) => ok(["workspace", "close", workspaceId], "close workspace"),
-    focusTab: (tabId) => ok(["tab", "focus", tabId], "restore focus"),
+    focusTab: (tabId, operation) => ok(["tab", "focus", tabId], operation),
   };
 };
 

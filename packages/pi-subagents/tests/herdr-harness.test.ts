@@ -266,6 +266,16 @@ describe("Herdr native harness security", () => {
           });
           expect(environmentCommand).toContain("exec /usr/bin/env -i");
           expect(environmentCommand).not.toContain(prepared.environmentReadyMarker);
+          const firstActivation = prepared.activationProbe(1);
+          const secondActivation = prepared.activationProbe(2);
+          expect(firstActivation.marker).not.toBe(secondActivation.marker);
+          expect(firstActivation.command).toContain(firstActivation.marker.slice(0, 20));
+          expect(secondActivation.command).toContain(secondActivation.marker.slice(0, 20));
+          const environmentShell = prepared.shellReadinessProbe("environment");
+          const secretShell = prepared.shellReadinessProbe("secrets");
+          expect(environmentShell.marker).not.toBe(secretShell.marker);
+          expect(environmentShell.command).toContain(environmentShell.marker.slice(0, 20));
+          expect(secretShell.command).toContain(secretShell.marker.slice(0, 20));
           const settings = JSON.parse(
             yield* Effect.promise(() =>
               fs.readFile(valueAfter(prepared.argv, "--settings")!, "utf8"),
@@ -426,7 +436,7 @@ describe("Herdr native harness security", () => {
           expect(valueAfter(prepared.argv, "--tools")).toContain("supervisor_submit_report");
           expect(valueAfter(prepared.argv, "--exclude-tools")).toContain("subagent_start");
           expect(valueAfter(prepared.argv, "--exclude-tools")).toContain("workflow_control");
-          const promptPath = valueAfter(prepared.argv, "--system-prompt")!;
+          const promptPath = valueAfter(prepared.argv, "--append-system-prompt")!;
           expect(yield* Effect.promise(() => fs.readFile(promptPath, "utf8"))).toBe(
             launch("pi").systemPrompt,
           );

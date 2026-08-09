@@ -123,6 +123,16 @@ export interface HerdrPreparedHarness {
     readonly workspaceId: string;
   }) => string;
   readonly environmentReadyMarker: string;
+  /** Harmless per-attempt marker used to causally activate a restored no-focus workspace. */
+  readonly activationProbe: (attempt: number) => {
+    readonly command: string;
+    readonly marker: string;
+  };
+  /** Causally proves that the replacement shell accepted input after a bootstrap marker. */
+  readonly shellReadinessProbe: (phase: "environment" | "secrets") => {
+    readonly command: string;
+    readonly marker: string;
+  };
   /** Optional fixed command containing only a private script path and readiness marker. */
   readonly secretCommand?: string | undefined;
   readonly secretReadyMarker?: string | undefined;
@@ -462,7 +472,7 @@ const piArgv = (
     tools.join(","),
     "--exclude-tools",
     ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
-    "--system-prompt",
+    "--append-system-prompt",
     promptPath,
     "--pi-subagents-supervisor-config",
     supervisorConfig,
@@ -560,6 +570,14 @@ const prepareHarness = async (
       readonly tabId: string;
       readonly workspaceId: string;
     }) => fixedEnvironmentCommand(environment, topology, environmentReadyMarker);
+    const activationProbe = (attempt: number) => {
+      const marker = `pi-subagents-activate-${nonce}-${attempt.toString()}`;
+      return { command: printMarkerCommand(marker), marker };
+    };
+    const shellReadinessProbe = (phase: "environment" | "secrets") => {
+      const marker = `pi-subagents-shell-${phase}-${nonce}`;
+      return { command: printMarkerCommand(marker), marker };
+    };
     const promptPath = join(directory, "system-prompt.md");
     await writeExclusive(promptPath, request.systemPrompt);
 
@@ -597,6 +615,8 @@ const prepareHarness = async (
         argv: controlFreeArgv(claudeArgv(request, settingsPath, mcpPath, promptPath)),
         environmentCommand,
         environmentReadyMarker,
+        activationProbe,
+        shellReadinessProbe,
       });
     }
 
@@ -629,6 +649,8 @@ const prepareHarness = async (
         ),
         environmentCommand,
         environmentReadyMarker,
+        activationProbe,
+        shellReadinessProbe,
         secretCommand: `. ${shellQuote(secretPath)} && ${printMarkerCommand(secretReadyMarker)}`,
         secretReadyMarker,
       });
@@ -668,6 +690,8 @@ const prepareHarness = async (
       argv: controlFreeArgv(codexArgv(request)),
       environmentCommand,
       environmentReadyMarker,
+      activationProbe,
+      shellReadinessProbe,
       secretCommand: `. ${shellQuote(secretPath)} && ${printMarkerCommand(secretReadyMarker)}`,
       secretReadyMarker,
     });

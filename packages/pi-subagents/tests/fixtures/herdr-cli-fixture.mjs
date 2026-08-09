@@ -71,6 +71,18 @@ if (args[0] === "agent" && args[1] === "start" && config.mode === "agent-start-t
   );
   process.exit(1);
 }
+if (args[0] === "agent" && args[1] === "start" && config.mode === "agent-pane-busy") {
+  console.error(
+    JSON.stringify({
+      id: "cli:agent:start",
+      error: {
+        code: "agent_pane_busy",
+        message: "agent target pane is not an available shell",
+      },
+    }),
+  );
+  process.exit(1);
+}
 if (args[0] === "agent" && args[1] === "start" && config.mode === "agent-pane-unavailable") {
   console.error(
     JSON.stringify({
@@ -163,6 +175,33 @@ if (args[0] === "workspace" && args[1] === "create") {
   process.exit(0);
 }
 if (args[0] === "pane" && args[1] === "run") process.exit(0);
+if (args[0] === "pane" && args[1] === "wait-output" && config.mode === "wait-output-timeout") {
+  console.error(
+    JSON.stringify({
+      id: "cli:pane:wait-output",
+      error: { code: "timeout", message: "timed out waiting for output match" },
+    }),
+  );
+  process.exit(1);
+}
+if (args[0] === "pane" && args[1] === "process-info") {
+  const paneId = args[args.indexOf("--pane") + 1];
+  console.log(
+    JSON.stringify({
+      id: "cli:pane:process_info",
+      result: {
+        type: "pane_process_info",
+        process_info: {
+          pane_id: paneId,
+          shell_pid: 4242,
+          foreground_process_group_id: 4242,
+          foreground_processes: [{ pid: 4242, name: "zsh", argv0: "-zsh", cwd: "/project" }],
+        },
+      },
+    }),
+  );
+  process.exit(0);
+}
 if (args[0] === "api" && args[1] === "snapshot") {
   console.log(
     JSON.stringify({
