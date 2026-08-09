@@ -22,6 +22,7 @@ import type * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import { MAX_BACKEND_REPORT_EVIDENCE_CHARS, type BackendReport } from "../backend/model.ts";
 import {
+  authenticateSupervisorServerPayload,
   decodeSupervisorClientMessage,
   isSupervisorRunId,
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
@@ -31,6 +32,8 @@ import {
   SUPERVISOR_MCP_SERVER_NAME,
   SupervisorChannelConfigSchema,
   type SupervisorEvent,
+  type SupervisorServerMessage,
+  type SupervisorServerPayload,
   validSupervisorMessage,
   validSupervisorReply,
   validSupervisorReport,
@@ -158,7 +161,7 @@ interface PendingEpochAcknowledgement {
 
 interface AuthenticatedPeer {
   readonly socket: Socket;
-  readonly send: (message: Readonly<Record<string, unknown>>) => Promise<void>;
+  readonly send: (message: SupervisorServerMessage) => Promise<void>;
   authenticated: boolean;
   detach: () => void;
 }
@@ -378,7 +381,7 @@ const closeServer = (server: Server): Promise<void> =>
 const makePeerSender = (socket: Socket, onFailure: () => void) => {
   let writeTail: Promise<void> = Promise.resolve();
   let pendingWrites = 0;
-  return (message: Readonly<Record<string, unknown>>): Promise<void> => {
+  return (message: SupervisorServerMessage): Promise<void> => {
     if (socket.destroyed || pendingWrites >= MAX_PENDING_WRITES) {
       onFailure();
       return Promise.reject(new Error("socket-write-unavailable"));
@@ -407,18 +410,25 @@ const makePeerSender = (socket: Socket, onFailure: () => void) => {
   };
 };
 
+const authenticatedServerMessage = (
+  state: NodeChannelState,
+  payload: SupervisorServerPayload,
+): SupervisorServerMessage =>
+  authenticateSupervisorServerPayload(
+    {
+      version: SUPERVISOR_CHANNEL_VERSION,
+      runId: state.metadata.runId,
+      token: state.token,
+    },
+    payload,
+  );
+
 const failPendingQuestion = (state: NodeChannelState, code: string, message: string): void => {
   const pending = state.pendingQuestion;
   if (!pending) return;
   state.pendingQuestion = undefined;
   void pending.peer
-    .send({
-      version: SUPERVISOR_CHANNEL_VERSION,
-      runId: state.metadata.runId,
-      token: state.token,
-      type: "cancelled",
-      id: pending.requestId,
-    })
+    .send(authenticatedServerMessage(state, { type: "cancelled", id: pending.requestId }))
     .catch(() => undefined);
   Deferred.doneUnsafe(pending.acknowledgement, Effect.fail(channelError("reply", code, message)));
 };
@@ -453,16 +463,9 @@ const publishReadyGeneration = (state: NodeChannelState): void => {
 const sendAuthenticated = (
   state: NodeChannelState,
   peer: AuthenticatedPeer,
-  message: Readonly<Record<string, unknown>>,
+  payload: SupervisorServerPayload,
 ): void => {
-  void peer
-    .send({
-      version: SUPERVISOR_CHANNEL_VERSION,
-      runId: state.metadata.runId,
-      token: state.token,
-      ...message,
-    })
-    .catch(() => undefined);
+  void peer.send(authenticatedServerMessage(state, payload)).catch(() => undefined);
 };
 
 const closePeer = (state: NodeChannelState, peer: AuthenticatedPeer): void => {
@@ -1107,14 +1110,13 @@ export const makeSupervisorChannel = (
               firstAcknowledgement,
             });
             void peer
-              .send({
-                version: SUPERVISOR_CHANNEL_VERSION,
-                runId: state.metadata.runId,
-                token: state.token,
-                type: "assignment_epoch",
-                id,
-                assignmentEpoch: epoch,
-              })
+              .send(
+                authenticatedServerMessage(state, {
+                  type: "assignment_epoch",
+                  id,
+                  assignmentEpoch: epoch,
+                }),
+              )
               .catch(() => closePeer(state, peer));
             return { id, deferred };
           });
@@ -1184,14 +1186,13 @@ export const makeSupervisorChannel = (
           pending.replyStarted = true;
           yield* Effect.tryPromise({
             try: () =>
-              pending.peer.send({
-                version: SUPERVISOR_CHANNEL_VERSION,
-                runId: state.metadata.runId,
-                token: state.token,
-                type: "question_reply",
-                id: pending.requestId,
-                message,
-              }),
+              pending.peer.send(
+                authenticatedServerMessage(state, {
+                  type: "question_reply",
+                  id: pending.requestId,
+                  message,
+                }),
+              ),
             catch: () =>
               channelError(
                 "reply",

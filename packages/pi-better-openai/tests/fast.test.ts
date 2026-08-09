@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import betterOpenAI from "../index.ts";
+import type { ConfigFile } from "../src/config/schema.ts";
 
 type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 type CommandHandler = (args: string, ctx: ExtensionContext) => unknown | Promise<unknown>;
@@ -28,7 +29,7 @@ function createTempProject() {
   return cwd;
 }
 
-function writeProjectConfig(cwd: string, overrides: Record<string, unknown> = {}): void {
+function writeProjectConfig(cwd: string, overrides: ConfigFile = {}): void {
   const configDir = join(cwd, ".pi", "extensions");
   mkdirSync(configDir, { recursive: true });
   writeFileSync(

@@ -91,7 +91,13 @@ const theme = {
   bold: (text: string) => text,
 } as unknown as Theme;
 
-const baseContext = (ui: Record<string, unknown>, trusted = true) =>
+interface FleetTestUi {
+  readonly custom?: ReturnType<typeof vi.fn> | undefined;
+  readonly notify?: ReturnType<typeof vi.fn> | undefined;
+  readonly confirm?: ReturnType<typeof vi.fn> | undefined;
+}
+
+const baseContext = (ui: FleetTestUi, trusted = true) =>
   ({
     mode: "tui",
     hasUI: true,

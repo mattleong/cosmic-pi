@@ -9,6 +9,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import {
   AgentDirectory,
@@ -373,7 +374,13 @@ describe("xAI credentials", () => {
       yield* TestClock.setTime(NOW);
       const credentials = yield* getXaiCredentials("/agent/auth.json");
       expect(credentials?.accessToken).toBe("next-access");
-      const xai = harness.documents.get("/agent/auth.json")?.xai as Record<string, unknown>;
+      const xai = yield* Schema.decodeUnknownEffect(
+        Schema.Struct({
+          unknown: Schema.String,
+          refresh: Schema.String,
+          expires: Schema.Number,
+        }),
+      )(harness.documents.get("/agent/auth.json")?.xai);
       expect(xai.unknown).toBe("keep");
       expect(xai.refresh).toBe("next-refresh");
       expect(xai.expires).toBe(NOW + 3_600_000);

@@ -241,7 +241,7 @@ describe("subagent Pi registration", () => {
     expect(active).toContain("subagent_start");
     expect(active).not.toContain("subagent_status");
 
-    const failedCapture = context() as unknown as Record<string, unknown>;
+    const failedCapture = context();
     Object.defineProperty(failedCapture, "cwd", {
       get: () => {
         throw new Error("capture failed");
@@ -383,7 +383,7 @@ describe("subagent Pi registration", () => {
     closeOverlay?.(false);
     await afterSecondReload;
 
-    const failedTreeContext = { ...ctx } as unknown as Record<string, unknown>;
+    const failedTreeContext = { ...ctx };
     Object.defineProperty(failedTreeContext, "cwd", {
       get: () => {
         throw new Error("tree capture failed");

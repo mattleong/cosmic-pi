@@ -274,13 +274,98 @@ export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotif
   },
 );
 
-export interface CodexRequest extends Readonly<Record<string, unknown>> {
+export interface CodexInitializeRequest {
   readonly id: string;
-  readonly method: "initialize" | "thread/start" | "turn/start" | "turn/steer" | "turn/interrupt";
-  readonly params: Readonly<Record<string, unknown>>;
+  readonly method: "initialize";
+  readonly params: {
+    readonly clientInfo: {
+      readonly name: "pi-subagents";
+      readonly title: "pi-subagents";
+      readonly version: "1";
+    };
+    readonly capabilities: {
+      readonly experimentalApi: true;
+      readonly optOutNotificationMethods: ReadonlyArray<string>;
+    };
+  };
 }
 
-export const initializeRequest = (id: string): CodexRequest => ({
+export interface CodexInitializedNotification {
+  readonly method: "initialized";
+}
+
+export interface CodexThreadStartRequest {
+  readonly id: string;
+  readonly method: "thread/start";
+  readonly params: {
+    readonly allowProviderModelFallback: false;
+    readonly approvalPolicy: "never";
+    readonly baseInstructions: string;
+    readonly cwd: string;
+    readonly dynamicTools: ReadonlyArray<never>;
+    readonly environments: ReadonlyArray<never>;
+    readonly ephemeral: true;
+    readonly experimentalRawEvents: false;
+    readonly model: string;
+    readonly serviceTier?: typeof SUBAGENT_FAST_SERVICE_TIER | undefined;
+    readonly multiAgentMode: "explicitRequestOnly";
+    readonly sandbox: "workspace-write" | "read-only";
+  };
+}
+
+export interface CodexTextInput {
+  readonly type: "text";
+  readonly text: string;
+  readonly text_elements: ReadonlyArray<never>;
+}
+
+export interface CodexTurnStartRequest {
+  readonly id: string;
+  readonly method: "turn/start";
+  readonly params: {
+    readonly threadId: string;
+    readonly input: ReadonlyArray<CodexTextInput>;
+    readonly approvalPolicy: "never";
+    readonly cwd: undefined;
+    readonly effort: string;
+    readonly environments: ReadonlyArray<never>;
+    readonly model: string;
+    readonly serviceTier?: typeof SUBAGENT_FAST_SERVICE_TIER | undefined;
+    readonly multiAgentMode: "explicitRequestOnly";
+    readonly sandboxPolicy:
+      | {
+          readonly type: "workspaceWrite";
+          readonly writableRoots: ReadonlyArray<never>;
+          readonly networkAccess: false;
+        }
+      | { readonly type: "readOnly"; readonly networkAccess: false };
+  };
+}
+
+export interface CodexTurnSteerRequest {
+  readonly id: string;
+  readonly method: "turn/steer";
+  readonly params: {
+    readonly threadId: string;
+    readonly expectedTurnId: string;
+    readonly input: ReadonlyArray<CodexTextInput>;
+  };
+}
+
+export interface CodexTurnInterruptRequest {
+  readonly id: string;
+  readonly method: "turn/interrupt";
+  readonly params: { readonly threadId: string; readonly turnId: string };
+}
+
+export type CodexRequest =
+  | CodexInitializeRequest
+  | CodexThreadStartRequest
+  | CodexTurnStartRequest
+  | CodexTurnSteerRequest
+  | CodexTurnInterruptRequest;
+
+export const initializeRequest = (id: string): CodexInitializeRequest => ({
   id,
   method: "initialize",
   params: {
@@ -289,7 +374,7 @@ export const initializeRequest = (id: string): CodexRequest => ({
   },
 });
 
-export const initializedNotification = (): Readonly<Record<string, unknown>> => ({
+export const initializedNotification = (): CodexInitializedNotification => ({
   method: "initialized",
 });
 
@@ -302,7 +387,7 @@ export const threadStartRequest = (
     readonly writeIntent: "read-only" | "writer";
     readonly fastMode: boolean;
   },
-): CodexRequest => ({
+): CodexThreadStartRequest => ({
   id,
   method: "thread/start",
   params: {
@@ -321,7 +406,9 @@ export const threadStartRequest = (
   },
 });
 
-const input = (text: string) => [{ type: "text", text, text_elements: [] }];
+const input = (text: string): ReadonlyArray<CodexTextInput> => [
+  { type: "text", text, text_elements: [] },
+];
 
 export const turnStartRequest = (
   id: string,
@@ -331,7 +418,7 @@ export const turnStartRequest = (
   effort: string,
   writeIntent: "read-only" | "writer",
   fastMode: boolean,
-): CodexRequest => ({
+): CodexTurnStartRequest => ({
   id,
   method: "turn/start",
   params: {
@@ -356,7 +443,7 @@ export const turnSteerRequest = (
   threadId: string,
   turnId: string,
   text: string,
-): CodexRequest => ({
+): CodexTurnSteerRequest => ({
   id,
   method: "turn/steer",
   params: { threadId, expectedTurnId: turnId, input: input(text) },
@@ -366,7 +453,7 @@ export const turnInterruptRequest = (
   id: string,
   threadId: string,
   turnId: string,
-): CodexRequest => ({
+): CodexTurnInterruptRequest => ({
   id,
   method: "turn/interrupt",
   params: { threadId, turnId },

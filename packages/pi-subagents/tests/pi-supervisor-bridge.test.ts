@@ -140,8 +140,12 @@ describe("packaged delegated-Pi supervisor bridge", () => {
           yield* Effect.addFinalizer(() => Effect.sync(() => client.close()));
           yield* channel.awaitReady;
           yield* channel.setAssignmentEpoch(1);
+          const callHostileInput = client.call as (
+            name: "supervisor_progress",
+            input: unknown,
+          ) => Promise<string>;
           const error = yield* Effect.tryPromise(() =>
-            client.call("supervisor_progress", { message: "ok", extra: true }),
+            callHostileInput("supervisor_progress", { message: "ok", extra: true }),
           ).pipe(Effect.flip);
           expect(error).toBeInstanceOf(Error);
         }),

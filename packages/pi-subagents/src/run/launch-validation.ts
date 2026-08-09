@@ -10,7 +10,7 @@ export const DISALLOWED_LAUNCH_OVERRIDE_FIELDS = [
 export type DisallowedLaunchOverrideField = (typeof DISALLOWED_LAUNCH_OVERRIDE_FIELDS)[number];
 
 export const firstDisallowedLaunchOverride = (
-  value: Readonly<Record<string, unknown>>,
+  value: object,
 ): DisallowedLaunchOverrideField | undefined =>
   DISALLOWED_LAUNCH_OVERRIDE_FIELDS.find((field) =>
     Object.prototype.hasOwnProperty.call(value, field),

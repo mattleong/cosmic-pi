@@ -19,6 +19,11 @@ import {
   makeSupervisorChannel,
   type SupervisorChannelHandle,
 } from "../src/boundary/supervisor-channel.ts";
+import {
+  authenticateSupervisorServerPayload,
+  SUPERVISOR_CHANNEL_VERSION,
+  type SupervisorServerPayload,
+} from "../src/supervisor/protocol.ts";
 
 const temporaryDirectories: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
@@ -114,7 +119,7 @@ class RpcClient {
     this.child.stdin.write(`${JSON.stringify(value)}\n`);
   }
 
-  request(value: Readonly<Record<string, unknown>> & { readonly id: string | number }) {
+  request<Request extends object & { readonly id: string | number }>(value: Request) {
     const key = `${typeof value.id}:${String(value.id)}`;
     const response = new Promise<unknown>((resolve) => this.#pending.set(key, resolve));
     this.send(value);
@@ -158,12 +163,7 @@ const initialize = async (rpc: RpcClient) => {
   rpc.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
 };
 
-const toolCall = (
-  rpc: RpcClient,
-  id: string | number,
-  name: string,
-  args: Readonly<Record<string, unknown>>,
-) =>
+const toolCall = (rpc: RpcClient, id: string | number, name: string, args: object) =>
   rpc.request({
     jsonrpc: "2.0",
     id,
@@ -183,9 +183,9 @@ const waitForExit = (child: ChildProcessWithoutNullStreams) =>
 
 interface RawChannelClient {
   readonly socket: Socket;
-  readonly send: (value: Readonly<Record<string, unknown>>) => void;
-  readonly request: (
-    value: Readonly<Record<string, unknown>> & { readonly id: string },
+  readonly send: (value: object) => void;
+  readonly request: <Request extends object & { readonly id: string }>(
+    value: Request,
   ) => Promise<unknown>;
   readonly next: (predicate: (value: unknown) => boolean) => Promise<unknown>;
 }
@@ -225,10 +225,10 @@ const connectRawChannel = async (handle: SupervisorChannelHandle): Promise<RawCh
       newline = buffer.indexOf("\n");
     }
   });
-  const send = (value: Readonly<Record<string, unknown>>) => {
+  const send = (value: object) => {
     socket.write(`${JSON.stringify(value)}\n`);
   };
-  const request = (value: Readonly<Record<string, unknown>> & { readonly id: string }) => {
+  const request = <Request extends object & { readonly id: string }>(value: Request) => {
     const response = new Promise<unknown>((resolve) => pending.set(value.id, resolve));
     send(value);
     return withTimeout(response);
@@ -252,6 +252,28 @@ const connectionConfig = async (handle: SupervisorChannelHandle) =>
   };
 
 describe("private supervisor channel", () => {
+  it("constructs authenticated server messages with reserved fields authoritative", () => {
+    const authenticated = authenticateSupervisorServerPayload(
+      {
+        version: SUPERVISOR_CHANNEL_VERSION,
+        runId: "authoritative-run",
+        token: "a".repeat(64),
+      },
+      {
+        type: "closed",
+        version: 999,
+        runId: "forged-run",
+        token: "b".repeat(64),
+      } as unknown as SupervisorServerPayload,
+    );
+    expect(authenticated).toMatchObject({
+      version: SUPERVISOR_CHANNEL_VERSION,
+      runId: "authoritative-run",
+      token: "a".repeat(64),
+      type: "closed",
+    });
+  });
+
   it("rejects invalid run identities, relative state roots, and symlink state roots", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-subagents-supervisor-paths-"));
     temporaryDirectories.push(root);

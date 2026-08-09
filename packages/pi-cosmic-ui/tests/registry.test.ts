@@ -5,6 +5,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import { HostCallbackBoundary, makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
+import type { CosmicFooterSurfaceContribution } from "../src/protocol/protocol.ts";
 import {
   emptyFooterRegistrySnapshot,
   FooterRegistryService,
@@ -12,8 +13,8 @@ import {
   type FooterRegistryServiceShape,
 } from "../src/footer/registry.ts";
 
-function surface(overrides: Record<string, unknown> = {}) {
-  return {
+const baseSurface = () =>
+  ({
     kind: "surface" as const,
     id: "media",
     region: "media" as const,
@@ -23,8 +24,19 @@ function surface(overrides: Record<string, unknown> = {}) {
     detach: vi.fn(),
     invalidate: vi.fn(),
     dispose: vi.fn(),
-    ...overrides,
-  };
+  }) satisfies CosmicFooterSurfaceContribution;
+
+type SurfaceOverride = Partial<Omit<CosmicFooterSurfaceContribution, "kind" | "region">>;
+type SurfaceFixture<Override extends SurfaceOverride> = Omit<
+  ReturnType<typeof baseSurface>,
+  keyof Override
+> &
+  Override;
+
+function surface<Override extends SurfaceOverride = object>(
+  overrides?: Override,
+): SurfaceFixture<Override> {
+  return { ...baseSurface(), ...overrides } as unknown as SurfaceFixture<Override>;
 }
 
 function registryLayer(callbacks = makeHostCallbackBoundary()) {

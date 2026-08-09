@@ -316,10 +316,10 @@ const authenticatedFrame = (value) =>
 const sendChannelFrame = (value) => {
   if (channelClosed) return Promise.reject(new Error("channel-closed"));
   return channelOutput.write({
+    ...value,
     version: VERSION,
     runId: config.runId,
     token: config.token,
-    ...value,
   });
 };
 

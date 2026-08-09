@@ -8,7 +8,18 @@ import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import {
+  initializeRequest,
+  initializedNotification,
+  type CodexInitializeRequest,
+  type CodexInitializedNotification,
+} from "../backend/local-codex-protocol.ts";
+import {
+  claudeInitializeFrame,
+  type ClaudeInitializeFrame,
+} from "../backend/local-claude-protocol.ts";
 import type { SubagentEffort } from "../run/model.ts";
 import {
   codexArgv,
@@ -59,6 +70,18 @@ const ServiceTier = Schema.String.check(
   hasNoTerminalControls,
 );
 
+const ClaudeCatalogCorrelatedFrame = Schema.Struct({
+  type: Schema.Literal("control_response"),
+  response: Schema.Struct({ request_id: Schema.Literal(CATALOG_REQUEST_ID) }),
+});
+const ClaudeCatalogErrorResponse = Schema.Struct({
+  type: Schema.Literal("control_response"),
+  response: Schema.Struct({
+    subtype: Schema.Literal("error"),
+    request_id: Schema.Literal(CATALOG_REQUEST_ID),
+    error: Schema.optional(Description),
+  }),
+});
 const ClaudeCatalogResponse = Schema.Struct({
   type: Schema.Literal("control_response"),
   response: Schema.Struct({
@@ -78,6 +101,15 @@ const ClaudeCatalogResponse = Schema.Struct({
   }),
 });
 
+const CodexCatalogCorrelatedFrame = Schema.Struct({ id: Schema.Literal(CATALOG_REQUEST_ID) });
+const CodexCatalogErrorResponse = Schema.Struct({
+  id: Schema.Literal(CATALOG_REQUEST_ID),
+  error: Schema.Struct({
+    code: Schema.Number.check(Schema.isFinite(), Schema.isInt()),
+    message: Description,
+    data: Schema.optional(Schema.Unknown),
+  }),
+});
 const CodexCatalogResponse = Schema.Struct({
   id: Schema.Literal(CATALOG_REQUEST_ID),
   result: Schema.Struct({
@@ -185,27 +217,27 @@ const claudeArgs = (): ReadonlyArray<string> => [
   "",
 ];
 
-const catalogFrames = (
-  runtime: LocalCliRuntime,
-): ReadonlyArray<Readonly<Record<string, unknown>>> =>
+interface CodexModelListRequest {
+  readonly id: typeof CATALOG_REQUEST_ID;
+  readonly method: "model/list";
+  readonly params: { readonly includeHidden: false; readonly limit: 100 };
+}
+
+type CatalogRequestFrame =
+  | ClaudeInitializeFrame
+  | CodexInitializeRequest
+  | CodexInitializedNotification
+  | CodexModelListRequest;
+
+type ClaudeCatalogErrorFrame = Schema.Schema.Type<typeof ClaudeCatalogErrorResponse>;
+type CodexCatalogErrorFrame = Schema.Schema.Type<typeof CodexCatalogErrorResponse>;
+
+const catalogFrames = (runtime: LocalCliRuntime): ReadonlyArray<CatalogRequestFrame> =>
   runtime === "claude"
-    ? [
-        {
-          type: "control_request",
-          request_id: CATALOG_REQUEST_ID,
-          request: { subtype: "initialize" },
-        },
-      ]
+    ? [claudeInitializeFrame(CATALOG_REQUEST_ID)]
     : [
-        {
-          id: "pi-subagents-initialize",
-          method: "initialize",
-          params: {
-            clientInfo: { name: "pi-subagents", title: "pi-subagents", version: "1" },
-            capabilities: { experimentalApi: true, optOutNotificationMethods: [] },
-          },
-        },
-        { method: "initialized" },
+        initializeRequest("pi-subagents-initialize"),
+        initializedNotification(),
         {
           id: CATALOG_REQUEST_ID,
           method: "model/list",
@@ -213,50 +245,24 @@ const catalogFrames = (
         },
       ];
 
-const isClaudeCatalogErrorResponse = (value: unknown): boolean => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Readonly<Record<string, unknown>>;
-  const response = record.response;
-  return (
-    record.type === "control_response" &&
-    response !== null &&
-    typeof response === "object" &&
-    !Array.isArray(response) &&
-    (response as Readonly<Record<string, unknown>>).request_id === CATALOG_REQUEST_ID &&
-    (response as Readonly<Record<string, unknown>>).subtype === "error"
-  );
-};
+const isClaudeCatalogErrorResponse = (value: unknown): value is ClaudeCatalogErrorFrame =>
+  Option.isSome(Schema.decodeUnknownOption(ClaudeCatalogErrorResponse)(value));
 
-const isCodexCatalogErrorResponse = (value: unknown): boolean => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Readonly<Record<string, unknown>>;
-  return (
-    record.id === CATALOG_REQUEST_ID &&
-    record.error !== null &&
-    typeof record.error === "object" &&
-    !Array.isArray(record.error)
-  );
-};
+const isCodexCatalogErrorResponse = (value: unknown): value is CodexCatalogErrorFrame =>
+  Option.isSome(Schema.decodeUnknownOption(CodexCatalogErrorResponse)(value));
 
-const isCatalogResponse = (runtime: LocalCliRuntime, value: unknown): boolean => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Readonly<Record<string, unknown>>;
-  if (runtime === "codex") return record.id === CATALOG_REQUEST_ID;
-  if (record.type !== "control_response") return false;
-  const response = record.response;
-  return (
-    response !== null &&
-    typeof response === "object" &&
-    !Array.isArray(response) &&
-    (response as Readonly<Record<string, unknown>>).request_id === CATALOG_REQUEST_ID
+const isCatalogResponse = (runtime: LocalCliRuntime, value: unknown): boolean =>
+  Option.isSome(
+    Schema.decodeUnknownOption(
+      runtime === "codex" ? CodexCatalogCorrelatedFrame : ClaudeCatalogCorrelatedFrame,
+    )(value),
   );
-};
 
 const runCatalogProcess = (
   runtime: LocalCliRuntime,
   executable: string,
   args: ReadonlyArray<string>,
-  frames: ReadonlyArray<Readonly<Record<string, unknown>>>,
+  frames: ReadonlyArray<CatalogRequestFrame>,
   cwd: string,
   env: NodeJS.ProcessEnv,
   timeoutMillis: number,

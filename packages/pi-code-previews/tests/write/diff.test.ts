@@ -49,6 +49,24 @@ test("write diff skip reasons only use threshold comparisons for size limits", a
   }
 });
 
+test("write diff skip reasons reject malformed or non-current skipped details", () => {
+  assert.equal(
+    getWriteDiffSkipReason({ kind: "skipped", reason: "missing bound" }, "after"),
+    undefined,
+  );
+  assert.equal(
+    getWriteDiffSkipReason(
+      { kind: "skipped", reason: "forged", maxBytes: 100, unexpected: true },
+      "after",
+    ),
+    undefined,
+  );
+  assert.equal(
+    getWriteDiffSkipReason({ kind: "skipped", reason: "bounded", maxBytes: 100 }, "after"),
+    "bounded",
+  );
+});
+
 test("readExistingFileForPreview returns bounded previous content", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-code-previews-"));
   try {

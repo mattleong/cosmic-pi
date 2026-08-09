@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { runCodePreviewSessionEffect } from "../application/capability";
 import { codePreviewPerformanceConfig } from "../config/env";
 import { resolvePreviewPath } from "../paths/resolve";
@@ -15,6 +16,19 @@ export type ExistingFilePreview =
       maxBytes: number;
       sizeExceeded?: boolean;
     };
+
+const PreviewByteLength = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
+const SkippedExistingFilePreview = Schema.Struct({
+  kind: Schema.Literal("skipped"),
+  reason: Schema.String,
+  byteLength: Schema.optional(PreviewByteLength),
+  maxBytes: PreviewByteLength,
+  sizeExceeded: Schema.optional(Schema.Boolean),
+});
 
 const currentMaxWriteDiffBytes = () => codePreviewPerformanceConfig.maxWriteDiffBytes;
 const currentMaxChangedLineCells = () => codePreviewPerformanceConfig.maxWriteDiffChangedLineCells;
@@ -75,18 +89,19 @@ export function readExistingFileForPreview(
 }
 
 export function getWriteDiffSkipReason(before: unknown, nextContent: string): string | undefined {
-  if (!before || typeof before !== "object") return undefined;
+  const decoded = Schema.decodeUnknownOption(SkippedExistingFilePreview, {
+    onExcessProperty: "error",
+  })(before);
+  if (Option.isNone(decoded)) return undefined;
   const nextBytes = Buffer.byteLength(nextContent, "utf8");
   if (nextBytes > currentMaxWriteDiffBytes())
     return formatSkipReason("new content too large", nextBytes, true);
-  const record = before as Record<string, unknown>;
-  if (record.kind !== "skipped") return undefined;
-  const reason = typeof record.reason === "string" ? record.reason : "preview unavailable";
-  const byteLength = typeof record.byteLength === "number" ? record.byteLength : undefined;
-  const maxBytes =
-    typeof record.maxBytes === "number" ? record.maxBytes : currentMaxWriteDiffBytes();
-  const sizeExceeded = record.sizeExceeded === true;
-  return formatSkipReason(reason, byteLength, sizeExceeded, maxBytes);
+  return formatSkipReason(
+    decoded.value.reason,
+    decoded.value.byteLength,
+    decoded.value.sizeExceeded === true,
+    decoded.value.maxBytes,
+  );
 }
 
 export function shouldSkipWriteDiffBytes(...texts: string[]): boolean {

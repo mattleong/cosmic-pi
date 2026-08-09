@@ -78,6 +78,51 @@ export const SupervisorChannelConfigSchema = Schema.Struct({
 
 export type SupervisorChannelConfig = Schema.Schema.Type<typeof SupervisorChannelConfigSchema>;
 
+export interface SupervisorServerAuthentication {
+  readonly version: typeof SUPERVISOR_CHANNEL_VERSION;
+  readonly runId: string;
+  readonly token: string;
+}
+
+export type SupervisorServerPayload =
+  | { readonly type: "hello_ok"; readonly id: string; readonly assignmentEpoch: number }
+  | { readonly type: "assignment_epoch"; readonly id: string; readonly assignmentEpoch: number }
+  | {
+      readonly type: "result";
+      readonly id: string;
+      readonly accepted: true;
+      readonly duplicate?: boolean | undefined;
+      readonly sequence?: number | undefined;
+      readonly assignmentEpoch?: number | undefined;
+    }
+  | {
+      readonly type: "error";
+      readonly id: string | null;
+      readonly code: string;
+      readonly message: string;
+    }
+  | { readonly type: "question_reply"; readonly id: string; readonly message: string }
+  | { readonly type: "cancelled"; readonly id: string }
+  | {
+      readonly type: "cancel_result";
+      readonly id: string;
+      readonly targetRequestId: string;
+      readonly cancelled: boolean;
+    }
+  | { readonly type: "closed" };
+
+export type SupervisorServerMessage = SupervisorServerPayload & SupervisorServerAuthentication;
+
+export const authenticateSupervisorServerPayload = <Payload extends SupervisorServerPayload>(
+  authentication: SupervisorServerAuthentication,
+  payload: Payload,
+): Payload & SupervisorServerAuthentication => ({
+  ...payload,
+  version: authentication.version,
+  runId: authentication.runId,
+  token: authentication.token,
+});
+
 const HelloSchema = Schema.Struct({
   ...RequestFields,
   type: Schema.Literal("hello"),

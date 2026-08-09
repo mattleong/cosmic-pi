@@ -3,18 +3,19 @@ import type { Component } from "@earendil-works/pi-tui";
 import { createCodePreviewToolShell } from "../../../preview/tool-shell";
 import { renderPathListResult, type PathListResultConfig } from "./path-list-result";
 
-type AnyToolDefinition = ToolDefinition<any, any, any>;
+type CurrentToolDefinition = ToolDefinition<any, any, any>;
+type ToolInput<Tool extends CurrentToolDefinition> = Parameters<NonNullable<Tool["renderCall"]>>[0];
 
-type PathListToolOptions = {
-  createToolDefinition: (cwd: string) => AnyToolDefinition;
-  renderCall: (args: Record<string, unknown>, theme: Theme, cwd: string) => Component;
+type PathListToolOptions<Tool extends CurrentToolDefinition> = {
+  createToolDefinition: (cwd: string) => Tool;
+  renderCall: (args: ToolInput<Tool>, theme: Theme, cwd: string) => Component;
   resultConfig: (cwd: string) => PathListResultConfig;
 };
 
-export function registerPathListTool(
+export function registerPathListTool<Tool extends CurrentToolDefinition>(
   pi: ExtensionAPI,
   cwd: string,
-  options: PathListToolOptions,
+  options: PathListToolOptions<Tool>,
 ): void {
   const originalTool = options.createToolDefinition(cwd);
   const previewShell = createCodePreviewToolShell();
@@ -22,9 +23,7 @@ export function registerPathListTool(
     ...originalTool,
     renderShell: previewShell.renderShell,
     renderCall(args, theme, context) {
-      return previewShell.renderCall(context, theme, () =>
-        options.renderCall(args as Record<string, unknown>, theme, cwd),
-      );
+      return previewShell.renderCall(context, theme, () => options.renderCall(args, theme, cwd));
     },
     renderResult(result, resultOptions, theme, context) {
       return previewShell.renderResult(context, theme, (renderContext) =>

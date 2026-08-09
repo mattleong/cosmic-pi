@@ -3,10 +3,25 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { snapshotData } from "../domain/safe-data.ts";
 import { isRecord } from "../shared/utils.ts";
 import { AdvisorModelError } from "./client.ts";
 import { ADVISOR_TOOL_NAMES } from "./tools.ts";
+
+const AdvisorMessageContent = Schema.Array(Schema.Unknown);
+const AdvisorUserMessage = Schema.Struct({
+  role: Schema.Literal("user"),
+  content: AdvisorMessageContent,
+});
+const AdvisorAssistantMessage = Schema.Struct({
+  role: Schema.Literal("assistant"),
+  content: AdvisorMessageContent,
+});
+const AdvisorTextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
+type AdvisorSessionMessage =
+  | Schema.Schema.Type<typeof AdvisorUserMessage>
+  | Schema.Schema.Type<typeof AdvisorAssistantMessage>;
 
 export const assistantTextAfterPromptEffect = Effect.fn("AdvisorCheckpoint.correlatedText")(
   function* (messages: readonly unknown[], prompt: string) {
@@ -23,9 +38,9 @@ export const assistantTextAfterPromptEffect = Effect.fn("AdvisorCheckpoint.corre
 export function assistantTextAfterPrompt(messages: readonly unknown[], prompt: string): string {
   let promptIndex = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = snapshotData(messages[index]);
-    if (!isRecord(message) || message.role !== "user" || !Array.isArray(message.content)) continue;
-    if (messageText(message) === prompt) {
+    const message = Schema.decodeUnknownOption(AdvisorUserMessage)(snapshotData(messages[index]));
+    if (Option.isNone(message)) continue;
+    if (messageText(message.value) === prompt) {
       promptIndex = index;
       break;
     }
@@ -36,9 +51,11 @@ export function assistantTextAfterPrompt(messages: readonly unknown[], prompt: s
     });
   }
   for (let index = promptIndex + 1; index < messages.length; index += 1) {
-    const message = snapshotData(messages[index]);
-    if (!isRecord(message) || message.role !== "assistant") continue;
-    const text = messageText(message);
+    const message = Schema.decodeUnknownOption(AdvisorAssistantMessage)(
+      snapshotData(messages[index]),
+    );
+    if (Option.isNone(message)) continue;
+    const text = messageText(message.value);
     if (text) return text;
   }
   throw new AdvisorModelError({
@@ -46,12 +63,12 @@ export function assistantTextAfterPrompt(messages: readonly unknown[], prompt: s
   });
 }
 
-function messageText(message: Record<string, unknown>): string {
-  if (!Array.isArray(message.content)) return "";
+function messageText(message: AdvisorSessionMessage): string {
   return message.content
-    .flatMap((part) =>
-      isRecord(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [],
-    )
+    .flatMap((part) => {
+      const text = Schema.decodeUnknownOption(AdvisorTextPart)(part);
+      return Option.isSome(text) ? [text.value.text] : [];
+    })
     .join("\n")
     .trim();
 }

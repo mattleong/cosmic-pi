@@ -3,16 +3,27 @@
 // @effect-diagnostics effect/processEnv:off
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  SupervisorToolArgumentsByName,
+  SupervisorToolName,
+} from "../src/boundary/pi-supervisor-bridge-client.ts";
 
-const bridgeCalls: Array<{
-  readonly name: string;
-  readonly input: Readonly<Record<string, unknown>>;
-}> = [];
+type BridgeCall = {
+  readonly [Name in SupervisorToolName]: {
+    readonly name: Name;
+    readonly input: SupervisorToolArgumentsByName[Name];
+  };
+}[SupervisorToolName];
+
+const bridgeCalls: BridgeCall[] = [];
 const close = vi.fn();
 vi.mock("../src/boundary/pi-supervisor-bridge-client.ts", () => ({
   openPiSupervisorBridge: vi.fn(async () => ({
-    call: async (name: string, input: Readonly<Record<string, unknown>>) => {
-      bridgeCalls.push({ name, input });
+    call: async <Name extends SupervisorToolName>(
+      name: Name,
+      input: SupervisorToolArgumentsByName[Name],
+    ) => {
+      bridgeCalls.push({ name, input } as BridgeCall);
       return "accepted";
     },
     close,
@@ -71,7 +82,7 @@ describe("Herdr-hosted Pi bridge extension", () => {
       readonly name: string;
       readonly execute: (
         id: string,
-        input: Readonly<Record<string, unknown>>,
+        input: unknown,
         signal?: AbortSignal,
       ) => Promise<{ readonly content: ReadonlyArray<{ readonly text: string }> }>;
       readonly renderCall?: unknown;

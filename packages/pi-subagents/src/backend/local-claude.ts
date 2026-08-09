@@ -47,6 +47,7 @@ import {
   decodeClaudeInitializeControlResponse,
   decodeClaudeMcpStatusControlResponse,
   decodeClaudeProtocolEvent,
+  type ClaudeControlRequestFrame,
   type ClaudeNativeInitialization,
 } from "./local-claude-protocol.ts";
 
@@ -695,7 +696,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
 
   const requestControl = (
     operation: string,
-    makeFrame: (requestId: string) => Readonly<Record<string, unknown>>,
+    makeFrame: (requestId: string) => ClaudeControlRequestFrame,
   ): Effect.Effect<unknown, SubagentError> =>
     Effect.acquireUseRelease(
       Effect.sync(() => {

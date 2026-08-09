@@ -18,6 +18,14 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
+import type {
+  CodexInitializedNotification,
+  CodexRequest,
+} from "../backend/local-codex-protocol.ts";
+import type {
+  ClaudeControlRequestFrame,
+  ClaudeUserFrame,
+} from "../backend/local-claude-protocol.ts";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors.ts";
 import {
@@ -105,6 +113,12 @@ export type LocalCliWireEvent =
       readonly stderr: string;
     };
 
+export type LocalCliOutboundFrame =
+  | ClaudeUserFrame
+  | ClaudeControlRequestFrame
+  | CodexRequest
+  | CodexInitializedNotification;
+
 export interface LocalCliHandle {
   readonly pid: number;
   readonly events: Queue.Dequeue<LocalCliWireEvent, Cause.Done>;
@@ -112,9 +126,7 @@ export interface LocalCliHandle {
     Extract<LocalCliWireEvent, { readonly type: "exit" }>,
     SubagentProcessError
   >;
-  readonly send: (
-    value: Readonly<Record<string, unknown>>,
-  ) => Effect.Effect<void, SubagentProcessError>;
+  readonly send: (value: LocalCliOutboundFrame) => Effect.Effect<void, SubagentProcessError>;
   readonly acknowledge: (event: LocalCliWireEvent) => void;
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, SubagentProcessError>;
 }
@@ -233,7 +245,41 @@ const claudeAllowedTools = (launch: BackendLaunchRequest): ReadonlyArray<string>
     : CLAUDE_INSPECTION_TOOLS;
 };
 
-export const claudeSettings = (launch: BackendLaunchRequest): Readonly<Record<string, unknown>> => {
+export interface ClaudePermissionSettings {
+  readonly defaultMode: "dontAsk";
+  readonly allow: ReadonlyArray<string>;
+  readonly deny: ReadonlyArray<string>;
+}
+
+export interface ClaudeSandboxFilesystemSettings {
+  readonly allowWrite: ReadonlyArray<string>;
+  readonly denyWrite: ReadonlyArray<string>;
+}
+
+export interface ClaudeSandboxNetworkSettings {
+  readonly allowedDomains: ReadonlyArray<string>;
+  readonly strictAllowlist: true;
+  readonly allowUnixSockets: ReadonlyArray<string>;
+  readonly allowAllUnixSockets: false;
+  readonly allowLocalBinding: false;
+}
+
+export interface ClaudeSandboxSettings {
+  readonly enabled: true;
+  readonly autoAllowBashIfSandboxed: true;
+  readonly failIfUnavailable: true;
+  readonly allowUnsandboxedCommands: false;
+  readonly filesystem: ClaudeSandboxFilesystemSettings;
+  readonly network: ClaudeSandboxNetworkSettings;
+}
+
+export interface ClaudeSettings {
+  readonly permissions: ClaudePermissionSettings;
+  readonly sandbox: ClaudeSandboxSettings;
+  readonly enableAllProjectMcpServers: false;
+}
+
+export const claudeSettings = (launch: BackendLaunchRequest): ClaudeSettings => {
   const writerPolicy = claudeWriterCwdPolicy(launch.cwd);
   return {
     permissions: {
@@ -857,7 +903,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
         return yield* processError("spawn local CLI", "Process did not expose a pid.");
       }
 
-      const send = (value: Readonly<Record<string, unknown>>) =>
+      const send = (value: LocalCliOutboundFrame) =>
         Effect.callback<void, SubagentProcessError>((resumeWrite) => {
           const stdin = child.stdin;
           if (!stdin || stdin.destroyed || stdinError) {

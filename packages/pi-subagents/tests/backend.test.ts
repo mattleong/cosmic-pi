@@ -11,6 +11,7 @@ import type {
 } from "../src/boundary/child-process.ts";
 import { withHerdrSupervisorInstructions } from "../src/backend/herdr.ts";
 import { makeLocalPiBackendDriver } from "../src/backend/local-pi.ts";
+import type { RpcCommand } from "../src/backend/local-pi-protocol.ts";
 import { withLocalSupervisorInstructions } from "../src/backend/local-supervisor-prompt.ts";
 import type { BackendDriver } from "../src/backend/model.ts";
 import { makeSubagentBackendRegistry } from "../src/backend/service.ts";
@@ -117,7 +118,7 @@ describe("subagent backend contract", () => {
     Effect.gen(function* () {
       const rawEvents = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
       const exited = yield* Deferred.make<Extract<ChildWireEvent, { readonly type: "exit" }>>();
-      const commands: Array<Readonly<Record<string, unknown>> & { readonly type: string }> = [];
+      const commands: RpcCommand[] = [];
       const ipc: unknown[] = [];
       const acknowledged: ChildWireEvent[] = [];
       let capturedLaunch: Parameters<ChildProcessShape["spawn"]>[0] | undefined;
@@ -253,7 +254,7 @@ describe("subagent backend contract", () => {
     Effect.gen(function* () {
       const rawEvents = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
       const exited = yield* Deferred.make<Extract<ChildWireEvent, { readonly type: "exit" }>>();
-      const commands: Array<Readonly<Record<string, unknown>> & { readonly type: string }> = [];
+      const commands: RpcCommand[] = [];
       const handle: ChildProcessHandle = {
         pid: 4343,
         events: rawEvents,

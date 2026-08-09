@@ -218,10 +218,16 @@ export const assistantText = (message: Schema.Schema.Type<typeof AssistantMessag
     .join("\n")
     .trim();
 
-export type RpcCommand = Readonly<Record<string, unknown>> & {
-  readonly type: string;
-  readonly id?: string;
-};
+type CorrelatedRpcCommand =
+  | { readonly type: "get_state"; readonly id?: string | undefined }
+  | { readonly type: "prompt"; readonly id?: string | undefined; readonly message: string }
+  | { readonly type: "steer"; readonly id?: string | undefined; readonly message: string }
+  | { readonly type: "abort"; readonly id?: string | undefined }
+  | { readonly type: "set_session_name"; readonly id?: string | undefined; readonly name: string };
+
+export type RpcCommand =
+  | CorrelatedRpcCommand
+  | { readonly type: "extension_ui_response"; readonly id: string; readonly cancelled: true };
 
 export interface PeerNotice {
   readonly channel: "pi-subagents";

@@ -2,6 +2,7 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test, vi } from "vitest";
 import { normalizeAdvisorConfig } from "../src/config/options.ts";
 import { createAdvisorExtension } from "../src/extension.ts";
@@ -15,6 +16,7 @@ import {
   advisorExtensionContext,
   commandRegistry,
   handlerRegistry,
+  type AdvisorHostEntry,
 } from "./support/extension-host.ts";
 import { controllableRuntimeService } from "./support/runtime-service.ts";
 
@@ -79,6 +81,19 @@ function progressTurn() {
   };
 }
 
+const setupModel = (provider: string, id: string): NonNullable<ExtensionContext["model"]> => ({
+  provider,
+  id,
+  name: id,
+  api: "openai-completions",
+  baseUrl: "https://example.invalid",
+  reasoning: true,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128_000,
+  maxTokens: 16_000,
+});
+
 function harness(
   options: {
     configured?: boolean;
@@ -94,12 +109,13 @@ function harness(
     handler: (args: string, ctx: never) => unknown;
   }>();
   const { layer: runtimeServiceLayer, pending, requests } = controllableRuntimeService();
-  const entries: Array<Record<string, unknown>> = [
+  const entries: AdvisorHostEntry[] = [
     {
       id: "anchor",
       type: "message",
       parentId: null,
-      message: { role: "user", content: "request" },
+      timestamp: "now",
+      message: { role: "user", content: "request", timestamp: 1 },
     },
   ];
   const sent: unknown[] = [];
@@ -117,7 +133,8 @@ function harness(
       entries.push({
         id: `e${entries.length}`,
         type: "custom",
-        parentId: entries.at(-1)?.id,
+        parentId: entries.at(-1)?.id ?? null,
+        timestamp: "now",
         customType,
         data,
       });
@@ -133,10 +150,10 @@ function harness(
     modelRegistry: {
       getAvailable: vi.fn(() =>
         options.setupSelection && options.setupSelection !== "Not now"
-          ? [{ provider: "setup-provider", id: "setup-model" }]
+          ? [setupModel("setup-provider", "setup-model")]
           : [],
       ),
-      find: vi.fn((provider: string, model: string) => ({ provider, id: model })),
+      find: vi.fn((provider: string, model: string) => setupModel(provider, model)),
       hasConfiguredAuth: vi.fn(() => true),
     },
   });

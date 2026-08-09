@@ -1,6 +1,6 @@
 // @effect-diagnostics effect/processEnv:off
 // @effect-diagnostics effect/asyncFunction:off
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import subagentChildBridge from "../src/boundary/host-child.ts";
 
@@ -135,28 +135,12 @@ describe("subagent child host bridge", () => {
     const previous = process.env.PI_SUBAGENT_CHILD;
     process.env.PI_SUBAGENT_CHILD = "1";
     try {
-      let registered:
-        | {
-            readonly name: string;
-            readonly executionMode?: string;
-            readonly parameters?: {
-              readonly additionalProperties?: boolean;
-              readonly properties?: Readonly<Record<string, unknown>>;
-            };
-          }
-        | undefined;
+      let registered: Pick<ToolDefinition, "name" | "executionMode" | "parameters"> | undefined;
       const pi = {
         registerFlag: vi.fn(),
         getFlag: vi.fn(() => false),
         registerTool: vi.fn(
-          (tool: {
-            readonly name: string;
-            readonly executionMode?: string;
-            readonly parameters?: {
-              readonly additionalProperties?: boolean;
-              readonly properties?: Readonly<Record<string, unknown>>;
-            };
-          }) => {
+          (tool: Pick<ToolDefinition, "name" | "executionMode" | "parameters">) => {
             registered = tool;
           },
         ),

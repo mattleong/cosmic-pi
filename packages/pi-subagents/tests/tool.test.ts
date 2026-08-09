@@ -45,7 +45,10 @@ import {
 } from "../src/run/service.ts";
 import { subagentServiceDouble } from "./subagent-service-double.ts";
 import { makeCompactToolDetails, makeStartAwaitCardDetails } from "../src/tools/details.ts";
-import { renderAwaitProgressComponent } from "../src/tools/render-await.ts";
+import {
+  renderAwaitProgressComponent,
+  type SubagentToolRenderContext,
+} from "../src/tools/render-await.ts";
 import {
   awaitResultBanner,
   renderExpandedStartAwaitResult,
@@ -809,7 +812,7 @@ describe("subagent tool", () => {
       startUiTicker,
     ).get("subagent_await");
     const invalidate = vi.fn();
-    const state: Record<string, unknown> = {};
+    const state: SubagentToolRenderContext["state"] = {};
     const renderContext = {
       args: { runIds: ["agent-1"], until: "all_finished" },
       toolCallId: "await-call",

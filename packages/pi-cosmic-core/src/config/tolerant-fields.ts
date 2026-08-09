@@ -43,7 +43,7 @@ export const decodeTolerantFields = <const Fields extends TolerantFieldSchemas>(
   const diagnostics: TolerantFieldDiagnostic[] = [];
   const maxDiagnostics = Math.max(0, Math.floor(options.maxDiagnostics ?? 32));
   const prefix = options.path ? `${options.path}.` : "";
-  const value: Record<string, unknown> = {};
+  const value: TolerantFieldValues<Fields> = {};
 
   if (Option.isNone(root) && diagnostics.length < maxDiagnostics) {
     diagnostics.push({ path: options.path ?? "$", issue: "invalid" });
@@ -65,7 +65,7 @@ export const decodeTolerantFields = <const Fields extends TolerantFieldSchemas>(
   }
 
   return {
-    value: value as TolerantFieldValues<Fields>,
+    value,
     raw,
     diagnostics,
   };

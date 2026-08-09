@@ -19,6 +19,7 @@ import {
   anchorUserBranch,
   commandRegistry,
   handlerRegistry,
+  type AdvisorHostEntry,
 } from "./support/extension-host.ts";
 import { controllableRuntimeService } from "./support/runtime-service.ts";
 
@@ -75,7 +76,7 @@ function harness(
     runtimeStartError?: Error;
     runtimeStartPromises?: Array<Promise<void> | undefined>;
     runtimeDisposePromises?: Array<Promise<void> | undefined>;
-    branch?: Array<Record<string, unknown>>;
+    branch?: AdvisorHostEntry[];
     withoutSessionId?: boolean;
   } = {},
 ) {

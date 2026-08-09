@@ -4,10 +4,15 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ResolvedCommand,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { vi } from "vitest";
 
 export type HostHandler = (event: never, ctx: ExtensionContext) => unknown | Promise<unknown>;
+export type AdvisorHostEntry = SessionEntry & {
+  readonly customType?: string | undefined;
+  readonly data?: unknown;
+};
 
 /**
  * Captures Pi event registrations and replays them either serially awaited or
@@ -36,14 +41,14 @@ export function commandRegistry<Command = Omit<ResolvedCommand, "name" | "source
 }
 
 /** A fresh instance-local mutable branch holding one genuine user anchor. */
-export function anchorUserBranch(): Array<Record<string, unknown>> {
+export function anchorUserBranch(): AdvisorHostEntry[] {
   return [
     {
       id: "anchor",
       type: "message",
       parentId: null,
       timestamp: "now",
-      message: { role: "user", content: "request" },
+      message: { role: "user", content: "request", timestamp: 1 },
     },
   ];
 }
@@ -68,9 +73,9 @@ export function advisorExtensionApi(options: AdvisorExtensionApiOptions): Extens
 }
 
 export interface AdvisorExtensionContextOptions {
-  getBranch: () => Array<Record<string, unknown>>;
+  getBranch: () => AdvisorHostEntry[];
   isProjectTrusted?: boolean | undefined;
-  modelRegistry?: Record<string, unknown> | undefined;
+  modelRegistry?: Partial<ExtensionContext["modelRegistry"]> | undefined;
   select?: ((...args: never[]) => unknown) | undefined;
   withoutSessionId?: boolean | undefined;
 }

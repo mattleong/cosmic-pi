@@ -336,29 +336,59 @@ export const decodeClaudeInitializeControlResponse = (value: unknown) =>
 export const decodeClaudeMcpStatusControlResponse = (value: unknown) =>
   Schema.decodeUnknownEffect(McpStatusControlResponse)(value);
 
+export interface ClaudeUserFrame {
+  readonly type: "user";
+  readonly uuid?: string | undefined;
+  readonly message: { readonly role: "user"; readonly content: string };
+  readonly shouldQuery?: boolean | undefined;
+}
+
+export interface ClaudeInitializeFrame {
+  readonly type: "control_request";
+  readonly request_id: string;
+  readonly request: { readonly subtype: "initialize" };
+}
+
+export interface ClaudeMcpStatusFrame {
+  readonly type: "control_request";
+  readonly request_id: string;
+  readonly request: { readonly subtype: "mcp_status" };
+}
+
+export interface ClaudeInterruptFrame {
+  readonly type: "control_request";
+  readonly request_id: string;
+  readonly request: { readonly subtype: "interrupt"; readonly cancel_queued: true };
+}
+
+export type ClaudeControlRequestFrame =
+  | ClaudeInitializeFrame
+  | ClaudeMcpStatusFrame
+  | ClaudeInterruptFrame;
+
 export const claudeUserFrame = (
   message: string,
   options: { readonly shouldQuery?: boolean | undefined; readonly uuid?: string | undefined } = {},
-): Readonly<Record<string, unknown>> => ({
+): ClaudeUserFrame => ({
   type: "user",
   ...(options.uuid ? { uuid: options.uuid } : {}),
   message: { role: "user", content: message },
   ...(options.shouldQuery === undefined ? {} : { shouldQuery: options.shouldQuery }),
 });
 
-export const claudeInitializeFrame = (requestId: string): Readonly<Record<string, unknown>> => ({
+export const claudeInitializeFrame = (requestId: string): ClaudeInitializeFrame => ({
   type: "control_request",
   request_id: requestId,
   request: { subtype: "initialize" },
 });
 
-export const claudeMcpStatusFrame = (requestId: string): Readonly<Record<string, unknown>> => ({
+export const claudeMcpStatusFrame = (requestId: string): ClaudeMcpStatusFrame => ({
   type: "control_request",
   request_id: requestId,
   request: { subtype: "mcp_status" },
 });
 
-export const claudeInterruptFrame = (requestId: string): Readonly<Record<string, unknown>> => ({
+export const claudeInterruptFrame = (requestId: string): ClaudeInterruptFrame => ({
   type: "control_request",
   request_id: requestId,
   request: { subtype: "interrupt", cancel_queued: true },

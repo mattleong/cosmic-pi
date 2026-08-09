@@ -19,6 +19,14 @@ type RedactedCodePreviewBeforeWrite =
   | Exclude<ExistingFilePreview, { kind: "content" }>
   | { kind: "content"; byteLength: number }
   | undefined;
+export interface CodePreviewWriteDetails {
+  readonly codePreviewBeforeWrite: RedactedCodePreviewBeforeWrite;
+}
+type WithCodePreviewWriteDetails<T extends { details?: unknown }> = Omit<T, "details"> & {
+  readonly details: T["details"] extends object
+    ? T["details"] & CodePreviewWriteDetails
+    : CodePreviewWriteDetails;
+};
 export class CodePreviewWriteError extends Schema.TaggedErrorClass<CodePreviewWriteError>()(
   "CodePreviewWriteError",
   { operation: Schema.String, path: Schema.String, message: Schema.String },
@@ -110,12 +118,13 @@ export function withCodePreviewBeforeWrite<T extends { details?: unknown }>(
   result: T,
   before: CodePreviewBeforeWrite,
   toolCallId?: string,
-): Promise<T & { details: Record<string, unknown> }> {
-  const details = result.details && typeof result.details === "object" ? result.details : {};
+): Promise<WithCodePreviewWriteDetails<T>> {
+  const details: object =
+    result.details !== null && typeof result.details === "object" ? result.details : {};
   const enriched = {
     ...result,
     details: { ...details, [CODE_PREVIEW_BEFORE_WRITE_DETAIL]: redactedBeforeWriteDetail(before) },
-  };
+  } as WithCodePreviewWriteDetails<T>;
   if (!toolCallId || !hasCodePreviewSessionCapability()) return Promise.resolve(enriched);
   return runCodePreviewSessionEffect(
     CodePreviewWriteService.use((service) => service.rememberBeforeWrite(toolCallId, before)),

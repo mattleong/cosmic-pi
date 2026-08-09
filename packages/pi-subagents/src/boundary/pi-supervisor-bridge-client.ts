@@ -6,6 +6,8 @@
 import { spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 const MAX_LINE_BYTES = 512 * 1024;
 const MAX_PENDING = 16;
@@ -20,14 +22,101 @@ interface PendingCall {
   readonly timer: NodeJS.Timeout;
 }
 
+export type SupervisorToolName =
+  | "supervisor_progress"
+  | "supervisor_warning"
+  | "supervisor_question"
+  | "supervisor_submit_report";
+
+export interface SupervisorMessageArguments {
+  readonly message: string;
+}
+
+export interface SupervisorReportArguments {
+  readonly delivery_id: string;
+  readonly report: string;
+}
+
+export interface SupervisorToolArgumentsByName {
+  readonly supervisor_progress: SupervisorMessageArguments;
+  readonly supervisor_warning: SupervisorMessageArguments;
+  readonly supervisor_question: SupervisorMessageArguments;
+  readonly supervisor_submit_report: SupervisorReportArguments;
+}
+
+interface BridgeInitializeRequest {
+  readonly jsonrpc: "2.0";
+  readonly id: "pi-bridge-initialize";
+  readonly method: "initialize";
+  readonly params: {
+    readonly protocolVersion: "2025-06-18";
+    readonly capabilities: object;
+    readonly clientInfo: { readonly name: "pi-subagents-pi-bridge"; readonly version: "1.0.0" };
+  };
+}
+
+interface BridgeInitializedNotification {
+  readonly jsonrpc: "2.0";
+  readonly method: "notifications/initialized";
+  readonly params: object;
+}
+
+interface BridgeCancelledNotification {
+  readonly jsonrpc: "2.0";
+  readonly method: "notifications/cancelled";
+  readonly params: { readonly requestId: string; readonly reason: string };
+}
+
+interface BridgeToolCallRequest<Name extends SupervisorToolName = SupervisorToolName> {
+  readonly jsonrpc: "2.0";
+  readonly id: string;
+  readonly method: "tools/call";
+  readonly params: {
+    readonly name: Name;
+    readonly arguments: SupervisorToolArgumentsByName[Name];
+  };
+}
+
+type BridgeOutboundMessage =
+  | BridgeInitializeRequest
+  | BridgeInitializedNotification
+  | BridgeCancelledNotification
+  | BridgeToolCallRequest;
+
+const BridgeResponseDiscriminant = Schema.Struct({ id: Schema.optional(Schema.Unknown) });
+const BridgeResponse = Schema.Struct({
+  jsonrpc: Schema.optional(Schema.Literal("2.0")),
+  id: Schema.String,
+  result: Schema.optional(Schema.Unknown),
+  error: Schema.optional(
+    Schema.Struct({
+      code: Schema.Number.check(Schema.isFinite(), Schema.isInt()),
+      message: Schema.String.check(Schema.isMaxLength(64 * 1024)),
+      data: Schema.optional(Schema.Unknown),
+    }),
+  ),
+});
+const BridgeInitializeResult = Schema.Struct({
+  protocolVersion: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+  capabilities: Schema.Struct({ tools: Schema.Struct({ listChanged: Schema.Boolean }) }),
+  serverInfo: Schema.Struct({
+    name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+    version: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+  }),
+});
+const BridgeTextContent = Schema.Struct({
+  type: Schema.Literal("text"),
+  text: Schema.String.check(Schema.isMaxLength(64 * 1024)),
+});
+const BridgeToolResult = Schema.Struct({
+  content: Schema.Array(BridgeTextContent),
+  isError: Schema.optional(Schema.Boolean),
+});
+
 export interface PiSupervisorBridgeClient {
-  readonly call: (
-    name:
-      | "supervisor_progress"
-      | "supervisor_warning"
-      | "supervisor_question"
-      | "supervisor_submit_report",
-    input: Readonly<Record<string, unknown>>,
+  readonly call: <Name extends SupervisorToolName>(
+    name: Name,
+    input: SupervisorToolArgumentsByName[Name],
     signal?: AbortSignal,
   ) => Promise<string>;
   readonly close: () => void;
@@ -120,7 +209,7 @@ export const openPiSupervisorBridge = (
     };
     child.stdin?.on("error", () => failAll("Private supervisor bridge input transport failed."));
 
-    const write = (value: Readonly<Record<string, unknown>>): Promise<void> => {
+    const write = (value: BridgeOutboundMessage): Promise<void> => {
       if (closed || !child.stdin || child.stdin.destroyed || pendingWrites >= 32)
         return Promise.reject(fixedError("Private supervisor bridge input is unavailable."));
       const line = `${JSON.stringify(value)}\n`;
@@ -146,9 +235,9 @@ export const openPiSupervisorBridge = (
         });
       return operation;
     };
-    const request = (
-      method: string,
-      params: Readonly<Record<string, unknown>>,
+    const request = <Name extends SupervisorToolName>(
+      name: Name,
+      input: SupervisorToolArgumentsByName[Name],
       timeoutMillis: number,
       signal?: AbortSignal,
     ): Promise<string> =>
@@ -199,7 +288,12 @@ export const openPiSupervisorBridge = (
           abort();
           return;
         }
-        void write({ jsonrpc: "2.0", id, method, params }).catch((error: unknown) => {
+        void write({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name, arguments: input },
+        }).catch((error: unknown) => {
           const call = pending.get(id);
           if (!call) return;
           pending.delete(id);
@@ -219,50 +313,40 @@ export const openPiSupervisorBridge = (
         failAll("Private supervisor bridge returned malformed JSON.");
         return;
       }
-      if (!value || typeof value !== "object" || Array.isArray(value)) {
+      const discriminant = Schema.decodeUnknownOption(BridgeResponseDiscriminant)(value);
+      if (Option.isNone(discriminant)) {
         failAll("Private supervisor bridge returned an invalid response.");
         return;
       }
-      const record = value as Record<string, unknown>;
-      const id = typeof record.id === "string" ? record.id : undefined;
+      const id = typeof discriminant.value.id === "string" ? discriminant.value.id : undefined;
       if (!id) return;
       const call = pending.get(id);
       if (!call) return;
       pending.delete(id);
       clearTimeout(call.timer);
-      if (record.error && typeof record.error === "object") {
+      const response = Schema.decodeUnknownOption(BridgeResponse)(value);
+      if (Option.isNone(response)) {
+        call.reject(fixedError("Private supervisor helper returned an invalid response."));
+        return;
+      }
+      if (response.value.error) {
         call.reject(fixedError("Private supervisor helper rejected the request."));
         return;
       }
-      const result = record.result;
-      if (!result || typeof result !== "object" || Array.isArray(result)) {
-        call.reject(fixedError("Private supervisor helper returned an invalid result."));
-        return;
-      }
       if (id === "pi-bridge-initialize") {
+        const result = Schema.decodeUnknownOption(BridgeInitializeResult)(response.value.result);
+        if (Option.isNone(result)) {
+          call.reject(fixedError("Private supervisor helper returned an invalid result."));
+          return;
+        }
         initialized = true;
         call.resolve("initialized");
         return;
       }
-      const resultRecord = result as Record<string, unknown>;
-      const content = resultRecord.content;
-      const part = Array.isArray(content)
-        ? content.find(
-            (candidate) =>
-              candidate &&
-              typeof candidate === "object" &&
-              !Array.isArray(candidate) &&
-              (candidate as Record<string, unknown>).type === "text",
-          )
-        : undefined;
-      const text =
-        part && typeof part === "object" ? (part as Record<string, unknown>).text : undefined;
-      if (resultRecord.isError === true || typeof text !== "string" || text.length > 64 * 1024) {
-        call.reject(
-          fixedError(
-            typeof text === "string" ? text : "Private supervisor helper rejected the call.",
-          ),
-        );
+      const result = Schema.decodeUnknownOption(BridgeToolResult)(response.value.result);
+      const text = Option.isSome(result) ? result.value.content[0]?.text : undefined;
+      if (Option.isNone(result) || result.value.isError === true || text === undefined) {
+        call.reject(fixedError(text ?? "Private supervisor helper rejected the call."));
         return;
       }
       call.resolve(text);
@@ -330,8 +414,8 @@ export const openPiSupervisorBridge = (
                     fixedError("Private supervisor bridge is not initialized."),
                   );
                 return request(
-                  "tools/call",
-                  { name, arguments: input },
+                  name,
+                  input,
                   name === "supervisor_question" ? QUESTION_TIMEOUT_MILLIS : CALL_TIMEOUT_MILLIS,
                   signal,
                 );

@@ -20,6 +20,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { layer } from "@effect/vitest";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as Deferred from "effect/Deferred";
@@ -28,7 +29,12 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { executeWriteWithPreviewEffect } from "../../src/write/preview-execution";
+import { expectTypeOf, test } from "vitest";
+import {
+  type CodePreviewWriteDetails,
+  executeWriteWithPreviewEffect,
+  withCodePreviewBeforeWrite,
+} from "../../src/write/preview-execution";
 import { lookupBeforeWrite } from "../../src/write/projection";
 import { CodePreviewWriteService } from "../../src/write/service";
 
@@ -58,6 +64,32 @@ const withTempDirectory = <A, E, R>(
         rm(directory, { recursive: true, force: true }),
       ),
   );
+
+test("before-write details replace undefined details and preserve object fields", async () => {
+  const resultWithoutDetails: AgentToolResult<undefined> = { content: [], details: undefined };
+  const enrichedWithoutDetails = await withCodePreviewBeforeWrite(resultWithoutDetails, {
+    kind: "content",
+    content: "before",
+  });
+  expectTypeOf(enrichedWithoutDetails.details).toEqualTypeOf<CodePreviewWriteDetails>();
+  assert.deepEqual(enrichedWithoutDetails.details, {
+    codePreviewBeforeWrite: { kind: "content", byteLength: 6 },
+  });
+
+  const resultWithDetails: AgentToolResult<{ readonly existing: "kept" }> = {
+    content: [],
+    details: { existing: "kept" },
+  };
+  const enrichedWithDetails = await withCodePreviewBeforeWrite(resultWithDetails, undefined);
+  expectTypeOf(enrichedWithDetails.details.existing).toEqualTypeOf<"kept">();
+  expectTypeOf(enrichedWithDetails.details.codePreviewBeforeWrite).toEqualTypeOf<
+    CodePreviewWriteDetails["codePreviewBeforeWrite"]
+  >();
+  assert.deepEqual(enrichedWithDetails.details, {
+    existing: "kept",
+    codePreviewBeforeWrite: undefined,
+  });
+});
 
 layer(CodePreviewWriteService.layer)("session write service", (it) => {
   it.effect("writes preserve an existing symlink and update its target", () =>

@@ -6,7 +6,13 @@
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/globalConsole:off
 // @effect-diagnostics effect/globalDate:off
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  EditToolDetails,
+  EditToolInput,
+  Theme,
+  createEditToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
   benchTheme,
@@ -27,9 +33,12 @@ const { startBenchmarkShikiSession } = await import("./shiki-session");
 const WIDTH = 120;
 let sink = 0;
 
+type NativeEditDefinition = ReturnType<typeof createEditToolDefinition>;
+type EditBenchmarkState = Parameters<NonNullable<NativeEditDefinition["renderCall"]>>[2]["state"];
+
 type Renderer = {
   name: string;
-  renderCall?: (args: unknown, theme: Theme, context: RenderContext) => Component;
+  renderCall?: (args: EditToolInput, theme: Theme, context: RenderContext) => Component;
   renderResult?: (
     result: ToolResult,
     options: { expanded: boolean; isPartial: boolean },
@@ -49,14 +58,11 @@ type RenderContext = {
   isPartial: boolean;
   lastComponent?: Component;
   showImages: boolean;
-  state: Record<string, unknown>;
+  state: EditBenchmarkState;
   toolCallId: string;
 };
 
-type ToolResult = {
-  content: Array<{ type: string; text?: string }>;
-  details?: Record<string, unknown>;
-};
+type ToolResult = AgentToolResult<EditToolDetails | undefined>;
 
 const previousSettings = { ...codePreviewSettings };
 const theme = benchTheme();
@@ -89,7 +95,7 @@ try {
       }),
     );
 
-    const state: Record<string, unknown> = {};
+    const state: EditBenchmarkState = {};
     const warm = () =>
       edit.renderCall!(benchCase.args, theme, callContext(benchCase.expanded, state));
     sink += renderComponent(warm(), WIDTH).length;
@@ -104,7 +110,7 @@ try {
     applyResultCaseSettings(benchCase);
     results.push(
       runBench(benchCase.name, "renderResult+coldComponent", benchCase.mode, () => {
-        const state: Record<string, unknown> = {};
+        const state: EditBenchmarkState = {};
         const component = edit.renderResult!(
           benchCase.result,
           { expanded: benchCase.expanded, isPartial: false },
@@ -115,7 +121,7 @@ try {
       }),
     );
 
-    const state: Record<string, unknown> = {};
+    const state: EditBenchmarkState = {};
     const warm = () =>
       edit.renderResult!(
         benchCase.result,
@@ -159,7 +165,7 @@ function findRenderer(renderers: Renderer[], name: string): Renderer {
   return renderer;
 }
 
-function callContext(expanded: boolean, state: Record<string, unknown>): RenderContext {
+function callContext(expanded: boolean, state: EditBenchmarkState): RenderContext {
   return {
     argsComplete: true,
     cwd: "/tmp/project",
@@ -175,9 +181,9 @@ function callContext(expanded: boolean, state: Record<string, unknown>): RenderC
 }
 
 function resultContext(
-  args: unknown,
+  args: EditToolInput,
   expanded: boolean,
-  state: Record<string, unknown>,
+  state: EditBenchmarkState,
 ): RenderContext {
   return {
     ...callContext(expanded, state),
@@ -190,7 +196,7 @@ function resultContext(
 function makeCallCases(): Array<{
   name: string;
   mode: string;
-  args: unknown;
+  args: EditToolInput;
   expanded: boolean;
 }> {
   return [
@@ -225,7 +231,7 @@ function makeCallCases(): Array<{
 function makeResultCases(): Array<{
   name: string;
   mode: string;
-  args: unknown;
+  args: EditToolInput;
   result: ToolResult;
   expanded: boolean;
   editDiffPreview: boolean;
@@ -298,7 +304,7 @@ function applyResultCaseSettings(benchCase: ReturnType<typeof makeResultCases>[n
   });
 }
 
-function editArgs(blocks: number, linesPerBlock: number): unknown {
+function editArgs(blocks: number, linesPerBlock: number): EditToolInput {
   return {
     path: "src/example.ts",
     edits: Array.from({ length: blocks }, (_, index) => ({
@@ -313,7 +319,10 @@ function editArgs(blocks: number, linesPerBlock: number): unknown {
 }
 
 function resultWithDiff(diff: string): ToolResult {
-  return { content: [{ type: "text", text: "ok" }], details: { diff } };
+  return {
+    content: [{ type: "text", text: "ok" }],
+    details: { diff, patch: diff },
+  };
 }
 
 function diffBlock(
