@@ -9,7 +9,7 @@ import {
   type SettingItem,
 } from "@earendil-works/pi-tui";
 import { bundledThemes } from "shiki";
-import { SETTINGS_GROUP_ID_PREFIX } from "./registry";
+import { withoutGroupRowChanges } from "pi-cosmic-ui/manager/settings-surface";
 import { ON_OFF_VALUES, formatOnOff } from "../../config/values";
 import {
   ALL_CODE_PREVIEW_TOOLS,
@@ -44,12 +44,13 @@ export class SettingsGroupSubmenu extends Container {
     super();
 
     const items = options.items();
+    const notifyChange = withoutGroupRowChanges(items, options.onChange);
     this.settingsList = new SettingsList(
       items,
       options.maxVisible ?? Math.min(items.length + 2, 12),
       getSettingsListTheme(),
       (id, value) => {
-        if (!id.startsWith(SETTINGS_GROUP_ID_PREFIX)) options.onChange(id, value);
+        notifyChange(id, value);
         this.syncValues();
       },
       () => options.done(options.summary?.()),

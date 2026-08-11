@@ -15,6 +15,7 @@ import type {
   SupervisorChannelShape,
 } from "../boundary/supervisor-channel.ts";
 import {
+  isOutcomeUncertain,
   SubagentProcessError,
   SubagentProtocolError,
   UnsupportedSubagentCapabilityError,
@@ -627,8 +628,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
             Effect.tapError((error) =>
               Effect.sync(() => {
                 const uncertain =
-                  error._tag === "SubagentProcessError" &&
-                  error.code?.endsWith("_outcome_uncertain") === true;
+                  error._tag === "SubagentProcessError" && isOutcomeUncertain(error);
                 if (!uncertain && !activeTurnId && assignmentEpoch === epoch)
                   assignmentEpoch = previousEpoch;
               }),

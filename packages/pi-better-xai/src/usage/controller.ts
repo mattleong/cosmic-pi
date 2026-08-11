@@ -20,6 +20,7 @@ import {
   type RefreshRequest,
 } from "pi-cosmic-core";
 import { ModelRegistryAuth } from "../boundary/model-registry-auth.ts";
+import { recoverHostUi } from "../boundary/host-ui.ts";
 import {
   decodeSettingUpdate,
   readRawConfig,
@@ -125,23 +126,9 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
               return Effect.succeed([next, next] as const);
             })
             .pipe(Effect.orDie);
-        const notifyChanged = Effect.try({
-          try: onChange,
-          catch: () =>
-            new XaiBoundaryError({
-              operation: "render",
-              message: "Unable to update Better xAI UI.",
-            }),
-        }).pipe(Effect.catch(() => Effect.void));
+        const notifyChanged = recoverHostUi("render", onChange);
         const notifyUser = (message: string, level: "info" | "warning") =>
-          Effect.try({
-            try: () => MutableRef.get(context).ui.notify(message, level),
-            catch: () =>
-              new XaiBoundaryError({
-                operation: "notify",
-                message: "Unable to notify Better xAI status.",
-              }),
-          }).pipe(Effect.catch(() => Effect.void));
+          recoverHostUi("notify", () => MutableRef.get(context).ui.notify(message, level));
         const subscriptionEligibility = (ctx: ExtensionContext, cfg: ResolvedConfig) => {
           const model = ctx.model;
           if (!model || model.provider !== "xai") return Effect.succeed(false);

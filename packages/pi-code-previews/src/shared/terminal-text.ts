@@ -1,5 +1,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
+export { stripAnsi } from "pi-cosmic-core";
+
 export function escapeControlChars(text: string): string {
   return text
     .replace(/\x1b/g, "␛")
@@ -7,14 +9,9 @@ export function escapeControlChars(text: string): string {
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "�");
 }
 
-const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
 const PRINTABLE_ASCII_RE = /^[\x20-\x7e]*$/;
 const TRUNCATION_SAFE_RE = /^(?:[\x20-\x7e\t]|\x1b\[[0-9;]*m)*$/;
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-
-export function stripAnsi(text: string): string {
-  return text.replace(ANSI_RE, "");
-}
 
 export function injectVisibleRanges(
   ansi: string,

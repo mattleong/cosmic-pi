@@ -1,5 +1,5 @@
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
-import { formatTokens } from "pi-cosmic-core";
+import { abbreviateHomePath, formatTokens } from "pi-cosmic-core";
 import type { CosmicFooterTextContribution } from "../protocol/protocol.ts";
 import { formatGitStatus, type FooterGitStatus } from "./git.ts";
 import type { FooterHostProjection } from "../boundary/host-footer-projection.ts";
@@ -10,14 +10,6 @@ export interface FooterTotals {
   cacheRead: number;
   cacheWrite: number;
   cost: number;
-}
-
-export function abbreviateHomePath(path: string, home?: string) {
-  if (!home) return path;
-  if (path === home) return "~";
-  const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
-  const prefix = home.endsWith(separator) ? home : `${home}${separator}`;
-  return path.startsWith(prefix) ? `~/${path.slice(prefix.length)}` : path;
 }
 
 function basename(path: string): string {

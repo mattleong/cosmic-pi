@@ -49,8 +49,17 @@ export const sanitizeName = (value: string): string => {
   return safeTextPrefix(sanitized.replace(/\s+/g, " ").trim(), MAX_NAME_CHARS);
 };
 
-export const snapshotView = (view: SubagentRunView): SubagentRunView =>
-  freezeSnapshot({
+const frozenViewSnapshots = new WeakMap<SubagentRunView, SubagentRunView>();
+
+/**
+ * Deep-clones and deep-freezes a view for publication. Run views are only ever
+ * replaced immutably (never mutated in place), so the frozen snapshot is
+ * memoized per view object and shared across projections and returned views.
+ */
+export const snapshotView = (view: SubagentRunView): SubagentRunView => {
+  const cached = frozenViewSnapshots.get(view);
+  if (cached) return cached;
+  const snapshot = freezeSnapshot({
     ...view,
     capabilities: [...view.capabilities],
     selection: {
@@ -60,6 +69,9 @@ export const snapshotView = (view: SubagentRunView): SubagentRunView =>
     sessionEvents: view.sessionEvents.map((event) => ({ ...event })),
     usage: { ...view.usage },
   });
+  frozenViewSnapshots.set(view, snapshot);
+  return snapshot;
+};
 
 export const clipText = (value: string, limit: number): string =>
   value.length <= limit ? value : `${safeTextPrefix(value, limit)}…`;

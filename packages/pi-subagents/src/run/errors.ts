@@ -44,6 +44,20 @@ export const subagentErrorCode = (error: SubagentError): string =>
   ("code" in error && typeof error.code === "string" && error.code !== "" && error.code) ||
   error._tag;
 
+/**
+ * By convention, `code` values ending in `_outcome_uncertain` mark failures whose side effects may
+ * already have applied; callers must not retry or fall through to another candidate.
+ */
+export const isOutcomeUncertain = (error: { readonly code?: string | undefined }): boolean =>
+  error.code?.endsWith("_outcome_uncertain") === true;
+
+/**
+ * By convention, `code` values ending in `_cleanup_unconfirmed` mark failures that left private
+ * state possibly present; callers must fail closed instead of attempting another candidate.
+ */
+export const isCleanupUnconfirmed = (error: { readonly code?: string | undefined }): boolean =>
+  error.code?.endsWith("_cleanup_unconfirmed") === true;
+
 export class SubagentProtocolError extends Schema.TaggedErrorClass<SubagentProtocolError>()(
   "SubagentProtocolError",
   { message: Schema.String },

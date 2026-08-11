@@ -13,6 +13,9 @@ import { ProcessCoordinator } from "./process-coordinator.ts";
 /** Historical public input shape; persistence validates every value against `Schema.Json`. */
 export type JsonObject = Record<string, unknown>;
 
+export const isJsonObject = (value: unknown): value is JsonObject =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 export interface JsonDocumentModification<A, AfterCommitR = never> {
   readonly value: A;
   readonly document: JsonObject;

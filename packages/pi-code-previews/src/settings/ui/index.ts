@@ -1,4 +1,5 @@
 import { type SettingItem } from "@earendil-works/pi-tui";
+import type { SettingsSurfaceItem } from "pi-cosmic-ui/manager/settings-surface";
 import { getSettingsPath } from "../../config/store";
 import type { CodePreviewSettings } from "../../config/schema";
 import { formatSettingValue } from "../../config/values";
@@ -115,8 +116,9 @@ function createSettingsGroupItemFromDefinition(
   current: CodePreviewSettings,
   getCurrent: SettingsProvider,
   onSettingChange: SettingChangeHandler,
-): SettingItem {
+): SettingsSurfaceItem {
   return {
+    kind: "group",
     id: groupId(definition.name),
     label: definition.label,
     description: definition.description,

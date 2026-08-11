@@ -10,6 +10,7 @@ import type {
   SupervisorChannelShape,
 } from "../boundary/supervisor-channel.ts";
 import {
+  isOutcomeUncertain,
   SubagentProcessError,
   UnsupportedSubagentCapabilityError,
   type SubagentError,
@@ -304,7 +305,7 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
             error._tag === "SubagentProcessError"
               ? (error as SubagentProcessError)
               : undefined;
-          if (processFailure?.code?.endsWith("_outcome_uncertain")) {
+          if (processFailure !== undefined && isOutcomeUncertain(processFailure)) {
             reconcilingEpoch = epoch;
             yield* reconcilePromptEvidence(epoch, baseline);
             return;

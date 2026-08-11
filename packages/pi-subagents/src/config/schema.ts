@@ -1,5 +1,6 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { isJsonObject } from "pi-cosmic-core";
 import {
   PROFILE_CANDIDATE_EFFORTS,
   PROFILE_IDS,
@@ -74,9 +75,7 @@ const ownKeysAre = (
 };
 
 const decodedRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Readonly<Record<string, unknown>>)
-    : undefined;
+  isJsonObject(value) ? value : undefined;
 
 const readField = (
   record: Readonly<Record<string, unknown>>,

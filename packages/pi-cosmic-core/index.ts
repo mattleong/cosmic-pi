@@ -37,11 +37,20 @@ export {
 } from "./src/platform/schema-document.ts";
 export {
   type AtomicJsonDocumentStoreShape,
+  isJsonObject,
   JsonDocumentStore,
   type JsonDocumentModification,
   type JsonDocumentStoreShape,
   type JsonObject,
 } from "./src/platform/json-document.ts";
+export {
+  abbreviateHomePath,
+  isContainedPath,
+  isContainedPathWith,
+  isStrictlyInsidePath,
+  isStrictlyInsidePathWith,
+  type PathContainmentAdapter,
+} from "./src/platform/paths.ts";
 export {
   JsonHttpClient,
   type JsonHttpAcceptedResponse,

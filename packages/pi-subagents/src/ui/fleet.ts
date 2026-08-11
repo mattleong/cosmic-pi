@@ -475,15 +475,19 @@ export class SubagentFleetComponent implements Component, Focusable {
     return this.options.theme.fg("borderMuted", text);
   }
 
+  private framedRow(line: string, inner: number): string {
+    return `${this.outerBorder("│")}${padListDetailRow(line, inner)}${this.outerBorder("│")}`;
+  }
+
   private renderNotice(width: number, notice: FleetNotice): string {
     const inner = Math.max(0, width - 2);
     const glyph = managerNoticeGlyph(notice.kind);
     const color =
       notice.kind === "error" ? "error" : notice.kind === "success" ? "success" : "muted";
-    return `${this.outerBorder("│")}${padListDetailRow(
+    return this.framedRow(
       this.options.theme.fg(color, `${glyph} ${sanitizeTerminalLine(notice.text)}`),
       inner,
-    )}${this.outerBorder("│")}`;
+    );
   }
 
   private renderPrompt(width: number, height: number, prompt: FleetPrompt): string[] {
@@ -537,8 +541,7 @@ export class SubagentFleetComponent implements Component, Focusable {
                 ...inputLines,
                 ...feedback,
               ];
-    const frame = (line: string) =>
-      `${this.outerBorder("│")}${padListDetailRow(line, inner)}${this.outerBorder("│")}`;
+    const frame = (line: string) => this.framedRow(line, inner);
     const rendered = rows.slice(0, height).map(frame);
     while (rendered.length < height) rendered.push(frame(""));
     return rendered;
@@ -632,20 +635,15 @@ export class SubagentFleetComponent implements Component, Focusable {
     if (!selected)
       // No alternate help exists without a selected run, so no "? More" hint is offered.
       return renderResponsiveManagerFooter(contentWidth, [["No runs", `${escape}/q Close`]]);
-    const actions = [
-      messageAction,
-      canInterrupt(selected) ? "i Interrupt" : undefined,
-      canResume(selected) ? "r Resume" : undefined,
-      canRename(selected) ? "n Rename" : undefined,
-      canStop(selected) ? "x Stop" : undefined,
-    ].filter((item): item is string => item !== undefined);
-    const compactActions = [
-      messageAction,
-      canInterrupt(selected) ? "i Int" : undefined,
-      canResume(selected) ? "r Resume" : undefined,
-      canRename(selected) ? "n Name" : undefined,
-      canStop(selected) ? "x Stop" : undefined,
-    ].filter((item): item is string => item !== undefined);
+    const availableActions = [
+      messageAction ? { full: messageAction, compact: messageAction } : undefined,
+      canInterrupt(selected) ? { full: "i Interrupt", compact: "i Int" } : undefined,
+      canResume(selected) ? { full: "r Resume", compact: "r Resume" } : undefined,
+      canRename(selected) ? { full: "n Rename", compact: "n Name" } : undefined,
+      canStop(selected) ? { full: "x Stop", compact: "x Stop" } : undefined,
+    ].filter((item): item is { full: string; compact: string } => item !== undefined);
+    const actions = availableActions.map((item) => item.full);
+    const compactActions = availableActions.map((item) => item.compact);
     const scrollHelp = this.pane === "list" ? "C-u/d Half-page · gg/G Ends" : "C-u/d Detail · gg/G";
     // The expanded ? overlay is the discoverable place for the full motion vocabulary.
     const expandedScrollHelp =
@@ -761,8 +759,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     const divider = `${this.outerBorder("├")}${this.innerBorder("─".repeat(inner))}${this.outerBorder("┤")}`;
     const remaining = Math.max(0, height - list.length - 1);
     const detail = this.detailWindow(this.detailLines(selected, inner), remaining, inner);
-    const frame = (line: string) =>
-      `${this.outerBorder("│")}${padListDetailRow(line, inner)}${this.outerBorder("│")}`;
+    const frame = (line: string) => this.framedRow(line, inner);
     const lines = [...list.map(frame), divider, ...detail.map(frame)];
     while (lines.length < height) lines.push(frame(""));
     return lines.slice(0, height);
@@ -798,8 +795,7 @@ export class SubagentFleetComponent implements Component, Focusable {
       this.detailMaxScroll = 0;
       this.detailLineCount = 0;
     }
-    const frame = (line: string) =>
-      `${this.outerBorder("│")}${padListDetailRow(line, inner)}${this.outerBorder("│")}`;
+    const frame = (line: string) => this.framedRow(line, inner);
     const rendered = lines.slice(0, height).map(frame);
     while (rendered.length < height) rendered.push(frame(""));
     return rendered;

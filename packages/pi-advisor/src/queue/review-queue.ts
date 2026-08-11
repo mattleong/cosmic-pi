@@ -173,7 +173,7 @@ export class AdvisorReviewQueue {
         new AdvisorQueueDisposedError({ message: "Advisor review queue was disposed." }),
       );
       yield* self.clearRequestQueue();
-      if (self.checkpointFiber) yield* interruptFiberWithin(self.checkpointFiber);
+      if (self.checkpointFiber) yield* Fiber.interrupt(self.checkpointFiber);
       self.checkpointFiber = undefined;
       if (active) self.requests.delete(active);
       const steeringIngress = self.steeringIngress;
@@ -232,7 +232,7 @@ export class AdvisorReviewQueue {
 
         const worker = self.checkpointFiber;
         self.checkpointFiber = undefined;
-        if (worker) yield* interruptFiberWithin(worker);
+        if (worker) yield* Fiber.interrupt(worker);
         self.observations.releaseBarrier(waiter.target);
         yield* self.transition((state) => settleCheckpoint(state, checkpointId));
         isolate(() => self.options.onCheckpointSettled?.(waiter.request));
@@ -574,9 +574,6 @@ export class AdvisorReviewQueue {
     });
   }
 }
-
-const interruptFiberWithin = <A, E>(fiber: Fiber.Fiber<A, E>) =>
-  Fiber.interrupt(fiber).pipe(Effect.asVoid);
 
 const toQueueError =
   (fallback: string) =>

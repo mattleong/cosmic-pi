@@ -1,11 +1,14 @@
 // Node filesystem access is confined to this capability-narrow read-only adapter.
 // @effect-diagnostics effect/nodeBuiltinImport:off
 import { constants, promises as fs } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { isContainedPath, isContainedPathWith } from "pi-cosmic-core";
+
+export { isContainedPath, isContainedPathWith };
 
 export class AdvisorFileError extends Schema.TaggedErrorClass<AdvisorFileError>()(
   "AdvisorFileError",
@@ -93,25 +96,6 @@ const closeResourceBestEffort = (
   path: string,
   close: () => Promise<void>,
 ) => closeResource(operation, path, close).pipe(Effect.ignore);
-
-/** Native-path containment; unlike prefix matching this is correct on Windows and sibling roots. */
-export const isContainedPathWith = (
-  path: {
-    relative(root: string, candidate: string): string;
-    isAbsolute(value: string): boolean;
-    sep: string;
-  },
-  root: string,
-  candidate: string,
-): boolean => {
-  const relation = path.relative(root, candidate);
-  return (
-    relation === "" ||
-    (relation !== ".." && !relation.startsWith(`..${path.sep}`) && !path.isAbsolute(relation))
-  );
-};
-export const isContainedPath = (root: string, candidate: string): boolean =>
-  isContainedPathWith({ relative, isAbsolute, sep }, root, candidate);
 
 let beforeDirectoryOpenHook: ((path: string) => void | Promise<void>) | undefined;
 let afterDirectoryReadHook: ((path: string) => void | Promise<void>) | undefined;

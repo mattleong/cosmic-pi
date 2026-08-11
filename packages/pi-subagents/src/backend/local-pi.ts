@@ -12,6 +12,7 @@ import {
 } from "../boundary/child-process.ts";
 import {
   InvalidSubagentRequestError,
+  isOutcomeUncertain,
   SubagentProcessError,
   SubagentProtocolError,
   type SubagentError,
@@ -394,8 +395,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
           Effect.tapError((error) =>
             Effect.sync(() => {
               const outcomeUncertain =
-                error._tag === "SubagentProcessError" &&
-                error.code?.endsWith("_outcome_uncertain") === true;
+                error._tag === "SubagentProcessError" && isOutcomeUncertain(error);
               if (!outcomeUncertain && assignmentEpoch === nextAssignmentEpoch)
                 assignmentEpoch = previousAssignmentEpoch;
             }),

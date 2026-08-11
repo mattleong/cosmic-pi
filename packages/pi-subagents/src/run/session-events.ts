@@ -8,7 +8,17 @@ const MAX_TOOL_TARGET_CHARS = 500;
 const MAX_ASSISTANT_TEXT_CHARS = 16 * 1024;
 const MAX_NOTICE_CHARS = 4 * 1024;
 
-const bytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
+// Session events are immutable once created, so each event's serialized size
+// is computed once and reused across every retention pass.
+const eventBytes = new WeakMap<SubagentSessionEvent, number>();
+
+const bytes = (event: SubagentSessionEvent): number => {
+  const cached = eventBytes.get(event);
+  if (cached !== undefined) return cached;
+  const size = Buffer.byteLength(JSON.stringify(event), "utf8");
+  eventBytes.set(event, size);
+  return size;
+};
 
 const asRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -73,7 +83,9 @@ export function appendSessionEvent(
   let retainedBytes = 0;
   let start = next.length;
   while (start > 0) {
-    const size = bytes(next[start - 1]);
+    const retained = next[start - 1];
+    if (!retained) break;
+    const size = bytes(retained);
     if (retainedBytes + size > MAX_SESSION_BYTES) break;
     retainedBytes += size;
     start -= 1;

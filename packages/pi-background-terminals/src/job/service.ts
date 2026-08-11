@@ -85,6 +85,9 @@ export interface BackgroundTerminalServiceOptions {
 const notFound = (id: string) =>
   new BackgroundJobNotFoundError({ id, message: `Background job not found: ${id}` });
 
+/** Output chunks coalesce into at most one projection publish per interval. */
+const OUTPUT_PUBLISH_INTERVAL_MILLIS = 1_000;
+
 const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
   options: BackgroundTerminalServiceOptions,
 ) {
@@ -113,22 +116,37 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
       })),
     ),
   });
+  let outputPublishPending = false;
+  let outputPublishDeadline = 0;
+  let outputFlushScheduled = false;
   const publish = () => {
+    outputPublishPending = false;
     options.publish?.(currentProjection());
   };
+  const flushOutputPublish = withLock(
+    Effect.gen(function* () {
+      outputFlushScheduled = false;
+      if (!outputPublishPending) return;
+      outputPublishDeadline = (yield* Clock.currentTimeMillis) + OUTPUT_PUBLISH_INTERVAL_MILLIS;
+      publish();
+    }),
+  );
   const totalLogBytes = () =>
     [...jobs.values()].reduce((total, record) => total + record.logs.bytes, 0);
   const enforceTotalLogBudget = () => {
-    while (totalLogBytes() > retainedLogBudget) {
+    let total = totalLogBytes();
+    while (total > retainedLogBudget) {
       let selected: JobRecord | undefined;
       for (const record of jobs.values()) {
-        const first = record.logs.events[0];
-        const selectedFirst = selected?.logs.events[0];
+        const first = record.logs.oldestEvent;
+        const selectedFirst = selected?.logs.oldestEvent;
         if (first && (!selectedFirst || first.timestamp < selectedFirst.timestamp))
           selected = record;
       }
-      if (!selected) break;
+      const dropped = selected?.logs.oldestEvent;
+      if (!selected || !dropped) break;
       selected.logs = dropOldestLogEvent(selected.logs);
+      total -= dropped.bytes;
       selected.snapshot = {
         ...selected.snapshot,
         droppedLogBytes: selected.logs.droppedBytes,
@@ -198,7 +216,19 @@ const makeService = Effect.fn("BackgroundTerminalService.make")(function* (
         };
         wake(record);
         enforceTotalLogBudget();
-        publish();
+        // Output-driven publishes coalesce onto an interval; a trailing flush
+        // covers chunks that land between the leading edge and quiescence.
+        outputPublishPending = true;
+        if (timestamp >= outputPublishDeadline) {
+          outputPublishDeadline = timestamp + OUTPUT_PUBLISH_INTERVAL_MILLIS;
+          publish();
+        } else if (!outputFlushScheduled) {
+          outputFlushScheduled = true;
+          yield* flushOutputPublish.pipe(
+            Effect.delay(`${OUTPUT_PUBLISH_INTERVAL_MILLIS} millis`),
+            Effect.forkIn(ownerScope, { startImmediately: true }),
+          );
+        }
       }),
     );
 

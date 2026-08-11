@@ -6,6 +6,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { isStrictlyInsidePath } from "./paths.ts";
 
 export class SafeFileError extends Schema.TaggedErrorClass<SafeFileError>()("SafeFileError", {
   operation: Schema.String,
@@ -40,16 +41,6 @@ export const closeSafeFileHandle = (
     try: () => handle.close(),
     catch: safeFileError("close", "Unable to close a stable regular file."),
   });
-
-const isStrictlyInside = (root: string, candidate: string): boolean => {
-  const relative = nodePath.relative(root, candidate);
-  return (
-    relative.length > 0 &&
-    relative !== ".." &&
-    !relative.startsWith(`..${nodePath.sep}`) &&
-    !nodePath.isAbsolute(relative)
-  );
-};
 
 /** Node-specific stable file acquisition for security-sensitive image inputs. */
 export class SafeFile extends Context.Service<SafeFile, SafeFileShape>()(
@@ -92,7 +83,7 @@ export class SafeFile extends Context.Service<SafeFile, SafeFileShape>()(
                       ([resolvedPath, resolvedRoot]) => {
                         if (
                           nodePath.resolve(resolvedRoot) !== nodePath.resolve(containmentRoot) ||
-                          !isStrictlyInside(resolvedRoot, resolvedPath)
+                          !isStrictlyInsidePath(resolvedRoot, resolvedPath)
                         )
                           return Promise.reject("containment");
                         return fs.stat(resolvedPath, { bigint: true }).then((visible) => {

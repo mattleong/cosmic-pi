@@ -82,6 +82,39 @@ describe("createSettingsListSurface", () => {
     expect(cancelled).toBe(1);
     expect(invoked).toContain("guard");
   });
+
+  it("suppresses onChange for group/navigation rows while setting rows still fire", () => {
+    const changes: Array<{ id: string; value: string }> = [];
+    const groupItem = {
+      kind: "group" as const,
+      id: "group.general",
+      label: "General",
+      currentValue: "summary",
+      submenu: (_value: string, done: (selectedValue?: string) => void) => ({
+        render: () => [] as string[],
+        invalidate: () => undefined,
+        handleInput: () => done("next summary"),
+      }),
+    };
+    const { surface } = createSettingsListSurface({
+      header: { render: () => [], invalidate: () => undefined },
+      items: [groupItem, ...items()],
+      height: 6,
+      listTheme,
+      onChange: (id, value) => changes.push({ id, value }),
+      onCancel: () => undefined,
+      dim: (text) => text,
+    });
+    surface.focused = true;
+    surface.handleInput?.("\r"); // Open the group submenu.
+    surface.handleInput?.("\r"); // Submenu completes with a fresh summary.
+    // The list still shows the completed summary, but the group row never fires onChange.
+    expect(groupItem.currentValue).toBe("next summary");
+    expect(changes).toEqual([]);
+    surface.handleInput?.("j");
+    surface.handleInput?.("\r");
+    expect(changes).toEqual([{ id: "enabled", value: "false" }]);
+  });
 });
 
 /**

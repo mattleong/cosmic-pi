@@ -11,7 +11,10 @@ import {
   dispatchSettingsCommand,
   redactDiagnosticValue,
 } from "pi-cosmic-core";
-import { createSettingsListSurface } from "pi-cosmic-ui/manager/settings-surface";
+import {
+  createSettingsListSurface,
+  type SettingsSurfaceItem,
+} from "pi-cosmic-ui/manager/settings-surface";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
 import {
   COMPACTION_SETTING_DESCRIPTORS,
@@ -223,10 +226,11 @@ export function registerSettingsController(
                 },
               ];
             };
-            const sections = (): SettingsPickerItem[] => {
+            const sections = (): (SettingsPickerItem & SettingsSurfaceItem)[] => {
               const cfg = config(ctx);
               return [
                 {
+                  kind: "group",
                   id: "section.fast",
                   label: "Fast mode",
                   currentValue: settingsSummary(ctx, MutableRef.get(fastProjection)),
@@ -237,6 +241,7 @@ export function registerSettingsController(
                     ),
                 },
                 {
+                  kind: "group",
                   id: "section.compaction",
                   label: "Compaction",
                   currentValue: compactionSummary(cfg),
@@ -250,6 +255,7 @@ export function registerSettingsController(
                     ),
                 },
                 {
+                  kind: "group",
                   id: "section.footer",
                   label: "Footer",
                   currentValue: cfg.footer.mode,
@@ -262,6 +268,7 @@ export function registerSettingsController(
                     ),
                 },
                 {
+                  kind: "group",
                   id: "section.usage",
                   label: "Usage",
                   currentValue: usageSummary(cfg),
@@ -274,6 +281,7 @@ export function registerSettingsController(
                     ),
                 },
                 {
+                  kind: "group",
                   id: "section.image",
                   label: "Image tool",
                   currentValue: imageSummary(cfg),
@@ -286,6 +294,7 @@ export function registerSettingsController(
                     ),
                 },
                 {
+                  kind: "group",
                   id: "section.diagnostics",
                   label: "Diagnostics",
                   currentValue: "debug / config",
@@ -310,7 +319,7 @@ export function registerSettingsController(
               height: 8,
               listTheme: getSettingsListTheme(),
               onChange: (id, value, list) => {
-                if (!id.startsWith("section.")) writeSetting(ctx, id, value);
+                writeSetting(ctx, id, value);
                 list.updateValue(
                   id,
                   sections().find((item) => item.id === id)?.currentValue ?? value,

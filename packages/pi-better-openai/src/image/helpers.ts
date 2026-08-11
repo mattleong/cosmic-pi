@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
+import { isStrictlyInsidePathWith } from "pi-cosmic-core";
 import type { ResolvedConfig } from "../config/index.ts";
 import { type ImageRequest } from "./protocol.ts";
 import {
@@ -43,13 +44,8 @@ export function imageMimeType(path: string, outputFormat?: string): string {
 }
 export const extensionForFormat = (format: ImageOutputFormat) =>
   format === "jpeg" ? "jpg" : format;
-export const isInside = (path: Path.Path, root: string, child: string) => {
-  const normalizedRoot = path.resolve(root);
-  const normalizedChild = path.resolve(child);
-  return (
-    normalizedChild !== normalizedRoot && normalizedChild.startsWith(`${normalizedRoot}${path.sep}`)
-  );
-};
+export const isInside = (path: Path.Path, root: string, child: string) =>
+  isStrictlyInsidePathWith(path, path.resolve(root), path.resolve(child));
 export function dataUrlParts(
   value: string,
   expectedMimeType: string,

@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { Type } from "typebox";
+import { isContainedPathWith } from "pi-cosmic-core";
 import { ReadOnlyFileSystem, type AdvisorProjectRoot } from "../boundary/read-only-fs.ts";
 
 // Stable file reads use isSymbolicLink checks and O_NOFOLLOW in the capability-narrow adapter.
@@ -362,12 +363,7 @@ const assertInsideEffect = Effect.fn("AdvisorTools.insideRoot")(function* (
   root: string,
   candidate: string,
 ) {
-  const relation = path.relative(root, candidate);
-  if (
-    relation === "" ||
-    (relation !== ".." && !relation.startsWith(`..${path.sep}`) && !path.isAbsolute(relation))
-  )
-    return;
+  if (isContainedPathWith(path, root, candidate)) return;
   return yield* safety("Requested path escapes the project root.");
 });
 const projectRelative = Effect.fn("AdvisorTools.relative")(function* (root: string, value: string) {

@@ -16,7 +16,12 @@ import {
   type HerdrAgentOwnershipEvidence as AgentOwnershipEvidence,
 } from "../backend/herdr-ownership.ts";
 import type { BackendLaunchRequest } from "../backend/model.ts";
-import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors.ts";
+import {
+  InvalidSubagentRequestError,
+  isCleanupUnconfirmed,
+  isOutcomeUncertain,
+  SubagentProcessError,
+} from "../run/errors.ts";
 import type { SubagentRuntime } from "../run/model.ts";
 import {
   HerdrCli,
@@ -521,10 +526,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
         });
         const markDefiniteNonApplication = (error: SubagentProcessError) =>
           Effect.sync(() => {
-            if (
-              !error.code?.endsWith("_outcome_uncertain") &&
-              !error.code?.endsWith("_cleanup_unconfirmed")
-            ) {
+            if (!isOutcomeUncertain(error) && !isCleanupUnconfirmed(error)) {
               launchCleanup.cleanupConfirmed = true;
               harness.authorizeCleanup();
             }
@@ -786,8 +788,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
               );
             if (
               error.operation === "start agent" &&
-              (error.code?.endsWith("_outcome_uncertain") ||
-                error.code?.endsWith("_cleanup_unconfirmed"))
+              (isOutcomeUncertain(error) || isCleanupUnconfirmed(error))
             )
               provisional.agentStartUncertain = true;
             return rollbackProvisional(provisional, harness).pipe(

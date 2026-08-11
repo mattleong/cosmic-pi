@@ -66,6 +66,18 @@ const matchActionOutcome = (id: string) =>
     onSuccess: (run: SubagentRunView) => ({ run }),
   });
 
+type ActionOutcome =
+  | { readonly run: SubagentRunView }
+  | { readonly failure: SubagentActionFailure };
+
+const splitOutcomes = (outcomes: ReadonlyArray<ActionOutcome>) => ({
+  runs: outcomes.flatMap((outcome) => ("run" in outcome ? [outcome.run] : [])),
+  actionFailures: outcomes.flatMap((outcome) => ("failure" in outcome ? [outcome.failure] : [])),
+});
+
+const singleOutcome = (outcome: ActionOutcome) =>
+  "run" in outcome ? { runs: [outcome.run] } : { runs: [], actionFailures: [outcome.failure] };
+
 const requiredRunId = (
   action: SubagentToolInput["action"],
   runId: string,
@@ -503,20 +515,13 @@ export const executeSubagentAction = async (
           (id) => service.send(id, message).pipe(matchActionOutcome(id)),
           { concurrency: 8 },
         );
-        return {
-          runs: outcomes.flatMap((outcome) => ("run" in outcome ? [outcome.run] : [])),
-          actionFailures: outcomes.flatMap((outcome) =>
-            "failure" in outcome ? [outcome.failure] : [],
-          ),
-        };
+        return splitOutcomes(outcomes);
       }
       case "reply": {
         const id = yield* requiredRunId(input.action, input.runId);
         const message = yield* requiredMessage(input.action, input.message);
         const outcome = yield* service.reply(id, message).pipe(matchActionOutcome(id));
-        return "run" in outcome
-          ? { runs: [outcome.run] }
-          : { runs: [], actionFailures: [outcome.failure] };
+        return singleOutcome(outcome);
       }
       case "interrupt":
       case "resume":
@@ -544,19 +549,12 @@ export const executeSubagentAction = async (
           },
           { concurrency: 8 },
         );
-        return {
-          runs: outcomes.flatMap((outcome) => ("run" in outcome ? [outcome.run] : [])),
-          actionFailures: outcomes.flatMap((outcome) =>
-            "failure" in outcome ? [outcome.failure] : [],
-          ),
-        };
+        return splitOutcomes(outcomes);
       }
       case "rename": {
         const id = yield* requiredRunId(input.action, input.runId);
         const outcome = yield* service.rename(id, input.name.trim()).pipe(matchActionOutcome(id));
-        return "run" in outcome
-          ? { runs: [outcome.run] }
-          : { runs: [], actionFailures: [outcome.failure] };
+        return singleOutcome(outcome);
       }
     }
   });

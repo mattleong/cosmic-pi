@@ -379,14 +379,20 @@ export class ProcessManagerComponent implements Component {
     }));
   }
 
-  private readonly sanitizedLogLines = new WeakMap<BackgroundLogEvent, ReadonlyArray<string>>();
+  // Caches fully sanitized, prefixed, themed lines per event so a render tick
+  // over unchanged events skips per-line reassembly of the whole detail pane.
+  private readonly renderedLogLines = new WeakMap<BackgroundLogEvent, ReadonlyArray<string>>();
 
   private logEventLines(event: BackgroundLogEvent): ReadonlyArray<string> {
-    const cached = this.sanitizedLogLines.get(event);
+    const cached = this.renderedLogLines.get(event);
     if (cached) return cached;
-    const parts = sanitizeTerminalText(event.text).split("\n");
-    this.sanitizedLogLines.set(event, parts);
-    return parts;
+    const prefix = event.stream === "stderr" ? this.options.theme.fg("error", "│ ") : "│ ";
+    const lines = sanitizeTerminalText(event.text)
+      .split("\n")
+      .filter((part) => part)
+      .map((part) => `${prefix}${part}`);
+    this.renderedLogLines.set(event, lines);
+    return lines;
   }
 
   private detailLines(job: BackgroundJobView | undefined): string[] {
@@ -414,8 +420,7 @@ export class ProcessManagerComponent implements Component {
         this.options.theme.fg("warning", `… ${job.droppedLogBytes} earlier bytes discarded`),
       );
     for (const event of job.logs) {
-      const prefix = event.stream === "stderr" ? this.options.theme.fg("error", "│ ") : "│ ";
-      for (const part of this.logEventLines(event)) if (part) lines.push(`${prefix}${part}`);
+      for (const line of this.logEventLines(event)) lines.push(line);
     }
     if (lines.length === (this.showTechnicalDetails ? 5 : 2))
       lines.push(this.options.theme.fg("dim", "(no output)"));

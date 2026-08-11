@@ -7,9 +7,9 @@
 // @effect-diagnostics effect/globalTimers:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { constants, promises as fs } from "node:fs";
+import { promises as fs } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import { isAbsolute, join, resolve } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -39,6 +39,12 @@ import {
   validSupervisorReport,
 } from "../supervisor/protocol.ts";
 import { attachBoundedLineParser } from "./bounded-line-parser.ts";
+import {
+  ensurePrivateDirectory,
+  nodeErrorCode,
+  safeAgentDirectory,
+  writeExclusive,
+} from "./harness-shared.ts";
 
 const LOOPBACK_HOST = "127.0.0.1" as const;
 const CHANNEL_ROOT = "supervisor-channels-v1";
@@ -50,7 +56,6 @@ const MAX_CONNECTIONS = 4;
 const MAX_PENDING_WRITES = 32;
 const MAX_TRACKED_ASSIGNMENTS = 256;
 const MAX_REPORT_DELIVERIES = 128;
-const MAX_PATH_CHARS = 4_096;
 const AUTH_TIMEOUT_MILLIS = 5_000;
 const REPLY_TIMEOUT = "10 seconds";
 
@@ -179,7 +184,6 @@ interface NodeChannelState {
   readonly reports: Map<string, AcceptedReport>;
   readonly epochAcknowledgements: Map<string, PendingEpochAcknowledgement>;
   readonly readinessWaiters: Set<Deferred.Deferred<void, SupervisorChannelError>>;
-  readinessGeneration: number;
   pendingAssignmentEpoch: number | undefined;
   currentAssignmentEpoch: number;
   nextReportSequence: number;
@@ -190,11 +194,6 @@ interface NodeChannelState {
 
 const channelError = (operation: string, code: string, message: string) =>
   new SupervisorChannelError({ operation, code, message });
-
-const nodeErrorCode = (error: unknown): string | undefined =>
-  error && typeof error === "object" && "code" in error && typeof error.code === "string"
-    ? error.code
-    : undefined;
 
 const isLoopbackPeer = (address: string | undefined): boolean =>
   address === LOOPBACK_HOST || address === "::ffff:127.0.0.1";
@@ -271,35 +270,11 @@ const makeMetadata = (
   };
 };
 
-const ensurePrivateDirectory = async (path: string): Promise<void> => {
-  try {
-    await fs.mkdir(path, { mode: 0o700 });
-  } catch (error) {
-    if (nodeErrorCode(error) !== "EEXIST") throw error;
-  }
-  const stat = await fs.lstat(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-directory");
-  await fs.chmod(path, 0o700);
-};
-
 const prepareStateDirectory = async (
   agentDirectory: string,
   runId: string,
 ): Promise<{ readonly stateDirectory: string; readonly connectionConfigPath: string }> => {
-  if (
-    !isAbsolute(agentDirectory) ||
-    agentDirectory.length < 1 ||
-    agentDirectory.length > MAX_PATH_CHARS ||
-    agentDirectory.includes("\0")
-  )
-    throw new Error("invalid-agent-directory");
-  const requestedAgentDirectory = resolve(agentDirectory);
-  const requestedAgentStat = await fs.lstat(requestedAgentDirectory);
-  if (!requestedAgentStat.isDirectory() || requestedAgentStat.isSymbolicLink())
-    throw new Error("unsafe-agent-dir");
-  const canonicalAgentDirectory = await fs.realpath(requestedAgentDirectory);
-  const agentStat = await fs.lstat(canonicalAgentDirectory);
-  if (!agentStat.isDirectory() || agentStat.isSymbolicLink()) throw new Error("unsafe-agent-dir");
+  const canonicalAgentDirectory = await safeAgentDirectory(agentDirectory);
   const packageRoot = join(canonicalAgentDirectory, "subagents");
   const channelRoot = join(packageRoot, CHANNEL_ROOT);
   await ensurePrivateDirectory(packageRoot);
@@ -318,19 +293,7 @@ const writePrivateConfig = async (path: string, value: unknown): Promise<void> =
   const source = `${JSON.stringify(value)}\n`;
   if (Buffer.byteLength(source, "utf8") > MAX_SUPERVISOR_CONFIG_BYTES)
     throw new Error("config-size");
-  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
-  const handle = await fs.open(
-    path,
-    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow,
-    0o600,
-  );
-  try {
-    await handle.writeFile(source, { encoding: "utf8" });
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await fs.chmod(path, 0o600);
+  await writeExclusive(path, source);
 };
 
 const removePrivateState = async (
@@ -454,7 +417,6 @@ const liveAuthenticatedPeers = (state: NodeChannelState): ReadonlyArray<Authenti
   [...state.peers].filter((peer) => peer.authenticated && !peer.socket.destroyed);
 
 const publishReadyGeneration = (state: NodeChannelState): void => {
-  state.readinessGeneration += 1;
   if (liveAuthenticatedPeers(state).length === 0) return;
   for (const waiter of state.readinessWaiters) Deferred.doneUnsafe(waiter, Effect.void);
   state.readinessWaiters.clear();
@@ -470,7 +432,6 @@ const sendAuthenticated = (
 
 const closePeer = (state: NodeChannelState, peer: AuthenticatedPeer): void => {
   if (!state.peers.delete(peer)) return;
-  const wasAuthenticated = peer.authenticated;
   peer.detach();
   peer.socket.destroy();
   const affectedEpochUpdates = new Set<Deferred.Deferred<void, SupervisorChannelError>>();
@@ -505,7 +466,6 @@ const closePeer = (state: NodeChannelState, peer: AuthenticatedPeer): void => {
         ),
       );
   }
-  if (wasAuthenticated) state.readinessGeneration += 1;
   if (state.pendingQuestion?.peer === peer)
     cancelPendingQuestion(
       state,
@@ -992,7 +952,6 @@ const acquireNodeChannel = async (
       reports: new Map(),
       epochAcknowledgements: new Map(),
       readinessWaiters: new Set(),
-      readinessGeneration: 0,
       pendingAssignmentEpoch: undefined,
       currentAssignmentEpoch: 0,
       nextReportSequence: 1,
@@ -1052,14 +1011,10 @@ export const makeSupervisorChannel = (
             ),
           );
         if (liveAuthenticatedPeers(state).length > 0) return Effect.void;
-        const generation = state.readinessGeneration;
+        // This thunk runs synchronously, so no handshake can interleave between the peer check
+        // above and waiter installation; only a new live handshake completes this waiter.
         const waiter = Deferred.makeUnsafe<void, SupervisorChannelError>();
         state.readinessWaiters.add(waiter);
-        // Recheck after registration so a handshake cannot be lost between the initial check and
-        // waiter installation. A disconnect advances the generation but never leaves readiness
-        // sticky; only a new live handshake completes this waiter.
-        if (state.readinessGeneration !== generation && liveAuthenticatedPeers(state).length > 0)
-          Deferred.doneUnsafe(waiter, Effect.void);
         return Deferred.await(waiter).pipe(
           Effect.timeoutOption(REPLY_TIMEOUT),
           Effect.ensuring(Effect.sync(() => void state.readinessWaiters.delete(waiter))),
@@ -1138,34 +1093,26 @@ export const makeSupervisorChannel = (
             );
         });
 
-      const hasAcceptedReport: SupervisorChannelHandle["hasAcceptedReport"] = (epoch) =>
-        Effect.sync(() =>
-          [...state.reports.values()].some((report) => report.epoch === epoch),
-        ).pipe(
-          Effect.flatMap((accepted) =>
-            state.closed ||
-            !Number.isSafeInteger(epoch) ||
-            epoch <= 0 ||
-            !state.assignmentEpochs.has(epoch)
-              ? Effect.fail(
-                  channelError(
-                    "query accepted report",
-                    "report_epoch_ownership_mismatch",
-                    "Accepted-report evidence requires an assignment epoch owned by this open channel.",
-                  ),
-                )
-              : Effect.succeed(accepted),
-          ),
+      const acceptedReportForEpoch: SupervisorChannelHandle["acceptedReportForEpoch"] = (epoch) =>
+        Effect.suspend(() =>
+          state.closed ||
+          !Number.isSafeInteger(epoch) ||
+          epoch <= 0 ||
+          !state.assignmentEpochs.has(epoch)
+            ? Effect.fail(
+                channelError(
+                  "query accepted report",
+                  "report_epoch_ownership_mismatch",
+                  "Accepted-report evidence requires an assignment epoch owned by this open channel.",
+                ),
+              )
+            : Effect.succeed(
+                [...state.reports.values()].find((report) => report.epoch === epoch)?.report,
+              ),
         );
 
-      const acceptedReportForEpoch: SupervisorChannelHandle["acceptedReportForEpoch"] = (epoch) =>
-        hasAcceptedReport(epoch).pipe(
-          Effect.map((accepted) =>
-            accepted
-              ? [...state.reports.values()].find((report) => report.epoch === epoch)?.report
-              : undefined,
-          ),
-        );
+      const hasAcceptedReport: SupervisorChannelHandle["hasAcceptedReport"] = (epoch) =>
+        acceptedReportForEpoch(epoch).pipe(Effect.map((report) => report !== undefined));
 
       const reply: SupervisorChannelHandle["reply"] = (requestId, message) =>
         Effect.gen(function* () {
@@ -1220,11 +1167,12 @@ export const makeSupervisorChannel = (
 
       const cancelPending = (reason?: string): void => {
         if (!state.pendingQuestion) return;
+        const trimmedReason = reason?.trim();
         cancelPendingQuestion(
           state,
           "question_cancelled",
-          reason?.trim()
-            ? "The pending supervisor question was cancelled by its owning adapter."
+          trimmedReason
+            ? `The pending supervisor question was cancelled by its owning adapter: ${trimmedReason}`
             : "The pending supervisor question was cancelled.",
         );
       };

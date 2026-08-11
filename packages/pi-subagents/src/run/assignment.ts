@@ -1,7 +1,7 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import type { BackendReport } from "../backend/model.ts";
-import { type SubagentError, SubagentProcessError } from "./errors.ts";
+import { isOutcomeUncertain, type SubagentError, SubagentProcessError } from "./errors.ts";
 import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
 import type { SubagentRunView } from "./model.ts";
 import type { RetainedReportTransition } from "./report-lifecycle.ts";
@@ -110,8 +110,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
   ) =>
     startPrompt(record, message, record.assignment.epoch).pipe(
       Effect.mapError((error) => {
-        const outcomeUncertain =
-          error._tag === "SubagentProcessError" && error.code?.endsWith("_outcome_uncertain");
+        const outcomeUncertain = error._tag === "SubagentProcessError" && isOutcomeUncertain(error);
         if (!outcomeUncertain || (operation === "start" && record.view.writeIntent !== "writer"))
           return error;
         return operation === "start"

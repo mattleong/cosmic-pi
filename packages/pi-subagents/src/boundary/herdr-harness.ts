@@ -5,9 +5,9 @@
 // @effect-diagnostics effect/asyncFunction:off
 // @effect-diagnostics effect/preferSchemaOverJson:off
 import { randomBytes } from "node:crypto";
-import { constants, promises as fs } from "node:fs";
+import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -20,12 +20,24 @@ import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
 import { subagentRuntimeEfforts, type SubagentRuntime } from "../run/model.ts";
 import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
 import { claudeWriterCwdPolicy } from "./claude-writer-policy.ts";
+import {
+  CLAUDE_DENIED_TOOLS,
+  CLAUDE_INSPECTION_TOOLS,
+  CLAUDE_READ_TOOLS,
+  CLAUDE_WRITE_TOOLS,
+  ensurePrivateDirectory,
+  harnessCleanupUnconfirmed,
+  hasControlCharacter,
+  isHarnessCleanupUnconfirmed,
+  MAX_PATH_CHARS,
+  readValidatedCodexAuth,
+  safeAgentDirectory,
+  writeExclusive,
+} from "./harness-shared.ts";
 import { claudeSettings } from "./local-cli-process.ts";
 import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
 
 const HARNESS_ROOT = "herdr-host-v1";
-const MAX_PATH_CHARS = 4_096;
-const MAX_AUTH_BYTES = 64 * 1024;
 const MAX_INTEGRATION_BYTES = 256 * 1024;
 const SAFE_ENVIRONMENT_KEYS = [
   "HOME",
@@ -57,41 +69,12 @@ const HERDR_080_INTEGRATION_VERSIONS: Readonly<Record<SubagentRuntime, number>> 
   claude: 7,
   codex: 7,
 };
-const SUPERVISOR_NATIVE_TOOLS = [
-  "mcp__pi_subagents_supervisor__supervisor_progress",
-  "mcp__pi_subagents_supervisor__supervisor_warning",
-  "mcp__pi_subagents_supervisor__supervisor_question",
-  "mcp__pi_subagents_supervisor__supervisor_submit_report",
-] as const;
 const PI_SUPERVISOR_TOOLS = [
   "supervisor_progress",
   "supervisor_warning",
   "supervisor_question",
   "supervisor_submit_report",
 ] as const;
-const CLAUDE_INSPECTION_TOOLS = [
-  "Glob",
-  "Grep",
-  "Read",
-  "WebFetch",
-  "WebSearch",
-  ...SUPERVISOR_NATIVE_TOOLS,
-];
-const CLAUDE_READ_TOOLS = ["Bash", ...CLAUDE_INSPECTION_TOOLS];
-const CLAUDE_WRITE_TOOLS = ["Bash", "Edit", ...CLAUDE_INSPECTION_TOOLS];
-const CLAUDE_DENIED_TOOLS = [
-  "Agent",
-  "Task",
-  "TaskOutput",
-  "TaskStop",
-  "SendMessage",
-  "Skill",
-  "EnterWorktree",
-  "ExitWorktree",
-  "Chrome",
-  "NotebookEdit",
-  "Write",
-];
 const CODEX_DISABLED_FEATURES = [
   "apps",
   "auth_elicitation",
@@ -172,15 +155,6 @@ const processError = (operation: string, code: string, message: string) =>
   new SubagentProcessError({ operation, code, message });
 const readinessError = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });
-const hasControlCharacter = (value: string): boolean =>
-  [...value].some((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
-  });
-const nodeCode = (error: unknown): string | undefined =>
-  error && typeof error === "object" && "code" in error && typeof error.code === "string"
-    ? error.code
-    : undefined;
 const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 const printMarkerCommand = (marker: string): string => {
   const pivot = Math.max(1, Math.floor(marker.length / 2));
@@ -200,111 +174,6 @@ const harnessEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
       ),
     ),
   );
-
-const harnessCleanupUnconfirmed = (cause: unknown): Error & { readonly cleanupUnconfirmed: true } =>
-  Object.assign(
-    new Error("Partial private Herdr harness cleanup could not be confirmed.", { cause }),
-    {
-      cleanupUnconfirmed: true as const,
-    },
-  );
-const isHarnessCleanupUnconfirmed = (
-  error: unknown,
-): error is Error & { readonly cleanupUnconfirmed: true } =>
-  error instanceof Error && "cleanupUnconfirmed" in error && error.cleanupUnconfirmed === true;
-
-const safeAgentDirectory = async (path: string): Promise<string> => {
-  if (
-    !isAbsolute(path) ||
-    path.length < 1 ||
-    path.length > MAX_PATH_CHARS ||
-    hasControlCharacter(path)
-  )
-    throw new Error("invalid-agent-directory");
-  const requested = resolve(path);
-  const requestedStat = await fs.lstat(requested);
-  if (!requestedStat.isDirectory() || requestedStat.isSymbolicLink())
-    throw new Error("unsafe-agent-directory");
-  const canonical = await fs.realpath(requested);
-  const canonicalStat = await fs.lstat(canonical);
-  if (!canonicalStat.isDirectory() || canonicalStat.isSymbolicLink())
-    throw new Error("unsafe-agent-directory");
-  return canonical;
-};
-
-const ensurePrivateDirectory = async (path: string): Promise<void> => {
-  try {
-    await fs.mkdir(path, { mode: 0o700 });
-  } catch (error) {
-    if (nodeCode(error) !== "EEXIST") throw error;
-  }
-  const stat = await fs.lstat(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-private-directory");
-  await fs.chmod(path, 0o700);
-};
-
-const writeExclusive = async (path: string, source: string): Promise<void> => {
-  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
-  const handle = await fs.open(
-    path,
-    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow,
-    0o600,
-  );
-  try {
-    await handle.writeFile(source, { encoding: "utf8" });
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await fs.chmod(path, 0o600);
-};
-
-const boundedJsonValue = (value: unknown, depth = 0): boolean => {
-  if (depth > 16) return false;
-  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value))
-    return value.length <= 1_024 && value.every((entry) => boundedJsonValue(entry, depth + 1));
-  if (typeof value !== "object") return false;
-  const entries = Object.entries(value);
-  return (
-    entries.length <= 1_024 &&
-    entries.every(([key, entry]) => key.length <= 1_024 && boundedJsonValue(entry, depth + 1))
-  );
-};
-
-const safeCodexSourceHome = async (source: NodeJS.ProcessEnv): Promise<string | undefined> => {
-  const value = source.CODEX_HOME ?? join(source.HOME || homedir(), ".codex");
-  if (!isAbsolute(value) || value.length > MAX_PATH_CHARS || value.includes("\0")) return undefined;
-  try {
-    const requested = resolve(value);
-    const requestedStat = await fs.lstat(requested);
-    if (!requestedStat.isDirectory() || requestedStat.isSymbolicLink()) return undefined;
-    const canonical = await fs.realpath(requested);
-    const canonicalStat = await fs.lstat(canonical);
-    return canonicalStat.isDirectory() && !canonicalStat.isSymbolicLink() ? canonical : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-const readCodexAuth = async (source: NodeJS.ProcessEnv): Promise<string | undefined> => {
-  const home = await safeCodexSourceHome(source);
-  if (!home) return undefined;
-  try {
-    const path = join(home, "auth.json");
-    const stat = await fs.lstat(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 2 || stat.size > MAX_AUTH_BYTES)
-      return undefined;
-    const bytes = await fs.readFile(path);
-    const value = JSON.parse(bytes.toString("utf8")) as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value) || !boundedJsonValue(value))
-      return undefined;
-    return `${JSON.stringify(value)}\n`;
-  } catch {
-    return undefined;
-  }
-};
 
 const approvedApiKey = (source: NodeJS.ProcessEnv): string | undefined => {
   const key = source.OPENAI_API_KEY;
@@ -658,7 +527,7 @@ const prepareHarness = async (
 
     const codexHome = join(directory, "codex-home");
     await fs.mkdir(codexHome, { mode: 0o700 });
-    const auth = await readCodexAuth(environment);
+    const auth = await readValidatedCodexAuth(environment);
     const apiKey = approvedApiKey(environment);
     if (auth) await writeExclusive(join(codexHome, "auth.json"), auth);
     else if (!apiKey) throw new Error("codex-auth-unavailable");
@@ -809,7 +678,7 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
           });
         }
         if (runtime === "codex") {
-          const auth = yield* Effect.promise(() => readCodexAuth(environment));
+          const auth = yield* Effect.promise(() => readValidatedCodexAuth(environment));
           if (!auth && !approvedApiKey(environment))
             return yield* readinessError(
               "codex_harness_auth_unavailable",

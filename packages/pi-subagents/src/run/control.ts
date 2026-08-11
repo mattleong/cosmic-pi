@@ -12,6 +12,7 @@ import {
 import type { RunRecord } from "./internal.ts";
 import {
   InvalidSubagentRequestError,
+  isOutcomeUncertain,
   type SubagentError,
   SubagentProcessError,
   SubagentNotFoundError,
@@ -192,10 +193,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
       yield* selected.retained
         ? beginAssignmentBackend(record, normalized, selected.attemptToken).pipe(
             Effect.tapError((error) => {
-              if (
-                error._tag === "SubagentProcessError" &&
-                error.code?.endsWith("_outcome_uncertain")
-              )
+              if (error._tag === "SubagentProcessError" && isOutcomeUncertain(error))
                 return retainUncertainAssignment(record, selected.attemptToken, error.message);
               return withLock(
                 Effect.sync(() => {
@@ -219,7 +217,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           )
         : steerBackend(record, normalized).pipe(
             Effect.tapError((error) =>
-              error._tag === "SubagentProcessError" && error.code?.endsWith("_outcome_uncertain")
+              error._tag === "SubagentProcessError" && isOutcomeUncertain(error)
                 ? retainControlWarning(record, error.message)
                 : Effect.void,
             ),

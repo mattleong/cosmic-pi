@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
 
 const STATUS_KEY = "pi-ask-user";
 
@@ -14,14 +15,7 @@ export interface AskUserDialogBridge {
   readonly clear: (token?: number) => void;
 }
 
-function setStatus(ctx: ExtensionContext | undefined, value: string | undefined): void {
-  if (!ctx || ctx.mode !== "tui") return;
-  try {
-    ctx.ui.setStatus(STATUS_KEY, value);
-  } catch {
-    // The host UI may already be shutting down.
-  }
-}
+const setStatus = makeSetStatusSafely(STATUS_KEY);
 
 export function makeAskUserDialogBridge(): AskUserDialogBridge {
   let context: ExtensionContext | undefined;

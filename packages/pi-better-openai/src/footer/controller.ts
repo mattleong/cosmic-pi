@@ -14,6 +14,23 @@ export function abbreviateHomePath(cwd: string): string {
   return cwd.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
 }
 
+/** Single-entry keyed memo: recomputes when the key changes, drops its entry on invalidate. */
+function memo<Ctx, K, V>(
+  compute: (ctx: Ctx, key: K) => V,
+  sameKey: (previous: K, next: K) => boolean = Object.is,
+): { get(ctx: Ctx, key: K): V; invalidate(): void } {
+  let cached: { key: K; value: V } | undefined;
+  return {
+    get(ctx, key) {
+      if (!cached || !sameKey(cached.key, key)) cached = { key, value: compute(ctx, key) };
+      return cached.value;
+    },
+    invalidate() {
+      cached = undefined;
+    },
+  };
+}
+
 export interface FooterController {
   update(ctx: ExtensionContext): void;
   resetTotals(): void;
@@ -38,8 +55,6 @@ export function createFooterController(deps: {
 }): FooterController {
   const { pi, config, fastProjection, projection, hasTerminalUI } = deps;
   let footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-  let footerInstalled = false;
-  let requestFooterRender: (() => void) | undefined;
   type FooterInstallToken = {
     disposed: boolean;
     requestRender: (() => void) | undefined;
@@ -48,16 +63,22 @@ export function createFooterController(deps: {
   let activeFooterToken: FooterInstallToken | undefined;
   let clearingFooterToken: FooterInstallToken | undefined;
   let statusInstalled = false;
-  let contextUsageCached = false;
-  let cachedContextUsage: ReturnType<ExtensionContext["getContextUsage"]>;
-  let cachedContextLeafId: string | null | undefined;
-  let cachedContextModel: ExtensionContext["model"];
-  let sessionNameCached = false;
-  let cachedSessionNameLeafId: string | null | undefined;
-  let cachedSessionName: string | undefined;
-  let oauthCached = false;
-  let cachedOAuth = false;
-  let cachedOAuthModel: ExtensionContext["model"];
+  const contextUsageMemo = memo(
+    (ctx: ExtensionContext) => {
+      const next = ctx.getContextUsage();
+      return next ? { ...next } : undefined;
+    },
+    (
+      previous: { leafId: string | null | undefined; model: ExtensionContext["model"] },
+      next: { leafId: string | null | undefined; model: ExtensionContext["model"] },
+    ) => previous.leafId === next.leafId && previous.model === next.model,
+  );
+  const sessionNameMemo = memo((ctx: ExtensionContext, _leafId: string | null | undefined) =>
+    ctx.sessionManager.getSessionName(),
+  );
+  const oauthMemo = memo((ctx: ExtensionContext, model: NonNullable<ExtensionContext["model"]>) =>
+    isModelUsingOAuth(ctx, model),
+  );
   let currentContext: ExtensionContext | undefined;
 
   function resetFooterTotals(): void {
@@ -82,67 +103,40 @@ export function createFooterController(deps: {
   }
 
   function invalidateContextUsage(): void {
-    contextUsageCached = false;
-    cachedContextUsage = undefined;
-    cachedContextLeafId = undefined;
-    cachedContextModel = undefined;
-    oauthCached = false;
-    cachedOAuth = false;
-    cachedOAuthModel = undefined;
+    contextUsageMemo.invalidate();
+    oauthMemo.invalidate();
   }
 
   function modelUsingOAuth(ctx: ExtensionContext): boolean {
     const model = ctx.model;
     if (!model) return false;
-    if (!oauthCached || model !== cachedOAuthModel) {
-      cachedOAuth = isModelUsingOAuth(ctx, model);
-      cachedOAuthModel = model;
-      oauthCached = true;
-    }
-    return cachedOAuth;
+    return oauthMemo.get(ctx, model);
   }
 
   function contextUsage(ctx: ExtensionContext): ReturnType<ExtensionContext["getContextUsage"]> {
-    const leafId = ctx.sessionManager.getLeafId();
-    const model = ctx.model;
-    if (!contextUsageCached || leafId !== cachedContextLeafId || model !== cachedContextModel) {
-      const next = ctx.getContextUsage();
-      cachedContextUsage = next ? { ...next } : undefined;
-      contextUsageCached = true;
-      cachedContextLeafId = leafId;
-      cachedContextModel = model;
-    }
-    return cachedContextUsage;
+    return contextUsageMemo.get(ctx, {
+      leafId: ctx.sessionManager.getLeafId(),
+      model: ctx.model,
+    });
   }
 
   function sessionName(ctx: ExtensionContext): string | undefined {
-    const leafId = ctx.sessionManager.getLeafId();
-    if (!sessionNameCached || leafId !== cachedSessionNameLeafId) {
-      const next = ctx.sessionManager.getSessionName();
-      cachedSessionName = next;
-      cachedSessionNameLeafId = leafId;
-      sessionNameCached = true;
-    }
-    return cachedSessionName;
+    return sessionNameMemo.get(ctx, ctx.sessionManager.getLeafId());
   }
 
   function invalidateSessionName(): void {
-    sessionNameCached = false;
-    cachedSessionNameLeafId = undefined;
-    cachedSessionName = undefined;
+    sessionNameMemo.invalidate();
   }
 
   function resetFooterOwnership(): void {
     activeFooterToken = undefined;
-    footerInstalled = false;
-    requestFooterRender = undefined;
   }
 
   function installFooter(ctx: ExtensionContext): void {
-    if (footerInstalled) {
-      if (!activeFooterToken?.disposed) {
+    if (activeFooterToken) {
+      if (!activeFooterToken.disposed) {
         try {
-          requestFooterRender?.();
+          activeFooterToken.requestRender?.();
         } catch {
           // Rendering is a host callback; a failed request does not relinquish ownership.
         }
@@ -187,7 +181,6 @@ export function createFooterController(deps: {
           if (componentDisposed || token.disposed || !accepted || activeFooterToken !== token)
             return;
           token.requestRender = safeRequestRender;
-          requestFooterRender = safeRequestRender;
           try {
             const cleanupBranch = footerData.onBranchChange?.(safeRequestRender);
             if (typeof cleanupBranch === "function") unsubscribe = cleanupBranch;
@@ -333,12 +326,11 @@ export function createFooterController(deps: {
     accepted = true;
     if (token.disposed) return;
     activeFooterToken = token;
-    footerInstalled = true;
     for (const activate of pendingActivations) activate();
   }
 
   function clearFooter(ctx: ExtensionContext): void {
-    if (!footerInstalled) return;
+    if (!activeFooterToken) return;
     const token = activeFooterToken;
     clearingFooterToken = token;
     try {

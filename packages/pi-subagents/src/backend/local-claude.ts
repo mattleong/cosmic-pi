@@ -18,6 +18,7 @@ import type {
   SupervisorChannelShape,
 } from "../boundary/supervisor-channel.ts";
 import {
+  isOutcomeUncertain,
   SubagentProcessError,
   UnsupportedSubagentCapabilityError,
   type SubagentError,
@@ -668,7 +669,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
               : error,
           ),
           Effect.catch((error) =>
-            error instanceof SubagentProcessError && error.code?.endsWith("_outcome_uncertain")
+            error instanceof SubagentProcessError && isOutcomeUncertain(error)
               ? failUncertainDelivery(error)
               : Effect.fail(error),
           ),

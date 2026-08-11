@@ -2700,7 +2700,7 @@ describe("subagent tool", () => {
       }),
       true,
     );
-    expect(known).toContain("Usage      1k tokens · $0.50");
+    expect(known).toContain("Usage      1.0k tokens · $0.50");
   });
 
   it("renders state-aware stop acknowledgements for terminal no-ops", async () => {

@@ -12,6 +12,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { nodeErrorCode } from "./harness-shared.ts";
 
 const LEASE_VERSION = 2 as const;
 const MAX_EVIDENCE_BYTES = 4 * 1024;
@@ -168,11 +169,6 @@ const transitionPath = (leasePath: string, ownershipToken: string): string =>
   join(leasePath, `.${OWNER_FILE}.spawn-${digest(ownershipToken).slice(0, 32)}.tmp`);
 const tombstonePath = (leasePath: string, ownershipToken: string): string =>
   `${leasePath}.tombstone-${digest(`lease:${ownershipToken}`).slice(0, 40)}`;
-
-const nodeErrorCode = (error: unknown): string | undefined =>
-  error && typeof error === "object" && "code" in error && typeof error.code === "string"
-    ? error.code
-    : undefined;
 
 const conflict = (
   reason: WriterLeaseConflictError["reason"],

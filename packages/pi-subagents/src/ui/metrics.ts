@@ -1,10 +1,7 @@
-export const formatTokenCount = (tokens: number): string => {
-  const value = Number.isFinite(tokens) ? Math.max(0, tokens) : 0;
-  if (value < 1_000) return `${Math.round(value)}`;
-  if (value < 1_000_000)
-    return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0).replace(/\.0$/, "")}k`;
-  return `${(value / 1_000_000).toFixed(value < 10_000_000 ? 1 : 0).replace(/\.0$/, "")}m`;
-};
+import { formatTokens } from "pi-cosmic-core";
+
+/** Token counts render via the shared core formatter for TUI-wide consistency. */
+export const formatTokenCount = formatTokens;
 
 export const formatCost = (cost: number): string => {
   const value = Number.isFinite(cost) ? Math.max(0, cost) : 0;

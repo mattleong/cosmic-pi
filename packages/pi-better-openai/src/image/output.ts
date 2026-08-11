@@ -53,8 +53,7 @@ export const makeImageOutput = (dependencies: {
       canonicalBase = yield* fs
         .realPath(protectedBase)
         .pipe(Effect.mapError(imageError("save", "Unable to resolve protected output root.")));
-      const relative = path.relative(path.resolve(protectedBase), path.resolve(requestedDirectory));
-      if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`))
+      if (!isInside(path, protectedBase, requestedDirectory))
         return yield* fail("save", "Image output directory escapes its protected root.");
       let existingAncestor = path.resolve(requestedDirectory);
       while (!(yield* fs.exists(existingAncestor))) {

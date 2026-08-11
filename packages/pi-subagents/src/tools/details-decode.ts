@@ -1,4 +1,4 @@
-import { freezeSnapshot } from "pi-cosmic-core";
+import { freezeSnapshot, isJsonObject } from "pi-cosmic-core";
 import {
   SUBAGENT_EFFORTS,
   SUBAGENT_RUN_STATES,
@@ -64,9 +64,7 @@ const PROFILE_SOURCES: ReadonlySet<string> = new Set([
 const SOURCES: ReadonlySet<string> = new Set(["profile-candidate", "profile-parent-candidate"]);
 
 const recordOf = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Readonly<Record<string, unknown>>)
-    : undefined;
+  isJsonObject(value) ? value : undefined;
 const finiteNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
 

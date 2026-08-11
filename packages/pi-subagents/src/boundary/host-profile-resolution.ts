@@ -7,7 +7,11 @@ import {
   disallowedLaunchOverrideMessage,
   firstDisallowedLaunchOverride,
 } from "../run/launch-validation.ts";
-import { InvalidSubagentRequestError } from "../run/errors.ts";
+import {
+  InvalidSubagentRequestError,
+  isCleanupUnconfirmed,
+  isOutcomeUncertain,
+} from "../run/errors.ts";
 import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
 import {
@@ -302,8 +306,7 @@ export const resolveProfileStart = (
       return resolveConcreteModel(attempt, ctx, environment.cwd).pipe(
         Effect.matchEffect({
           onFailure: (error) =>
-            error.code?.includes("cleanup_unconfirmed") === true ||
-            error.code?.includes("outcome_uncertain") === true
+            isCleanupUnconfirmed(error) || isOutcomeUncertain(error)
               ? Effect.fail(error)
               : tryAttempt(index + 1, [...precedingSkips, dynamicCandidateSkip(attempt, error)]),
           onSuccess: (concrete) =>

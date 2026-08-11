@@ -95,22 +95,21 @@ const activityItems = (
   events: ReadonlyArray<SubagentSessionEvent>,
 ): ReadonlyArray<ActivityItem> => {
   const items: ActivityItem[] = [];
+  let openGroup: ToolEvent[] | undefined;
   for (const event of events) {
     if (event.type === "assistant" || (event.type === "notice" && event.kind === "progress"))
       continue;
     if (event.type === "notice") {
       items.push({ type: "notice", event });
+      openGroup = undefined;
       continue;
     }
-    const previous = items.at(-1);
-    if (
-      previous?.type === "tools" &&
-      previous.events.at(-1)?.toolName === event.toolName &&
-      previous.events.at(-1)?.state === event.state
-    ) {
-      items[items.length - 1] = { type: "tools", events: [...previous.events, event] };
+    const last = openGroup?.at(-1);
+    if (openGroup && last?.toolName === event.toolName && last.state === event.state) {
+      openGroup.push(event);
     } else {
-      items.push({ type: "tools", events: [event] });
+      openGroup = [event];
+      items.push({ type: "tools", events: openGroup });
     }
   }
   return items;

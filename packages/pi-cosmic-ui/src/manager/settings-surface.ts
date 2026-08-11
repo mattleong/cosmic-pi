@@ -21,13 +21,29 @@ import {
 
 type SettingsListTheme = ConstructorParameters<typeof SettingsList>[2];
 
+export type SettingsSurfaceItem = SettingItem & {
+  /** "group" marks navigation/summary rows whose submenu completions never reach `onChange`. */
+  readonly kind?: "setting" | "group";
+};
+
+/** Wraps a SettingsList change callback so group/navigation rows never reach it. */
+export const withoutGroupRowChanges = (
+  items: readonly SettingsSurfaceItem[],
+  onChange: (id: string, value: string) => void,
+): ((id: string, value: string) => void) => {
+  const groupIds = new Set(items.filter((item) => item.kind === "group").map((item) => item.id));
+  return (id, value) => {
+    if (!groupIds.has(id)) onChange(id, value);
+  };
+};
+
 export interface SettingsListSurfaceOptions {
   /** Caller-owned header component rendered above the list (title, config path, …). */
   readonly header: Component;
-  readonly items: SettingItem[];
+  readonly items: SettingsSurfaceItem[];
   readonly height: number;
   readonly listTheme: SettingsListTheme;
-  /** Value-change callback; receives the composed list for optimistic display updates. */
+  /** Value-change callback for setting rows; group rows are filtered out by the surface. */
   readonly onChange: (id: string, value: string, list: SettingsList) => void;
   readonly onCancel: () => void;
   readonly search?: boolean | undefined;
@@ -55,7 +71,7 @@ export const createSettingsListSurface = (
     options.items,
     options.height,
     options.listTheme,
-    (id, value) => options.onChange(id, value, list),
+    withoutGroupRowChanges(options.items, (id, value) => options.onChange(id, value, list)),
     options.onCancel,
     { enableSearch: search },
   );

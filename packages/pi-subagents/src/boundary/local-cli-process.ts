@@ -8,9 +8,8 @@
 // @effect-diagnostics effect/preferSchemaOverJson:off
 import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { constants, promises as fs } from "node:fs";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -35,6 +34,18 @@ import {
 } from "../run/model.ts";
 import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
 import { claudeWriterCwdPolicy } from "./claude-writer-policy.ts";
+import {
+  CLAUDE_DENIED_TOOLS,
+  CLAUDE_INSPECTION_TOOLS,
+  CLAUDE_READ_TOOLS,
+  CLAUDE_WRITE_TOOLS,
+  ensurePrivateDirectory,
+  harnessCleanupUnconfirmed,
+  isHarnessCleanupUnconfirmed,
+  readValidatedCodexAuth,
+  safeAgentDirectory,
+  writeExclusive,
+} from "./harness-shared.ts";
 import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
 import { releaseChildProcess } from "./child-process.ts";
@@ -46,8 +57,6 @@ const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 128 * 1024;
 const MAX_PROBE_OUTPUT_BYTES = 32 * 1024;
-const MAX_AUTH_BYTES = 64 * 1024;
-const MAX_PATH_CHARS = 4_096;
 const EVENT_CAPACITY = 512;
 const WRITE_TIMEOUT = "10 seconds";
 const PROBE_TIMEOUT_MILLIS = 5_000;
@@ -71,36 +80,6 @@ const SAFE_ENV_KEYS = new Set([
   "NO_PROXY",
   "ALL_PROXY",
 ]);
-const SUPERVISOR_TOOLS = [
-  "mcp__pi_subagents_supervisor__supervisor_progress",
-  "mcp__pi_subagents_supervisor__supervisor_warning",
-  "mcp__pi_subagents_supervisor__supervisor_question",
-  "mcp__pi_subagents_supervisor__supervisor_submit_report",
-] as const;
-const CLAUDE_INSPECTION_TOOLS = [
-  "Glob",
-  "Grep",
-  "Read",
-  "WebFetch",
-  "WebSearch",
-  ...SUPERVISOR_TOOLS,
-];
-const CLAUDE_READ_TOOLS = ["Bash", ...CLAUDE_INSPECTION_TOOLS];
-const CLAUDE_WRITE_TOOLS = ["Bash", "Edit", ...CLAUDE_INSPECTION_TOOLS];
-const CLAUDE_DENIED_TOOLS = [
-  "Agent",
-  "Task",
-  "TaskOutput",
-  "TaskStop",
-  "SendMessage",
-  "Skill",
-  "EnterWorktree",
-  "ExitWorktree",
-  "Chrome",
-  "NotebookEdit",
-  "Write",
-];
-
 export type LocalCliRuntime = Extract<SubagentRuntime, "claude" | "codex">;
 
 export type LocalCliWireEvent =
@@ -192,11 +171,6 @@ const processError = (operation: string, error?: unknown, code?: string) =>
 
 const preflightError = (code: string, message: string) =>
   new InvalidSubagentRequestError({ code, message });
-
-const nodeErrorCode = (error: unknown): string | undefined =>
-  error && typeof error === "object" && "code" in error && typeof error.code === "string"
-    ? error.code
-    : undefined;
 
 interface BoundedTailChunks {
   readonly chunks: Buffer[];
@@ -411,136 +385,6 @@ const codexConfig = (supervisor: SupervisorConnectionMetadata, fastMode: boolean
   [...codexBaseConfig(fastMode), supervisor.codexMcp.tomlFragment, ""].join("\n");
 
 const codexCatalogConfig = (): string => [...codexBaseConfig(), ""].join("\n");
-
-const safeAgentDirectory = async (agentDirectory: string): Promise<string> => {
-  if (
-    !isAbsolute(agentDirectory) ||
-    agentDirectory.length < 1 ||
-    agentDirectory.length > MAX_PATH_CHARS ||
-    agentDirectory.includes("\0")
-  )
-    throw new Error("invalid-agent-directory");
-  const requested = resolve(agentDirectory);
-  const requestedStat = await fs.lstat(requested);
-  if (!requestedStat.isDirectory() || requestedStat.isSymbolicLink())
-    throw new Error("unsafe-agent-directory");
-  const canonical = await fs.realpath(requested);
-  const canonicalStat = await fs.lstat(canonical);
-  if (!canonicalStat.isDirectory() || canonicalStat.isSymbolicLink())
-    throw new Error("unsafe-agent-directory");
-  return canonical;
-};
-
-const ensurePrivateDirectory = async (path: string): Promise<void> => {
-  try {
-    await fs.mkdir(path, { mode: 0o700 });
-  } catch (error) {
-    if (nodeErrorCode(error) !== "EEXIST") throw error;
-  }
-  const stat = await fs.lstat(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-private-directory");
-  await fs.chmod(path, 0o700);
-};
-
-const writeExclusive = async (path: string, source: string): Promise<void> => {
-  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
-  const handle = await fs.open(
-    path,
-    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow,
-    0o600,
-  );
-  try {
-    await handle.writeFile(source, { encoding: "utf8" });
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await fs.chmod(path, 0o600);
-};
-
-const boundedJsonValue = (value: unknown, depth = 0): boolean => {
-  if (depth > 16) return false;
-  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value))
-    return value.length <= 1_024 && value.every((entry) => boundedJsonValue(entry, depth + 1));
-  if (typeof value !== "object") return false;
-  const entries = Object.entries(value);
-  return (
-    entries.length <= 1_024 &&
-    entries.every(([key, entry]) => key.length <= 1_024 && boundedJsonValue(entry, depth + 1))
-  );
-};
-
-const safeCodexSourceHome = async (
-  sourceEnvironment: NodeJS.ProcessEnv,
-): Promise<string | undefined> => {
-  const configured = sourceEnvironment.CODEX_HOME;
-  const source =
-    configured === undefined ? join(sourceEnvironment.HOME || homedir(), ".codex") : configured;
-  if (
-    !isAbsolute(source) ||
-    source.length < 1 ||
-    source.length > MAX_PATH_CHARS ||
-    source.includes("\0") ||
-    source.includes("\r") ||
-    source.includes("\n")
-  )
-    return undefined;
-  try {
-    const requested = resolve(source);
-    const requestedStat = await fs.lstat(requested);
-    if (!requestedStat.isDirectory() || requestedStat.isSymbolicLink()) return undefined;
-    const canonical = await fs.realpath(requested);
-    const canonicalStat = await fs.lstat(canonical);
-    if (!canonicalStat.isDirectory() || canonicalStat.isSymbolicLink()) return undefined;
-    return canonical;
-  } catch {
-    return undefined;
-  }
-};
-
-const readValidatedCodexAuthFromHome = async (sourceHome: string): Promise<string | undefined> => {
-  const path = join(sourceHome, "auth.json");
-  let bytes: Buffer;
-  try {
-    const stat = await fs.lstat(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 1 || stat.size > MAX_AUTH_BYTES)
-      return undefined;
-    bytes = await fs.readFile(path);
-  } catch {
-    return undefined;
-  }
-  if (bytes.length <= 1 || bytes.length > MAX_AUTH_BYTES) return undefined;
-  try {
-    const value = JSON.parse(bytes.toString("utf8")) as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value) || !boundedJsonValue(value))
-      return undefined;
-    return `${JSON.stringify(value)}\n`;
-  } catch {
-    return undefined;
-  }
-};
-
-const readValidatedCodexAuth = async (
-  sourceEnvironment: NodeJS.ProcessEnv,
-): Promise<string | undefined> => {
-  const sourceHome = await safeCodexSourceHome(sourceEnvironment);
-  return sourceHome ? readValidatedCodexAuthFromHome(sourceHome) : undefined;
-};
-
-const harnessCleanupUnconfirmed = (cause: unknown): Error & { readonly cleanupUnconfirmed: true } =>
-  Object.assign(
-    new Error("Partial private local CLI harness cleanup could not be confirmed.", { cause }),
-    {
-      cleanupUnconfirmed: true as const,
-    },
-  );
-
-const isHarnessCleanupUnconfirmed = (
-  error: unknown,
-): error is Error & { readonly cleanupUnconfirmed: true } =>
-  error instanceof Error && "cleanupUnconfirmed" in error && error.cleanupUnconfirmed === true;
 
 const prepareHarness = async (
   options: LocalCliProcessLayerOptions,
@@ -905,6 +749,16 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
         child.stdout?.destroy();
         child.stderr?.destroy();
       };
+      const releaseHarness = Effect.tryPromise({
+        try: async () => {
+          cleanup();
+          if (harnessOwned) {
+            harnessOwned = false;
+            await removeHarness(harness.directory);
+          }
+        },
+        catch: (error) => processError("remove private local CLI harness", error),
+      }).pipe(Effect.orDie);
       child.stdout?.on("error", onStdoutError);
       child.stderr?.on("data", onStderr);
       child.stderr?.on("error", onStderrError);
@@ -912,20 +766,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
       child.once("spawn", onSpawn);
       child.once("error", onError);
       child.once("close", onClose);
-      yield* Deferred.await(ready).pipe(
-        Effect.onError(() =>
-          Effect.tryPromise({
-            try: async () => {
-              cleanup();
-              if (harnessOwned) {
-                harnessOwned = false;
-                await removeHarness(harness.directory);
-              }
-            },
-            catch: () => processError("clean failed local CLI acquisition"),
-          }).pipe(Effect.orDie),
-        ),
-      );
+      yield* Deferred.await(ready).pipe(Effect.onError(() => releaseHarness));
       const pid = child.pid;
       if (!pid) {
         cleanup();
@@ -1001,20 +842,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
         requestAbort: Effect.void,
         terminate,
         awaitExit: Deferred.await(exited),
-      }).pipe(
-        Effect.ensuring(
-          Effect.tryPromise({
-            try: async () => {
-              cleanup();
-              if (harnessOwned) {
-                harnessOwned = false;
-                await removeHarness(harness.directory);
-              }
-            },
-            catch: (error) => processError("remove private local CLI harness", error),
-          }).pipe(Effect.orDie),
-        ),
-      );
+      }).pipe(Effect.ensuring(releaseHarness));
       return {
         pid,
         events,

@@ -4,6 +4,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import { AdvisorModelError, type AdvisorModelErrorKind } from "../runtime/client.ts";
 import { type AdvisorCheckpoint } from "../runtime/runtime.ts";
 import {
   appendAdvisorReviewCardAtHostBoundary,
@@ -102,8 +103,20 @@ export function activeContextMessages(ctx: ExtensionContext): unknown[] {
   return result.ok ? result.value.flatMap(sessionEntryToContextMessages) : [];
 }
 
+const MODEL_ERROR_KIND_CLASSIFICATION: Record<AdvisorModelErrorKind, string> = {
+  authentication: "authentication",
+  configuration: "model",
+  timeout: "timeout",
+  unavailable: "model",
+  aborted: "cancelled",
+  unknown: "provider",
+};
+
 export function classifyFailure(error: unknown): string {
   if (error instanceof AdvisorReviewParseError) return "response-format";
+  if (error instanceof AdvisorModelError && error.kind)
+    return MODEL_ERROR_KIND_CLASSIFICATION[error.kind];
+  // Message heuristics remain only as a fallback for errors produced outside this extension.
   const message =
     error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
   if (message.includes("auth") || message.includes("credential") || message.includes("api key")) {
