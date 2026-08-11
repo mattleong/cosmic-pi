@@ -112,7 +112,32 @@ export {
   type HostTrustContext,
   type HostUiContext,
 } from "./src/host-session.ts";
-export { withUsageEligibility, type UsageVisibilityFields } from "./src/usage-projection.ts";
+export {
+  initialUsageProjection,
+  withUsageEligibility,
+  type UsageProjectionBase,
+  type UsageVisibilityFields,
+} from "./src/usage-projection.ts";
+export {
+  formatUsageDebugReport,
+  makeUsageRefreshController,
+  type UsageControllerConfig,
+  type UsageControllerConfigFields,
+  type UsageControllerStore,
+  type UsageDebugReport,
+  type UsageFetchOutcome,
+  type UsageProviderRequirements,
+  type UsageRefreshController,
+  type UsageRefreshControllerOptions,
+} from "./src/usage-controller.ts";
+export {
+  createFooterPresenter,
+  type FooterHostData,
+  type FooterMode,
+  type FooterPresenter,
+  type FooterPresenterOptions,
+  type FooterTheme,
+} from "./src/footer-presenter.ts";
 export {
   freezeSnapshot,
   makeFrozenProjection,

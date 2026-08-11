@@ -1,6 +1,11 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
-import { freezeSnapshot, withUsageEligibility } from "pi-cosmic-core";
+import {
+  freezeSnapshot,
+  initialUsageProjection,
+  withUsageEligibility,
+  type UsageProjectionBase,
+} from "pi-cosmic-core";
 import { isUsingOAuthAtHostBoundary } from "../boundary/model-registry-auth.ts";
 import type { ResolvedConfig } from "../config/index.ts";
 import type { UsageSnapshot } from "./format.ts";
@@ -8,31 +13,12 @@ import type { UsageSnapshot } from "./format.ts";
 export const HIDDEN_USAGE_STATUS_TEXT =
   "Usage hidden: current model is not an xAI subscription model.";
 
-export interface XaiProjection {
-  readonly config: ResolvedConfig | undefined;
-  readonly eligible: boolean;
-  readonly snapshot: UsageSnapshot | undefined;
-  readonly statusLine: string | undefined;
-  readonly statusText: string;
-  readonly error: string | undefined;
-  readonly lastFetchAt: number | undefined;
-  readonly updatedAt: number | undefined;
-  readonly authPath: string | undefined;
-  readonly authFound: boolean;
+export interface XaiProjection extends UsageProjectionBase<ResolvedConfig, UsageSnapshot> {
   readonly teamId: string | undefined;
 }
 
 export const initialXaiProjection = (): XaiProjection => ({
-  config: undefined,
-  eligible: false,
-  snapshot: undefined,
-  statusLine: undefined,
-  statusText: "Usage unavailable.",
-  error: undefined,
-  lastFetchAt: undefined,
-  updatedAt: undefined,
-  authPath: undefined,
-  authFound: false,
+  ...initialUsageProjection<ResolvedConfig, UsageSnapshot>(),
   teamId: undefined,
 });
 

@@ -1,12 +1,9 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
-import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
   decodeTolerantFields,
   makeConfigDocumentErrorFactory,
   makeScopedConfigStore,
-  modifyJsonObject,
-  type JsonDocumentModification,
   type JsonObject,
   type ScopedConfigMetadata,
 } from "pi-cosmic-core";
@@ -98,29 +95,10 @@ const store = makeScopedConfigStore({
 
 export const {
   configPaths,
+  modifyConfig,
   readConfig,
   readRawConfig,
   resolveCommittedConfig,
   resolveConfig,
   writeConfig,
 } = store;
-
-export const updateConfig = Effect.fn("XaiConfig.updateConfig")(function* (
-  // The callback is part of the store's narrow, uninterruptible rename commit region.
-  path: string,
-  update: (document: JsonObject) => JsonObject,
-  afterCommit: (document: JsonObject) => Effect.Effect<void>,
-) {
-  return yield* modifyJsonObject(
-    path,
-    (current) => {
-      const next = update(current);
-      return {
-        value: next,
-        document: next,
-        afterCommit: afterCommit(next),
-      } satisfies JsonDocumentModification<JsonObject>;
-    },
-    mapDocumentError,
-  );
-});

@@ -1,36 +1,22 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
-import { freezeSnapshot, withUsageEligibility } from "pi-cosmic-core";
+import {
+  freezeSnapshot,
+  initialUsageProjection,
+  withUsageEligibility,
+  type UsageProjectionBase,
+} from "pi-cosmic-core";
 import { isModelUsingOAuth } from "../boundary/model-registry.ts";
 import type { ResolvedConfig } from "../config/index.ts";
 import { usageScopeForModel, type UsageSnapshot } from "./format.ts";
 
-export interface OpenAIProjection {
-  readonly config: ResolvedConfig | undefined;
-  readonly eligible: boolean;
-  readonly snapshot: UsageSnapshot | undefined;
-  readonly statusLine: string | undefined;
-  readonly statusText: string;
-  readonly error: string | undefined;
-  readonly lastFetchAt: number | undefined;
-  readonly updatedAt: number | undefined;
-  readonly authPath: string | undefined;
-  readonly authFound: boolean;
+export interface OpenAIProjection extends UsageProjectionBase<ResolvedConfig, UsageSnapshot> {
   readonly authSource: "modelRegistry" | "authFile" | undefined;
   readonly accountId: string | undefined;
 }
 
 export const initialProjection = (): OpenAIProjection => ({
-  config: undefined,
-  eligible: false,
-  snapshot: undefined,
-  statusLine: undefined,
-  statusText: "Usage unavailable.",
-  error: undefined,
-  lastFetchAt: undefined,
-  updatedAt: undefined,
-  authPath: undefined,
-  authFound: false,
+  ...initialUsageProjection<ResolvedConfig, UsageSnapshot>(),
   authSource: undefined,
   accountId: undefined,
 });

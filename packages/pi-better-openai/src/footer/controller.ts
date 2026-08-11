@@ -4,7 +4,12 @@ import { isModelUsingOAuth } from "../boundary/model-registry.ts";
 import { isFastActive, statusSegment, type FastSnapshot } from "../fast/controller.ts";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import * as MutableRef from "effect/MutableRef";
-import { formatTokens } from "pi-cosmic-core";
+import {
+  createFooterPresenter,
+  formatTokens,
+  type FooterHostData,
+  type FooterTheme,
+} from "pi-cosmic-core";
 import { visibleStatusLine, type OpenAIProjection } from "../usage/index.ts";
 
 const sanitizeStatusText = (text: string) => text.replace(/[ \r\n\t]+/g, " ").trim();
@@ -55,14 +60,6 @@ export function createFooterController(deps: {
 }): FooterController {
   const { pi, config, fastProjection, projection, hasTerminalUI } = deps;
   let footerTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-  type FooterInstallToken = {
-    disposed: boolean;
-    requestRender: (() => void) | undefined;
-    readonly cleanups: Set<() => void>;
-  };
-  let activeFooterToken: FooterInstallToken | undefined;
-  let clearingFooterToken: FooterInstallToken | undefined;
-  let statusInstalled = false;
   const contextUsageMemo = memo(
     (ctx: ExtensionContext) => {
       const next = ctx.getContextUsage();
@@ -128,234 +125,107 @@ export function createFooterController(deps: {
     sessionNameMemo.invalidate();
   }
 
-  function resetFooterOwnership(): void {
-    activeFooterToken = undefined;
-  }
+  function renderDetailed(
+    installCtx: ExtensionContext,
+    theme: FooterTheme,
+    footerData: FooterHostData | undefined,
+    width: number,
+  ): string[] {
+    const renderContext = currentContext ?? installCtx;
+    const parts: string[] = [];
+    if (footerTotals.input) parts.push(`↑${formatTokens(footerTotals.input)}`);
+    if (footerTotals.output) parts.push(`↓${formatTokens(footerTotals.output)}`);
+    if (footerTotals.cacheRead) parts.push(`R${formatTokens(footerTotals.cacheRead)}`);
+    if (footerTotals.cacheWrite) parts.push(`W${formatTokens(footerTotals.cacheWrite)}`);
 
-  function installFooter(ctx: ExtensionContext): void {
-    if (activeFooterToken) {
-      if (!activeFooterToken.disposed) {
-        try {
-          activeFooterToken.requestRender?.();
-        } catch {
-          // Rendering is a host callback; a failed request does not relinquish ownership.
-        }
-        return;
-      }
-      resetFooterOwnership();
+    const usingSubscription = modelUsingOAuth(renderContext);
+    if (footerTotals.cost || usingSubscription)
+      parts.push(`$${footerTotals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
+
+    const currentContextUsage = contextUsage(renderContext);
+    const contextWindow =
+      currentContextUsage?.contextWindow ?? renderContext.model?.contextWindow ?? 0;
+    const contextPercentValue = currentContextUsage?.percent ?? 0;
+    const contextPercent =
+      currentContextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
+    const contextDisplay =
+      contextPercent === "?"
+        ? `?/${formatTokens(contextWindow)} (auto)`
+        : `${contextPercent}%/${formatTokens(contextWindow)} (auto)`;
+    const contextText =
+      contextPercentValue > 90
+        ? theme.fg("error", contextDisplay)
+        : contextPercentValue > 70
+          ? theme.fg("warning", contextDisplay)
+          : contextDisplay;
+    parts.push(contextText);
+
+    let statsLeft = parts.join(" ");
+    let statsLeftWidth = visibleWidth(statsLeft);
+    if (statsLeftWidth > width) {
+      statsLeft = truncateToWidth(statsLeft, width, "...");
+      statsLeftWidth = visibleWidth(statsLeft);
     }
 
-    const token: FooterInstallToken = {
-      disposed: false,
-      requestRender: undefined,
-      cleanups: new Set(),
-    };
-    let accepted = false;
-    const pendingActivations = new Set<() => void>();
-
-    try {
-      ctx.ui.setFooter((tui, theme, footerData) => {
-        let componentDisposed = false;
-        let unsubscribe: (() => void) | undefined;
-        const safeRequestRender = () => {
-          try {
-            tui.requestRender();
-          } catch {
-            // TUI render requests are advisory and must not escape the footer callback.
-          }
-        };
-        const cleanup = () => {
-          const cleanupBranch = unsubscribe;
-          unsubscribe = undefined;
-          token.cleanups.delete(cleanup);
-          if (!cleanupBranch) return;
-          try {
-            cleanupBranch();
-          } catch {
-            // Branch subscriptions are host-owned; disposal remains total.
-          }
-        };
-        token.cleanups.add(cleanup);
-        const activate = () => {
-          pendingActivations.delete(activate);
-          if (componentDisposed || token.disposed || !accepted || activeFooterToken !== token)
-            return;
-          token.requestRender = safeRequestRender;
-          try {
-            const cleanupBranch = footerData.onBranchChange?.(safeRequestRender);
-            if (typeof cleanupBranch === "function") unsubscribe = cleanupBranch;
-          } catch {
-            // A branch subscription failure does not invalidate an otherwise usable footer.
-          }
-        };
-        if (accepted) activate();
-        else if (!token.disposed) pendingActivations.add(activate);
-
-        const renderDetailed = (width: number): string[] => {
-          if (!Number.isFinite(width) || width <= 0) return [];
-          const renderContext = currentContext ?? ctx;
-          const parts: string[] = [];
-          if (footerTotals.input) parts.push(`↑${formatTokens(footerTotals.input)}`);
-          if (footerTotals.output) parts.push(`↓${formatTokens(footerTotals.output)}`);
-          if (footerTotals.cacheRead) parts.push(`R${formatTokens(footerTotals.cacheRead)}`);
-          if (footerTotals.cacheWrite) parts.push(`W${formatTokens(footerTotals.cacheWrite)}`);
-
-          const usingSubscription = modelUsingOAuth(renderContext);
-          if (footerTotals.cost || usingSubscription)
-            parts.push(`$${footerTotals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
-
-          const currentContextUsage = contextUsage(renderContext);
-          const contextWindow =
-            currentContextUsage?.contextWindow ?? renderContext.model?.contextWindow ?? 0;
-          const contextPercentValue = currentContextUsage?.percent ?? 0;
-          const contextPercent =
-            currentContextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
-          const contextDisplay =
-            contextPercent === "?"
-              ? `?/${formatTokens(contextWindow)} (auto)`
-              : `${contextPercent}%/${formatTokens(contextWindow)} (auto)`;
-          const contextText =
-            contextPercentValue > 90
-              ? theme.fg("error", contextDisplay)
-              : contextPercentValue > 70
-                ? theme.fg("warning", contextDisplay)
-                : contextDisplay;
-          parts.push(contextText);
-
-          let statsLeft = parts.join(" ");
-          let statsLeftWidth = visibleWidth(statsLeft);
-          if (statsLeftWidth > width) {
-            statsLeft = truncateToWidth(statsLeft, width, "...");
-            statsLeftWidth = visibleWidth(statsLeft);
-          }
-
-          const modelName = renderContext.model?.id || "no-model";
-          const thinkingLevel = pi.getThinkingLevel();
-          const fastActive = isFastActive(renderContext, MutableRef.get(fastProjection));
-          let rightWithoutProvider = modelName;
-          if (renderContext.model?.reasoning) {
-            const effort = thinkingLevel === "off" ? "thinking off" : thinkingLevel;
-            rightWithoutProvider = `${modelName} • ${fastActive ? "⚡" : ""}${effort}`;
-          } else if (fastActive) {
-            rightWithoutProvider = `${modelName} • ⚡`;
-          }
-
-          let rightSide = rightWithoutProvider;
-          if ((footerData.getAvailableProviderCount?.() ?? 0) > 1 && renderContext.model) {
-            const withProvider = `(${renderContext.model.provider}) ${rightWithoutProvider}`;
-            if (statsLeftWidth + 2 + visibleWidth(withProvider) <= width) rightSide = withProvider;
-          }
-
-          const rightWidth = visibleWidth(rightSide);
-          let statsLine: string;
-          if (statsLeftWidth + 2 + rightWidth <= width) {
-            statsLine = statsLeft + " ".repeat(width - statsLeftWidth - rightWidth) + rightSide;
-          } else {
-            const availableForRight = width - statsLeftWidth - 2;
-            if (availableForRight > 0) {
-              const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
-              statsLine =
-                statsLeft +
-                " ".repeat(Math.max(0, width - statsLeftWidth - visibleWidth(truncatedRight))) +
-                truncatedRight;
-            } else statsLine = statsLeft;
-          }
-
-          let pwd = abbreviateHomePath(renderContext.sessionManager.getCwd());
-          const branch = footerData.getGitBranch?.();
-          if (branch) pwd = `${pwd} (${branch})`;
-          const currentSessionName = sessionName(renderContext);
-          if (currentSessionName) pwd = `${pwd} • ${currentSessionName}`;
-
-          const textLines: string[] = [
-            truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "...")),
-            theme.fg("dim", statsLeft) + theme.fg("dim", statsLine.slice(statsLeft.length)),
-          ];
-
-          const cfg = config(renderContext);
-          const usageStatusLine = visibleStatusLine(
-            renderContext,
-            cfg,
-            projection,
-            usingSubscription,
-          );
-          if (usageStatusLine)
-            textLines.push(
-              truncateToWidth(theme.fg("dim", usageStatusLine), width, theme.fg("dim", "...")),
-            );
-
-          const extensionStatuses = footerData.getExtensionStatuses?.();
-          if (extensionStatuses?.size) {
-            const statusLine = Array.from(extensionStatuses.entries())
-              .sort(([a], [b]) => String(a).localeCompare(String(b)))
-              .map(([, text]) => sanitizeStatusText(String(text)))
-              .join(" ");
-            textLines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
-          }
-          return textLines;
-        };
-
-        return {
-          dispose: () => {
-            if (componentDisposed) return;
-            componentDisposed = true;
-            pendingActivations.delete(activate);
-            cleanup();
-            token.disposed = true;
-            if (activeFooterToken !== token || clearingFooterToken === token) return;
-            resetFooterOwnership();
-          },
-          invalidate() {},
-          render(width: number): string[] {
-            if (componentDisposed || token.disposed) return [];
-            try {
-              return renderDetailed(width);
-            } catch {
-              return [];
-            }
-          },
-        };
-      });
-    } catch {
-      token.disposed = true;
-      pendingActivations.clear();
-      for (const cleanup of token.cleanups) cleanup();
-      return;
+    const modelName = renderContext.model?.id || "no-model";
+    const thinkingLevel = pi.getThinkingLevel();
+    const fastActive = isFastActive(renderContext, MutableRef.get(fastProjection));
+    let rightWithoutProvider = modelName;
+    if (renderContext.model?.reasoning) {
+      const effort = thinkingLevel === "off" ? "thinking off" : thinkingLevel;
+      rightWithoutProvider = `${modelName} • ${fastActive ? "⚡" : ""}${effort}`;
+    } else if (fastActive) {
+      rightWithoutProvider = `${modelName} • ⚡`;
     }
 
-    accepted = true;
-    if (token.disposed) return;
-    activeFooterToken = token;
-    for (const activate of pendingActivations) activate();
-  }
+    let rightSide = rightWithoutProvider;
+    if ((footerData?.getAvailableProviderCount?.() ?? 0) > 1 && renderContext.model) {
+      const withProvider = `(${renderContext.model.provider}) ${rightWithoutProvider}`;
+      if (statsLeftWidth + 2 + visibleWidth(withProvider) <= width) rightSide = withProvider;
+    }
 
-  function clearFooter(ctx: ExtensionContext): void {
-    if (!activeFooterToken) return;
-    const token = activeFooterToken;
-    clearingFooterToken = token;
-    try {
-      ctx.ui.setFooter(undefined);
-    } catch {
-      if (token?.disposed && activeFooterToken === token) resetFooterOwnership();
-      return;
-    } finally {
-      clearingFooterToken = undefined;
+    const rightWidth = visibleWidth(rightSide);
+    let statsLine: string;
+    if (statsLeftWidth + 2 + rightWidth <= width) {
+      statsLine = statsLeft + " ".repeat(width - statsLeftWidth - rightWidth) + rightSide;
+    } else {
+      const availableForRight = width - statsLeftWidth - 2;
+      if (availableForRight > 0) {
+        const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
+        statsLine =
+          statsLeft +
+          " ".repeat(Math.max(0, width - statsLeftWidth - visibleWidth(truncatedRight))) +
+          truncatedRight;
+      } else statsLine = statsLeft;
     }
-    if (token && activeFooterToken === token) {
-      token.disposed = true;
-      for (const cleanup of token.cleanups) cleanup();
-      resetFooterOwnership();
-    }
-  }
 
-  function setStatus(ctx: ExtensionContext, text: string | undefined): void {
-    if (!text && !statusInstalled) return;
-    try {
-      ctx.ui.setStatus("better-openai", text);
-      statusInstalled = text !== undefined;
-    } catch {
-      // Retain the prior ownership state so a later update retries the mutation.
+    let pwd = abbreviateHomePath(renderContext.sessionManager.getCwd());
+    const branch = footerData?.getGitBranch?.();
+    if (branch) pwd = `${pwd} (${branch})`;
+    const currentSessionName = sessionName(renderContext);
+    if (currentSessionName) pwd = `${pwd} • ${currentSessionName}`;
+
+    const textLines: string[] = [
+      truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "...")),
+      theme.fg("dim", statsLeft) + theme.fg("dim", statsLine.slice(statsLeft.length)),
+    ];
+
+    const cfg = config(renderContext);
+    const usageStatusLine = visibleStatusLine(renderContext, cfg, projection, usingSubscription);
+    if (usageStatusLine)
+      textLines.push(
+        truncateToWidth(theme.fg("dim", usageStatusLine), width, theme.fg("dim", "...")),
+      );
+
+    const extensionStatuses = footerData?.getExtensionStatuses?.();
+    if (extensionStatuses?.size) {
+      const statusLine = Array.from(extensionStatuses.entries())
+        .sort(([a], [b]) => String(a).localeCompare(String(b)))
+        .map(([, text]) => sanitizeStatusText(String(text)))
+        .join(" ");
+      textLines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
     }
+    return textLines;
   }
 
   function statusText(ctx: ExtensionContext, cfg: ResolvedConfig): string | undefined {
@@ -364,35 +234,18 @@ export function createFooterController(deps: {
     return [fast, usage].filter(Boolean).join(" | ") || undefined;
   }
 
+  const presenter = createFooterPresenter({
+    statusKey: "better-openai",
+    footerMode: (ctx) => config(ctx).footer.mode,
+    hasTerminalUI,
+    statusText: (ctx) => statusText(ctx, config(ctx)),
+    renderLines: ({ ctx, theme, footerData, width }) =>
+      renderDetailed(ctx, theme, footerData, width),
+  });
+
   function updateFooter(ctx: ExtensionContext): void {
     currentContext = ctx;
-    try {
-      const cfg = config(ctx);
-      if (!hasTerminalUI(ctx)) {
-        if (cfg.footer.mode === "off") {
-          setStatus(ctx, undefined);
-          return;
-        }
-        setStatus(ctx, statusText(ctx, cfg));
-        return;
-      }
-
-      if (cfg.footer.mode === "replace") {
-        setStatus(ctx, undefined);
-        installFooter(ctx);
-        return;
-      }
-
-      clearFooter(ctx);
-      if (cfg.footer.mode === "off") {
-        setStatus(ctx, undefined);
-        return;
-      }
-
-      setStatus(ctx, statusText(ctx, cfg));
-    } catch {
-      // Footer/status updates are synchronous host callbacks and must remain total.
-    }
+    presenter.update(ctx);
   }
 
   function addAssistantUsage(usage: {

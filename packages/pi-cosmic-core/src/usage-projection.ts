@@ -1,5 +1,39 @@
 /** Shared eligibility/clearing transitions for provider usage projections. */
 
+/**
+ * Common shape of a provider usage projection. Provider projections extend this with
+ * provider-specific identity fields (for example team or account identifiers).
+ */
+export interface UsageProjectionBase<Resolved, Snapshot> {
+  readonly config: Resolved | undefined;
+  readonly eligible: boolean;
+  readonly snapshot: Snapshot | undefined;
+  readonly statusLine: string | undefined;
+  readonly statusText: string;
+  readonly error: string | undefined;
+  readonly lastFetchAt: number | undefined;
+  readonly updatedAt: number | undefined;
+  readonly authPath: string | undefined;
+  readonly authFound: boolean;
+}
+
+/** Initial value for the shared usage projection fields. */
+export const initialUsageProjection = <Resolved, Snapshot>(): UsageProjectionBase<
+  Resolved,
+  Snapshot
+> => ({
+  config: undefined,
+  eligible: false,
+  snapshot: undefined,
+  statusLine: undefined,
+  statusText: "Usage unavailable.",
+  error: undefined,
+  lastFetchAt: undefined,
+  updatedAt: undefined,
+  authPath: undefined,
+  authFound: false,
+});
+
 export type UsageVisibilityFields = {
   readonly eligible: boolean;
   readonly snapshot: unknown;
