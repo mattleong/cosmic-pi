@@ -1,6 +1,9 @@
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { abbreviateHomePath, formatTokens } from "pi-cosmic-core";
-import type { CosmicFooterTextContribution } from "../protocol/protocol.ts";
+import type {
+  CosmicFooterStatusContribution,
+  CosmicFooterTextContribution,
+} from "../protocol/protocol.ts";
 import { formatGitStatus, type FooterGitStatus } from "./git.ts";
 import type { FooterHostProjection } from "../boundary/host-footer-projection.ts";
 
@@ -17,12 +20,20 @@ function basename(path: string): string {
   return normalized.slice(normalized.lastIndexOf("/") + 1) || normalized;
 }
 
+/** Generic defaults for host status entries with no declared placement. */
+const DEFAULT_STATUS_REGION = "details" as const;
+const DEFAULT_STATUS_PRIORITY = 20;
+const DEFAULT_STATUS_ORDER = 1020;
+
+export type FooterStatusPlacements = ReadonlyMap<string, CosmicFooterStatusContribution>;
+
 export function builtinContributions(
   host: FooterHostProjection,
   totals: FooterTotals,
   gitStatus: FooterGitStatus | undefined,
   pullRequestNumber: number | undefined,
   homeDirectory: string | undefined,
+  statusPlacements: FooterStatusPlacements,
 ): CosmicFooterTextContribution[] {
   const { model, contextUsage, branch, sessionName, subscription } = host;
   const location = abbreviateHomePath(host.cwd, homeDirectory);
@@ -169,30 +180,49 @@ export function builtinContributions(
       priority: 90,
       order: metric.order,
     });
-  const advisorStatus = host.extensionStatuses.find(({ id }) => id === "pi-advisor")?.text;
-  if (advisorStatus)
-    result.push({
-      kind: "text",
-      id: "advisor.status",
-      region: "identity",
-      text: advisorStatus,
-      align: "right",
-      priority: 100,
-      order: 1000,
-    });
-  for (const status of host.extensionStatuses.filter(({ id }) => id !== "pi-advisor")) {
-    const order =
-      status.id === "pi-subagents" ? 1000 : status.id === "pi-background-terminals" ? 1010 : 1020;
+  for (const status of host.extensionStatuses) {
+    const placement = statusPlacements.get(status.id);
     result.push({
       kind: "text",
       id: `extension.${status.id}`,
-      region: "details",
+      region: placement?.region ?? DEFAULT_STATUS_REGION,
       text: status.text,
-      priority: 20,
-      order,
+      ...(placement?.align ? { align: placement.align } : {}),
+      priority: placement?.priority ?? DEFAULT_STATUS_PRIORITY,
+      order: placement?.order ?? DEFAULT_STATUS_ORDER,
     });
   }
   return result;
+}
+
+/**
+ * Folds decorator entries (`decorates`) into their targets by prefixing the
+ * decorator's text; decorators without a matching target render standalone.
+ */
+export function applyTextDecorations(
+  entries: readonly CosmicFooterTextContribution[],
+): CosmicFooterTextContribution[] {
+  const prefixes = new Map<string, string>();
+  const consumed = new Set<CosmicFooterTextContribution>();
+  for (const entry of entries) {
+    const target = entry.decorates;
+    if (target === undefined) continue;
+    if (!entries.some((candidate) => candidate !== entry && candidate.id === target)) continue;
+    consumed.add(entry);
+    prefixes.set(target, (prefixes.get(target) ?? "") + entry.text);
+  }
+  if (prefixes.size === 0) return [...entries];
+  return entries
+    .filter((entry) => !consumed.has(entry))
+    .map((entry) => {
+      const prefix = prefixes.get(entry.id);
+      if (prefix === undefined) return entry;
+      return {
+        ...entry,
+        text: `${prefix}${entry.text}`,
+        ...(entry.compactText ? { compactText: `${prefix}${entry.compactText}` } : {}),
+      };
+    });
 }
 
 export function orderedContributions(
@@ -206,10 +236,7 @@ export function orderedContributions(
         !config.footer.hidden.includes(value.id) &&
         !(value.id.startsWith("metrics.") && config.footer.hidden.includes("metrics")) &&
         !(value.id.startsWith("git.") && config.footer.hidden.includes("git")) &&
-        !(
-          (value.id === "advisor.status" || value.id.startsWith("extension.")) &&
-          config.footer.hidden.includes("extensions")
-        ),
+        !(value.id.startsWith("extension.") && config.footer.hidden.includes("extensions")),
     )
     .sort((a, b) => (order.get(a.id) ?? a.order ?? 500) - (order.get(b.id) ?? b.order ?? 500));
 }

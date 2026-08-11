@@ -124,7 +124,6 @@ const CONTRIBUTION_COLORS: Readonly<Record<string, string>> = {
   model: "mdLink",
   effort: "syntaxOperator",
   location: "accent",
-  "openai.fast": "syntaxFunction",
   branch: "syntaxType",
   pullRequest: "mdLink",
   git: "syntaxOperator",
@@ -139,6 +138,7 @@ const CONTRIBUTION_COLORS: Readonly<Record<string, string>> = {
 
 function contributionColor(contribution: CosmicFooterTextContribution): string {
   if (contribution.tone === "warning" || contribution.tone === "error") return contribution.tone;
+  if (contribution.color) return contribution.color;
   return Object.hasOwn(CONTRIBUTION_COLORS, contribution.id)
     ? CONTRIBUTION_COLORS[contribution.id]!
     : "accent";

@@ -25,6 +25,7 @@ export function xaiUsageFooterPrimitive(state: XaiUsageUiState): FooterTextPrimi
     text: state.text,
     // Drop reset suffixes in compact mode so bars stay readable.
     compactText: state.text.replace(/\s*\|\s*(?:7d|mo)\s*↺[^|]*/g, "").trim(),
+    label: "xAI",
     tone: "dim",
     priority: 60,
     order: 101,

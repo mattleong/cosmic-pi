@@ -86,7 +86,7 @@ export function registerSubagentApplication(
   pi: ExtensionAPI,
   boundaries: SubagentApplicationBoundaries = LIVE_APPLICATION_BOUNDARIES,
 ): void {
-  const bridge = makeSubagentProjectionBridge();
+  const bridge = makeSubagentProjectionBridge(pi.events);
   const notify = makeHostNotifier(pi);
   let currentContext: ExtensionContext | undefined;
   let currentActivation: CapturedActivation | undefined;

@@ -204,6 +204,39 @@ describe("responsive footer layout", () => {
     expect(colors).not.toContain("text");
   });
 
+  test("prefers a declared color token, but warning and error tones still win", () => {
+    const fg = vi.fn((_color: string, text: string) => text);
+
+    renderContributionLine(
+      [
+        {
+          kind: "text",
+          id: "openai.fast",
+          region: "identity",
+          text: "⚡",
+          tone: "success",
+          color: "syntaxFunction",
+        },
+        {
+          kind: "text",
+          id: "custom.alarm",
+          region: "identity",
+          text: "alarm",
+          tone: "warning",
+          color: "syntaxFunction",
+        },
+        { kind: "text", id: "custom.plain", region: "identity", text: "plain" },
+      ],
+      120,
+      { fg },
+      false,
+    );
+
+    expect(fg.mock.calls).toContainEqual(["syntaxFunction", "⚡"]);
+    expect(fg.mock.calls).toContainEqual(["warning", "alarm"]);
+    expect(fg.mock.calls).toContainEqual(["accent", "plain"]);
+  });
+
   test("keeps Git line statistics in one block without bullet separators", () => {
     const line = renderContributionLine(
       [{ kind: "text", id: "git.lines", region: "identity", text: "+8L -3L ~2L" }],

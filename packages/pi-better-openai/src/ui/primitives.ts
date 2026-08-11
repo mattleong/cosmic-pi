@@ -33,8 +33,12 @@ export function fastModeFooterPrimitive(state: FastModeUiState): FooterTextPrimi
     kind: "text",
     id: "openai.fast",
     region: "identity",
-    text: "fast",
+    text: "⚡",
+    compactText: "⚡",
     tone: "success",
+    color: "syntaxFunction",
+    // Prefix the effort entry when present; render the glyph standalone otherwise.
+    decorates: "effort",
     priority: 80,
     order: 110,
   };
@@ -59,6 +63,7 @@ export function openAIUsageFooterPrimitive(
     region: "details",
     text: state.text,
     compactText: state.text.replace(/\s*\([^)]*\)/g, ""),
+    label: "OpenAI",
     tone: "dim",
     priority: 60,
     order: 100,

@@ -10,7 +10,13 @@ describe("public footer primitives", () => {
         supported: true,
         modelId: "gpt-5.5",
       }),
-    ).toMatchObject({ id: "openai.fast", text: "fast", tone: "success" });
+    ).toMatchObject({
+      id: "openai.fast",
+      text: "⚡",
+      tone: "success",
+      color: "syntaxFunction",
+      decorates: "effort",
+    });
     expect(
       fastModeFooterPrimitive({
         desired: false,
@@ -25,6 +31,7 @@ describe("public footer primitives", () => {
       id: "openai.usage",
       text: "Usage: 90%",
       region: "details",
+      label: "OpenAI",
     });
     expect(openAIUsageFooterPrimitive({ visible: false })).toBeUndefined();
   });

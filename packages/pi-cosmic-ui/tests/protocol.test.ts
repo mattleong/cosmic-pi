@@ -54,6 +54,58 @@ describe("Cosmic UI protocol validation", () => {
     ).toBe(false);
   });
 
+  test("accepts label, color, and decoration hints on text contributions", () => {
+    expect(
+      isCosmicFooterUpsertEvent(
+        event({
+          kind: "text",
+          id: "openai.usage",
+          region: "details",
+          text: "Usage: 5h: 90%",
+          label: "OpenAI",
+          color: "syntaxFunction",
+          decorates: "effort",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isCosmicFooterUpsertEvent(
+        event({ kind: "text", id: "status", region: "details", text: "ready", decorates: "" }),
+      ),
+    ).toBe(false);
+    expect(
+      isCosmicFooterUpsertEvent(
+        event({ kind: "text", id: "status", region: "details", text: "ready", label: 7 }),
+      ),
+    ).toBe(false);
+  });
+
+  test("validates status placement contributions", () => {
+    expect(
+      isCosmicFooterUpsertEvent(
+        event({
+          kind: "status",
+          id: "pi-advisor",
+          region: "identity",
+          align: "right",
+          priority: 100,
+          order: 1000,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isCosmicFooterUpsertEvent(event({ kind: "status", id: "pi-advisor", region: "media" })),
+    ).toBe(false);
+    expect(
+      isCosmicFooterUpsertEvent(
+        event({ kind: "status", id: "pi-advisor", region: "details", order: Number.NaN }),
+      ),
+    ).toBe(false);
+    expect(isCosmicFooterUpsertEvent(event({ kind: "status", id: "", region: "details" }))).toBe(
+      false,
+    );
+  });
+
   test("validates host, remove, and invalidate payloads through schemas", () => {
     expect(isCosmicUiHostQuery({ version: 1, respond() {} })).toBe(true);
     expect(isCosmicUiHostQuery({ version: 1, respond: "later" })).toBe(false);

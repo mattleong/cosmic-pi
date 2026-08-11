@@ -24,7 +24,7 @@ import { registerProcessManagerCommand } from "./settings/controller.ts";
 import { registerBackgroundTerminalTool } from "./tools/background-terminal.ts";
 
 export function registerBackgroundTerminalsApplication(pi: ExtensionAPI): void {
-  const bridge = makeProjectionBridge();
+  const bridge = makeProjectionBridge(pi.events);
   let currentContext: ExtensionContext | undefined;
 
   const slot = makePiSessionRuntimeSlot<

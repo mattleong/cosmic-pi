@@ -34,6 +34,30 @@ export interface CosmicFooterTextContribution {
   tone?: CosmicFooterTone;
   priority?: number;
   order?: number;
+  /** Line label; details entries with a label render as their own labeled line. */
+  label?: string;
+  /** Theme color token; tones warning/error still take precedence. */
+  color?: string;
+  /**
+   * Id of another text entry this one decorates: this entry's text is prefixed
+   * onto the target instead of rendering separately. Renders standalone when
+   * the target entry is absent.
+   */
+  decorates?: string;
+}
+/**
+ * Declares footer placement for a host status entry published through
+ * `ctx.ui.setStatus`. `id` is the host status key; the status text keeps
+ * flowing through the host, so the status still renders without a Cosmic host.
+ * Undeclared status entries fall back to generic defaults.
+ */
+export interface CosmicFooterStatusContribution {
+  kind: "status";
+  id: string;
+  region: Exclude<CosmicFooterRegion, "media">;
+  align?: "left" | "right";
+  priority?: number;
+  order?: number;
 }
 export interface CosmicFooterSurfaceContribution {
   kind: "surface";
@@ -49,6 +73,7 @@ export interface CosmicFooterSurfaceContribution {
 }
 export type CosmicFooterContribution =
   | CosmicFooterTextContribution
+  | CosmicFooterStatusContribution
   | CosmicFooterSurfaceContribution;
 export interface CosmicUiHostQuery {
   version: typeof COSMIC_UI_PROTOCOL_VERSION;
@@ -87,6 +112,17 @@ const TextContributionData = Schema.Struct({
   ),
   priority: Schema.optional(Schema.Number),
   order: Schema.optional(Schema.Number),
+  label: Schema.optional(NonEmpty),
+  color: Schema.optional(NonEmpty),
+  decorates: Schema.optional(NonEmpty),
+});
+const StatusContributionData = Schema.Struct({
+  kind: Schema.Literal("status"),
+  id: NonEmpty,
+  region: Schema.Literals(["identity", "metrics", "details"]),
+  align: Schema.optional(Schema.Literals(["left", "right"])),
+  priority: Schema.optional(Schema.Number),
+  order: Schema.optional(Schema.Number),
 });
 const SurfaceContributionData = Schema.Struct({
   kind: Schema.Literal("surface"),
@@ -105,7 +141,11 @@ const SurfaceContributionData = Schema.Struct({
 const UpsertData = Schema.Struct({
   version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
   owner: NonEmpty,
-  contribution: Schema.Union([TextContributionData, SurfaceContributionData]),
+  contribution: Schema.Union([
+    TextContributionData,
+    StatusContributionData,
+    SurfaceContributionData,
+  ]),
 });
 const RemoveData = Schema.Struct({
   version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
@@ -152,6 +192,9 @@ const contributionFields = [
   "tone",
   "priority",
   "order",
+  "label",
+  "color",
+  "decorates",
   "preferredWidth",
   "preferredPlacement",
   "attach",
@@ -185,7 +228,7 @@ export function normalizeCosmicFooterUpsertEvent(
   const event = decodeSafely(UpsertData, snapshot);
   if (!event) return undefined;
   const contribution = event.contribution;
-  if (contribution.kind === "text") {
+  if (contribution.kind === "text" || contribution.kind === "status") {
     if (
       (contribution.priority !== undefined && !Number.isFinite(contribution.priority)) ||
       (contribution.order !== undefined && !Number.isFinite(contribution.order))

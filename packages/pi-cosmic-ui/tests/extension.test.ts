@@ -143,6 +143,7 @@ describe("Cosmic UI extension", () => {
         id: "openai.usage",
         region: "details",
         text: "Usage: 5h: 90% | 7d: 51%",
+        label: "OpenAI",
       },
     });
     h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
@@ -153,6 +154,7 @@ describe("Cosmic UI extension", () => {
         id: "xai.usage",
         region: "details",
         text: "Usage: 7d: 82% | mo: 83%",
+        label: "xAI",
       },
     });
     h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
@@ -162,7 +164,36 @@ describe("Cosmic UI extension", () => {
         kind: "text",
         id: "openai.fast",
         region: "identity",
-        text: "fast",
+        text: "⚡",
+        color: "syntaxFunction",
+        decorates: "effort",
+      },
+    });
+    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      owner: "pi-advisor",
+      contribution: {
+        kind: "status",
+        id: "pi-advisor",
+        region: "identity",
+        align: "right",
+        priority: 100,
+        order: 1000,
+      },
+    });
+    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      owner: "pi-subagents",
+      contribution: { kind: "status", id: "pi-subagents", region: "details", order: 1000 },
+    });
+    h.pi.events.emit(COSMIC_UI_FOOTER_UPSERT, {
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      owner: "pi-background-terminals",
+      contribution: {
+        kind: "status",
+        id: "pi-background-terminals",
+        region: "details",
+        order: 1010,
       },
     });
     await emit(h, "session_start");

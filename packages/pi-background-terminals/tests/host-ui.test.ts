@@ -38,6 +38,55 @@ describe("background terminal host projection", () => {
     );
   });
 
+  it("declares its Cosmic footer placement when a Cosmic host answers", () => {
+    const emitted: Array<{ name: string; data: unknown }> = [];
+    const events = {
+      emit: (name: string, data: unknown) => {
+        emitted.push({ name, data });
+        if (name === "cosmic-ui:v1:host:query") (data as { respond: () => void }).respond();
+      },
+      on: () => () => undefined,
+    } as never;
+    const bridge = makeProjectionBridge(events);
+    bridge.setContext(context(vi.fn()));
+
+    expect(emitted).toContainEqual({
+      name: "cosmic-ui:v1:footer:upsert",
+      data: expect.objectContaining({
+        owner: "pi-background-terminals",
+        contribution: expect.objectContaining({
+          kind: "status",
+          id: "pi-background-terminals",
+          region: "details",
+          order: 1010,
+        }),
+      }),
+    });
+
+    emitted.length = 0;
+    bridge.clear();
+    expect(emitted).toContainEqual({
+      name: "cosmic-ui:v1:footer:remove",
+      data: expect.objectContaining({ owner: "pi-background-terminals" }),
+    });
+  });
+
+  it("stays inert without a Cosmic host and outside the TUI", () => {
+    const emitted: Array<{ name: string }> = [];
+    const events = {
+      emit: (name: string) => emitted.push({ name }),
+      on: () => () => undefined,
+    } as never;
+    const bridge = makeProjectionBridge(events);
+    bridge.setContext(context(vi.fn()));
+    expect(emitted.map((event) => event.name)).toEqual(["cosmic-ui:v1:host:query"]);
+
+    const rpcBridge = makeProjectionBridge(events);
+    emitted.length = 0;
+    rpcBridge.setContext({ mode: "rpc", ui: { setStatus: vi.fn() } } as never);
+    expect(emitted).toEqual([]);
+  });
+
   it("keeps notifying remaining listeners when one subscriber throws", () => {
     const bridge = makeProjectionBridge();
     const before = vi.fn();

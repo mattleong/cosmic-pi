@@ -12,8 +12,10 @@ import type {
 } from "../protocol/protocol.ts";
 import type { HostCallbackBoundaryShape } from "../boundary/host-callback.ts";
 import {
+  applyTextDecorations,
   builtinContributions,
   orderedContributions,
+  type FooterStatusPlacements,
   type FooterTotals,
 } from "./builtin-contributions.ts";
 import { type FooterGitStatus } from "./git.ts";
@@ -115,6 +117,11 @@ export function createFooterComponent(options: {
             contextUsage: currentContextUsage,
           });
           const registrySnapshot = registry.snapshot();
+          const statusPlacements: FooterStatusPlacements = new Map(
+            registrySnapshot.contributions.flatMap((entry) =>
+              entry.kind === "status" ? [[entry.id, entry] as const] : [],
+            ),
+          );
           const contributions: CosmicFooterContribution[] = [
             ...builtinContributions(
               host,
@@ -122,14 +129,17 @@ export function createFooterComponent(options: {
               options.gitStatus(),
               options.pullRequestNumber(),
               options.homeDirectory(),
+              statusPlacements,
             ),
             ...registrySnapshot.contributions,
           ];
-          const text = orderedContributions(
-            contributions.filter(
-              (entry): entry is CosmicFooterTextContribution => entry.kind === "text",
+          const text = applyTextDecorations(
+            orderedContributions(
+              contributions.filter(
+                (entry): entry is CosmicFooterTextContribution => entry.kind === "text",
+              ),
+              config,
             ),
-            config,
           );
           const compact =
             config.footer.density === "compact" || (config.footer.density === "auto" && width < 72);
@@ -141,34 +151,15 @@ export function createFooterComponent(options: {
               entry.id === "pullRequest" ||
               entry.id.startsWith("git"),
           );
-          const rawModelIdentity = identity.filter((entry) => !repositoryIdentity.includes(entry));
-          const fastMode = rawModelIdentity.find((entry) => entry.id === "openai.fast");
-          const hasEffort = rawModelIdentity.some((entry) => entry.id === "effort");
-          const modelIdentity = rawModelIdentity
-            .filter((entry) => entry.id !== "openai.fast")
-            .map((entry) =>
-              fastMode && entry.id === "effort"
-                ? {
-                    ...entry,
-                    text: `⚡${entry.text}`,
-                    ...(entry.compactText ? { compactText: `⚡${entry.compactText}` } : {}),
-                  }
-                : entry,
-            );
-          if (fastMode && !hasEffort)
-            modelIdentity.push({ ...fastMode, text: "⚡", compactText: "⚡" });
+          const modelIdentity = identity.filter((entry) => !repositoryIdentity.includes(entry));
           const metrics = text.filter((entry) => entry.region === "metrics");
           const contextVisible = metrics.some((entry) => entry.id === "context");
           const sessionInfo = metrics.filter((entry) => entry.id !== "context");
           const details = text.filter((entry) => entry.region === "details");
-          const providerUsageLabels: Readonly<Record<string, string>> = {
-            "openai.usage": "OpenAI",
-            "xai.usage": "xAI",
-          };
-          const providerUsage = details.filter((entry) => entry.id in providerUsageLabels);
+          const labeledDetails = details.filter((entry) => entry.label !== undefined);
           const extensionDetails = details.filter((entry) => entry.id.startsWith("extension."));
           const otherDetails = details.filter(
-            (entry) => !(entry.id in providerUsageLabels) && !entry.id.startsWith("extension."),
+            (entry) => entry.label === undefined && !entry.id.startsWith("extension."),
           );
           let lines: string[] = [];
           if (modelIdentity.length)
@@ -185,8 +176,8 @@ export function createFooterComponent(options: {
                 ? renderContextLine(currentContextUsage, sessionInfo, width, theme, compact)
                 : renderContributionLine(sessionInfo, width, theme, compact),
             );
-          for (const usage of providerUsage) {
-            const label = providerUsageLabels[usage.id];
+          for (const usage of labeledDetails) {
+            const label = usage.label;
             if (!label) continue;
             lines.push(
               renderProviderUsageLine(

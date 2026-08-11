@@ -39,6 +39,7 @@
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
     "pi-cosmic-core": "workspace:*",
+    "pi-cosmic-ui": "workspace:*",
     "typebox": "catalog:"
   },
   "devDependencies": {

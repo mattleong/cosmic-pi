@@ -11,6 +11,7 @@ import {
   makePiSessionRuntimeSlot,
   type PiSessionRuntimeSlot,
 } from "pi-cosmic-core";
+import { makeFooterStatusDeclaration } from "pi-cosmic-ui/boundary/host-status";
 import type { AdvisorEffectExecutor, AdvisorPlatform } from "../boundary/executor.ts";
 import { makeAdvisorHostBindings } from "../boundary/host-bindings.ts";
 import { registerAdvisorReviewCardRendererAtHostBoundary } from "../boundary/host-review-cards.ts";
@@ -26,6 +27,7 @@ import { FailureLogger } from "../logging/logger.ts";
 import {
   AdvisorController,
   AdvisorExtensionError,
+  STATUS_KEY,
   type AdvisorControllerShape,
   type AdvisorExtensionDependencies,
 } from "./controller-types.ts";
@@ -37,6 +39,12 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
   return function registerPersistentAdvisorExtension(pi: ExtensionAPI): void {
     registerAdvisorReviewCardRendererAtHostBoundary(pi);
     const hostBindings = makeAdvisorHostBindings();
+    const footerPlacement = makeFooterStatusDeclaration({
+      events: pi.events,
+      owner: STATUS_KEY,
+      statusKey: STATUS_KEY,
+      placement: { region: "identity", align: "right", priority: 100, order: 1000 },
+    });
     let parentSlot!: PiSessionRuntimeSlot<
       AdvisorSessionInput,
       | AdvisorPlatform
@@ -84,6 +92,8 @@ export function createAdvisorExtension(dependencies: AdvisorExtensionDependencie
           const controller = yield* AdvisorController;
           yield* controller.sessionInitialize(undefined as never, input);
         }),
+      onActivated: ({ ctx }) => footerPlacement.activate(ctx),
+      onDeactivated: () => footerPlacement.shutdown(),
     });
 
     const runController = <A, E>(

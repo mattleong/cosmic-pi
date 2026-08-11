@@ -1,6 +1,8 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import { createCosmicFooterClient } from "../footer/client.ts";
+import type { CosmicFooterStatusContribution } from "../protocol/protocol.ts";
 
 export const startHostUiTicker = (intervalMs: number, tick: () => void): (() => void) => {
   const fiber = Effect.runFork(
@@ -33,6 +35,50 @@ export const makeSetStatusSafely =
     }
   };
 
+export type FooterStatusPlacement = Omit<CosmicFooterStatusContribution, "kind" | "id">;
+
+export interface FooterStatusDeclaration {
+  readonly activate: (ctx: ExtensionContext | undefined) => void;
+  readonly shutdown: () => void;
+}
+
+/**
+ * Declares how a host status entry (`ctx.ui.setStatus`) is placed in the
+ * Cosmic footer. Inert when no Cosmic host answers the query; the status text
+ * itself keeps flowing through the host status channel either way.
+ */
+export function makeFooterStatusDeclaration(options: {
+  readonly events: ExtensionAPI["events"] | undefined;
+  readonly owner: string;
+  readonly statusKey: string;
+  readonly placement: FooterStatusPlacement;
+}): FooterStatusDeclaration {
+  const client = createCosmicFooterClient(options.events, options.owner);
+  const contribution: CosmicFooterStatusContribution = Object.freeze({
+    kind: "status",
+    id: options.statusKey,
+    ...options.placement,
+  });
+  return {
+    activate(ctx) {
+      let tui = false;
+      try {
+        tui = ctx?.mode === "tui";
+      } catch {
+        tui = false;
+      }
+      if (!tui) {
+        client.shutdown();
+        return;
+      }
+      if (client.query()) client.upsert(contribution);
+    },
+    shutdown() {
+      client.shutdown();
+    },
+  };
+}
+
 export interface ProjectionBridge<P> {
   readonly get: () => P;
   readonly publish: (projection: P) => void;
@@ -46,6 +92,8 @@ export interface ProjectionBridgeOptions<P> {
   readonly statusKey: string;
   readonly emptyProjection: () => P;
   readonly footerStatus: (projection: P) => string | undefined;
+  /** Optional Cosmic footer placement declaration for this status entry. */
+  readonly footerPlacement?: FooterStatusDeclaration;
 }
 
 export function makeProjectionBridge<P>(options: ProjectionBridgeOptions<P>): ProjectionBridge<P> {
@@ -81,6 +129,7 @@ export function makeProjectionBridge<P>(options: ProjectionBridgeOptions<P>): Pr
     setContext: (next) => {
       if (context && context !== next) setStatusSafely(context, undefined);
       context = next;
+      options.footerPlacement?.activate(next);
       updateFooter();
     },
     setFooterEnabled: (enabled) => {
@@ -89,6 +138,7 @@ export function makeProjectionBridge<P>(options: ProjectionBridgeOptions<P>): Pr
     },
     clear: () => {
       setStatusSafely(context, undefined);
+      options.footerPlacement?.shutdown();
       context = undefined;
       projection = options.emptyProjection();
       notifyListeners();
