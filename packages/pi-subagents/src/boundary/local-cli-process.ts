@@ -820,7 +820,10 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
         if (room.offer(event, bytes)) return;
         if (queueOverflowed) return;
         queueOverflowed = true;
-        appendTailText(stderr, `\nLocal CLI event queue exceeded ${EVENT_CAPACITY} pending events.`);
+        appendTailText(
+          stderr,
+          `\nLocal CLI event queue exceeded ${EVENT_CAPACITY} pending events.`,
+        );
         void terminateProcessTree(child, "force", { platform }).catch(() => undefined);
       };
       const detachStdout = child.stdout

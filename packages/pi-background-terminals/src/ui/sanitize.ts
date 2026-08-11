@@ -3,4 +3,7 @@
  *
  * The control-sequence policy and single-line normalization are owned by `pi-cosmic-core`.
  */
-export { sanitizeTerminalLine, stripTerminalControls as sanitizeTerminalText } from "pi-cosmic-core";
+export {
+  sanitizeTerminalLine,
+  stripTerminalControls as sanitizeTerminalText,
+} from "pi-cosmic-core";

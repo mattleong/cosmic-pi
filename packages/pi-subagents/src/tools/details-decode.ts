@@ -331,7 +331,8 @@ const decodedStartAwaitDetails = new WeakMap<object, SubagentStartAwaitCardDetai
 export function decodeStartAwaitCardDetails(
   value: unknown,
 ): SubagentStartAwaitCardDetails | undefined {
-  if (typeof value !== "object" || value === null) return decodeStartAwaitCardDetailsUncached(value);
+  if (typeof value !== "object" || value === null)
+    return decodeStartAwaitCardDetailsUncached(value);
   if (decodedStartAwaitDetails.has(value)) return decodedStartAwaitDetails.get(value);
   const decoded = decodeStartAwaitCardDetailsUncached(value);
   decodedStartAwaitDetails.set(value, decoded);

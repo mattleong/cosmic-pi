@@ -427,10 +427,7 @@ const recoveredOmittedFallback = (
   const container = new Container();
   container.addChild(
     new Text(
-      theme.fg(
-        "warning",
-        theme.bold("Recovered omitted output · bounded complete result follows"),
-      ),
+      theme.fg("warning", theme.bold("Recovered omitted output · bounded complete result follows")),
       0,
       0,
     ),

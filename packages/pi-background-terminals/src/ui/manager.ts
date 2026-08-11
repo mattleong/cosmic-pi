@@ -449,11 +449,7 @@ export class ProcessManagerComponent implements Component {
     return rows.slice(0, height);
   }
 
-  private listPane(
-    jobs: ReadonlyArray<BackgroundJobView>,
-    limit: number,
-    width: number,
-  ): string[] {
+  private listPane(jobs: ReadonlyArray<BackgroundJobView>, limit: number, width: number): string[] {
     return [
       this.options.theme.fg(
         this.pane === "list" ? "accent" : "muted",
