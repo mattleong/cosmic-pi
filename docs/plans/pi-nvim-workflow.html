@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi.nvim × pi-nvim-bridge — expected workflow</title>
+<style>
+  :root {
+    --bg: #101216;
+    --panel: #171a20;
+    --term: #0b0d11;
+    --border: #2a2f3a;
+    --text: #d6dae2;
+    --muted: #8b93a3;
+    --accent: #7aa2f7;
+    --good: #9ece6a;
+    --warn: #e0af68;
+    --bad: #f7768e;
+    --dim: #565f73;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 3rem 1.5rem 6rem;
+  }
+  main { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 1.7rem; margin: 0 0 .25rem; }
+  h1 code, h2 code, p code, li code, td code {
+    font-family: var(--mono); font-size: .9em;
+    background: #ffffff12; padding: .1em .35em; border-radius: 4px;
+  }
+  .sub { color: var(--muted); margin: 0 0 .75rem; }
+  .sub a { color: var(--accent); }
+  .scene {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.5rem 1.75rem; margin: 2rem 0;
+  }
+  .scene h2 { margin: 0 0 .25rem; font-size: 1.15rem; }
+  .scene h2 .num {
+    display: inline-block; min-width: 1.7em; text-align: center;
+    background: var(--accent); color: #0b0d11; border-radius: 6px;
+    font-family: var(--mono); font-size: .8em; padding: .1em .2em;
+    margin-right: .55em; vertical-align: 2px;
+  }
+  .scene > p { color: var(--text); margin: .5rem 0 1rem; }
+  .scene .note { color: var(--muted); font-size: .9rem; margin-top: 1rem; }
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 800px) { .duo { grid-template-columns: 1fr; } }
+  .term {
+    background: var(--term); border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden; min-width: 0;
+  }
+  .term .bar {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .45rem .8rem; border-bottom: 1px solid var(--border);
+    color: var(--muted); font-family: var(--mono); font-size: .75rem;
+  }
+  .term .bar::before {
+    content: ""; width: .65rem; height: .65rem; border-radius: 50%;
+    background: var(--dim); box-shadow: 1.05rem 0 0 var(--dim), 2.1rem 0 0 var(--dim);
+    margin-right: 1.9rem;
+  }
+  .term pre {
+    margin: 0; padding: .9rem 1rem; font-family: var(--mono);
+    font-size: .8rem; line-height: 1.55; overflow-x: auto; color: var(--text);
+  }
+  .k { color: var(--accent); }        /* keys, commands */
+  .g { color: var(--good); }          /* success, additions */
+  .w { color: var(--warn); }          /* prompts, highlights */
+  .b { color: var(--bad); }           /* errors */
+  .d { color: var(--dim); }           /* chrome, line numbers */
+  .m { color: var(--muted); }         /* secondary text */
+  .sel { background: #7aa2f733; }     /* visual selection */
+  kbd {
+    font-family: var(--mono); font-size: .8em; color: var(--text);
+    background: #ffffff14; border: 1px solid var(--border);
+    border-bottom-width: 2px; border-radius: 5px; padding: .05em .4em;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  .guarantees li { margin: .35rem 0; }
+  .arrow { text-align: center; color: var(--dim); font-family: var(--mono); margin: .35rem 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sending code from Neovim to pi — the expected workflow</h1>
+  <p class="sub">
+    User-perspective storyboard for <code>pi.nvim</code> + <code>pi-nvim-bridge</code>. Status: planning.
+    Companion specs: <a href="pi-nvim-bridge.md">pi-nvim-bridge.md</a> · <a href="pi-nvim-plugin.md">pi-nvim-plugin.md</a>.
+  </p>
+  <p class="sub">
+    The one-breath model: <em>pi writes a file saying where it listens; nvim reads it, connects,
+    and pastes your selection into pi's input; you decide in pi what to do with it.</em>
+  </p>
+
+  <section class="scene">
+    <h2><span class="num">0</span>One-time setup</h2>
+    <p>Install the extension once, add the plugin to your lazy spec, bind two keys. No config required.</p>
+    <div class="duo">
+      <div class="term"><div class="bar">shell</div>
+<pre><span class="d">$</span> pi install npm:pi-nvim-bridge
+<span class="g">✓ installed pi-nvim-bridge</span></pre></div>
+      <div class="term"><div class="bar">lazy spec</div>
+<pre>{
+  <span class="w">"mattleong/pi.nvim"</span>,
+  keys = {
+    { <span class="k">"&lt;leader&gt;ps"</span>, mode = { "n", "x" } },
+    { <span class="k">"&lt;leader&gt;pr"</span>, mode = { "n", "x" } },
+  },
+  opts = {},
+}</pre></div>
+    </div>
+    <p class="note">From now on, every pi you launch advertises itself in a private discovery file
+    (<code>&lt;agentDir&gt;/nvim-bridge-v1/&lt;pid&gt;.json</code>, 0600) and cleans it up on exit. You never touch these.</p>
+  </section>
+
+  <section class="scene">
+    <h2><span class="num">1</span>The everyday send</h2>
+    <p>Visually select code, hit <kbd>&lt;leader&gt;ps</kbd>, optionally type a note. The snippet lands
+    in pi's <em>input editor</em> — staged, not sent. You finish the thought in pi.</p>
+    <div class="duo">
+      <div class="term"><div class="bar">nvim — src/boundary/host-listener.ts</div>
+<pre><span class="d">41</span>  const server = net.createServer((socket) =&gt; {
+<span class="d">42</span><span class="sel">    socket.on("data", (chunk) =&gt; {</span>
+<span class="d">43</span><span class="sel">      parser.push(chunk)</span>
+<span class="d">44</span><span class="sel">    })</span>
+<span class="d">45</span>  })
+<span class="d">──────────────────────────────────────</span>
+<span class="w">Annotation (empty for none):</span> why does this leak the socket?
+<span class="g">→ pi: src/boundary/host-listener.ts:42-44</span></pre></div>
+      <div class="term"><div class="bar">pi — input editor (staged, not submitted)</div>
+<pre><span class="d">┌─ &gt; ────────────────────────────────┐</span>
+why does this leak the socket?
+
+src/boundary/host-listener.ts:42-44
+<span class="d">```typescript</span>
+    socket.on("data", (chunk) =&gt; {
+      parser.push(chunk)
+    })
+<span class="d">```</span>
+<span class="w">▌</span>  <span class="m">← cursor; type more or submit</span>
+<span class="d">└────────────────────────────────────┘</span></pre></div>
+    </div>
+    <p class="note">Nothing is submitted for you. Press <kbd>Enter</kbd> in pi to send it as a prompt —
+    or, if the agent is mid-turn, pi's own steer / follow-up handling applies, exactly as if you had typed it.
+    An unsaved buffer adds an <code>(unsaved changes)</code> badge to the reference line.</p>
+  </section>
+
+  <section class="scene">
+    <h2><span class="num">2</span>References — point without pasting</h2>
+    <p>For a big region, don't inline 200 lines: <kbd>&lt;leader&gt;pr</kbd> sends just the location.
+    pi reads the file itself when it needs to.</p>
+    <div class="duo">
+      <div class="term"><div class="bar">nvim</div>
+<pre><span class="d">:'&lt;,'&gt;</span><span class="k">PiRef</span>
+<span class="w">Annotation (empty for none):</span> this whole parser feels overgrown
+<span class="g">→ pi: src/parser.ts:1-214</span></pre></div>
+      <div class="term"><div class="bar">pi — input editor</div>
+<pre><span class="d">┌─ &gt; ────────────────────────────────┐</span>
+this whole parser feels overgrown
+
+src/parser.ts:1-214
+<span class="w">▌</span>
+<span class="d">└────────────────────────────────────┘</span></pre></div>
+    </div>
+  </section>
+
+  <section class="scene">
+    <h2><span class="num">3</span>Batching — stack, then ask once</h2>
+    <p>Sends accumulate in pi's input (each paste appends). Fire from three places, switch to pi,
+    write one question above the pile, submit. No tray UI, no special mode — it's just an editor.</p>
+    <div class="duo">
+      <div class="term"><div class="bar">nvim — three sends, no annotations</div>
+<pre><span class="g">→ pi: src/protocol.ts:12-30</span>
+<span class="g">→ pi: src/client.lua:44-61</span>
+<span class="g">→ pi: src/boundary/host-listener.ts:88-102</span></pre></div>
+      <div class="term"><div class="bar">pi — input editor</div>
+<pre><span class="d">┌─ &gt; ────────────────────────────────┐</span>
+<span class="w">these three must agree on framing —
+do they?▌</span>
+src/protocol.ts:12-30
+<span class="d">```typescript</span> <span class="m">…</span> <span class="d">```</span>
+src/client.lua:44-61
+<span class="d">```lua</span> <span class="m">…</span> <span class="d">```</span>
+src/boundary/host-listener.ts:88-102
+<span class="d">```typescript</span> <span class="m">…</span> <span class="d">```</span>
+<span class="d">└────────────────────────────────────┘</span></pre></div>
+    </div>
+  </section>
+
+  <section class="scene">
+    <h2><span class="num">4</span>Several repos — routing is automatic</h2>
+    <p>A pi per repo, one nvim with buffers from both. The buffer's path decides: whichever pi's
+    cwd contains the file gets the snippet. No prompt, ever.</p>
+    <div class="duo">
+      <div class="term"><div class="bar">nvim</div>
+<pre><span class="m">buffer:</span> ~/dev/cosmic-pi/src/app.ts
+<span class="k">&lt;leader&gt;ps</span>  <span class="g">→ pi: src/app.ts:10-18</span>   <span class="m">(cosmic-pi session)</span>
+
+<span class="m">buffer:</span> ~/dev/CosmicNvim/lua/init.lua
+<span class="k">&lt;leader&gt;ps</span>  <span class="g">→ pi: lua/init.lua:3-9</span>   <span class="m">(CosmicNvim session)</span></pre></div>
+      <div class="term"><div class="bar">discovery (what nvim saw)</div>
+<pre><span class="d">nvim-bridge-v1/</span>
+  <span class="m">41210.json</span>  cwd=<span class="w">~/dev/cosmic-pi</span>
+  <span class="m">41984.json</span>  cwd=<span class="w">~/dev/CosmicNvim</span>
+
+<span class="m">match: longest cwd containing the
+buffer path → unambiguous → silent</span></pre></div>
+    </div>
+  </section>
+
+  <section class="scene">
+    <h2><span class="num">5</span>Several pis on one repo — pick once, pinned</h2>
+    <p>Two pi sessions in the same checkout: the first send asks which one, labeled by pi's session
+    name. The choice is pinned for that project — every later send is silent. No pane-position guessing.</p>
+    <div class="duo">
+      <div class="term"><div class="bar">nvim — first send only</div>
+<pre><span class="w">Send to which pi session?</span>
+<span class="k">1.</span> refactor-parser  <span class="m">· ~/dev/cosmic-pi</span>
+<span class="k">2.</span> fix-flaky-tests  <span class="m">· ~/dev/cosmic-pi</span>
+<span class="d">Type number and &lt;Enter&gt; or click:</span> 1
+<span class="g">→ pi: src/parser.ts:88-95</span></pre></div>
+      <div class="term"><div class="bar">nvim — every send after</div>
+<pre><span class="k">&lt;leader&gt;ps</span>
+<span class="g">→ pi: src/parser.ts:120-131</span>
+<span class="m">(pinned: refactor-parser)</span>
+
+<span class="m">switch deliberately any time:</span>
+<span class="d">:</span><span class="k">PiTarget</span>   <span class="m">re-pick &amp; pin</span>
+<span class="d">:</span><span class="k">PiTarget!</span>  <span class="m">clear the pin</span></pre></div>
+    </div>
+  </section>
+
+  <section class="scene">
+    <h2><span class="num">6</span>Worktree buffer, pi elsewhere — fallback, not a dead end</h2>
+    <p>Editing in a worktree while pi runs in another checkout means no cwd matches. Instead of an
+    error, you get the picker over all live sessions — because sending across checkouts is usually
+    intentional. Pinned afterward like any other choice.</p>
+    <div class="duo">
+      <div class="term"><div class="bar">nvim — buffer in ~/.t3/worktrees/cosmic-pi/…</div>
+<pre><span class="w">No session matches this path. Send to:</span>
+<span class="k">1.</span> main-review   <span class="m">· ~/dev/cosmic-pi</span>
+<span class="k">2.</span> nvim-hacking  <span class="m">· ~/dev/CosmicNvim</span>
+<span class="d">Type number and &lt;Enter&gt; or click:</span> 1
+<span class="g">→ pi: /Users/…/worktrees/cosmic-pi/src/app.ts:5-9</span></pre></div>
+      <div class="term"><div class="bar">pi — input editor</div>
+<pre><span class="d">┌─ &gt; ────────────────────────────────┐</span>
+/Users/…/worktrees/cosmic-pi/src/app.ts:5-9
+<span class="d">```typescript</span>
+<span class="m">…</span>
+<span class="d">```</span>
+<span class="m">(path outside pi's cwd stays absolute)</span>
+<span class="d">└────────────────────────────────────┘</span></pre></div>
+    </div>
+  </section>
+
+  <section class="scene">
+    <h2><span class="num">7</span>When it can't deliver, it says so</h2>
+    <p>Every failure is a one-line notify in nvim; pi's UI is never touched by failures. Stale state
+    heals itself — a dead session's refused connection drops the pin and triggers one re-scan.</p>
+    <table>
+      <tr><th>You did</th><th>nvim says</th></tr>
+      <tr><td>Sent with no pi running</td><td><code class="b">pi.nvim: no pi session running</code></td></tr>
+      <tr><td>Sent after pi restarted</td><td>reconnects via re-scan; or <code class="b">pi.nvim: pi session unreachable — is it still running?</code></td></tr>
+      <tr><td>Updated one side only</td><td><code class="b">pi.nvim: protocol mismatch — update pi.nvim or pi-nvim-bridge</code></td></tr>
+      <tr><td>Targeted a headless pi</td><td><code class="b">pi.nvim: target pi session has no interactive UI</code></td></tr>
+      <tr><td>Selected &gt; 512&nbsp;KB</td><td><code class="b">selection too large — send a reference instead (:PiRef)</code></td></tr>
+      <tr><td>Wondered why it's broken</td><td><code class="k">:checkhealth pi</code> — discovery dir, live candidates, protocol version</td></tr>
+    </table>
+  </section>
+
+  <section class="scene">
+    <h2><span class="num">8</span>What never happens</h2>
+    <ul class="guarantees">
+      <li>Your prompt is never <strong>submitted for you</strong> — staging only; queue/steer decisions stay in pi.</li>
+      <li>A send never <strong>interrupts a running turn</strong> — it can't; it only edits the input.</li>
+      <li>pi's UI shows <strong>no notifications</strong> from the bridge — the paste itself is the feedback; failures surface only in nvim.</li>
+      <li>The target is never <strong>guessed from window layout</strong> — ambiguity is asked about once, then pinned; works identically under Herdr, tmux, or bare terminals.</li>
+      <li>Nothing listens beyond <strong>loopback</strong>, and every request carries a per-process token readable only by your user.</li>
+      <li>nvim never <strong>deletes or edits</strong> pi's discovery files — pi owns their lifecycle.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
