@@ -4,7 +4,12 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { JsonDocumentStore, type JsonDocumentModification, type JsonObject } from "pi-cosmic-core";
+import {
+  JsonDocumentStore,
+  makeConfigDocumentErrorFactory,
+  type JsonDocumentModification,
+  type JsonObject,
+} from "pi-cosmic-core";
 import type { AdvisorPlatform } from "../boundary/executor.ts";
 import { getAdvisorConfigPath, normalizeAdvisorConfig } from "./options.ts";
 import {
@@ -14,12 +19,7 @@ import {
   type ResolvedAdvisorConfig,
 } from "./schema.ts";
 
-const mapConfigError = (operation: string, path: string) => () =>
-  new AdvisorConfigError({
-    operation,
-    path,
-    message: `Unable to ${operation} Advisor configuration.`,
-  });
+const mapConfigError = makeConfigDocumentErrorFactory(AdvisorConfigError, "Advisor");
 
 export const readRawAdvisorConfigEffect = Effect.fn("AdvisorConfig.readRaw")(function* (
   path = getAdvisorConfigPath(),

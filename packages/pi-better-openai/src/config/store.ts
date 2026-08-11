@@ -1,8 +1,10 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Number from "effect/Number";
 import * as Schema from "effect/Schema";
 import {
   decodeTolerantFields,
+  makeConfigDocumentErrorFactory,
   modifyJsonObject,
   readConfigOrWarn,
   readOptionalJsonObject,
@@ -34,12 +36,7 @@ export class OpenAIConfigError extends Schema.TaggedErrorClass<OpenAIConfigError
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
 
-const mapError = (operation: string, path: string) => () =>
-  new OpenAIConfigError({
-    operation,
-    path,
-    message: `Unable to ${operation} Better OpenAI configuration.`,
-  });
+const mapError = makeConfigDocumentErrorFactory(OpenAIConfigError, "Better OpenAI");
 
 export const configPaths = Effect.fn("OpenAIConfig.configPaths")(function* (
   cwd: string,
@@ -57,8 +54,6 @@ export const readRawConfig = Effect.fn("OpenAIConfig.readRawConfig")(function* (
 
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
-const clamp = (value: number, minimum: number, maximum: number) =>
-  Math.max(minimum, Math.min(maximum, value));
 
 /** Tolerant field-level wire decode: one malformed field never discards valid siblings. */
 function decodeConfig(value: unknown): ConfigFile {
@@ -151,12 +146,11 @@ function resolveConfigFiles(
     desiredActive,
     usage: {
       enabled: project?.usage?.enabled ?? global?.usage?.enabled ?? DEFAULT_USAGE_CONFIG.enabled,
-      refreshIntervalMs: clamp(
+      refreshIntervalMs: Number.clamp(
         project?.usage?.refreshIntervalMs ??
           global?.usage?.refreshIntervalMs ??
           DEFAULT_USAGE_CONFIG.refreshIntervalMs,
-        15_000,
-        10 * 60_000,
+        { minimum: 15_000, maximum: 10 * 60_000 },
       ),
       showOnlyOnSubscriptionModels:
         project?.usage?.showOnlyOnSubscriptionModels ??
@@ -190,10 +184,9 @@ function resolveConfigFiles(
         project?.image?.outputFormat ??
         global?.image?.outputFormat ??
         DEFAULT_IMAGE_CONFIG.outputFormat,
-      timeoutMs: clamp(
+      timeoutMs: Number.clamp(
         project?.image?.timeoutMs ?? global?.image?.timeoutMs ?? DEFAULT_IMAGE_CONFIG.timeoutMs,
-        30_000,
-        5 * 60_000,
+        { minimum: 30_000, maximum: 5 * 60_000 },
       ),
     },
   };
@@ -256,8 +249,13 @@ export const resolveConfig = Effect.fn("OpenAIConfig.resolveConfig")(function* (
     globalExists = true;
   }
   const warning = "Unable to read a Better OpenAI configuration document.";
-  const project = yield* readConfigOrWarn(paths.project, projectExists, readConfig, warning);
-  const global = yield* readConfigOrWarn(paths.global, globalExists, readConfig, warning);
+  const [project, global] = yield* Effect.all(
+    [
+      readConfigOrWarn(paths.project, projectExists, readConfig, warning),
+      readConfigOrWarn(paths.global, globalExists, readConfig, warning),
+    ] as const,
+    { concurrency: 2 },
+  );
   return resolveConfigFiles(
     {
       configPath: projectExists ? paths.project : paths.global,

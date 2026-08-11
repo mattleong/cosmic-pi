@@ -57,6 +57,16 @@ export function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value));
 }
 
+/** Convert a finite used-percent value into the clamped remaining percent. */
+export function usedToLeftPercent(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? clampPercent(100 - value) : null;
+}
+
+/** Format an epoch-millis timestamp for diagnostic output, or "never" when absent. */
+export function formatTimestampOrNever(value: number | undefined): string {
+  return value === undefined ? "never" : DateTime.formatLocal(DateTime.makeUnsafe(value));
+}
+
 /** Format a remaining-percent value for subscription status lines. */
 export function formatPercent(value: number | null): string {
   return typeof value === "number" && Number.isFinite(value)

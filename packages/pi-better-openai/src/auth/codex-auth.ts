@@ -119,17 +119,22 @@ export const getCodexCredentialsResult = Effect.fn("CodexAuth.getCredentialsResu
   authPath: string,
   ctx: Pick<ExtensionContext, "modelRegistry">,
 ) {
-  const file = yield* readCodexAuthResult(authPath).pipe(
-    Effect.catch((error) => Effect.succeed(unavailable(error.operation, error.message))),
+  const [file, registryRaw] = yield* Effect.all(
+    [
+      readCodexAuthResult(authPath).pipe(
+        Effect.catch((error) => Effect.succeed(unavailable(error.operation, error.message))),
+      ),
+      Effect.tryPromise({
+        try: () => ctx.modelRegistry.getApiKeyForProvider("openai-codex"),
+        catch: () =>
+          new CodexAuthError({
+            operation: "registry",
+            message: "Unable to read openai-codex credentials.",
+          }),
+      }).pipe(Effect.result),
+    ] as const,
+    { concurrency: 2 },
   );
-  const registryRaw = yield* Effect.tryPromise({
-    try: () => ctx.modelRegistry.getApiKeyForProvider("openai-codex"),
-    catch: () =>
-      new CodexAuthError({
-        operation: "registry",
-        message: "Unable to read openai-codex credentials.",
-      }),
-  }).pipe(Effect.result);
   if (registryRaw._tag === "Success") {
     const registry = yield* parseCodexRegistryCredentials(
       typeof registryRaw.success === "string" ? registryRaw.success : undefined,

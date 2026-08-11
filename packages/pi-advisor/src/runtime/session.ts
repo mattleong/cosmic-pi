@@ -4,6 +4,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { snapshotData } from "../domain/safe-data.ts";
 import { isRecord } from "../shared/utils.ts";
 import { AdvisorModelError } from "./client.ts";
@@ -203,9 +204,5 @@ export function isToolCallDelta(value: unknown): value is { delta: string } {
 }
 
 export function isolateCallback(action: () => void): void {
-  try {
-    action();
-  } catch {
-    /* host diagnostics are best-effort and never own cleanup */
-  }
+  invokeHostCallback(action, undefined);
 }

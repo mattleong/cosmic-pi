@@ -4,10 +4,10 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
-  clampPercent,
   formatPercent,
   formatWindowedUsageLine,
   JsonHttpClient,
+  usedToLeftPercent,
 } from "pi-cosmic-core";
 import type { CodexCredentialsWithSource } from "../auth/codex-auth.ts";
 
@@ -57,9 +57,6 @@ export class CodexUsageError extends Schema.TaggedErrorClass<CodexUsageError>()(
   operation: Schema.String,
   message: Schema.String,
 }) {}
-
-const usedToLeftPercent = (value: number | null | undefined): number | null =>
-  typeof value === "number" && Number.isFinite(value) ? clampPercent(100 - value) : null;
 
 const normalizeBucket = (value: unknown): RateLimitBucket | null =>
   Option.getOrUndefined(Schema.decodeUnknownOption(RateLimitBucketSchema)(value)) ?? null;

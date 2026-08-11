@@ -20,6 +20,11 @@ export const safeTextPrefix = (value: string, maximumCodeUnits: number): string 
   return value.slice(0, end);
 };
 
+export const clipWithMarker = (value: string, maximum: number, marker: string): string =>
+  value.length <= maximum
+    ? value
+    : `${safeTextPrefix(value, Math.max(0, maximum - marker.length))}${marker}`;
+
 export const clipUtf8Text = (value: string, maximumBytes: number): string => {
   if (Buffer.byteLength(value, "utf8") <= maximumBytes) return value;
   const marker = "…";

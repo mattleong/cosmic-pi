@@ -3,7 +3,7 @@ import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { animatedRunStateGlyph } from "../ui/run-state.ts";
 import { sanitizeTerminalLine } from "../ui/sanitize.ts";
-import { safeTextPrefix } from "../run/state.ts";
+import { clipWithMarker } from "../run/state.ts";
 import type { SubagentRunCard, SubagentStartEntry } from "./details.ts";
 import { failureRecovery } from "./render-management.ts";
 import { aggregateRunUsage, renderResponsiveRunRows } from "./render-run-rows.ts";
@@ -20,12 +20,7 @@ export const renderStartFailures = (
       const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
       const summary = `${theme.fg("error", `× ${name}`)} · ${theme.fg("error", `failed to start${code}`)}`;
       const raw = sanitizeTerminalLine(failure.message);
-      const maximum = expanded ? 2_048 : 240;
-      const marker = "… [truncated]";
-      const detail =
-        raw.length <= maximum
-          ? raw
-          : `${safeTextPrefix(raw, Math.max(0, maximum - marker.length))}${marker}`;
+      const detail = clipWithMarker(raw, expanded ? 2_048 : 240, "… [truncated]");
       const recovery = failureRecovery(failure.code, failure.message, "start");
       return `${summary}\n${theme.fg("dim", detail)}\n${theme.fg("accent", `Next: ${recovery}`)}`;
     })

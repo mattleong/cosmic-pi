@@ -3,7 +3,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
-import { freezeSnapshot } from "pi-cosmic-core";
 import type { BackendStartupState } from "../backend/model.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import type {
@@ -174,12 +173,18 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     revision,
     runs: sortRuns([...records.values()].map((record) => snapshotView(record.view))),
   });
+  // Each run view is already deeply frozen by snapshotView, so only the fresh
+  // top-level container and array need freezing before publication.
+  const frozenProjection = (): SubagentProjection => {
+    const projection = currentProjection();
+    return Object.freeze({ revision: projection.revision, runs: Object.freeze(projection.runs) });
+  };
   const publish = () => {
     revision += 1;
     for (const waiter of revisionWaiters) Deferred.doneUnsafe(waiter, Effect.void);
     revisionWaiters.clear();
     try {
-      options.publish?.(freezeSnapshot(currentProjection()));
+      options.publish?.(frozenProjection());
     } catch {
       // Host projection delivery cannot own the fleet lifecycle.
     }
@@ -326,9 +331,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     sendPeerNotices: (changedId) => sendPeerNotices(changedId),
   });
 
-  const list = withLock(
-    Effect.sync(() => sortRuns([...records.values()].map((record) => snapshotView(record.view)))),
-  );
+  const list = withLock(Effect.sync(() => currentProjection().runs));
   const status: SubagentServiceShape["status"] = (id) =>
     observations
       .withStatusObservations([id], ({ observations: selected }) => {
@@ -380,7 +383,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     settle,
   });
 
-  const projection = withLock(Effect.sync(() => freezeSnapshot(currentProjection())));
+  const projection = withLock(Effect.sync(() => frozenProjection()));
 
   const service: SubagentServiceShape = {
     start,

@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { captureHostSignal, invokeHostCallback } from "pi-cosmic-core";
 
 export class OpenAIHostUiError extends Schema.TaggedErrorClass<OpenAIHostUiError>()(
   "OpenAIHostUiError",
@@ -30,18 +31,11 @@ export const ignoreHostUi = (operation: string, callback: () => unknown) =>
 
 /** Best-effort adapter for Pi callbacks that cannot enter the session runtime. */
 export function safeHostUi(callback: () => unknown): void {
-  try {
-    callback();
-  } catch {
-    // Host UI failures never replace the application outcome being reported.
-  }
+  invokeHostCallback(callback, undefined);
 }
 
 /** Materializes Pi's dynamic cancellation signal without allowing a host getter to defect. */
 export function safeHostSignal(ctx: ExtensionContext): AbortSignal | undefined {
-  try {
-    return ctx.signal;
-  } catch {
-    return undefined;
-  }
+  const captured = captureHostSignal(ctx);
+  return captured._tag === "Captured" ? captured.signal : undefined;
 }

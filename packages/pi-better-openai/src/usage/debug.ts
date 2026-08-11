@@ -1,7 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as DateTime from "effect/DateTime";
 import * as MutableRef from "effect/MutableRef";
-import { maskIdentifier } from "pi-cosmic-core";
+import { formatTimestampOrNever, maskIdentifier } from "pi-cosmic-core";
 import { currentModelKey } from "../fast/controller.ts";
 import { USAGE_URL } from "./format.ts";
 import { isOpenAISubscriptionModel, type OpenAIProjection } from "./projection.ts";
@@ -12,8 +11,7 @@ export function formatDebug(
 ): string {
   const state = MutableRef.get(projection);
   const cfg = state.config;
-  const time = (value: number | undefined) =>
-    value === undefined ? "never" : DateTime.formatLocal(DateTime.makeUnsafe(value));
+  const time = formatTimestampOrNever;
   return [
     `Usage enabled: ${cfg?.usage.enabled ?? false}`,
     `Current model: ${currentModelKey(ctx)}`,

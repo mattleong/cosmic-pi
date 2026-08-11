@@ -197,15 +197,15 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
           ),
           fetch: (request) =>
             Effect.gen(function* () {
+              const notify = request.notify === true;
               const ctx = MutableRef.get(context);
               const current = yield* state.getState;
               const cfg = current.config;
               if (!cfg) return { _tag: "Skipped" } as const;
               const now = yield* Clock.currentTimeMillis;
-              if (!cfg.usage.enabled)
-                return { _tag: "Disabled", notify: request.notify === true } as const;
+              if (!cfg.usage.enabled) return { _tag: "Disabled", notify } as const;
               if (!(yield* subscriptionEligibility(ctx, cfg)))
-                return { _tag: "Hidden", notify: request.notify === true } as const;
+                return { _tag: "Hidden", notify } as const;
               if (
                 !request.force &&
                 !request.notify &&
@@ -223,22 +223,12 @@ export class XaiUsageService extends Context.Service<XaiUsageService, XaiUsageSe
                     ? result.failure.message
                     : "xAI usage request timed out.",
                 );
-                return {
-                  _tag: "Failure",
-                  notify: request.notify === true,
-                  fetchedAt: now,
-                  message,
-                } as const;
+                return { _tag: "Failure", notify, fetchedAt: now, message } as const;
               }
-              if (!result.success)
-                return {
-                  _tag: "Missing",
-                  notify: request.notify === true,
-                  fetchedAt: now,
-                } as const;
+              if (!result.success) return { _tag: "Missing", notify, fetchedAt: now } as const;
               return {
                 _tag: "Success",
-                notify: request.notify === true,
+                notify,
                 fetchedAt: now,
                 snapshot: result.success.snapshot,
                 authFound: true,

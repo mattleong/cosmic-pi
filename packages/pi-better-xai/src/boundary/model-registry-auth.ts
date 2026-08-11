@@ -21,13 +21,7 @@ export interface ModelRegistryAuthShape {
 }
 
 /** Synchronous Pi-renderer boundary. Host failures fail closed and never escape rendering. */
-export function isUsingOAuthAtHostBoundary(registry: Registry, model: Model): boolean {
-  try {
-    return registry.isUsingOAuth(model);
-  } catch {
-    return false;
-  }
-}
+export { isUsingOAuthAtHostBoundary } from "pi-cosmic-core";
 
 /** Named Pi boundary for the model registry's Promise-returning credential lookup. */
 export class ModelRegistryAuth extends Context.Service<ModelRegistryAuth, ModelRegistryAuthShape>()(

@@ -144,14 +144,6 @@ export function sendCorrection(
   review: AdvisorReview,
   triggerTurn: boolean,
 ): AdvisorGuidancePublishResult {
-  return publishAdvisorGuidance(pi, review, triggerTurn);
-}
-
-function publishAdvisorGuidance(
-  pi: ExtensionAPI,
-  review: AdvisorReview,
-  triggerTurn: boolean,
-): AdvisorGuidancePublishResult {
   const published = appendAdvisorReviewCardAtHostBoundary(pi, sanitizeAdvisorReview(review));
   return {
     ...published,

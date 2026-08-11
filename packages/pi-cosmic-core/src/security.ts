@@ -100,6 +100,10 @@ export function stripTerminalControls(value: string): string {
   return result;
 }
 
+/** Strip terminal controls and collapse whitespace into a single trimmed line. */
+export const sanitizeTerminalLine = (text: string): string =>
+  stripTerminalControls(text).replace(/\s+/g, " ").trim();
+
 const redactSensitiveText = (message: string, extraPatterns: readonly RegExp[] = []): string => {
   let redacted = stripAnsi(message)
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")

@@ -46,7 +46,7 @@ import {
 } from "./protocol/protocol.ts";
 import { registerSettingsCommand } from "./settings/controller.ts";
 import { createFooterInstallation } from "./footer/installation.ts";
-import { WorkingTimerService } from "./working/service.ts";
+import { WorkingTimerService, type WorkingTimerServiceShape } from "./working/service.ts";
 
 const isProjectTrusted = (ctx: ExtensionContext): boolean => {
   try {
@@ -137,6 +137,7 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
     return read._tag === "Success" ? rememberTotals(read.totals) : lastCompleteTotals;
   };
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
+  let workingTimer: WorkingTimerServiceShape | undefined;
   let subscriptions: Array<() => void> = [];
 
   const config = (): ResolvedCosmicUiConfig =>
@@ -175,7 +176,7 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
         yield* CosmicUiService;
         yield* FooterRegistryService;
         yield* FooterProtocolHost;
-        yield* WorkingTimerService;
+        workingTimer = yield* WorkingTimerService;
       }),
     onActivated: ({ ctx, context, signal }) => {
       currentContext = context;
@@ -188,6 +189,7 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
     onDeactivated: ({ context, releaseSignal }) => {
       releaseSignal();
       if (currentContext === context) currentContext = undefined;
+      workingTimer = undefined;
       footerInstallation.uninstall();
     },
     onStartFailure: ({ ctx, releaseSignal }) => {
@@ -457,10 +459,7 @@ export function registerCosmicUiApplication(pi: ExtensionAPI): void {
         update.type !== "toolcall_delta")
     )
       return;
-    forkFrom(
-      WorkingTimerService.use((timer) => timer.recordOutputCharacters(update.delta.length)),
-      ctx,
-    );
+    workingTimer?.noteOutputCharacters(update.delta.length);
   });
   pi.on("message_end", (event, ctx) => {
     invalidateContextUsage(event, ctx);

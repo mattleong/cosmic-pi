@@ -55,6 +55,9 @@ export function createFooterController(deps: {
   let sessionNameCached = false;
   let cachedSessionNameLeafId: string | null | undefined;
   let cachedSessionName: string | undefined;
+  let oauthCached = false;
+  let cachedOAuth = false;
+  let cachedOAuthModel: ExtensionContext["model"];
   let currentContext: ExtensionContext | undefined;
 
   function resetFooterTotals(): void {
@@ -83,6 +86,20 @@ export function createFooterController(deps: {
     cachedContextUsage = undefined;
     cachedContextLeafId = undefined;
     cachedContextModel = undefined;
+    oauthCached = false;
+    cachedOAuth = false;
+    cachedOAuthModel = undefined;
+  }
+
+  function modelUsingOAuth(ctx: ExtensionContext): boolean {
+    const model = ctx.model;
+    if (!model) return false;
+    if (!oauthCached || model !== cachedOAuthModel) {
+      cachedOAuth = isModelUsingOAuth(ctx, model);
+      cachedOAuthModel = model;
+      oauthCached = true;
+    }
+    return cachedOAuth;
   }
 
   function contextUsage(ctx: ExtensionContext): ReturnType<ExtensionContext["getContextUsage"]> {
@@ -90,14 +107,7 @@ export function createFooterController(deps: {
     const model = ctx.model;
     if (!contextUsageCached || leafId !== cachedContextLeafId || model !== cachedContextModel) {
       const next = ctx.getContextUsage();
-      const materialized = next
-        ? {
-            ...next,
-            contextWindow: next.contextWindow,
-            percent: next.percent,
-          }
-        : undefined;
-      cachedContextUsage = materialized;
+      cachedContextUsage = next ? { ...next } : undefined;
       contextUsageCached = true;
       cachedContextLeafId = leafId;
       cachedContextModel = model;
@@ -197,9 +207,7 @@ export function createFooterController(deps: {
           if (footerTotals.cacheRead) parts.push(`R${formatTokens(footerTotals.cacheRead)}`);
           if (footerTotals.cacheWrite) parts.push(`W${formatTokens(footerTotals.cacheWrite)}`);
 
-          const usingSubscription = renderContext.model
-            ? isModelUsingOAuth(renderContext, renderContext.model)
-            : false;
+          const usingSubscription = modelUsingOAuth(renderContext);
           if (footerTotals.cost || usingSubscription)
             parts.push(`$${footerTotals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
 

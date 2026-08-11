@@ -51,6 +51,7 @@ export const formatWorkingMessage = (
 export interface WorkingTimerServiceShape {
   readonly start: Effect.Effect<void>;
   readonly recordOutputCharacters: (characters: number) => Effect.Effect<void>;
+  readonly noteOutputCharacters: (characters: number) => void;
   readonly pauseOutput: Effect.Effect<void>;
   readonly stop: Effect.Effect<void>;
 }
@@ -64,6 +65,7 @@ export class WorkingTimerService extends Context.Service<
     this,
     Effect.gen(function* () {
       const host = yield* WorkingMessageHost;
+      const clock = yield* Clock.Clock;
       const scope = yield* Effect.scope;
       const state = yield* SynchronizedRef.make<WorkingTimerState>({
         generation: 0,
@@ -72,6 +74,28 @@ export class WorkingTimerService extends Context.Service<
         outputMilliseconds: 0,
         outputCharacters: 0,
         active: false,
+      });
+
+      let pendingOutputCharacters = 0;
+      let pendingOutputFirstAt = 0;
+
+      const applyOutputCharacters = (increment: number, now: number) =>
+        SynchronizedRef.update(state, (current) =>
+          current.active
+            ? {
+                ...current,
+                outputActiveStartedAt: current.outputActiveStartedAt ?? now,
+                outputCharacters: current.outputCharacters + increment,
+              }
+            : current,
+        );
+
+      const drainOutputCharacters = Effect.suspend(() => {
+        if (pendingOutputCharacters === 0) return Effect.void;
+        const increment = pendingOutputCharacters;
+        const firstAt = pendingOutputFirstAt;
+        pendingOutputCharacters = 0;
+        return applyOutputCharacters(increment, firstAt);
       });
 
       const tick = (generation: number): Effect.Effect<boolean> =>
@@ -97,6 +121,7 @@ export class WorkingTimerService extends Context.Service<
 
       const ticker = (generation: number): Effect.Effect<void> =>
         Effect.sleep(UPDATE_INTERVAL_MS).pipe(
+          Effect.andThen(drainOutputCharacters),
           Effect.andThen(tick(generation)),
           Effect.flatMap((active) => (active ? ticker(generation) : Effect.void)),
         );
@@ -121,6 +146,11 @@ export class WorkingTimerService extends Context.Service<
           }),
         ),
       ).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            pendingOutputCharacters = 0;
+          }),
+        ),
         Effect.flatMap((generation) => Effect.forkIn(ticker(generation), scope)),
         Effect.asVoid,
       );
@@ -129,21 +159,19 @@ export class WorkingTimerService extends Context.Service<
         const increment = Math.max(0, Math.floor(characters));
         if (increment === 0) return Effect.void;
         return Clock.currentTimeMillis.pipe(
-          Effect.flatMap((now) =>
-            SynchronizedRef.update(state, (current) =>
-              current.active
-                ? {
-                    ...current,
-                    outputActiveStartedAt: current.outputActiveStartedAt ?? now,
-                    outputCharacters: current.outputCharacters + increment,
-                  }
-                : current,
-            ),
-          ),
+          Effect.flatMap((now) => applyOutputCharacters(increment, now)),
         );
       };
 
-      const pauseOutput = Clock.currentTimeMillis.pipe(
+      const noteOutputCharacters = (characters: number): void => {
+        const increment = Math.max(0, Math.floor(characters));
+        if (increment === 0) return;
+        if (pendingOutputCharacters === 0) pendingOutputFirstAt = clock.currentTimeMillisUnsafe();
+        pendingOutputCharacters += increment;
+      };
+
+      const pauseOutput = drainOutputCharacters.pipe(
+        Effect.andThen(Clock.currentTimeMillis),
         Effect.flatMap((now) =>
           SynchronizedRef.update(state, (current) =>
             current.active && current.outputActiveStartedAt !== undefined
@@ -170,7 +198,13 @@ export class WorkingTimerService extends Context.Service<
       );
 
       yield* Effect.addFinalizer(() => stop);
-      return WorkingTimerService.of({ start, recordOutputCharacters, pauseOutput, stop });
+      return WorkingTimerService.of({
+        start,
+        recordOutputCharacters,
+        noteOutputCharacters,
+        pauseOutput,
+        stop,
+      });
     }),
   );
 }

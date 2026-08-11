@@ -72,6 +72,7 @@ export {
   type ScopedDocumentSelection,
 } from "./src/config/scoped-store.ts";
 export {
+  makeConfigDocumentErrorFactory,
   modifyJsonObject,
   readConfigOrWarn,
   readOptionalJsonObject,
@@ -83,9 +84,15 @@ export {
   captureHostSignal,
   captureSessionHost,
   hasTerminalUI,
+  invokeHostCallback,
   isProjectTrusted,
+  isUsingOAuthAtHostBoundary,
+  notifyAtHostBoundary,
   type CapturedHostSignal,
   type CapturedSessionHost,
+  type HostModelRegistry,
+  type HostNotificationLevel,
+  type HostNotifierContext,
   type HostSessionContext,
   type HostTrustContext,
   type HostUiContext,
@@ -116,12 +123,14 @@ export {
   fileLayer as nodeFilePlatformLayer,
   layer as nodePlatformLayer,
 } from "./src/platform/node.ts";
+export { synchronousNow } from "./src/platform/native-clock.ts";
 export {
   decodeJwtPayloadText,
   maskIdentifier,
   redactDiagnosticValue,
   sanitizeDiagnosticContent,
   sanitizeDiagnosticError,
+  sanitizeTerminalLine,
   stripAnsi,
   stripTerminalControls,
   type DiagnosticSanitizerOptions,
@@ -141,8 +150,10 @@ export {
   formatCompactReset,
   formatPercent,
   formatResetCountdown,
+  formatTimestampOrNever,
   formatTokens,
   formatWindowedUsageLine,
   remainingResetSeconds,
+  usedToLeftPercent,
   type UsageWindowLine,
 } from "./src/subscription-format.ts";

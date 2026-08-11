@@ -27,7 +27,11 @@ import {
   wideListDetailGeometry,
   type ListDetailPane,
 } from "pi-cosmic-ui/manager/list-detail";
-import type { BackgroundJobView, BackgroundTerminalProjection } from "../job/model.ts";
+import type {
+  BackgroundJobView,
+  BackgroundLogEvent,
+  BackgroundTerminalProjection,
+} from "../job/model.ts";
 import { isActiveJobState } from "../job/model.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "./sanitize.ts";
 
@@ -375,6 +379,16 @@ export class ProcessManagerComponent implements Component {
     }));
   }
 
+  private readonly sanitizedLogLines = new WeakMap<BackgroundLogEvent, ReadonlyArray<string>>();
+
+  private logEventLines(event: BackgroundLogEvent): ReadonlyArray<string> {
+    const cached = this.sanitizedLogLines.get(event);
+    if (cached) return cached;
+    const parts = sanitizeTerminalText(event.text).split("\n");
+    this.sanitizedLogLines.set(event, parts);
+    return parts;
+  }
+
   private detailLines(job: BackgroundJobView | undefined): string[] {
     if (!job) return [this.options.theme.fg("dim", "No background jobs.")];
     const presentation = statePresentation(job, Math.floor(this.options.getNow() / 160));
@@ -401,8 +415,7 @@ export class ProcessManagerComponent implements Component {
       );
     for (const event of job.logs) {
       const prefix = event.stream === "stderr" ? this.options.theme.fg("error", "│ ") : "│ ";
-      const parts = sanitizeTerminalText(event.text).split("\n");
-      for (const part of parts) if (part) lines.push(`${prefix}${part}`);
+      for (const part of this.logEventLines(event)) if (part) lines.push(`${prefix}${part}`);
     }
     if (lines.length === (this.showTechnicalDetails ? 5 : 2))
       lines.push(this.options.theme.fg("dim", "(no output)"));
@@ -427,6 +440,29 @@ export class ProcessManagerComponent implements Component {
     ].map((line) => truncateToWidth(line, width, ""));
   }
 
+  private frameLine(line: string, inner: number): string {
+    return `${this.outerBorder("│")}${padListDetailRow(line, inner)}${this.outerBorder("│")}`;
+  }
+
+  private frameToHeight(rows: string[], height: number, inner: number): string[] {
+    while (rows.length < height) rows.push(this.frameLine("", inner));
+    return rows.slice(0, height);
+  }
+
+  private listPane(
+    jobs: ReadonlyArray<BackgroundJobView>,
+    limit: number,
+    width: number,
+  ): string[] {
+    return [
+      this.options.theme.fg(
+        this.pane === "list" ? "accent" : "muted",
+        `${this.pane === "list" ? "› " : ""}Background jobs`,
+      ),
+      ...this.visibleJobs(jobs, limit).map(({ job, index }) => this.jobLine(job, index, width)),
+    ];
+  }
+
   private renderWide(
     width: number,
     height: number,
@@ -438,15 +474,7 @@ export class ProcessManagerComponent implements Component {
       34,
       0.4,
     );
-    const left = [
-      this.options.theme.fg(
-        this.pane === "list" ? "accent" : "muted",
-        `${this.pane === "list" ? "› " : ""}Background jobs`,
-      ),
-      ...this.visibleJobs(jobs, Math.max(1, height - 1)).map(({ job, index }) =>
-        this.jobLine(job, index, leftWidth),
-      ),
-    ];
+    const left = this.listPane(jobs, Math.max(1, height - 1), leftWidth);
     const detail = this.detailWindow(this.detailLines(selected), height, rightWidth);
     return Array.from(
       { length: height },
@@ -465,23 +493,12 @@ export class ProcessManagerComponent implements Component {
   ): string[] {
     const inner = width - 2;
     const listHeight = stackedListHeight(height, jobs.length);
-    const list = [
-      this.options.theme.fg(
-        this.pane === "list" ? "accent" : "muted",
-        `${this.pane === "list" ? "› " : ""}Background jobs`,
-      ),
-      ...this.visibleJobs(jobs, Math.max(1, listHeight - 1)).map(({ job, index }) =>
-        this.jobLine(job, index, inner),
-      ),
-    ];
+    const list = this.listPane(jobs, Math.max(1, listHeight - 1), inner);
     const divider = `${this.outerBorder("├")}${this.innerBorder("─".repeat(inner))}${this.outerBorder("┤")}`;
     const remaining = Math.max(0, height - list.length - 1);
     const detail = this.detailWindow(this.detailLines(selected), remaining, inner);
-    const frame = (line: string) =>
-      `${this.outerBorder("│")}${padListDetailRow(line, inner)}${this.outerBorder("│")}`;
-    const content = [...list.map(frame), divider, ...detail.map(frame)];
-    while (content.length < height) content.push(frame(""));
-    return content.slice(0, height);
+    const frame = (line: string) => this.frameLine(line, inner);
+    return this.frameToHeight([...list.map(frame), divider, ...detail.map(frame)], height, inner);
   }
 
   private renderNarrow(
@@ -501,11 +518,11 @@ export class ProcessManagerComponent implements Component {
       this.detailMaxScroll = 0;
       this.detailLineCount = 0;
     }
-    const frame = (line: string) =>
-      `${this.outerBorder("│")}${padListDetailRow(line, inner)}${this.outerBorder("│")}`;
-    const rendered = lines.slice(0, height).map(frame);
-    while (rendered.length < height) rendered.push(frame(""));
-    return rendered;
+    return this.frameToHeight(
+      lines.map((line) => this.frameLine(line, inner)),
+      height,
+      inner,
+    );
   }
 
   invalidate(): void {}

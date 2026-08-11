@@ -11,7 +11,7 @@ import {
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
-import { safeTextPrefix } from "../run/state.ts";
+import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
@@ -32,6 +32,15 @@ interface RunReportSection {
   readonly kind: "report" | "failure";
   readonly text: string;
 }
+
+const joinTextContent = (
+  content: ReadonlyArray<{ readonly type: string; readonly text?: string }>,
+  separator = "\n",
+): string =>
+  content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text ?? "")
+    .join(separator);
 
 const expandedRunReportSections = (
   runs: ReadonlyArray<SubagentRunCard>,
@@ -74,11 +83,7 @@ const expandedRunReportSections = (
   );
   return candidates.map((section) => {
     if (section.text.length <= perSection) return section;
-    const marker = "\n… [report truncated]";
-    return {
-      ...section,
-      text: `${safeTextPrefix(section.text, perSection - marker.length)}${marker}`,
-    };
+    return { ...section, text: clipWithMarker(section.text, perSection, "\n… [report truncated]") };
   });
 };
 
@@ -413,6 +418,27 @@ const includeContentOmission = (
     : { color: "warning", text: warning };
 };
 
+const recoveredOmittedFallback = (
+  content: ReadonlyArray<{ readonly type: string; readonly text?: string }>,
+  theme: Theme,
+): Component | undefined => {
+  const fallback = boundToolOutput(sanitizeTerminalText(joinTextContent(content)));
+  if (!fallback) return undefined;
+  const container = new Container();
+  container.addChild(
+    new Text(
+      theme.fg(
+        "warning",
+        theme.bold("Recovered omitted output · bounded complete result follows"),
+      ),
+      0,
+      0,
+    ),
+  );
+  container.addChild(new Text(theme.fg("toolOutput", fallback), 2, 0));
+  return container;
+};
+
 export const renderSubagentCall = (name: string, target: string, theme: Theme): Component => {
   const safeTarget = sanitizeTerminalLine(target);
   const clippedTarget =
@@ -447,10 +473,7 @@ export const renderSubagentResult = (
     return renderAwaitProgressComponent(details.cards, details.awaitUntil, theme);
   }
   if (isPartial && details?.action === "start") {
-    const rawProgress = result.content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text ?? "")
-      .join(" ");
+    const rawProgress = joinTextContent(result.content, " ");
     const progress = sanitizeTerminalLine(rawProgress || "Starting subagents…");
     return renderStartProgressComponent(
       progress,
@@ -471,28 +494,7 @@ export const renderSubagentResult = (
     if (expanded) {
       const rendered = renderExpandedStartAwaitResult(details.cards, theme, failures, banner);
       if (!details.contentOmitted) return rendered;
-      const fallback = boundToolOutput(
-        sanitizeTerminalText(
-          result.content
-            .filter((part) => part.type === "text")
-            .map((part) => part.text ?? "")
-            .join("\n"),
-        ),
-      );
-      if (!fallback) return rendered;
-      const container = new Container();
-      container.addChild(
-        new Text(
-          theme.fg(
-            "warning",
-            theme.bold("Recovered omitted output · bounded complete result follows"),
-          ),
-          0,
-          0,
-        ),
-      );
-      container.addChild(new Text(theme.fg("toolOutput", fallback), 2, 0));
-      return container;
+      return recoveredOmittedFallback(result.content, theme) ?? rendered;
     }
     return renderStartAwaitOverviewComponent(details.cards, theme, failures, banner);
   }
@@ -518,37 +520,9 @@ export const renderSubagentResult = (
             ),
     );
     if (!expanded || !compact.contentOmitted) return rendered;
-    const fallback = boundToolOutput(
-      sanitizeTerminalText(
-        result.content
-          .filter((part) => part.type === "text")
-          .map((part) => part.text ?? "")
-          .join("\n"),
-      ),
-    );
-    if (!fallback) return rendered;
-    const container = new Container();
-    container.addChild(
-      new Text(
-        theme.fg(
-          "warning",
-          theme.bold("Recovered omitted output · bounded complete result follows"),
-        ),
-        0,
-        0,
-      ),
-    );
-    container.addChild(new Text(theme.fg("toolOutput", fallback), 2, 0));
-    return container;
+    return recoveredOmittedFallback(result.content, theme) ?? rendered;
   }
-  let text = boundToolOutput(
-    sanitizeTerminalText(
-      result.content
-        .filter((part) => part.type === "text")
-        .map((part) => part.text ?? "")
-        .join("\n"),
-    ),
-  );
+  let text = boundToolOutput(sanitizeTerminalText(joinTextContent(result.content)));
   if (!expanded) {
     const lines = text.split("\n");
     if (lines.length > 12)

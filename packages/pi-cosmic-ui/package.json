@@ -29,6 +29,7 @@
   "type": "module",
   "exports": {
     ".": "./index.ts",
+    "./boundary/host-status": "./src/boundary/host-status.ts",
     "./client": "./src/footer/client.ts",
     "./manager": "./src/manager/chrome.ts",
     "./manager/key-labels": "./src/manager/key-labels.ts",

@@ -39,8 +39,10 @@ export const selectScopedDocument = Effect.fn("ScopedStore.select")(function* (
   paths: ScopedDocumentPaths,
 ) {
   const documents = yield* JsonDocumentStore;
-  const projectExists = yield* documents.exists(paths.project);
-  const globalExists = yield* documents.exists(paths.global);
+  const [projectExists, globalExists] = yield* Effect.all(
+    [documents.exists(paths.project), documents.exists(paths.global)] as const,
+    { concurrency: 2 },
+  );
   return {
     ...paths,
     projectExists,

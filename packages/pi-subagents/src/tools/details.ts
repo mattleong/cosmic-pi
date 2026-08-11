@@ -28,10 +28,10 @@ import {
 
 export const SUBAGENT_CARD_DETAILS_VERSION = 1;
 const CARD_STRING_BUDGET = 36_000;
-const MAX_CARD_MODEL_CHARS = 512;
-const MAX_CARD_PROVENANCE_CHARS = 1_024;
-const MAX_CARD_QUESTION_CHARS = 2_048;
-const MAX_CARD_SKIPS = 8;
+export const MAX_CARD_MODEL_CHARS = 512;
+export const MAX_CARD_PROVENANCE_CHARS = 1_024;
+export const MAX_CARD_QUESTION_CHARS = 2_048;
+export const MAX_CARD_SKIPS = 8;
 
 export interface SubagentRunCard {
   readonly id: string;
@@ -155,7 +155,8 @@ export interface StartAwaitDetailsInput {
   readonly contentOmitted?: boolean | undefined;
 }
 
-const clean = (value: string, maximum: number): string =>
+/** Shared wire sanitizer for versioned card details and their strict renderer decode. */
+export const clean = (value: string, maximum: number): string =>
   safeTextPrefix(stripTerminalControls(value).replaceAll("\u0000", ""), maximum);
 const cleanProfileId = (value: string): string => normalizeProfileId(value) ?? clean(value, 64);
 

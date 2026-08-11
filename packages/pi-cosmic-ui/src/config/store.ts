@@ -8,6 +8,7 @@ import {
   AgentDirectory,
   decodeTolerantFields,
   JsonDocumentStore,
+  makeConfigDocumentErrorFactory,
   scopedDocumentPaths,
   selectScopedDocument,
   type JsonDocumentModification,
@@ -28,12 +29,7 @@ export class CosmicUiConfigError extends Schema.TaggedErrorClass<CosmicUiConfigE
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
 
-const mapError = (operation: string, path: string) => () =>
-  new CosmicUiConfigError({
-    operation,
-    path,
-    message: `Unable to ${operation} Cosmic UI configuration.`,
-  });
+const mapError = makeConfigDocumentErrorFactory(CosmicUiConfigError, "Cosmic UI");
 
 const stringArray = (candidate: unknown): readonly string[] | undefined =>
   Array.isArray(candidate)

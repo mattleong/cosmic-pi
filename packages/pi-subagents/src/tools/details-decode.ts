@@ -1,4 +1,4 @@
-import { freezeSnapshot, stripTerminalControls } from "pi-cosmic-core";
+import { freezeSnapshot } from "pi-cosmic-core";
 import {
   SUBAGENT_EFFORTS,
   SUBAGENT_RUN_STATES,
@@ -12,7 +12,6 @@ import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
   MAX_NAME_CHARS,
-  safeTextPrefix,
   sanitizeName,
   sanitizeOutputText,
 } from "../run/state.ts";
@@ -24,9 +23,14 @@ import {
   type SubagentSelectionSource,
 } from "../profiles/model.ts";
 import {
+  MAX_CARD_MODEL_CHARS,
+  MAX_CARD_PROVENANCE_CHARS,
+  MAX_CARD_QUESTION_CHARS,
+  MAX_CARD_SKIPS,
   SUBAGENT_CARD_DETAILS_VERSION,
   boundedNonNegative,
   boundedUsage,
+  clean,
   makeStartAwaitCardDetails,
   type CompactSubagentToolDetails,
   type CompactToolActionFailure,
@@ -37,14 +41,6 @@ import {
   type SubagentStartAwaitCardDetails,
   type SubagentStartEntry,
 } from "./details.ts";
-
-const MAX_CARD_MODEL_CHARS = 512;
-const MAX_CARD_PROVENANCE_CHARS = 1_024;
-const MAX_CARD_QUESTION_CHARS = 2_048;
-const MAX_CARD_SKIPS = 8;
-
-const clean = (value: string, maximum: number): string =>
-  safeTextPrefix(stripTerminalControls(value).replaceAll("\u0000", ""), maximum);
 
 const RUN_STATES: ReadonlySet<string> = new Set(SUBAGENT_RUN_STATES);
 const EFFORTS: ReadonlySet<string> = new Set(SUBAGENT_EFFORTS);
@@ -326,8 +322,23 @@ const decodeProfiles = (value: unknown): ReadonlyArray<SubagentProfileRouteCard>
   return profiles.length > 0 ? profiles : undefined;
 };
 
-/** Strict current-version renderer boundary for start/await result details. */
+const decodedStartAwaitDetails = new WeakMap<object, SubagentStartAwaitCardDetails | undefined>();
+
+/**
+ * Strict current-version renderer boundary for start/await result details.
+ * Details objects are immutable, so decodes are memoized per object identity.
+ */
 export function decodeStartAwaitCardDetails(
+  value: unknown,
+): SubagentStartAwaitCardDetails | undefined {
+  if (typeof value !== "object" || value === null) return decodeStartAwaitCardDetailsUncached(value);
+  if (decodedStartAwaitDetails.has(value)) return decodedStartAwaitDetails.get(value);
+  const decoded = decodeStartAwaitCardDetailsUncached(value);
+  decodedStartAwaitDetails.set(value, decoded);
+  return decoded;
+}
+
+function decodeStartAwaitCardDetailsUncached(
   value: unknown,
 ): SubagentStartAwaitCardDetails | undefined {
   const record = recordOf(value);

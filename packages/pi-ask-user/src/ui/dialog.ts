@@ -31,6 +31,8 @@ import { type DialogInputMode, renderQuestionnaireView } from "./dialog-render.t
 
 const CHOICE_SHORTCUTS = ["1", "2", "3", "4"] as const;
 
+const DIALOG_SHORTCUTS = new Set(["b", "n"]);
+
 export interface AskUserDialogOptions {
   readonly tui: TUI;
   readonly theme: Theme;
@@ -238,7 +240,7 @@ export class AskUserDialog implements Focusable {
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding,
-      reservedKeys: new Set(["b", "n"]),
+      reservedKeys: DIALOG_SHORTCUTS,
     });
     if (resolution?._tag === "Shortcut") {
       if (resolution.key === "b") this.collapse();

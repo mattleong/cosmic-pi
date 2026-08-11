@@ -1,14 +1,10 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { formatTokens } from "pi-cosmic-core";
+import { clampPercent, formatTokens } from "pi-cosmic-core";
 import type {
   CosmicFooterPlacement,
   CosmicFooterTextContribution,
   CosmicFooterTheme,
 } from "../protocol/protocol.ts";
-
-function clampPercent(percent: number): number {
-  return Math.max(0, Math.min(100, percent));
-}
 
 type ProgressTone = "success" | "warning" | "error";
 

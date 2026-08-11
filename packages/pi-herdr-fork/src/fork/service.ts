@@ -298,52 +298,48 @@ export const makeHerdrForkService = (
 
       yield* waitForAvailableShell(runner, forkPane.pane_id, readinessDelay);
 
+      const retainForkPane = <A>(
+        effect: Effect.Effect<A, HerdrForkError>,
+      ): Effect.Effect<A, HerdrForkError> =>
+        effect.pipe(
+          Effect.mapError((failure) =>
+            retainPane(
+              failure,
+              forkPane.pane_id,
+              `Pane ${forkPane.pane_id} was retained for manual inspection.`,
+            ),
+          ),
+        );
+
       const agentName = makeAgentName(sessionId, forkPane.pane_id);
       const displayName = parentForkDisplayName(input.cwd);
-      const startedOutput = yield* command(
-        runner,
-        [
-          "agent",
-          "start",
-          agentName,
-          "--kind",
-          "pi",
-          "--pane",
-          forkPane.pane_id,
-          "--timeout",
-          "60000",
-          "--",
-          "--fork",
-          sessionFile,
-          "--name",
-          displayName,
-        ],
-        "start forked Pi",
-        true,
-        START_TIMEOUT_MILLIS,
-        ["agent_pane_busy"],
-      ).pipe(
-        Effect.mapError((failure) =>
-          retainPane(
-            failure,
+      const startedOutput = yield* retainForkPane(
+        command(
+          runner,
+          [
+            "agent",
+            "start",
+            agentName,
+            "--kind",
+            "pi",
+            "--pane",
             forkPane.pane_id,
-            `Pane ${forkPane.pane_id} was retained for manual inspection.`,
-          ),
+            "--timeout",
+            "60000",
+            "--",
+            "--fork",
+            sessionFile,
+            "--name",
+            displayName,
+          ],
+          "start forked Pi",
+          true,
+          START_TIMEOUT_MILLIS,
+          ["agent_pane_busy"],
         ),
       );
-      const { result: startedResult } = yield* decodeJson(
-        AgentEnvelopeSchema,
-        startedOutput.stdout,
-        "start forked Pi",
-        true,
-      ).pipe(
-        Effect.mapError((failure) =>
-          retainPane(
-            failure,
-            forkPane.pane_id,
-            `Pane ${forkPane.pane_id} was retained for manual inspection.`,
-          ),
-        ),
+      const { result: startedResult } = yield* retainForkPane(
+        decodeJson(AgentEnvelopeSchema, startedOutput.stdout, "start forked Pi", true),
       );
       const childSession = yield* validateStartedAgent(
         startedResult.agent,

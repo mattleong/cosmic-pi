@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import {
   AgentDirectory,
   decodeTolerantFields,
+  makeConfigDocumentErrorFactory,
   readConfigOrWarn,
   readOptionalJsonObject,
   scopedDocumentPaths,
@@ -21,12 +22,10 @@ export class BackgroundTerminalConfigError extends Schema.TaggedErrorClass<Backg
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
 
-const mapDocumentError = (operation: string, path: string) => () =>
-  new BackgroundTerminalConfigError({
-    operation,
-    path,
-    message: `Unable to ${operation} Background Terminals configuration.`,
-  });
+const mapDocumentError = makeConfigDocumentErrorFactory(
+  BackgroundTerminalConfigError,
+  "Background Terminals",
+);
 
 function decodeConfig(value: unknown): Partial<BackgroundTerminalConfig> {
   return decodeTolerantFields(

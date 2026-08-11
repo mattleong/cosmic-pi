@@ -1,30 +1,11 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
+import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
 import type { SubagentProjection } from "../run/model.ts";
 import { emptyProjection, fleetStatus } from "../run/projection.ts";
 
-const STATUS_KEY = "pi-subagents";
+export { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 
-export const startHostUiTicker = (intervalMs: number, tick: () => void): (() => void) => {
-  const fiber = Effect.runFork(
-    Effect.sleep(intervalMs).pipe(
-      Effect.andThen(
-        Effect.sync(() => {
-          try {
-            tick();
-          } catch {
-            // The host UI may be tearing down between timer ticks.
-          }
-        }),
-      ),
-      Effect.forever,
-    ),
-  );
-  return () => {
-    void Effect.runFork(Fiber.interrupt(fiber));
-  };
-};
+const STATUS_KEY = "pi-subagents";
 
 export interface SubagentProjectionBridge {
   readonly get: () => SubagentProjection;
@@ -34,14 +15,7 @@ export interface SubagentProjectionBridge {
   readonly clear: () => void;
 }
 
-function setStatusSafely(ctx: ExtensionContext | undefined, text?: string): void {
-  if (!ctx || ctx.mode !== "tui") return;
-  try {
-    ctx.ui.setStatus(STATUS_KEY, text);
-  } catch {
-    // Host UI may already be tearing down.
-  }
-}
+const setStatusSafely = makeSetStatusSafely(STATUS_KEY);
 
 export function makeSubagentProjectionBridge(): SubagentProjectionBridge {
   let projection = emptyProjection();

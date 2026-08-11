@@ -14,6 +14,18 @@ export type HostSessionContext = {
   readonly signal?: unknown;
 };
 
+export type HostNotificationLevel = "info" | "warning" | "error";
+
+export type HostNotifierContext = {
+  readonly ui: {
+    readonly notify: (message: string, level: HostNotificationLevel) => void;
+  };
+};
+
+export type HostModelRegistry<Model> = {
+  readonly isUsingOAuth: (model: Model) => boolean;
+};
+
 export type CapturedHostSignal =
   | { readonly _tag: "Captured"; readonly signal: AbortSignal | undefined }
   | { readonly _tag: "Unavailable" };
@@ -43,6 +55,40 @@ export function isProjectTrusted(ctx: HostTrustContext): boolean {
   try {
     const readTrust = ctx.isProjectTrusted;
     return typeof readTrust === "function" && readTrust.call(ctx) === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Best-effort Pi notification boundary; a hostile or stale host UI never throws into the caller. */
+export function notifyAtHostBoundary(
+  ctx: HostNotifierContext,
+  message: string,
+  level: HostNotificationLevel,
+): void {
+  try {
+    ctx.ui.notify(message, level);
+  } catch {
+    // Notifications are best effort at the Pi host boundary.
+  }
+}
+
+/** Invoke a synchronous Pi host callback, resolving to the supplied fallback if it throws. */
+export function invokeHostCallback<A>(callback: () => A, fallback: A): A {
+  try {
+    return callback();
+  } catch {
+    return fallback;
+  }
+}
+
+/** Synchronous Pi-renderer boundary. Host registry failures fail closed and never escape rendering. */
+export function isUsingOAuthAtHostBoundary<Model>(
+  registry: HostModelRegistry<Model>,
+  model: Model,
+): boolean {
+  try {
+    return registry.isUsingOAuth(model);
   } catch {
     return false;
   }

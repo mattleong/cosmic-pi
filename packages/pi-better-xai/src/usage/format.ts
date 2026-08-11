@@ -10,6 +10,7 @@ import {
   formatWindowedUsageLine,
   JsonHttpClient,
   remainingResetSeconds,
+  usedToLeftPercent,
   type JsonHttpResponseSchema,
 } from "pi-cosmic-core";
 import { getXaiCredentials } from "../auth/auth.ts";
@@ -66,11 +67,6 @@ export interface UsageSnapshot {
   readonly onDemandCap: number | null;
   readonly onDemandUsed: number | null;
   readonly isLimited: boolean;
-}
-
-function usedToLeftPercent(value: number | null | undefined): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return clampPercent(100 - value);
 }
 
 function parseIsoToSecondsFromNow(value: string | undefined, now: number): number | null {

@@ -155,15 +155,14 @@ export class OpenAIUsageService extends Context.Service<
           ),
           fetch: (request) =>
             Effect.gen(function* () {
+              const notify = request.notify === true;
               const ctx = MutableRef.get(context);
               const current = yield* state.getState;
               const cfg = current.config;
               if (!cfg || !ctx.hasUI) return { _tag: "Skipped" } as const;
               const now = yield* Clock.currentTimeMillis;
-              if (!cfg.usage.enabled)
-                return { _tag: "Disabled", notify: request.notify === true } as const;
-              if (!isOpenAISubscriptionModel(ctx, cfg))
-                return { _tag: "Hidden", notify: request.notify === true } as const;
+              if (!cfg.usage.enabled) return { _tag: "Disabled", notify } as const;
+              if (!isOpenAISubscriptionModel(ctx, cfg)) return { _tag: "Hidden", notify } as const;
               if (
                 !request.force &&
                 !request.notify &&
@@ -178,21 +177,17 @@ export class OpenAIUsageService extends Context.Service<
               if (authOutcome._tag === "Failure")
                 return {
                   _tag: "Failure",
-                  notify: request.notify === true,
+                  notify,
                   fetchedAt: now,
                   message: "Codex credential lookup timed out.",
                 } as const;
               const authResult = authOutcome.success;
               if (authResult._tag === "Missing")
-                return {
-                  _tag: "Missing",
-                  notify: request.notify === true,
-                  fetchedAt: now,
-                } as const;
+                return { _tag: "Missing", notify, fetchedAt: now } as const;
               if (authResult._tag !== "Found")
                 return {
                   _tag: "Failure",
-                  notify: request.notify === true,
+                  notify,
                   fetchedAt: now,
                   message: sanitizeDiagnosticError(authResult.message),
                 } as const;
@@ -203,7 +198,7 @@ export class OpenAIUsageService extends Context.Service<
               if (usage._tag === "Failure")
                 return {
                   _tag: "Failure",
-                  notify: request.notify === true,
+                  notify,
                   fetchedAt: now,
                   message: sanitizeDiagnosticError(
                     typeof usage.failure.message === "string"
@@ -215,12 +210,7 @@ export class OpenAIUsageService extends Context.Service<
                     accountId: authResult.credentials.accountId,
                   },
                 } as const;
-              return {
-                _tag: "Success",
-                notify: request.notify === true,
-                fetchedAt: now,
-                result: usage.success,
-              } as const;
+              return { _tag: "Success", notify, fetchedAt: now, result: usage.success } as const;
             }),
           commit: (value) =>
             Effect.gen(function* () {
@@ -240,50 +230,38 @@ export class OpenAIUsageService extends Context.Service<
                         lastFetchAt: value.fetchedAt,
                       }
                     : current;
-                if (value._tag === "Disabled")
+                if (value._tag === "Disabled" || value._tag === "Hidden")
                   return {
                     ...attempted,
                     eligible: false,
                     snapshot: undefined,
                     statusLine: undefined,
                     error: undefined,
-                    statusText: "Usage display is disabled.",
+                    statusText:
+                      value._tag === "Disabled"
+                        ? "Usage display is disabled."
+                        : "Usage hidden: current model is not an OpenAI subscription model.",
                   };
-                if (value._tag === "Hidden")
-                  return {
-                    ...attempted,
-                    eligible: false,
-                    snapshot: undefined,
-                    statusLine: undefined,
-                    error: undefined,
-                    statusText: "Usage hidden: current model is not an OpenAI subscription model.",
-                  };
-                if (value._tag === "Failure")
-                  return {
-                    ...attempted,
-                    snapshot: undefined,
-                    statusLine: undefined,
-                    error: value.message,
-                    statusText: `Usage unavailable: ${value.message}`,
-                    ...(value.credential
-                      ? {
-                          authFound: true,
-                          authSource: value.credential.source,
-                          accountId: value.credential.accountId,
-                        }
-                      : {}),
-                  };
-                if (value._tag === "Missing") {
-                  const message = `Missing openai-codex OAuth credentials in ${authPath}. Run /login openai-codex.`;
+                if (value._tag === "Failure" || value._tag === "Missing") {
+                  const message =
+                    value._tag === "Missing"
+                      ? `Missing openai-codex OAuth credentials in ${authPath}. Run /login openai-codex.`
+                      : value.message;
                   return {
                     ...attempted,
                     snapshot: undefined,
                     statusLine: undefined,
                     error: message,
                     statusText: `Usage unavailable: ${message}`,
-                    authFound: false,
-                    authSource: undefined,
-                    accountId: undefined,
+                    ...(value._tag === "Missing"
+                      ? { authFound: false, authSource: undefined, accountId: undefined }
+                      : value.credential
+                        ? {
+                            authFound: true,
+                            authSource: value.credential.source,
+                            accountId: value.credential.accountId,
+                          }
+                        : {}),
                   };
                 }
                 const { snapshot, credential } = value.result;

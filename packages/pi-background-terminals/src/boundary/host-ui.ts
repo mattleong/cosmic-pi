@@ -1,30 +1,11 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
+import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
 import { emptyProjection, footerStatus } from "../job/projection.ts";
 import type { BackgroundTerminalProjection } from "../job/model.ts";
 
-const STATUS_KEY = "pi-background-terminals";
+export { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 
-export const startHostUiTicker = (intervalMs: number, tick: () => void): (() => void) => {
-  const fiber = Effect.runFork(
-    Effect.sleep(intervalMs).pipe(
-      Effect.andThen(
-        Effect.sync(() => {
-          try {
-            tick();
-          } catch {
-            // The host UI may be tearing down between timer ticks.
-          }
-        }),
-      ),
-      Effect.forever,
-    ),
-  );
-  return () => {
-    void Effect.runFork(Fiber.interrupt(fiber));
-  };
-};
+const STATUS_KEY = "pi-background-terminals";
 
 export interface BackgroundTerminalProjectionBridge {
   readonly get: () => BackgroundTerminalProjection;
@@ -35,14 +16,7 @@ export interface BackgroundTerminalProjectionBridge {
   readonly clear: () => void;
 }
 
-function setStatusSafely(ctx: ExtensionContext | undefined, text?: string): void {
-  if (!ctx || ctx.mode !== "tui") return;
-  try {
-    ctx.ui.setStatus(STATUS_KEY, text);
-  } catch {
-    // Host UI may already be tearing down.
-  }
-}
+const setStatusSafely = makeSetStatusSafely(STATUS_KEY);
 
 export function makeProjectionBridge(): BackgroundTerminalProjectionBridge {
   let projection = emptyProjection();

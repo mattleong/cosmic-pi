@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
   decodeTolerantFields,
+  makeConfigDocumentErrorFactory,
   modifyJsonObject,
   readConfigOrWarn,
   readOptionalJsonObject,
@@ -28,14 +29,7 @@ export class XaiConfigError extends Schema.TaggedErrorClass<XaiConfigError>()("X
   message: Schema.String,
 }) {}
 
-function mapDocumentError(operation: string, path: string) {
-  return () =>
-    new XaiConfigError({
-      operation,
-      path,
-      message: `Unable to ${operation} Better xAI configuration.`,
-    });
-}
+const mapDocumentError = makeConfigDocumentErrorFactory(XaiConfigError, "Better xAI");
 
 export const configPaths = Effect.fn("XaiConfig.configPaths")(function* (
   cwd: string,
@@ -172,8 +166,13 @@ export const resolveConfig = Effect.fn("XaiConfig.resolveConfig")(function* (
   }
 
   const warning = "Unable to read a Better xAI configuration document.";
-  const project = yield* readConfigOrWarn(paths.project, projectExists, readConfig, warning);
-  const global = yield* readConfigOrWarn(paths.global, globalExists, readConfig, warning);
+  const [project, global] = yield* Effect.all(
+    [
+      readConfigOrWarn(paths.project, projectExists, readConfig, warning),
+      readConfigOrWarn(paths.global, globalExists, readConfig, warning),
+    ] as const,
+    { concurrency: 2 },
+  );
   const globalValues = overlayConfigValues(global, defaultConfigValues());
   const resolved = overlayConfigValues(project, globalValues);
 

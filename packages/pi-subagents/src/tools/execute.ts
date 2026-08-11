@@ -54,6 +54,18 @@ import type {
   SubagentToolRuntime,
 } from "./subagent.ts";
 
+const matchActionOutcome = (id: string) =>
+  Effect.match({
+    onFailure: (error: SubagentError) => ({
+      failure: {
+        id,
+        message: error.message,
+        code: subagentErrorCode(error),
+      } satisfies SubagentActionFailure,
+    }),
+    onSuccess: (run: SubagentRunView) => ({ run }),
+  });
+
 const requiredRunId = (
   action: SubagentToolInput["action"],
   runId: string,
@@ -488,19 +500,7 @@ export const executeSubagentAction = async (
         const message = yield* requiredMessage(input.action, input.message);
         const outcomes = yield* Effect.forEach(
           ids,
-          (id) =>
-            service.send(id, message).pipe(
-              Effect.match({
-                onFailure: (error) => ({
-                  failure: {
-                    id,
-                    message: error.message,
-                    code: subagentErrorCode(error),
-                  } satisfies SubagentActionFailure,
-                }),
-                onSuccess: (run) => ({ run }),
-              }),
-            ),
+          (id) => service.send(id, message).pipe(matchActionOutcome(id)),
           { concurrency: 8 },
         );
         return {
@@ -513,18 +513,7 @@ export const executeSubagentAction = async (
       case "reply": {
         const id = yield* requiredRunId(input.action, input.runId);
         const message = yield* requiredMessage(input.action, input.message);
-        const outcome = yield* service.reply(id, message).pipe(
-          Effect.match({
-            onFailure: (error) => ({
-              failure: {
-                id,
-                message: error.message,
-                code: subagentErrorCode(error),
-              } satisfies SubagentActionFailure,
-            }),
-            onSuccess: (run) => ({ run }),
-          }),
-        );
+        const outcome = yield* service.reply(id, message).pipe(matchActionOutcome(id));
         return "run" in outcome
           ? { runs: [outcome.run] }
           : { runs: [], actionFailures: [outcome.failure] };
@@ -551,18 +540,7 @@ export const executeSubagentAction = async (
                   return service.stop(id);
               }
             })();
-            return operation.pipe(
-              Effect.match({
-                onFailure: (error) => ({
-                  failure: {
-                    id,
-                    message: error.message,
-                    code: subagentErrorCode(error),
-                  } satisfies SubagentActionFailure,
-                }),
-                onSuccess: (run) => ({ run }),
-              }),
-            );
+            return operation.pipe(matchActionOutcome(id));
           },
           { concurrency: 8 },
         );
@@ -575,18 +553,7 @@ export const executeSubagentAction = async (
       }
       case "rename": {
         const id = yield* requiredRunId(input.action, input.runId);
-        const outcome = yield* service.rename(id, input.name.trim()).pipe(
-          Effect.match({
-            onFailure: (error) => ({
-              failure: {
-                id,
-                message: error.message,
-                code: subagentErrorCode(error),
-              } satisfies SubagentActionFailure,
-            }),
-            onSuccess: (run) => ({ run }),
-          }),
-        );
+        const outcome = yield* service.rename(id, input.name.trim()).pipe(matchActionOutcome(id));
         return "run" in outcome
           ? { runs: [outcome.run] }
           : { runs: [], actionFailures: [outcome.failure] };

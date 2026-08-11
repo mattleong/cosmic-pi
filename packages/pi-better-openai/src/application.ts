@@ -62,22 +62,6 @@ export interface BetterOpenAIExtensionDependencies {
   readonly loadPreviewSettings?: (projectCwd: string, projectTrusted: boolean) => Promise<unknown>;
 }
 
-const captureSessionHostContext = (ctx: ExtensionContext) => {
-  const captured = captureSessionHost(ctx);
-  if (captured._tag === "Captured") {
-    return {
-      _tag: "Success" as const,
-      value: { cwd: captured.cwd, signal: captured.signal, aborted: captured.aborted },
-    };
-  }
-  return {
-    _tag: "Failure" as const,
-    error: new OpenAIBoundaryError({
-      operation: "session-context",
-      message: "Unable to capture the Pi session context.",
-    }),
-  };
-};
 const requiredConfig = (projection: MutableRef.MutableRef<OpenAIProjection>): ResolvedConfig => {
   const cfg = MutableRef.get(projection).config;
   if (cfg) return cfg;
@@ -275,16 +259,12 @@ export function betterOpenAIWithDependencies(
   pi.on("session_start", (_event, ctx) => {
     // Admission order, not asynchronous settings-load completion order, owns session freshness.
     const generation = ++startGeneration;
-    const captured = captureSessionHostContext(ctx);
-    if (captured._tag === "Failure") {
+    const captured = captureSessionHost(ctx);
+    if (captured._tag !== "Captured" || captured.aborted) {
       safeHostUi(() => ctx.ui.notify("Better OpenAI failed to start.", "warning"));
       return slot.shutdown();
     }
-    const { cwd, signal, aborted } = captured.value;
-    if (aborted) {
-      safeHostUi(() => ctx.ui.notify("Better OpenAI failed to start.", "warning"));
-      return slot.shutdown();
-    }
+    const { cwd, signal } = captured;
     const projectTrusted = isProjectTrusted(ctx);
     cosmicUi.shutdown();
     resetProjection(projection);
@@ -294,23 +274,24 @@ export function betterOpenAIWithDependencies(
     footerController.invalidateSessionName();
     const context = MutableRef.make(ctx);
     currentContext = context;
-    return (dependencies.loadPreviewSettings ?? loadCodePreviewSettings)(cwd, projectTrusted)
-      .catch(() => undefined)
-      .then(() => {
-        if (generation !== startGeneration) return undefined;
-        registerOpenAIImage(pi, run, updateContext);
-        return slot.start(
-          {
-            ctx,
-            context,
-            cwd,
-            generation,
-            projectTrusted,
-          },
-          signal,
-        );
-      })
-      .then(() => undefined);
+    return Promise.all([
+      (dependencies.loadPreviewSettings ?? loadCodePreviewSettings)(cwd, projectTrusted)
+        .catch(() => undefined)
+        .then(() => {
+          if (generation !== startGeneration) return;
+          registerOpenAIImage(pi, run, updateContext);
+        }),
+      slot.start(
+        {
+          ctx,
+          context,
+          cwd,
+          generation,
+          projectTrusted,
+        },
+        signal,
+      ),
+    ]).then(() => undefined);
   });
   pi.on("agent_start", (_event, ctx) => {
     updateContext(ctx);

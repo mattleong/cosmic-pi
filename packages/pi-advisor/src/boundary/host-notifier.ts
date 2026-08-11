@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
+import { notifyAtHostBoundary } from "pi-cosmic-core";
 
 export type AdvisorNotificationLevel = "info" | "warning" | "error";
 export interface HostNotifierShape {
@@ -19,12 +20,6 @@ export class HostNotifier extends Context.Service<HostNotifier, HostNotifierShap
 export const hostNotifierLayer = Layer.succeed(
   HostNotifier,
   HostNotifier.of({
-    notify: (ctx, message, level) => {
-      try {
-        ctx.ui.notify(message, level);
-      } catch {
-        // The Pi host cannot escape or own application lifecycle cleanup.
-      }
-    },
+    notify: (ctx, message, level) => notifyAtHostBoundary(ctx, message, level),
   }),
 );

@@ -198,10 +198,36 @@ const nodeErrorCode = (error: unknown): string | undefined =>
     ? error.code
     : undefined;
 
-const boundedAppend = (current: string, chunk: Buffer, maximum: number): string => {
-  const next = Buffer.concat([Buffer.from(current, "utf8"), chunk]);
-  return next.subarray(Math.max(0, next.length - maximum)).toString("utf8");
+interface BoundedTailChunks {
+  readonly chunks: Buffer[];
+  length: number;
+}
+
+const boundedAppend = (target: BoundedTailChunks, chunk: Buffer, maximum: number): void => {
+  target.chunks.push(chunk);
+  target.length += chunk.byteLength;
+  while (target.length > maximum) {
+    const first = target.chunks[0];
+    if (!first) break;
+    const excess = target.length - maximum;
+    if (first.byteLength <= excess) {
+      target.chunks.shift();
+      target.length -= first.byteLength;
+    } else {
+      target.chunks[0] = first.subarray(excess);
+      target.length -= excess;
+    }
+  }
 };
+
+const appendTailText = (target: BoundedTailChunks, text: string): void => {
+  const chunk = Buffer.from(text, "utf8");
+  target.chunks.push(chunk);
+  target.length += chunk.byteLength;
+};
+
+const readTail = (target: BoundedTailChunks): string =>
+  Buffer.concat(target.chunks).toString("utf8");
 
 const approvedCodexApiKey = (source: NodeJS.ProcessEnv): string | undefined => {
   const apiKey = source.OPENAI_API_KEY;
@@ -761,7 +787,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
   const events = yield* Queue.dropping<LocalCliWireEvent, Cause.Done>(EVENT_CAPACITY);
   const ready = yield* Deferred.make<void, SubagentProcessError>();
   const exited = yield* Deferred.make<Extract<LocalCliWireEvent, { readonly type: "exit" }>>();
-  let stderr = "";
+  const stderr: BoundedTailChunks = { chunks: [], length: 0 };
   let settled = false;
   let spawned = false;
   let cleaned = false;
@@ -782,7 +808,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
         catch: (error) => processError("spawn local CLI", error, "local_cli_spawn_failed"),
       });
       const room = makeByteBoundedQueueRoom(events, MAX_QUEUED_BYTES, () => {
-        stderr = `${stderr}\nLocal CLI event backlog exceeded ${MAX_QUEUED_BYTES} bytes.`;
+        appendTailText(stderr, `\nLocal CLI event backlog exceeded ${MAX_QUEUED_BYTES} bytes.`);
         Queue.offerUnsafe(events, {
           type: "protocol_error",
           message: "Local CLI event backlog exceeded its byte budget.",
@@ -794,7 +820,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
         if (room.offer(event, bytes)) return;
         if (queueOverflowed) return;
         queueOverflowed = true;
-        stderr = `${stderr}\nLocal CLI event queue exceeded ${EVENT_CAPACITY} pending events.`;
+        appendTailText(stderr, `\nLocal CLI event queue exceeded ${EVENT_CAPACITY} pending events.`);
         void terminateProcessTree(child, "force", { platform }).catch(() => undefined);
       };
       const detachStdout = child.stdout
@@ -822,7 +848,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
           })
         : () => {};
       const onStderr = (chunk: Buffer) => {
-        stderr = boundedAppend(stderr, chunk, MAX_STDERR_BYTES);
+        boundedAppend(stderr, chunk, MAX_STDERR_BYTES);
       };
       const onStdoutError = (error: Error) => {
         onStderr(Buffer.from(`\nLocal CLI stdout error: ${error.message}\n`, "utf8"));
@@ -849,7 +875,7 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
             type: "exit",
             exitCode,
             ...(signal ? { signal } : {}),
-            stderr,
+            stderr: readTail(stderr),
           }),
         );
       };

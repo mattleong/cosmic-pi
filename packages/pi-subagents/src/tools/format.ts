@@ -1,7 +1,7 @@
 import type { SubagentSelectionProvenance } from "../profiles/model.ts";
 import type { SubagentRunView } from "../run/model.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { safeTextPrefix } from "../run/state.ts";
+import { clipWithMarker } from "../run/state.ts";
 import { sanitizeTerminalLine } from "../ui/sanitize.ts";
 import type { SubagentRunCard } from "./details.ts";
 
@@ -15,12 +15,12 @@ export const selectionSourceLabel = (
   return `${run.selection.source}${candidate}`;
 };
 
-export const boundToolOutput = (text: string): string => {
-  if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
-  const marker =
-    "\n… [tool output truncated; narrow the request or query individual run IDs for the omitted content]";
-  return `${safeTextPrefix(text, Math.max(0, MAX_TOOL_OUTPUT_CHARS - marker.length))}${marker}`;
-};
+export const boundToolOutput = (text: string): string =>
+  clipWithMarker(
+    text,
+    MAX_TOOL_OUTPUT_CHARS,
+    "\n… [tool output truncated; narrow the request or query individual run IDs for the omitted content]",
+  );
 
 export const formatToolModel = (model: string, effort: string, fastMode?: boolean): string =>
   `${sanitizeTerminalLine(model)}:${sanitizeTerminalLine(effort)}${fastMode ? " ⚡" : ""}`;
@@ -44,11 +44,7 @@ export const attentionRecoveryText = (runs: ReadonlyArray<SubagentRunCard>): str
     "Parent reply required; other unfinished subagents continue independently.",
     ...waiting.flatMap((run) => {
       const question = sanitizeTerminalLine(run.question?.message ?? "");
-      const marker = "… [truncated]";
-      const bounded =
-        question.length <= 512
-          ? question
-          : `${safeTextPrefix(question, 512 - marker.length)}${marker}`;
+      const bounded = clipWithMarker(question, 512, "… [truncated]");
       return [
         `Question from ${sanitizeTerminalLine(run.name)}: ${bounded}`,
         `Reply with subagent_reply({ runId: ${JSON.stringify(run.id)}, message: "..." }), then call subagent_await again.`,

@@ -328,8 +328,18 @@ const protocolError = (operation: string, code: string, message: string) =>
     ? outcomeUncertain(operation, message)
     : processError(operation, code, message);
 
-const boundedAppend = (current: Buffer, chunk: Buffer, maximum: number): Buffer =>
-  Buffer.concat([current, chunk]).subarray(0, maximum);
+interface BoundedChunks {
+  readonly chunks: Buffer[];
+  length: number;
+}
+
+const boundedAppend = (target: BoundedChunks, chunk: Buffer, maximum: number): void => {
+  const room = maximum - target.length;
+  if (room <= 0) return;
+  const accepted = chunk.byteLength <= room ? chunk : chunk.subarray(0, room);
+  target.chunks.push(accepted);
+  target.length += accepted.byteLength;
+};
 
 const terminateProbe = (child: NodeChildProcess): Promise<boolean> =>
   new Promise((resolve) => {
@@ -354,8 +364,8 @@ const run = (
   maximumBytes: number,
 ): Promise<CommandResult> =>
   new Promise((resolve) => {
-    let stdout: Buffer = Buffer.alloc(0);
-    let stderr: Buffer = Buffer.alloc(0);
+    const stdout: BoundedChunks = { chunks: [], length: 0 };
+    const stderr: BoundedChunks = { chunks: [], length: 0 };
     let overflowed = false;
     let observedBytes = 0;
     let timedOut = false;
@@ -370,8 +380,8 @@ const run = (
       if (timer) clearTimeout(timer);
       resolve({
         code,
-        stdout: stdout.toString("utf8"),
-        stderr: stderr.toString("utf8"),
+        stdout: Buffer.concat(stdout.chunks).toString("utf8"),
+        stderr: Buffer.concat(stderr.chunks).toString("utf8"),
         overflowed,
         timedOut,
         cleanupUnconfirmed,
@@ -395,8 +405,8 @@ const run = (
         child.kill();
         return;
       }
-      if (target === "stdout") stdout = boundedAppend(stdout, chunk, maximumBytes);
-      else stderr = boundedAppend(stderr, chunk, MAX_DIAGNOSTIC_BYTES);
+      if (target === "stdout") boundedAppend(stdout, chunk, maximumBytes);
+      else boundedAppend(stderr, chunk, MAX_DIAGNOSTIC_BYTES);
     };
     child.once("spawn", () => {
       dispatched = true;

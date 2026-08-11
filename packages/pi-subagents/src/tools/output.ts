@@ -3,19 +3,14 @@ import type { SubagentRunView } from "../run/model.ts";
 import { synchronousNow } from "../boundary/native-clock.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { safeTextPrefix } from "../run/state.ts";
+import { clipWithMarker } from "../run/state.ts";
 import { formatDuration, formatUsage } from "../ui/metrics.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 import { formatToolRoute, selectionSourceLabel } from "./format.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./subagent.ts";
 
-const boundedLine = (value: string, maximum: number): string => {
-  const safe = sanitizeTerminalLine(value);
-  const marker = "… [truncated]";
-  return safe.length <= maximum
-    ? safe
-    : `${safeTextPrefix(safe, Math.max(0, maximum - marker.length))}${marker}`;
-};
+const boundedLine = (value: string, maximum: number): string =>
+  clipWithMarker(sanitizeTerminalLine(value), maximum, "… [truncated]");
 
 export const formatRun = (run: SubagentRunView, detailed = false): string => {
   const profile = run.profile ? ` · profile=${sanitizeTerminalLine(run.profile)}` : "";
@@ -103,14 +98,16 @@ export const formatDetailedRuns = (
       fullyRenderedIds.add(run.id);
       return value;
     }
-    const marker = "\n… [run output truncated]";
-    return `${safeTextPrefix(value, Math.max(0, perRun - marker.length))}${marker}`;
+    return clipWithMarker(value, perRun, "\n… [run output truncated]");
   });
   const output = `${prefix}${formatted.join("\n\n")}`;
   if (output.length <= MAX_TOOL_OUTPUT_CHARS) return { text: output, fullyRenderedIds };
-  const marker = "\n… [additional run output omitted; query individual run IDs]";
   return {
-    text: `${safeTextPrefix(output, Math.max(0, MAX_TOOL_OUTPUT_CHARS - marker.length))}${marker}`,
+    text: clipWithMarker(
+      output,
+      MAX_TOOL_OUTPUT_CHARS,
+      "\n… [additional run output omitted; query individual run IDs]",
+    ),
     fullyRenderedIds: new Set(),
   };
 };

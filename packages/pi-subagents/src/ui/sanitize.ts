@@ -1,7 +1,2 @@
-import { stripTerminalControls } from "pi-cosmic-core";
-
-/** Remove terminal controls from child-owned text before host rendering. */
-export const sanitizeTerminalText = (text: string): string => stripTerminalControls(text);
-
-export const sanitizeTerminalLine = (text: string): string =>
-  sanitizeTerminalText(text).replace(/\s+/g, " ").trim();
+/** Remove terminal controls from child-owned text before host rendering; owned by `pi-cosmic-core`. */
+export { sanitizeTerminalLine, stripTerminalControls as sanitizeTerminalText } from "pi-cosmic-core";

@@ -74,11 +74,9 @@ export class FooterRegistryService extends Context.Service<
         const resources = new Map<string, Map<string, SurfaceResource>>();
         let requestRender: (() => void) | undefined;
         let renderSuppressionDepth = 0;
-        let published = emptyFooterRegistrySnapshot();
 
         const publish = (next: RegistryState) => {
-          published = snapshotOf(next);
-          options.bridge.snapshot = published;
+          options.bridge.snapshot = snapshotOf(next);
         };
         const renderNow = () => {
           if (renderSuppressionDepth > 0) return;
@@ -116,7 +114,8 @@ export class FooterRegistryService extends Context.Service<
           Effect.gen(function* () {
             const scope = yield* Scope.make();
             const resource: SurfaceResource = { contribution, scope, attached: false };
-            return yield* Effect.acquireRelease(Effect.succeed(resource), () =>
+            yield* Scope.addFinalizer(
+              scope,
               Effect.sync(() => {
                 detach(resource);
                 if (contribution.dispose)
@@ -126,7 +125,8 @@ export class FooterRegistryService extends Context.Service<
                     undefined,
                   );
               }),
-            ).pipe(Effect.provideService(Scope.Scope, scope));
+            );
+            return resource;
           });
         const resourceValues = () => [...resources.values()].flatMap((byId) => [...byId.values()]);
         const setResource = (owner: string, id: string, resource: SurfaceResource) => {
@@ -300,7 +300,7 @@ export class FooterRegistryService extends Context.Service<
 
         yield* Effect.acquireRelease(
           Effect.sync(() => {
-            options.bridge.snapshot = published;
+            options.bridge.snapshot = emptyFooterRegistrySnapshot();
             options.bridge.requestRenderNow = renderNow;
           }),
           () =>
@@ -321,7 +321,7 @@ export class FooterRegistryService extends Context.Service<
           invalidate,
           setRenderRequest,
           clear: clear.pipe(Effect.asVoid),
-          snapshot: () => published,
+          snapshot: () => options.bridge.snapshot,
           requestRenderNow: renderNow,
         });
       }),

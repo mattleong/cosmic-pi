@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
+import { JsonDocumentStore, makeConfigDocumentErrorFactory, type JsonObject } from "pi-cosmic-core";
 import type {
   DeclaredProfileCandidate,
   DeclaredProfileRoute,
@@ -73,12 +73,7 @@ export class SubagentConfigStore extends Context.Service<
   SubagentConfigStoreShape
 >()("pi-subagents/config/store/SubagentConfigStore") {}
 
-const storeError = (operation: string, path: string) => () =>
-  new SubagentConfigStoreError({
-    operation,
-    path,
-    message: `Unable to ${operation} Subagents configuration.`,
-  });
+const storeError = makeConfigDocumentErrorFactory(SubagentConfigStoreError, "Subagents");
 
 const unsupportedVersionError = (path: string) =>
   new SubagentConfigStoreError({

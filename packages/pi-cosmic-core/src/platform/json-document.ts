@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
@@ -83,11 +84,16 @@ export class JsonDocumentStore extends Context.Service<JsonDocumentStore, JsonDo
       const readObjectUnlocked = Effect.fn("JsonDocumentStore.readObjectUnlocked")(function* (
         path: string,
       ) {
-        if (!(yield* exists(path))) return undefined;
-        const source = yield* fs
-          .readFileString(path)
-          .pipe(Effect.mapError(mapError("read", path, "Unable to read JSON document.")));
-        return yield* Schema.decodeUnknownEffect(JsonObjectFromString)(source).pipe(
+        const source = yield* fs.readFileString(path).pipe(
+          Effect.map(Option.some),
+          Effect.catch((error) =>
+            error.reason._tag === "NotFound"
+              ? Effect.succeedNone
+              : Effect.fail(mapError("read", path, "Unable to read JSON document.")()),
+          ),
+        );
+        if (Option.isNone(source)) return undefined;
+        return yield* Schema.decodeUnknownEffect(JsonObjectFromString)(source.value).pipe(
           Effect.mapError(mapError("decode", path, "JSON document must contain an object.")),
         );
       });
