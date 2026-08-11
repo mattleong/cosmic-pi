@@ -4,15 +4,11 @@ import * as Schema from "effect/Schema";
 import {
   decodeTolerantFields,
   makeConfigDocumentErrorFactory,
+  makeScopedConfigStore,
   modifyJsonObject,
-  readConfigOrWarn,
-  readOptionalJsonObject,
-  readRawJsonObject,
-  scopedDocumentPaths,
-  selectScopedDocument,
-  writeJsonObject,
   type JsonDocumentModification,
   type JsonObject,
+  type ScopedConfigMetadata,
 } from "pi-cosmic-core";
 import {
   CONFIG_BASENAME,
@@ -30,20 +26,6 @@ export class XaiConfigError extends Schema.TaggedErrorClass<XaiConfigError>()("X
 }) {}
 
 const mapDocumentError = makeConfigDocumentErrorFactory(XaiConfigError, "Better xAI");
-
-export const configPaths = Effect.fn("XaiConfig.configPaths")(function* (
-  cwd: string,
-  agentDir: string,
-) {
-  return yield* scopedDocumentPaths(cwd, agentDir, {
-    projectConfigDirectory: CONFIG_DIR_NAME,
-    basename: CONFIG_BASENAME,
-  });
-});
-
-export const readRawConfig = Effect.fn("XaiConfig.readRawConfig")(function* (path: string) {
-  return yield* readRawJsonObject(path, mapDocumentError);
-});
 
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 
@@ -96,35 +78,32 @@ function overlayConfigValues(
   };
 }
 
-/** Resolves an atomically committed selected document without another filesystem read. */
-export function resolveCommittedConfig(
-  current: ResolvedConfig,
-  committedDocument: JsonObject,
-  globalFallback: JsonObject | undefined,
-): ResolvedConfig {
-  const fallback =
-    current.configPath === current.projectConfigPath
-      ? overlayConfigValues(
-          globalFallback === undefined ? undefined : decodeConfig(globalFallback),
-          defaultConfigValues(),
-        )
-      : defaultConfigValues();
-  return {
-    ...current,
-    ...overlayConfigValues(decodeConfig(committedDocument), fallback),
-  };
-}
-
-export const readConfig = Effect.fn("XaiConfig.readConfig")(function* (path: string) {
-  return yield* readOptionalJsonObject(path, decodeConfig, mapDocumentError);
+const store = makeScopedConfigStore({
+  errorFactory: mapDocumentError,
+  label: "Better xAI",
+  spanPrefix: "XaiConfig",
+  projectConfigDirectory: CONFIG_DIR_NAME,
+  basename: CONFIG_BASENAME,
+  decode: decodeConfig,
+  defaultDocument: (): JsonObject => defaultConfigValues(),
+  resolve: (
+    metadata: ScopedConfigMetadata,
+    project: DecodedConfig | undefined,
+    global: DecodedConfig | undefined,
+  ): ResolvedConfig => ({
+    ...metadata,
+    ...overlayConfigValues(project, overlayConfigValues(global, defaultConfigValues())),
+  }),
 });
 
-export const writeConfig = Effect.fn("XaiConfig.writeConfig")(function* (
-  path: string,
-  config: JsonObject,
-) {
-  yield* writeJsonObject(path, config, mapDocumentError);
-});
+export const {
+  configPaths,
+  readConfig,
+  readRawConfig,
+  resolveCommittedConfig,
+  resolveConfig,
+  writeConfig,
+} = store;
 
 export const updateConfig = Effect.fn("XaiConfig.updateConfig")(function* (
   // The callback is part of the store's narrow, uninterruptible rename commit region.
@@ -144,45 +123,4 @@ export const updateConfig = Effect.fn("XaiConfig.updateConfig")(function* (
     },
     mapDocumentError,
   );
-});
-
-const defaultDocument = (): JsonObject => defaultConfigValues();
-
-export const resolveConfig = Effect.fn("XaiConfig.resolveConfig")(function* (
-  cwd: string,
-  agentDir: string,
-  projectTrusted = true,
-) {
-  const paths = yield* configPaths(cwd, agentDir);
-  const selected = yield* selectScopedDocument(paths).pipe(
-    Effect.mapError((error) => mapDocumentError("inspect", error.path)()),
-  );
-  let projectExists = projectTrusted && selected.projectExists;
-  let globalExists = selected.globalExists;
-
-  if (!projectExists && !globalExists) {
-    yield* writeConfig(paths.global, defaultDocument());
-    globalExists = true;
-  }
-
-  const warning = "Unable to read a Better xAI configuration document.";
-  const [project, global] = yield* Effect.all(
-    [
-      readConfigOrWarn(paths.project, projectExists, readConfig, warning),
-      readConfigOrWarn(paths.global, globalExists, readConfig, warning),
-    ] as const,
-    { concurrency: 2 },
-  );
-  const globalValues = overlayConfigValues(global, defaultConfigValues());
-  const resolved = overlayConfigValues(project, globalValues);
-
-  return {
-    configPath: projectExists ? paths.project : paths.global,
-    projectConfigPath: paths.project,
-    globalConfigPath: paths.global,
-    projectConfigExists: projectExists,
-    globalConfigExists: globalExists,
-    usage: resolved.usage,
-    footer: resolved.footer,
-  } satisfies ResolvedConfig;
 });

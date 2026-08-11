@@ -1,19 +1,12 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
-import * as Effect from "effect/Effect";
 import * as Number from "effect/Number";
 import * as Schema from "effect/Schema";
 import {
   decodeTolerantFields,
   makeConfigDocumentErrorFactory,
-  modifyJsonObject,
-  readConfigOrWarn,
-  readOptionalJsonObject,
-  readRawJsonObject,
-  scopedDocumentPaths,
-  selectScopedDocument,
-  writeJsonObject,
-  type JsonDocumentModification,
+  makeScopedConfigStore,
   type JsonObject,
+  type ScopedConfigMetadata,
 } from "pi-cosmic-core";
 import {
   CONFIG_BASENAME,
@@ -37,20 +30,6 @@ export class OpenAIConfigError extends Schema.TaggedErrorClass<OpenAIConfigError
 ) {}
 
 const mapError = makeConfigDocumentErrorFactory(OpenAIConfigError, "Better OpenAI");
-
-export const configPaths = Effect.fn("OpenAIConfig.configPaths")(function* (
-  cwd: string,
-  agentDir: string,
-) {
-  return yield* scopedDocumentPaths(cwd, agentDir, {
-    projectConfigDirectory: CONFIG_DIR_NAME,
-    basename: CONFIG_BASENAME,
-  });
-});
-
-export const readRawConfig = Effect.fn("OpenAIConfig.readRawConfig")(function* (path: string) {
-  return yield* readRawJsonObject(path, mapError);
-});
 
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
@@ -117,17 +96,8 @@ function decodeConfig(value: unknown): ConfigFile {
   };
 }
 
-type ResolvedConfigMetadata = Pick<
-  ResolvedConfig,
-  | "configPath"
-  | "projectConfigPath"
-  | "globalConfigPath"
-  | "projectConfigExists"
-  | "globalConfigExists"
->;
-
 function resolveConfigFiles(
-  metadata: ResolvedConfigMetadata,
+  metadata: ScopedConfigMetadata,
   project: ConfigFile | undefined,
   global: ConfigFile | undefined,
 ): ResolvedConfig {
@@ -192,79 +162,23 @@ function resolveConfigFiles(
   };
 }
 
-/** Resolves the exact document returned by an atomic commit without performing post-commit I/O. */
-export function resolveCommittedConfig(
-  current: ResolvedConfig,
-  committed: JsonObject,
-  globalFallback: JsonObject | undefined,
-): ResolvedConfig {
-  const metadata: ResolvedConfigMetadata = {
-    configPath: current.configPath,
-    projectConfigPath: current.projectConfigPath,
-    globalConfigPath: current.globalConfigPath,
-    projectConfigExists: current.projectConfigExists,
-    globalConfigExists: current.globalConfigExists,
-  };
-  if (current.configPath === current.projectConfigPath) {
-    return resolveConfigFiles(
-      metadata,
-      decodeConfig(committed),
-      globalFallback === undefined ? undefined : decodeConfig(globalFallback),
-    );
-  }
-  return resolveConfigFiles(metadata, undefined, decodeConfig(committed));
-}
-
-export const readConfig = Effect.fn("OpenAIConfig.readConfig")(function* (path: string) {
-  return yield* readOptionalJsonObject(path, decodeConfig, mapError);
+const store = makeScopedConfigStore({
+  errorFactory: mapError,
+  label: "Better OpenAI",
+  spanPrefix: "OpenAIConfig",
+  projectConfigDirectory: CONFIG_DIR_NAME,
+  basename: CONFIG_BASENAME,
+  decode: decodeConfig,
+  defaultDocument: () => DEFAULT_CONFIG as JsonObject,
+  resolve: resolveConfigFiles,
 });
 
-export const writeConfig = Effect.fn("OpenAIConfig.writeConfig")(function* (
-  path: string,
-  config: JsonObject,
-) {
-  yield* writeJsonObject(path, config, mapError);
-});
-
-export const modifyConfig = Effect.fn("OpenAIConfig.modifyConfig")(function* <A, AfterCommitR>(
-  path: string,
-  modify: (document: JsonObject) => JsonDocumentModification<A, AfterCommitR>,
-) {
-  return yield* modifyJsonObject(path, modify, mapError);
-});
-
-export const resolveConfig = Effect.fn("OpenAIConfig.resolveConfig")(function* (
-  cwd: string,
-  agentDir: string,
-  projectTrusted = true,
-) {
-  const paths = yield* configPaths(cwd, agentDir);
-  const selected = yield* selectScopedDocument(paths).pipe(
-    Effect.mapError((error) => mapError("inspect", error.path)()),
-  );
-  let projectExists = projectTrusted && selected.projectExists;
-  let globalExists = selected.globalExists;
-  if (!projectExists && !globalExists) {
-    yield* writeConfig(paths.global, DEFAULT_CONFIG as JsonObject);
-    globalExists = true;
-  }
-  const warning = "Unable to read a Better OpenAI configuration document.";
-  const [project, global] = yield* Effect.all(
-    [
-      readConfigOrWarn(paths.project, projectExists, readConfig, warning),
-      readConfigOrWarn(paths.global, globalExists, readConfig, warning),
-    ] as const,
-    { concurrency: 2 },
-  );
-  return resolveConfigFiles(
-    {
-      configPath: projectExists ? paths.project : paths.global,
-      projectConfigPath: paths.project,
-      globalConfigPath: paths.global,
-      projectConfigExists: projectExists,
-      globalConfigExists: globalExists,
-    },
-    project,
-    global,
-  );
-});
+export const {
+  configPaths,
+  modifyConfig,
+  readConfig,
+  readRawConfig,
+  resolveCommittedConfig,
+  resolveConfig,
+  writeConfig,
+} = store;

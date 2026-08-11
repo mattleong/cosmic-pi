@@ -90,6 +90,12 @@ export {
   type ConfigDocumentErrorFactory,
 } from "./src/config/document-ops.ts";
 export {
+  makeScopedConfigStore,
+  type ScopedConfigMetadata,
+  type ScopedConfigStore,
+  type ScopedConfigStoreOptions,
+} from "./src/config/scoped-config-store.ts";
+export {
   captureHostSignal,
   captureSessionHost,
   hasTerminalUI,
