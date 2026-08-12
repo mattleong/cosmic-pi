@@ -114,7 +114,8 @@ export const resolveConfig = Effect.fn("pi-cosmic-ui.config.resolve")(function* 
   projectTrusted = true,
 ) {
   const paths = yield* configPaths(cwd, agentDir);
-  const selected = yield* selectScopedDocument(paths).pipe(
+  // Untrusted projects never probe the project document: its path stays inert metadata.
+  const selected = yield* selectScopedDocument(paths, { probeProject: projectTrusted }).pipe(
     Effect.mapError((error) => mapError("inspect", error.path)()),
   );
   const projectExists = projectTrusted && selected.projectExists;

@@ -1,0 +1,88 @@
+{
+  "name": "pi-code-mode",
+  "version": "0.2.0",
+  "description": "Code Mode for pi: a confined code_mode agent tool that orchestrates read-only Pi tools from one interpreted program, with trusted-project scoped settings.",
+  "keywords": [
+    "code-mode",
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "settings",
+    "tools"
+  ],
+  "homepage": "https://github.com/mattleong/cosmic-pi/tree/main/packages/pi-code-mode#readme",
+  "bugs": {
+    "url": "https://github.com/mattleong/cosmic-pi/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mattleong/cosmic-pi.git",
+    "directory": "packages/pi-code-mode"
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "runtime/dist/",
+    "runtime/LICENSE",
+    "runtime/THIRD_PARTY_NOTICES.md",
+    "runtime/PROVENANCE.md",
+    "runtime/README.md",
+    "README.md",
+    "ARCHITECTURE.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "validate": "pnpm check && pnpm test",
+    "pretypecheck": "pnpm --filter pi-cosmic-core build && pnpm --filter pi-code-previews build && pnpm --filter pi-code-mode-runtime build",
+    "typecheck": "tsc --noEmit",
+    "effect:diagnostics": "effect-language-service diagnostics --project tsconfig.json",
+    "lint": "oxlint --deny-warnings .",
+    "lint:fix": "oxlint --fix .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "pretest": "pnpm --filter pi-cosmic-core build && pnpm --filter pi-code-previews build && pnpm --filter pi-code-mode-runtime build",
+    "test": "vitest run",
+    "prepack": "pnpm --filter pi-code-mode-runtime build",
+    "prepublishOnly": "pnpm validate",
+    "pack:dry": "pnpm pack --dry-run"
+  },
+  "dependencies": {
+    "acorn": "catalog:",
+    "effect": "catalog:",
+    "pi-code-previews": "workspace:*",
+    "pi-cosmic-core": "workspace:*",
+    "pi-cosmic-ui": "workspace:*",
+    "typebox": "catalog:",
+    "typescript": "catalog:"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

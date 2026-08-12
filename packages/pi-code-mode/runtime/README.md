@@ -1,0 +1,46 @@
+# pi-code-mode-runtime
+
+Host-neutral confined code execution over explicit, schema-described tools,
+vendored from OpenCode 2 Code Mode (`@opencode-ai/codemode`) at a pinned
+upstream commit. A model-written JavaScript program is TypeScript-transpiled,
+Acorn-parsed, and tree-walk interpreted - never `eval`'d - and can only call the
+tools the host supplies.
+
+## Status
+
+- **Private, nested, and shipped by value.** This package is workspace-internal
+  (`"private": true`) and is never published on its own. It lives _inside_ the
+  public `pi-code-mode` package directory (`packages/pi-code-mode/runtime/`) so
+  that its built output (`dist/`, produced by `pnpm --filter
+pi-code-mode-runtime build`) ships inside the `pi-code-mode` tarball.
+  In the repository, `dist/` is an ephemeral generated artifact — git-ignored
+  and rebuilt on demand by `pi-code-mode`'s `prepack`/`pretest`/`pretypecheck`
+  hooks — only the packed tarball carries it permanently.
+  `pi-code-mode` imports it only by relative path through its single boundary
+  door (`src/boundary/codemode-runtime.ts`) — never by package name — which
+  keeps consumers on one shared `effect` instance and avoids a registry
+  dependency that could never resolve. This `package.json` is repository-only
+  and stays out of the tarball: the packed `dist/` files inherit
+  `pi-code-mode`'s top-level `type: module`, and `pi-code-mode` declares the
+  runtime's external dependencies (`acorn`, `effect`, `typescript`) itself.
+- **Host-neutral.** It registers no Pi extension and imports nothing from Pi.
+  The `pi-code-mode` extension owns the Pi-facing integration: the read-only
+  `code_mode` agent tool, the `tools.pi.*` adapters, and the Pi-specific host
+  limits are layered above this boundary.
+
+## Documentation
+
+- `ARCHITECTURE.md` - source map and public/private boundaries.
+- `PROVENANCE.md` - upstream origin, pinned commit, deviations, resync policy.
+- `THIRD_PARTY_NOTICES.md` - upstream MIT license notice.
+- `docs/adr/0003-code-mode-runtime.md` (repository root) - the decision record.
+
+## Verification
+
+```sh
+pnpm --filter pi-code-mode-runtime typecheck
+pnpm --filter pi-code-mode-runtime test
+pnpm --filter pi-code-mode-runtime lint
+pnpm --filter pi-code-mode-runtime format:check
+pnpm --filter pi-code-mode-runtime effect:diagnostics
+```

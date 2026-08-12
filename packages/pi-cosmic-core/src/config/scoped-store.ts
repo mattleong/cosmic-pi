@@ -34,13 +34,27 @@ export const scopedDocumentPaths = Effect.fn("ScopedStore.paths")(function* (
   } satisfies ScopedDocumentPaths;
 });
 
+export interface ScopedDocumentSelectionOptions {
+  /**
+   * When false, the project document is never inspected: no exists/stat/read touches the
+   * project path, and the selection reports it as absent. Callers use this for untrusted
+   * projects whose path stays inert plain metadata.
+   */
+  readonly probeProject?: boolean;
+}
+
 /** Inspects both scopes and selects project precedence based on existence, not decode success. */
 export const selectScopedDocument = Effect.fn("ScopedStore.select")(function* (
   paths: ScopedDocumentPaths,
+  options?: ScopedDocumentSelectionOptions,
 ) {
   const documents = yield* JsonDocumentStore;
+  const probeProject = options?.probeProject ?? true;
   const [projectExists, globalExists] = yield* Effect.all(
-    [documents.exists(paths.project), documents.exists(paths.global)] as const,
+    [
+      probeProject ? documents.exists(paths.project) : Effect.succeed(false),
+      documents.exists(paths.global),
+    ] as const,
     { concurrency: 2 },
   );
   return {

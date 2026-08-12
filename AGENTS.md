@@ -7,6 +7,8 @@
 - `packages/pi-better-openai/` contains the Better OpenAI pi extension.
 - `packages/pi-better-xai/` contains the Better xAI subscription usage extension.
 - `packages/pi-background-terminals/` contains the session-scoped background process extension.
+- `packages/pi-code-mode/` contains the Code Mode Pi extension: the read-only `code_mode` agent tool (confined interpreted programs over `tools.pi.read/grep/find/ls`), trusted-project-only scoped settings, session lifecycle, and `/code-mode-settings`.
+- `packages/pi-code-mode/runtime/` contains the private, host-neutral Code Mode execution runtime vendored from OpenCode 2 (no Pi imports; see its `PROVENANCE.md`). It is a nested workspace package whose built `dist/` ships inside the `pi-code-mode` tarball; `pi-code-mode` imports it only through its `src/boundary/codemode-runtime.ts` door.
 - `packages/pi-code-previews/` contains the code-preview pi extension.
 - `packages/pi-cosmic-core/` contains shared Effect-first runtime foundations for the extension packages.
 - `packages/pi-cosmic-ui/` contains composable shared UI elements, including the responsive footer.

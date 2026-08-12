@@ -62,9 +62,10 @@ export class BackgroundTerminalConfigStore extends Context.Service<
           projectConfigDirectory: CONFIG_DIR_NAME,
           basename: CONFIG_BASENAME,
         });
-        const selected = yield* selectScopedDocument(paths).pipe(
-          Effect.mapError((error) => mapDocumentError("inspect", error.path)()),
-        );
+        // Untrusted projects never probe the project document: its path stays inert metadata.
+        const selected = yield* selectScopedDocument(paths, {
+          probeProject: options.projectTrusted,
+        }).pipe(Effect.mapError((error) => mapDocumentError("inspect", error.path)()));
         const warning = "Unable to read Background Terminals configuration.";
         const global = yield* readConfigOrWarn(
           paths.global,

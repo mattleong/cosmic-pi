@@ -1,5 +1,8 @@
 packages:
   - packages/*
+  # The private Code Mode runtime is nested inside the public pi-code-mode package so its
+  # built files ship inside the pi-code-mode tarball (see ADR 0003).
+  - packages/pi-code-mode/runtime
 
 catalog:
   "@earendil-works/pi-ai": 0.84.0
@@ -8,10 +11,12 @@ catalog:
   "@effect/platform-node": 4.0.0-beta.99
   "@effect/vitest": 4.0.0-beta.99
   "@types/node": ~22.19.0
+  acorn: 8.15.0
   effect: 4.0.0-beta.99
   oxfmt: ^0.47.0
   oxlint: ^1.62.0
   typebox: 1.1.38
+  typescript: 6.0.3
   vitest: ^4.1.5
 
 engineStrict: true

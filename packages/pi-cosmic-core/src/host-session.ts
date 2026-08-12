@@ -67,7 +67,20 @@ export function notifyAtHostBoundary(
   level: HostNotificationLevel,
 ): void {
   try {
-    ctx.ui.notify(message, level);
+    const outcome: unknown = ctx.ui.notify(message, level);
+    // Pi documents `notify` as synchronous void. A runtime that returns a thenable anyway must
+    // not surface an unhandled rejection through this best-effort boundary, so any returned
+    // thenable gets a no-op rejection handler; there is no resource to manage or await.
+    if (
+      typeof outcome === "object" &&
+      outcome !== null &&
+      typeof (outcome as { readonly then?: unknown }).then === "function"
+    ) {
+      (outcome as PromiseLike<unknown>).then(
+        () => undefined,
+        () => undefined,
+      );
+    }
   } catch {
     // Notifications are best effort at the Pi host boundary.
   }

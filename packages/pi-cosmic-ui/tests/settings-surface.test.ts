@@ -81,6 +81,48 @@ describe("createSettingsListSurface", () => {
     surface.handleInput?.("");
     expect(cancelled).toBe(1);
     expect(invoked).toContain("guard");
+
+    // Render, invalidate, and input all delegate through the same caller-owned guard.
+    invoked.length = 0;
+    surface.render(80);
+    surface.invalidate();
+    surface.handleInput?.("j");
+    expect(invoked).toEqual(["guard", "guard", "guard"]);
+    // Malformed host input delegations resolve through the guard instead of escaping.
+    expect(() => surface.handleInput?.(undefined as unknown as string)).not.toThrow();
+  });
+
+  it("contains throwing render, invalidate, and input delegation behind the caller guard", () => {
+    const guard = <A>(callback: () => A, fallback: A): A => {
+      try {
+        return callback();
+      } catch {
+        return fallback;
+      }
+    };
+    const { surface } = createSettingsListSurface({
+      header: {
+        render: () => {
+          throw new Error("hostile header render");
+        },
+        invalidate: () => {
+          throw new Error("hostile header invalidate");
+        },
+      },
+      items: items(),
+      height: 6,
+      listTheme,
+      onChange: () => {
+        throw new Error("hostile change callback");
+      },
+      onCancel: () => undefined,
+      dim: (text) => text,
+      bridge: { invoke: guard },
+    });
+    surface.focused = true;
+    expect(surface.render(80)).toEqual([]);
+    expect(() => surface.invalidate()).not.toThrow();
+    expect(() => surface.handleInput?.("\r")).not.toThrow();
   });
 
   it("suppresses onChange for group/navigation rows while setting rows still fire", () => {

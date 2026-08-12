@@ -79,6 +79,7 @@ export {
   type ScopedDocumentPathOptions,
   type ScopedDocumentPaths,
   type ScopedDocumentSelection,
+  type ScopedDocumentSelectionOptions,
 } from "./src/config/scoped-store.ts";
 export {
   makeConfigDocumentErrorFactory,

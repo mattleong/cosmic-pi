@@ -11,6 +11,7 @@ import {
   nodePlatformLayer,
   type JsonDocumentStoreShape,
 } from "pi-cosmic-core";
+import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import {
   configPaths,
   resolveConfig,
@@ -86,6 +87,52 @@ describe("Cosmic UI config", () => {
       }),
     ),
   );
+
+  it.effect("untrusted resolution and writes perform no project-document I/O at all", () => {
+    const memory = makeInMemoryDocuments();
+    const operations: string[] = [];
+    const record =
+      <Arguments extends unknown[], Result>(
+        operation: string,
+        method: (path: string, ...rest: Arguments) => Result,
+      ) =>
+      (path: string, ...rest: Arguments): Result => {
+        operations.push(`${operation}:${path}`);
+        return method(path, ...rest);
+      };
+    const service: JsonDocumentStoreShape = {
+      exists: record("exists", memory.service.exists),
+      readObject: record("read", memory.service.readObject),
+      writeObject: record("write", memory.service.writeObject),
+      modifyObject: (path, modify) => {
+        operations.push(`modify:${path}`);
+        return memory.service.modifyObject(path, modify);
+      },
+      updateObject: record("update", memory.service.updateObject),
+    };
+    return Effect.gen(function* () {
+      const paths = yield* configPaths("/project", "/agent");
+      memory.documents.set(paths.project, { footer: { enabled: false, density: "compact" } });
+      memory.documents.set(paths.global, { footer: { density: "comfortable" } });
+
+      const config = yield* resolveConfig("/project", "/agent", false);
+      expect(config.configPath).toBe(paths.global);
+      expect(config.footer).toMatchObject({ enabled: true, density: "comfortable" });
+
+      const updated = yield* updateFooterConfig("/project", "/agent", { enabled: false }, false);
+      expect(updated.configPath).toBe(paths.global);
+      expect(memory.documents.get(paths.global)).toEqual({
+        footer: { density: "comfortable", enabled: false },
+      });
+
+      // The untrusted project document is never stat'd, read, or written.
+      expect(operations.length).toBeGreaterThan(0);
+      expect(operations.filter((operation) => operation.includes(paths.project))).toEqual([]);
+      expect(memory.documents.get(paths.project)).toEqual({
+        footer: { enabled: false, density: "compact" },
+      });
+    }).pipe(Effect.provide(Layer.merge(Layer.succeed(JsonDocumentStore, service), Path.layer)));
+  });
 
   it.effect("reselects scope when external documents appear or disappear", () =>
     withTempConfig(({ cwd, agent }) =>

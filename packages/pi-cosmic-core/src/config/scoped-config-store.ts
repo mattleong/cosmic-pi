@@ -73,11 +73,19 @@ export interface ScopedConfigStore<File, Resolved extends ScopedConfigMetadata, 
     agentDir: string,
     projectTrusted?: boolean,
   ) => Effect.Effect<Resolved, E, JsonDocumentStore | Path.Path>;
-  /** Resolves the exact document returned by an atomic commit without post-commit I/O. */
+  /**
+   * Resolves the exact document returned by an atomic commit without post-commit I/O.
+   *
+   * `fallback` is the other scope's raw document captured before the commit (the global
+   * document for a project commit, the project document for a global commit). When
+   * `committedScope` is omitted it is derived from `current.configPath`, which matches
+   * callers that always commit to the preferred scope.
+   */
   readonly resolveCommittedConfig: (
     current: Resolved,
     committed: JsonObject,
-    globalFallback: JsonObject | undefined,
+    fallback: JsonObject | undefined,
+    committedScope?: "project" | "global",
   ) => Resolved;
 }
 
@@ -134,7 +142,8 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
     projectTrusted = true,
   ) {
     const paths = yield* configPaths(cwd, agentDir);
-    const selected = yield* selectScopedDocument(paths).pipe(
+    // Untrusted projects perform no project-document I/O at all: the path stays inert metadata.
+    const selected = yield* selectScopedDocument(paths, { probeProject: projectTrusted }).pipe(
       Effect.mapError((error) => errorFactory("inspect", error.path)()),
     );
     const projectExists = projectTrusted && selected.projectExists;
@@ -166,7 +175,8 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
   const resolveCommittedConfig = (
     current: Resolved,
     committed: JsonObject,
-    globalFallback: JsonObject | undefined,
+    fallback: JsonObject | undefined,
+    committedScope?: "project" | "global",
   ): Resolved => {
     const metadata: ScopedConfigMetadata = {
       configPath: current.configPath,
@@ -175,14 +185,20 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
       projectConfigExists: current.projectConfigExists,
       globalConfigExists: current.globalConfigExists,
     };
-    if (current.configPath === current.projectConfigPath) {
+    const scope =
+      committedScope ?? (current.configPath === current.projectConfigPath ? "project" : "global");
+    if (scope === "project") {
       return resolve(
         metadata,
         decode(committed),
-        globalFallback === undefined ? undefined : decode(globalFallback),
+        fallback === undefined ? undefined : decode(fallback),
       );
     }
-    return resolve(metadata, undefined, decode(committed));
+    return resolve(
+      metadata,
+      fallback === undefined ? undefined : decode(fallback),
+      decode(committed),
+    );
   };
 
   return {

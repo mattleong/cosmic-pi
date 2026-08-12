@@ -61,10 +61,20 @@ jobs:
       - name: Publish unpublished public packages
         run: |
           set -euo pipefail
-          # Publish the shared runtime before extension packages that depend on it.
-          package_dirs=(packages/pi-cosmic-core)
+          # Publish shared public runtime dependencies before the extension packages that
+          # depend on them (pi-code-mode depends on pi-cosmic-core, pi-cosmic-ui, and
+          # pi-code-previews), then every other top-level package exactly once. Private
+          # packages are skipped below; the nested private runtime is not a top-level
+          # packages/* entry and ships by value inside the pi-code-mode tarball.
+          package_dirs=(packages/pi-cosmic-core packages/pi-cosmic-ui packages/pi-code-previews)
           for package_dir in packages/*; do
-            if [ "$package_dir" != "packages/pi-cosmic-core" ]; then
+            already_listed=false
+            for ordered_dir in "${package_dirs[@]}"; do
+              if [ "$package_dir" = "$ordered_dir" ]; then
+                already_listed=true
+              fi
+            done
+            if [ "$already_listed" = "false" ]; then
               package_dirs+=("$package_dir")
             fi
           done

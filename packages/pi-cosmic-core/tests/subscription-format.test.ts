@@ -12,6 +12,8 @@ import {
   captureSessionHost,
   hasTerminalUI,
   isProjectTrusted,
+  notifyAtHostBoundary,
+  type HostNotifierContext,
 } from "../src/host-session.ts";
 import { withUsageEligibility } from "../src/usage-projection.ts";
 
@@ -96,6 +98,47 @@ describe("host-session helpers", () => {
       aborted: false,
     });
     expect(captureSessionHost({ cwd: "" })).toEqual({ _tag: "Unavailable" });
+  });
+
+  it("contains throwing and rejecting-thenable notify runtimes without unhandled rejections", () => {
+    const throwing: HostNotifierContext = {
+      ui: {
+        notify: () => {
+          throw new Error("hostile notify");
+        },
+      },
+    };
+    expect(() => notifyAtHostBoundary(throwing, "message", "info")).not.toThrow();
+
+    // Pi documents `notify` as synchronous void; a runtime that returns a rejecting thenable
+    // anyway must have its rejection observed by the boundary instead of leaking unhandled.
+    let rejectionObserved = false;
+    const rejecting = {
+      ui: {
+        notify: () => ({
+          // oxlint-disable-next-line unicorn/no-thenable -- simulates the contract-violating runtime under test
+          then: (_onResolve?: unknown, onReject?: (reason: unknown) => unknown) => {
+            rejectionObserved = typeof onReject === "function";
+            onReject?.(new Error("late notify failure"));
+          },
+        }),
+      },
+    } as unknown as HostNotifierContext;
+    expect(() => notifyAtHostBoundary(rejecting, "message", "warning")).not.toThrow();
+    expect(rejectionObserved).toBe(true);
+
+    // Even a hostile thenable whose `then` itself throws stays contained.
+    const hostileThenable = {
+      ui: {
+        notify: () => ({
+          // oxlint-disable-next-line unicorn/no-thenable -- simulates the contract-violating runtime under test
+          then: () => {
+            throw new Error("hostile then");
+          },
+        }),
+      },
+    } as unknown as HostNotifierContext;
+    expect(() => notifyAtHostBoundary(hostileThenable, "message", "error")).not.toThrow();
   });
 });
 

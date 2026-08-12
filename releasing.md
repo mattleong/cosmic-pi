@@ -1,6 +1,6 @@
 # Releasing cosmic-pi
 
-All workspace packages use the same version. The public `pi-ask-user`, `pi-background-terminals`, `pi-better-openai`, `pi-better-xai`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-advisor` and `pi-herdr-fork` remain local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm.
+All workspace packages use the same version. The public `pi-ask-user`, `pi-background-terminals`, `pi-better-openai`, `pi-better-xai`, `pi-code-mode`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-advisor` and `pi-herdr-fork` remain local-only, and the nested private `pi-code-mode-runtime` is never published on its own (its built output ships inside the `pi-code-mode` tarball). A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm — shared runtime dependencies (`pi-cosmic-core`, `pi-cosmic-ui`, `pi-code-previews`) first, then the remaining public packages.
 
 ## One-time setup
 
@@ -12,6 +12,7 @@ Before the first release:
    - `pi-background-terminals`
    - `pi-better-openai`
    - `pi-better-xai`
+   - `pi-code-mode`
    - `pi-code-previews`
    - `pi-cosmic-core`
    - `pi-cosmic-ui`
@@ -24,6 +25,8 @@ Before the first release:
 4. Ensure the GitHub workflow is enabled on the default branch.
 
 The workflow uses GitHub OIDC and npm provenance. It does not require an `NPM_TOKEN` secret when trusted publishing is configured.
+
+When a new package becomes public (most recently `pi-code-mode`), configure its npm trusted publisher **before tagging** the first release that includes it; a tag pushed first will fail to publish that package until trusted publishing is configured and the workflow is retried.
 
 ## Prepare a release
 
@@ -90,6 +93,7 @@ npm view pi-ask-user version
 npm view pi-background-terminals version
 npm view pi-better-openai version
 npm view pi-better-xai version
+npm view pi-code-mode version
 npm view pi-code-previews version
 npm view pi-cosmic-core version
 npm view pi-cosmic-ui version
@@ -97,7 +101,7 @@ npm view pi-directory-models version
 npm view pi-subagents version
 ```
 
-All nine commands should report the release version. npm provenance should also appear on each package version page.
+All ten commands should report the release version. npm provenance should also appear on each package version page.
 
 ## Retry a failed release
 
