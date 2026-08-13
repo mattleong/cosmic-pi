@@ -16,7 +16,7 @@
 - `src/platform/` contains typed Node, HTTP, document, file, process-coordination, and agent-directory adapters.
 - `src/config/` contains reusable scoped-store, document-ops, and tolerant-field configuration infrastructure.
 - `src/projection.ts` publishes immutable synchronous snapshots.
-- `src/security.ts` owns shared redaction/sanitization.
+- `src/security.ts` owns shared redaction/plain terminal sanitization; `src/security/terminal-styled.ts` owns linear per-channel parsing and bounded safe visual-SGR preservation for terminal log UIs that must strip every active control sequence.
 - `src/settings-completion.ts` owns pure `/…-settings` argument completion (`completeSettingsArguments`): descriptor-ordered id matching, caller-supplied extra verbs, case-insensitive prefixes (ids match case-insensitively in both stages), and the `null`-on-no-match host contract. It has no UI dependency.
 - `src/settings-dispatch.ts` owns pure `/…-settings` argument dispatch (`dispatchSettingsCommand`): a closed OpenInteractive/Help/Diagnostics/Apply/Invalid tagged result with exact finite-value matching and no hidden verb aliases. Hosts own all side effects and message wording; it has no host dependency.
 - `src/subscription-format.ts` owns shared subscription countdown/percent/token/status-line formatting helpers.

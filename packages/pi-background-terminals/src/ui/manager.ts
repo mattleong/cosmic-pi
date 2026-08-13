@@ -33,7 +33,8 @@ import type {
   BackgroundTerminalProjection,
 } from "../job/model.ts";
 import { isActiveJobState } from "../job/model.ts";
-import { sanitizeTerminalLine, sanitizeTerminalText } from "./sanitize.ts";
+import { sanitizeTerminalLine } from "./sanitize.ts";
+import { styledBackgroundLogLines } from "./styled-log.ts";
 
 export interface ProcessManagerOptions {
   readonly theme: Theme;
@@ -379,20 +380,22 @@ export class ProcessManagerComponent implements Component {
     }));
   }
 
-  // Caches fully sanitized, prefixed, themed lines per event so a render tick
-  // over unchanged events skips per-line reassembly of the whole detail pane.
-  private readonly renderedLogLines = new WeakMap<BackgroundLogEvent, ReadonlyArray<string>>();
+  // Caches fully sanitized, prefixed, themed lines per immutable log snapshot so a render tick
+  // over unchanged events skips reassembly of the whole detail pane.
+  private readonly renderedLogLines = new WeakMap<
+    ReadonlyArray<BackgroundLogEvent>,
+    ReadonlyArray<string>
+  >();
 
-  private logEventLines(event: BackgroundLogEvent): ReadonlyArray<string> {
-    const cached = this.renderedLogLines.get(event);
+  private logLines(events: ReadonlyArray<BackgroundLogEvent>): ReadonlyArray<string> {
+    const cached = this.renderedLogLines.get(events);
     if (cached) return cached;
-    const prefix = event.stream === "stderr" ? this.options.theme.fg("error", "│ ") : "│ ";
-    const lines = sanitizeTerminalText(event.text)
-      .split("\n")
-      .filter((part) => part)
-      .map((part) => `${prefix}${part}`);
-    this.renderedLogLines.set(event, lines);
-    return lines;
+    const rendered = styledBackgroundLogLines(events).map(({ stream, text }) => {
+      const prefix = stream === "stderr" ? this.options.theme.fg("error", "│ ") : "│ ";
+      return `${prefix}${text}`;
+    });
+    this.renderedLogLines.set(events, rendered);
+    return rendered;
   }
 
   private detailLines(job: BackgroundJobView | undefined): string[] {
@@ -419,9 +422,7 @@ export class ProcessManagerComponent implements Component {
       lines.push(
         this.options.theme.fg("warning", `… ${job.droppedLogBytes} earlier bytes discarded`),
       );
-    for (const event of job.logs) {
-      for (const line of this.logEventLines(event)) lines.push(line);
-    }
+    for (const line of this.logLines(job.logs)) lines.push(line);
     if (lines.length === (this.showTechnicalDetails ? 5 : 2))
       lines.push(this.options.theme.fg("dim", "(no output)"));
     return lines;

@@ -62,9 +62,12 @@ const processError = (operation: string, error: unknown) =>
     message: error instanceof Error ? error.message : `Unable to ${operation} local process.`,
   });
 
-function sanitizedEnvironment(): NodeJS.ProcessEnv {
-  return Object.fromEntries(
-    Object.entries(process.env).filter(
+export function makeBackgroundProcessEnvironment(
+  source: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const environment = Object.fromEntries(
+    Object.entries(source).filter(
       ([key, value]) =>
         value !== undefined &&
         !BLOCKED_ENVIRONMENT_KEYS.has(key) &&
@@ -72,6 +75,15 @@ function sanitizedEnvironment(): NodeJS.ProcessEnv {
         key !== "PI_SESSION_ID",
     ),
   );
+  // Background stdout/stderr are pipes, so compatible CLIs otherwise suppress useful color.
+  // Explicit FORCE_COLOR and the cross-ecosystem NO_COLOR convention always win. Windows
+  // environment keys are case-insensitive even though the reconstructed plain object is not.
+  const hasKey = (name: string): boolean =>
+    platform === "win32"
+      ? Object.keys(environment).some((key) => key.toUpperCase() === name)
+      : environment[name] !== undefined;
+  if (!hasKey("FORCE_COLOR") && !hasKey("NO_COLOR")) environment.FORCE_COLOR = "1";
+  return environment;
 }
 
 function terminateTree(child: ChildProcess, mode: "graceful" | "force"): void {
@@ -144,7 +156,7 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
       spawn(request.command, {
         cwd: request.cwd,
         detached: process.platform !== "win32",
-        env: sanitizedEnvironment(),
+        env: makeBackgroundProcessEnvironment(process.env),
         shell: request.shellPath ?? true,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,

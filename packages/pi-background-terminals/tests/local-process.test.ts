@@ -4,12 +4,30 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { LocalProcess } from "../src/boundary/local-process.ts";
+import { LocalProcess, makeBackgroundProcessEnvironment } from "../src/boundary/local-process.ts";
 
 const withLocalProcess = <A, E>(effect: Effect.Effect<A, E, LocalProcess | Scope.Scope>) =>
   effect.pipe(Effect.scoped, Effect.provide(LocalProcess.layer));
 
 describe("local process boundary", () => {
+  it("requests color from compatible CLIs unless the environment explicitly configures it", () => {
+    expect(
+      makeBackgroundProcessEnvironment({
+        PATH: "/bin",
+        PI_SESSION_ID: "private",
+        NODE_OPTIONS: "--inspect",
+      }),
+    ).toEqual({ PATH: "/bin", FORCE_COLOR: "1" });
+    expect(makeBackgroundProcessEnvironment({ FORCE_COLOR: "0" })).toEqual({ FORCE_COLOR: "0" });
+    expect(makeBackgroundProcessEnvironment({ NO_COLOR: "1" })).toEqual({ NO_COLOR: "1" });
+    expect(makeBackgroundProcessEnvironment({ force_color: "0" }, "win32")).toEqual({
+      force_color: "0",
+    });
+    expect(makeBackgroundProcessEnvironment({ no_color: "1" }, "win32")).toEqual({
+      no_color: "1",
+    });
+  });
+
   it.effect("captures stdout, stderr, and exit", () =>
     withLocalProcess(
       Effect.gen(function* () {

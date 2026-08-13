@@ -177,6 +177,12 @@ export {
   type DiagnosticSanitizerOptions,
 } from "./src/security.ts";
 export {
+  sanitizeTerminalStyledFragments,
+  sanitizeTerminalStyledText,
+  type SanitizedTerminalStyledFragment,
+  type TerminalStyledFragment,
+} from "./src/security/terminal-styled.ts";
+export {
   completeSettingsArguments,
   type SettingsCompletionChoice,
   type SettingsCompletionDescriptor,

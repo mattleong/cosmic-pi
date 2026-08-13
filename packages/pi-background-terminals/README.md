@@ -36,6 +36,6 @@ Optional configuration may be placed in:
 
 `shellPath` is an optional string (for example `"shellPath": "/bin/bash"`); when omitted, jobs run in the platform default shell.
 
-Captured output is bounded and sanitized before TUI rendering. Complete output should be redirected explicitly to a file when required.
+Captured output is bounded and sanitized before TUI rendering. `/ps` preserves only safe ANSI SGR colors and text styles; cursor movement, screen erasure, terminal-title, hyperlink, clipboard, and other control sequences are removed. Background jobs receive `FORCE_COLOR=1` by default so compatible CLIs highlight piped output, unless the environment already sets `FORCE_COLOR` or `NO_COLOR`. Complete output should be redirected explicitly to a file when required.
 
 Interactive PTYs, persistent reattachment, and remote execution are deferred to later phases.

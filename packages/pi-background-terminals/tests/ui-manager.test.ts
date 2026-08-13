@@ -69,6 +69,189 @@ describe("/ps process manager", () => {
     expect(lines.every((line) => visibleWidth(line) <= 120)).toBe(true);
   });
 
+  it("preserves safe CLI colors while stripping active terminal controls", () => {
+    const styled: BackgroundTerminalProjection = {
+      jobs: [
+        {
+          ...projection.jobs[0]!,
+          logs: [
+            {
+              cursor: 1,
+              stream: "stdout",
+              text: "\u001b[31;1mred\u001b[0m plain\u001b[2J safe\u001b]52;c;Y2xpcA==\u0007\n",
+              timestamp: 1,
+              bytes: 64,
+            },
+          ],
+        },
+      ],
+    };
+    const text = makeComponent({ getProjection: () => styled })
+      .component.render(120)
+      .join("\n");
+    expect(text).toContain("\u001b[31;1mred\u001b[0m plain safe");
+    expect(text).not.toContain("\u001b[2J");
+    expect(text).not.toContain("Y2xpcA");
+  });
+
+  it("preserves SGR state across pipe chunks and output lines", () => {
+    const split: BackgroundTerminalProjection = {
+      jobs: [
+        {
+          ...projection.jobs[0]!,
+          logs: [
+            { cursor: 1, stream: "stdout", text: "\u001b[3", timestamp: 1, bytes: 3 },
+            {
+              cursor: 2,
+              stream: "stdout",
+              text: "1msplit\nstill red\u001b[0m\n",
+              timestamp: 2,
+              bytes: 24,
+            },
+          ],
+        },
+      ],
+    };
+    const text = makeComponent({ getProjection: () => split })
+      .component.render(120)
+      .join("\n");
+    expect(text).toContain("\u001b[31msplit\u001b[0m");
+    expect(text).toContain("\u001b[31mstill red\u001b[0m");
+    expect(text).not.toContain("│ 1msplit");
+  });
+
+  it("retains parser and style state independently across interleaved streams", () => {
+    const interleaved: BackgroundTerminalProjection = {
+      jobs: [
+        {
+          ...projection.jobs[0]!,
+          logs: [
+            { cursor: 1, stream: "stdout", text: "\u001b[3", timestamp: 1, bytes: 3 },
+            { cursor: 2, stream: "stderr", text: "oops\n", timestamp: 2, bytes: 5 },
+            {
+              cursor: 3,
+              stream: "stdout",
+              text: "1mred\nstill red",
+              timestamp: 3,
+              bytes: 17,
+            },
+            { cursor: 4, stream: "stderr", text: "again\n", timestamp: 4, bytes: 6 },
+            {
+              cursor: 5,
+              stream: "stdout",
+              text: " after switch\u001b[0m\n",
+              timestamp: 5,
+              bytes: 22,
+            },
+          ],
+        },
+      ],
+    };
+    const text = makeComponent({ getProjection: () => interleaved })
+      .component.render(120)
+      .join("\n");
+    expect(text).toContain("\u001b[31mred\u001b[0m");
+    expect(text).toContain("\u001b[31mstill red\u001b[0m");
+    expect(text).toContain("\u001b[31m after switch\u001b[0m");
+    expect(text).not.toContain("│ 1mred");
+  });
+
+  it("drops terminal-string payloads split around an interleaved stream", () => {
+    const interleaved: BackgroundTerminalProjection = {
+      jobs: [
+        {
+          ...projection.jobs[0]!,
+          logs: [
+            { cursor: 1, stream: "stdout", text: "before\u001b]52;c;SEC", timestamp: 1, bytes: 16 },
+            { cursor: 2, stream: "stderr", text: "safe\n", timestamp: 2, bytes: 5 },
+            { cursor: 3, stream: "stdout", text: "RET\u0007after\n", timestamp: 3, bytes: 10 },
+          ],
+        },
+      ],
+    };
+    const text = makeComponent({ getProjection: () => interleaved })
+      .component.render(120)
+      .join("\n");
+    expect(text).toContain("before");
+    expect(text).toContain("after");
+    expect(text).toContain("safe");
+    expect(text).not.toContain("SECRET");
+    expect(text).not.toContain("52;c");
+  });
+
+  it("canonicalizes omitted SGR resets and keeps following lines plain", () => {
+    const reset: BackgroundTerminalProjection = {
+      jobs: [
+        {
+          ...projection.jobs[0]!,
+          logs: [
+            {
+              cursor: 1,
+              stream: "stdout",
+              text: "\u001b[31mred\u001b[;mplain\nnext\n",
+              timestamp: 1,
+              bytes: 25,
+            },
+          ],
+        },
+      ],
+    };
+    const text = makeComponent({ getProjection: () => reset })
+      .component.render(120)
+      .join("\n");
+    expect(text).toContain("\u001b[31mred\u001b[0;0mplain");
+    expect(text).toContain("│ next");
+    expect(text).not.toContain("\u001b[31mnext");
+  });
+
+  it("normalizes process tabs so they cannot move the terminal cursor", () => {
+    const tabbed: BackgroundTerminalProjection = {
+      jobs: [
+        {
+          ...projection.jobs[0]!,
+          logs: [
+            {
+              cursor: 1,
+              stream: "stdout",
+              text: "one\ttwo\n",
+              timestamp: 1,
+              bytes: 8,
+            },
+          ],
+        },
+      ],
+    };
+    const text = makeComponent({ getProjection: () => tabbed })
+      .component.render(120)
+      .join("\n");
+    expect(text).toContain("one   two");
+    expect(text).not.toContain("\t");
+  });
+
+  it("drops ANSI-only rows and bounds preserved styling traffic", () => {
+    const noisy: BackgroundTerminalProjection = {
+      jobs: [
+        {
+          ...projection.jobs[0]!,
+          logs: [
+            {
+              cursor: 1,
+              stream: "stdout",
+              text: `${"\u001b[31m".repeat(1_000)}\nvisible\n`,
+              timestamp: 1,
+              bytes: 5_008,
+            },
+          ],
+        },
+      ],
+    };
+    const text = makeComponent({ getProjection: () => noisy })
+      .component.render(120)
+      .join("\n");
+    expect(text).toContain("visible");
+    expect(text.length).toBeLessThan(2_000);
+  });
+
   it("renders width- and height-safe narrow fallbacks", () => {
     const lines = renderAt(42, 12);
     expect(lines).toHaveLength(12);
