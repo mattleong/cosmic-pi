@@ -51,6 +51,8 @@ export interface CodeModeExecutionEnvironment {
   readonly runInSession: <A>(effect: Effect.Effect<A>, signal?: AbortSignal) => Promise<A>;
   /** All seven built-in Pi definitions captured for this registration's cwd. */
   readonly definitions: NestedPiToolDefinitions;
+  /** Runtime execution boundary; injectable for compatibility tests. */
+  readonly executeCodeMode?: typeof CodeMode.execute;
   /** One-shot handoff to the `tool_result` hook for failures Pi converts to details `{}`. */
   readonly retainFailureDetails?: (toolCallId: string, details: CodeModeToolDetails) => void;
 }
@@ -146,6 +148,11 @@ export const makeCodeModeToolExecute =
 
     const calls: MutableCallEntry[] = [];
     const callById = new Map<number, MutableCallEntry>();
+    // `/reload` refreshes this TypeScript extension but Node can retain the already-imported
+    // runtime JS module. Older runtime instances emit only the legacy start/end hooks, so keep
+    // an independent index for that backward-compatible path instead of assuming lifecycle
+    // `queued` events always materialized the row first.
+    const legacyCallByIndex = new Map<number, MutableCallEntry>();
     const counts = emptyCounts();
     const publish = () => publisher.publish(progressResult(snapshotCalls(calls), counts));
     const trackQueued = (entry: MutableCallEntry): boolean => {
@@ -177,7 +184,7 @@ export const makeCodeModeToolExecute =
       signal,
     });
 
-    const execution = CodeMode.execute({
+    const execution = (environment.executeCodeMode ?? CodeMode.execute)({
       code: params.code,
       tools: makeExecutionGuestTools(dispatch, budget),
       limits: {
@@ -222,8 +229,20 @@ export const makeCodeModeToolExecute =
         }),
       onToolCallStart: ({ index, lifecycleId, name, input }) =>
         Effect.sync(() => {
-          const current = lifecycleId === undefined ? calls[index] : callById.get(lifecycleId);
-          if (current !== undefined) {
+          let current =
+            lifecycleId === undefined ? legacyCallByIndex.get(index) : callById.get(lifecycleId);
+          if (current === undefined && lifecycleId === undefined) {
+            counts.total += 1;
+            counts.running += 1;
+            current = {
+              // Legacy indices are execution-local and disjoint from non-negative lifecycle IDs.
+              id: -(index + 1),
+              tool: name,
+              status: "running",
+              activity: describeNestedActivity(name, input),
+            };
+            if (trackQueued(current)) legacyCallByIndex.set(index, current);
+          } else if (current !== undefined) {
             transitionCall(current, "running", counts);
             current.activity = describeNestedActivity(name, input);
           }
@@ -231,10 +250,17 @@ export const makeCodeModeToolExecute =
         }),
       onToolCallEnd: ({ index, lifecycleId, outcome, durationMs }) =>
         Effect.sync(() => {
-          const current = lifecycleId === undefined ? calls[index] : callById.get(lifecycleId);
+          const current =
+            lifecycleId === undefined ? legacyCallByIndex.get(index) : callById.get(lifecycleId);
+          const nextStatus = outcome === "success" ? "completed" : "error";
           if (current !== undefined) {
-            transitionCall(current, outcome === "success" ? "completed" : "error", counts);
+            transitionCall(current, nextStatus, counts);
             current.durationMs = durationMs;
+            if (lifecycleId === undefined) legacyCallByIndex.delete(index);
+          } else if (lifecycleId === undefined) {
+            // The legacy call was counted but its row exceeded the bounded host-side cap.
+            counts.running -= 1;
+            counts[statusCountKey(nextStatus)] += 1;
           }
           publish();
         }),

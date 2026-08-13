@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, it } from "vitest";
+import { CodeMode } from "../src/boundary/codemode-runtime.ts";
 import {
   makeNestedPiToolDefinitions,
   type NestedPiToolDefinitions,
@@ -116,6 +117,7 @@ interface HarnessOptions {
   /** Simulates the no-current-state gate: getState() returns undefined. */
   readonly noState?: boolean;
   readonly definitions?: NestedPiToolDefinitions;
+  readonly executeCodeMode?: CodeModeExecutionEnvironment["executeCodeMode"];
   readonly isCurrent?: () => boolean;
   readonly runInSession?: CodeModeExecutionEnvironment["runInSession"];
   readonly retainFailureDetails?: CodeModeExecutionEnvironment["retainFailureDetails"];
@@ -130,6 +132,7 @@ const makeHarness = (cwd: string, options: HarnessOptions = {}) => {
       options.runInSession ??
       ((effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined)),
     definitions: options.definitions ?? testDefinitions(cwd),
+    ...(options.executeCodeMode === undefined ? {} : { executeCodeMode: options.executeCodeMode }),
     ...(options.retainFailureDetails === undefined
       ? {}
       : { retainFailureDetails: options.retainFailureDetails }),
@@ -916,6 +919,34 @@ describe("progress", () => {
     expect(updates.at(-1)?.details.toolCalls[0]?.status).toBe("completed");
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(updates.length).toBe(updateCountAtSettle);
+  });
+
+  it("falls back to legacy start/end hooks when a reload-cached runtime emits no lifecycle events", async () => {
+    const cwd = newCwd();
+    const definitions = fakeDefinitions({ read: async () => "legacy-data" });
+    const executeCodeMode: NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> = (
+      options,
+    ) => {
+      const { onToolCallLifecycle: _ignored, ...legacyOptions } = options;
+      return CodeMode.execute(legacyOptions);
+    };
+    const execute = makeHarness(cwd, { definitions, executeCodeMode });
+    const result = await execute(
+      "call-legacy-runtime",
+      { code: "return await tools.pi.read({ path: 'legacy.txt' });" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(textOf(result)).toBe("legacy-data");
+    expect(result.details.counts).toMatchObject({ total: 1, succeeded: 1 });
+    expect(result.details.toolCalls).toEqual([
+      expect.objectContaining({
+        tool: "pi.read",
+        status: "completed",
+        activity: "Read legacy.txt",
+      }),
+    ]);
   });
 
   it("accepts an optional intent and records bounded activity labels from decoded input", async () => {

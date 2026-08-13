@@ -331,7 +331,13 @@ describe("subagent tool", () => {
       {
         name: "substantial parallel reconnaissance",
         prompt: startPrompt,
-        evidence: ["two or more", "one to three read-only", "scout", "codebase reconnaissance"],
+        evidence: [
+          "two or more",
+          "one to three read-only",
+          "scout",
+          "one narrow reconnaissance question",
+          "follow relevant evidence as deeply as needed",
+        ],
       },
       {
         name: "external research beside local inspection",
