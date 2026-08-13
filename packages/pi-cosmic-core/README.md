@@ -1,6 +1,6 @@
 # pi-cosmic-core
 
-Shared Effect v4 foundations for the extensions in the cosmic-pi workspace. This package does not register a Pi extension and does not create a process-wide runtime.
+Shared Effect v4 foundations for the extensions in the cosmic-pi workspace. This package does not register a Pi extension and does not create a process-wide runtime. It intentionally publishes TypeScript source for Pi's Jiti host rather than generated JavaScript, so installation, reload, testing, and release require no build step.
 
 ## Runtime and lifecycle
 

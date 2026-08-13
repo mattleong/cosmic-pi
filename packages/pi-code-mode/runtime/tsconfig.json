@@ -1,8 +1,8 @@
 {
   "extends": "../../../tsconfig.effect.json",
   "compilerOptions": {
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     // Vendored OpenCode 2 Code Mode sources (see PROVENANCE.md) keep upstream
     // syntax and typing conventions to stay diffable against the pinned commit.
     "erasableSyntaxOnly": false,

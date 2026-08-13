@@ -1,8 +1,9 @@
 {
   "extends": "../../tsconfig.effect.json",
   "compilerOptions": {
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext"
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "erasableSyntaxOnly": false
   },
   "include": ["index.ts", "src/**/*.ts", "tests/**/*.ts"]
 }

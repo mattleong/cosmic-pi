@@ -23,7 +23,7 @@
   "files": [
     "index.ts",
     "src/",
-    "runtime/dist/",
+    "runtime/src/",
     "runtime/LICENSE",
     "runtime/THIRD_PARTY_NOTICES.md",
     "runtime/PROVENANCE.md",
@@ -42,16 +42,13 @@
   "scripts": {
     "check": "pnpm typecheck && pnpm lint && pnpm format:check",
     "validate": "pnpm check && pnpm test",
-    "pretypecheck": "pnpm --filter pi-cosmic-core build && pnpm --filter pi-code-previews build && pnpm --filter pi-code-mode-runtime build",
     "typecheck": "tsc --noEmit",
     "effect:diagnostics": "effect-language-service diagnostics --project tsconfig.json",
     "lint": "oxlint --deny-warnings .",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "pretest": "pnpm --filter pi-cosmic-core build && pnpm --filter pi-code-previews build && pnpm --filter pi-code-mode-runtime build",
     "test": "vitest run",
-    "prepack": "pnpm --filter pi-code-mode-runtime build",
     "prepublishOnly": "pnpm validate",
     "pack:dry": "pnpm pack --dry-run"
   },

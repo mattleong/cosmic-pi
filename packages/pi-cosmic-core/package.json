@@ -19,34 +19,28 @@
     "directory": "packages/pi-cosmic-core"
   },
   "files": [
-    "dist",
+    "index.ts",
+    "testing.ts",
+    "src/",
     "README.md",
+    "ARCHITECTURE.md",
     "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./index.ts",
+  "types": "./index.ts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
-    },
-    "./testing": {
-      "types": "./dist/testing.d.ts",
-      "import": "./dist/testing.js",
-      "default": "./dist/testing.js"
-    },
+    ".": "./index.ts",
+    "./testing": "./testing.ts",
     "./package.json": "./package.json"
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "tsdown",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check",
-    "validate": "pnpm check && pnpm test && pnpm build",
+    "validate": "pnpm check && pnpm test",
     "typecheck": "tsc --noEmit",
     "effect:diagnostics": "effect-language-service diagnostics --project tsconfig.json",
     "lint": "oxlint --deny-warnings .",
@@ -54,7 +48,6 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "test": "vitest run",
-    "prepack": "pnpm build",
     "prepublishOnly": "pnpm validate",
     "pack:dry": "pnpm pack --dry-run"
   },
@@ -68,7 +61,6 @@
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
-    "tsdown": "^0.22.0",
     "vitest": "catalog:"
   },
   "peerDependencies": {

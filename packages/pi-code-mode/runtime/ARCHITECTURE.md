@@ -9,10 +9,10 @@ call the tools the host supplies.
 
 This package is workspace-private and host-neutral: it has no Pi imports and no
 Pi-specific policy. It is nested inside the public `pi-code-mode` package
-directory so its built `dist/` output (tsdown: `dist/index.js` +
-`dist/index.d.ts`) ships inside the `pi-code-mode` tarball; `pi-code-mode`
-consumes it exclusively through the relative-path boundary door
-`src/boundary/codemode-runtime.ts`. The `pi-code-mode` extension owns every
+directory so its TypeScript `src/` tree ships inside the `pi-code-mode` tarball
+and loads directly through Pi/Jiti; `pi-code-mode` consumes it exclusively
+through the relative-path boundary door `src/boundary/codemode-runtime.ts`.
+The `pi-code-mode` extension owns every
 Pi-facing concern above this boundary: the outer `code_mode` agent tool, adapters for all
 seven `tools.pi` built-ins, their deliberate direct-dispatch authority policy (ADR 0004),
 and the Pi host limits (program source size, cumulative nested output).

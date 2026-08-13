@@ -20,9 +20,8 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsdown",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check",
-    "validate": "pnpm check && pnpm test && pnpm build",
+    "validate": "pnpm check && pnpm test",
     "typecheck": "tsc --noEmit",
     "effect:diagnostics": "effect-language-service diagnostics --project tsconfig.json",
     "lint": "oxlint --deny-warnings .",
@@ -40,7 +39,6 @@
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
-    "tsdown": "^0.22.0",
     "vitest": "catalog:"
   },
   "engines": {

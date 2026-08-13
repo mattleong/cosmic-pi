@@ -11,18 +11,14 @@ tools the host supplies.
 - **Private, nested, and shipped by value.** This package is workspace-internal
   (`"private": true`) and is never published on its own. It lives _inside_ the
   public `pi-code-mode` package directory (`packages/pi-code-mode/runtime/`) so
-  that its built output (`dist/`, produced by `pnpm --filter
-pi-code-mode-runtime build`) ships inside the `pi-code-mode` tarball.
-  In the repository, `dist/` is an ephemeral generated artifact — git-ignored
-  and rebuilt on demand by `pi-code-mode`'s `prepack`/`pretest`/`pretypecheck`
-  hooks — only the packed tarball carries it permanently.
+  that its TypeScript `src/` tree ships inside the `pi-code-mode` tarball and
+  loads directly through Pi/Jiti without a build step.
   `pi-code-mode` imports it only by relative path through its single boundary
   door (`src/boundary/codemode-runtime.ts`) — never by package name — which
   keeps consumers on one shared `effect` instance and avoids a registry
   dependency that could never resolve. This `package.json` is repository-only
-  and stays out of the tarball: the packed `dist/` files inherit
-  `pi-code-mode`'s top-level `type: module`, and `pi-code-mode` declares the
-  runtime's external dependencies (`acorn`, `effect`, `typescript`) itself.
+  and stays out of the tarball; `pi-code-mode` declares the runtime's external
+  dependencies (`acorn`, `effect`, `typescript`) itself.
 - **Host-neutral.** It registers no Pi extension and imports nothing from Pi.
   The `pi-code-mode` extension owns the Pi-facing integration: the `code_mode`
   agent tool, adapters for all seven `tools.pi` built-ins, their supplied-tool

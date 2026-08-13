@@ -4,7 +4,7 @@
  */
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
-import type { CodeMode } from "../boundary/codemode-runtime.ts";
+import type { CodeModeFailure, CodeModeSuccess } from "../boundary/codemode-runtime.ts";
 import { utf8ByteLength } from "./limits.ts";
 
 /** Schema and display bound (code points) for the human-readable `intent` parameter. */
@@ -202,7 +202,7 @@ export const progressResult = (
  * compact form the runtime bounded is emitted, keeping the model-visible value inside
  * `maxOutputBytes`.
  */
-export const formatCodeModeSuccess = (result: CodeMode.Success, maxOutputBytes: number): string => {
+export const formatCodeModeSuccess = (result: CodeModeSuccess, maxOutputBytes: number): string => {
   // The runtime validates returned values as plain JSON data, so stringify cannot throw; it
   // yields undefined only for a program that returns undefined (serialized as null upstream).
   const output =
@@ -220,7 +220,7 @@ const renderJson = (value: unknown, maxOutputBytes: number): string => {
  * Normalized diagnostic rendering: stable kind, message, source location, and any
  * suggestions the runtime attached, with runtime logs preserved.
  */
-export const formatCodeModeFailure = (result: CodeMode.Failure): string => {
+export const formatCodeModeFailure = (result: CodeModeFailure): string => {
   const { error } = result;
   const location =
     error.location === undefined

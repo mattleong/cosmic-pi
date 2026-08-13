@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`pi-cosmic-core` is publishable infrastructure shared by the extensions. It does not register a Pi extension and contains no provider- or feature-specific orchestration.
+`pi-cosmic-core` is publishable infrastructure shared by the extensions. It does not register a Pi extension and contains no provider- or feature-specific orchestration. Its public barrels and `src/` tree ship as TypeScript and load through Pi/Jiti; there is no generated distribution or plain-Node package contract.
 
 ## Public surface
 

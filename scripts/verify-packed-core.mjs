@@ -140,51 +140,82 @@ try {
     ],
     temporaryDirectory,
   );
-  run(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      "const api = await import('pi-cosmic-core'); const testing = await import('pi-cosmic-core/testing'); if (!api.PiApi || !api.makePiRuntime || !api.JsonDocumentStore || !api.JsonHttpClient || !api.nodePlatformLayer) throw new Error('missing core exports'); if (typeof testing.makeInMemoryDocuments !== 'function' || typeof testing.makeCapturedTracer !== 'function') throw new Error('missing core testing exports');",
-    ],
-    temporaryDirectory,
-  );
-  run(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      "import { createJiti } from 'jiti'; const jiti = createJiti(import.meta.url); const askUser = await jiti.import('pi-ask-user'); const xai = await jiti.import('pi-better-xai'); const openai = await jiti.import('pi-better-openai'); const cosmicUi = await jiti.import('pi-cosmic-ui'); const directoryModels = await jiti.import('pi-directory-models'); const advisor = await jiti.import('pi-advisor'); const terminals = await jiti.import('pi-background-terminals'); const subagents = await jiti.import('pi-subagents'); const codeMode = await jiti.import('pi-code-mode'); const protocol = await jiti.import('pi-cosmic-ui/protocol'); const client = await jiti.import('pi-cosmic-ui/client'); const manager = await jiti.import('pi-cosmic-ui/manager'); const fastModels = await jiti.import('pi-better-openai/fast-models'); const previews = await import('pi-code-previews'); if (typeof askUser.default !== 'function') throw new Error('missing ask-user extension export'); if (typeof xai.default !== 'function') throw new Error('missing xAI extension export'); if (typeof openai.default !== 'function') throw new Error('missing OpenAI extension export'); if (typeof cosmicUi.default !== 'function') throw new Error('missing Cosmic UI extension export'); if (typeof directoryModels.default !== 'function') throw new Error('missing directory-model extension export'); if (typeof advisor.default !== 'function') throw new Error('missing advisor extension export'); if (typeof terminals.default !== 'function') throw new Error('missing background terminals extension export'); if (typeof subagents.default !== 'function') throw new Error('missing subagents extension export'); if (typeof codeMode.default !== 'function') throw new Error('missing code-mode extension export'); if (typeof previews.default !== 'function' || typeof previews.loadCodePreviewSettings !== 'function' || typeof previews.withCodePreviewShell !== 'function') throw new Error('missing code-preview public exports'); if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== 'function') throw new Error('missing Cosmic UI protocol exports'); if (typeof client.createCosmicFooterClient !== 'function') throw new Error('missing Cosmic UI client export'); if (typeof manager.renderResponsiveManagerFooter !== 'function') throw new Error('missing Cosmic UI manager export'); if (typeof fastModels.supportsFastModel !== 'function') throw new Error('missing OpenAI fast-model export');",
-    ],
-    temporaryDirectory,
-  );
+  const sourceImportSmoke = `
+    import { createJiti } from "jiti/static";
+    import { join } from "node:path";
+    const load = (specifier) => createJiti(import.meta.url, { moduleCache: false }).import(specifier);
+    const api = await load("pi-cosmic-core");
+    const testing = await load("pi-cosmic-core/testing");
+    const askUser = await load("pi-ask-user");
+    const xai = await load("pi-better-xai");
+    const openai = await load("pi-better-openai");
+    const cosmicUi = await load("pi-cosmic-ui");
+    const directoryModels = await load("pi-directory-models");
+    const advisor = await load("pi-advisor");
+    const terminals = await load("pi-background-terminals");
+    const subagents = await load("pi-subagents");
+    const codeMode = await load("pi-code-mode");
+    const protocol = await load("pi-cosmic-ui/protocol");
+    const client = await load("pi-cosmic-ui/client");
+    const manager = await load("pi-cosmic-ui/manager");
+    const fastModels = await load("pi-better-openai/fast-models");
+    const previews = await load("pi-code-previews");
+    const runtime = await load(join(process.cwd(), "node_modules/pi-code-mode/runtime/src/index.ts"));
+    if (!api.PiApi || !api.makePiRuntime || !api.JsonDocumentStore || !api.JsonHttpClient || !api.nodePlatformLayer) throw new Error("missing core exports");
+    if (typeof testing.makeInMemoryDocuments !== "function" || typeof testing.makeCapturedTracer !== "function") throw new Error("missing core testing exports");
+    if (typeof askUser.default !== "function") throw new Error("missing ask-user extension export");
+    if (typeof xai.default !== "function") throw new Error("missing xAI extension export");
+    if (typeof openai.default !== "function") throw new Error("missing OpenAI extension export");
+    if (typeof cosmicUi.default !== "function") throw new Error("missing Cosmic UI extension export");
+    if (typeof directoryModels.default !== "function") throw new Error("missing directory-model extension export");
+    if (typeof advisor.default !== "function") throw new Error("missing advisor extension export");
+    if (typeof terminals.default !== "function") throw new Error("missing background terminals extension export");
+    if (typeof subagents.default !== "function") throw new Error("missing subagents extension export");
+    if (typeof codeMode.default !== "function") throw new Error("missing code-mode extension export");
+    if (typeof previews.default !== "function" || typeof previews.loadCodePreviewSettings !== "function" || typeof previews.withCodePreviewShell !== "function") throw new Error("missing code-preview public exports");
+    if (typeof runtime.CodeMode?.make !== "function" || typeof runtime.Tool?.make !== "function") throw new Error("missing source-loaded Code Mode runtime exports");
+    if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 1 || typeof protocol.isCosmicFooterUpsertEvent !== "function") throw new Error("missing Cosmic UI protocol exports");
+    if (typeof client.createCosmicFooterClient !== "function") throw new Error("missing Cosmic UI client export");
+    if (typeof manager.renderResponsiveManagerFooter !== "function") throw new Error("missing Cosmic UI manager export");
+    if (typeof fastModels.supportsFastModel !== "function") throw new Error("missing OpenAI fast-model export");
+  `;
+  run(process.execPath, ["--input-type=module", "--eval", sourceImportSmoke], temporaryDirectory);
 
-  // The private Code Mode runtime ships by value inside the packed pi-code-mode tarball;
-  // the jiti import above already resolved it through the relative boundary door.
-  await readFile(join(temporaryDirectory, "node_modules/pi-code-mode/runtime/dist/index.js"));
+  // Pi and the clean-consumer smoke load TypeScript source directly through Jiti.
+  for (const source of [
+    "pi-cosmic-core/index.ts",
+    "pi-cosmic-core/testing.ts",
+    "pi-cosmic-core/src/runtime/runtime.ts",
+    "pi-code-previews/index.ts",
+    "pi-code-previews/src/extension.ts",
+    "pi-code-mode/runtime/src/index.ts",
+    "pi-code-mode/runtime/src/codemode.ts",
+  ]) {
+    await readFile(join(temporaryDirectory, "node_modules", source));
+  }
   for (const notice of ["LICENSE", "THIRD_PARTY_NOTICES.md", "PROVENANCE.md"]) {
     await readFile(join(temporaryDirectory, "node_modules/pi-code-mode/runtime", notice));
   }
-  // Only the built runtime and its notices ship; runtime dev files stay out of the tarball.
-  // The nested workspace manifest is repository-only: the packed runtime files inherit
-  // pi-code-mode's top-level `type: module`, and pi-code-mode declares the runtime's
-  // external dependencies itself, so a shipped runtime/package.json would only mislead.
+  // Runtime source ships by value, but its workspace manifest, tests, and build tooling remain
+  // repository-only. No source-hosted package may regain a generated dist dependency.
   for (const excluded of [
-    "src",
-    "tests",
-    "node_modules",
-    "package.json",
-    "tsconfig.json",
-    "tsdown.config.ts",
+    "pi-cosmic-core/dist",
+    "pi-cosmic-core/tsdown.config.ts",
+    "pi-code-previews/dist",
+    "pi-code-previews/tsdown.config.ts",
+    "pi-code-mode/runtime/dist",
+    "pi-code-mode/runtime/tests",
+    "pi-code-mode/runtime/node_modules",
+    "pi-code-mode/runtime/package.json",
+    "pi-code-mode/runtime/tsconfig.json",
+    "pi-code-mode/runtime/tsdown.config.ts",
   ]) {
-    const excludedPath = join(temporaryDirectory, "node_modules/pi-code-mode/runtime", excluded);
+    const excludedPath = join(temporaryDirectory, "node_modules", excluded);
     const present = await stat(excludedPath).then(
       () => true,
       () => false,
     );
-    if (present) {
-      throw new Error(`Packed pi-code-mode ships runtime dev file: runtime/${excluded}.`);
-    }
+    if (present) throw new Error(`Packed source package ships forbidden path: ${excluded}.`);
   }
 
   const packedCoreManifest = JSON.parse(
@@ -213,7 +244,7 @@ try {
   }
 
   console.log(
-    "Packed core, ask-user, xAI, OpenAI, Cosmic UI, code-mode, code-preview, directory-model, advisor, background terminal, and subagent packages install and import in a clean consumer.",
+    "Packed TypeScript source for core, extensions, previews, and Code Mode runtime installs and imports through Jiti in a clean consumer.",
   );
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });

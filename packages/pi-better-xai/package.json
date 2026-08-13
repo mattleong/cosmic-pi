@@ -38,14 +38,12 @@
   "scripts": {
     "check": "pnpm typecheck && pnpm lint && pnpm format:check",
     "validate": "pnpm check && pnpm test",
-    "pretypecheck": "pnpm --filter pi-cosmic-core build",
     "typecheck": "tsc --noEmit",
     "effect:diagnostics": "effect-language-service diagnostics --project tsconfig.json",
     "lint": "oxlint --deny-warnings .",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "pretest": "pnpm --filter pi-cosmic-core build",
     "test": "vitest run",
     "prepublishOnly": "pnpm validate",
     "pack:dry": "pnpm pack --dry-run"

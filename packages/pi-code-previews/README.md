@@ -2,6 +2,8 @@
 
 Syntax-highlighted previews for pi's built-in tool calls.
 
+The package publishes TypeScript source and runs directly through Pi's Jiti loader; it has no generated distribution or build prerequisite.
+
 `pi-code-previews` makes `bash`, `read`, `write`, `edit`, `grep`, `find`, and `ls` output easier to scan in the pi TUI without changing what the tools do. If another extension already owns one of those tools, `pi-code-previews` skips that preview instead of conflicting with it.
 
 ## Features

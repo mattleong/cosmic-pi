@@ -23,7 +23,6 @@
   "type": "module",
   "scripts": {
     "check": "pnpm typecheck && pnpm lint && pnpm format:check",
-    "pretypecheck": "pnpm --filter pi-cosmic-core build",
     "validate": "pnpm check && pnpm test",
     "bench:queue": "node --experimental-strip-types bench/queue.ts",
     "typecheck": "tsc --noEmit",
@@ -32,7 +31,6 @@
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "pretest": "pnpm --filter pi-cosmic-core build",
     "test": "vitest run"
   },
   "dependencies": {

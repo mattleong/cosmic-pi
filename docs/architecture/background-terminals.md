@@ -497,7 +497,7 @@ The MVP is complete when:
 6. Start/stop/exit/shutdown races settle jobs exactly once.
 7. No background resource starts during extension factory evaluation.
 8. TUI, RPC, JSON, and print behavior follows the mode table.
-9. Effect diagnostics, package checks, tests, builds, and `pnpm validate` pass.
+9. Effect diagnostics, package checks, source-loaded package tests, and `pnpm validate` pass.
 
 ## 17. Deferred follow-ups
 

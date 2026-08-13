@@ -10,7 +10,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { CodeMode } from "../boundary/codemode-runtime.ts";
+import { CodeMode, type CodeModeResult } from "../boundary/codemode-runtime.ts";
 import {
   makeNestedPiToolDispatch,
   type NestedPiToolDefinitions,
@@ -266,7 +266,7 @@ export const makeCodeModeToolExecute =
         }),
     });
 
-    let result: CodeMode.Result;
+    let result: CodeModeResult;
     try {
       result = await environment.runInSession(execution, signal);
     } catch (error) {

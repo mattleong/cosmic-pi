@@ -131,7 +131,7 @@ Only bounded enums, counts, methods, and status codes may be attributes. URLs, p
 
 ## Dependency layout
 
-Compiler tooling lives at the workspace root. Runtime dependencies are declared directly by every package that imports them, using the synchronized pnpm catalog. `pi-cosmic-core` is a normal publishable package and does not register a Pi extension.
+Compiler tooling lives at the workspace root. Runtime dependencies are declared directly by every package that imports them, using the synchronized pnpm catalog. Every Cosmic Pi package publishes and runs TypeScript source through Pi/Jiti; there are no generated package distributions or prerequisite builds. TypeScript projects use ESNext/Bundler resolution. Packages that consume source containing constructor parameter properties explicitly relax `erasableSyntaxOnly`; the stricter workspace default remains in force elsewhere. `pi-cosmic-core` is a normal publishable source package and does not register a Pi extension.
 
 ## Quality checks
 

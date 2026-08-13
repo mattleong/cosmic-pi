@@ -23,19 +23,21 @@ host concerns, and without depending on an unpublished upstream package.
    host-neutral library containing the vendored Code Mode runtime. It has no Pi
    imports, no `pi.extensions`, and no Pi-specific policy. It is a separate
    workspace package (own tests, tsconfig, lint config) but is **nested inside
-   the public `pi-code-mode` package directory** so that its built output
-   (`runtime/dist/`, produced by tsdown) ships inside the `pi-code-mode`
-   tarball. A private package can never resolve from a registry, and package
-   managers resolve transitive `file:` dependencies against the consumer root
-   (verified empirically with pnpm), so `pi-code-mode` carries the runtime by
-   value and imports it **only by relative path** through one boundary door
-   (`src/boundary/codemode-runtime.ts`). That relative import also guarantees
-   the runtime shares the extension's single `effect` instance. The runtime's
-   `acorn`/`typescript`/`effect` dependencies are declared by `pi-code-mode`
-   itself so packed consumers install them. Only the built `runtime/dist/` and
-   the runtime's legal/provenance docs ship in the tarball; the nested
-   workspace manifest is repository-only (the packed runtime files inherit
-   `pi-code-mode`'s top-level `type: module`).
+   the public `pi-code-mode` package directory** so that its TypeScript
+   `runtime/src/` tree ships inside the `pi-code-mode` tarball and Pi/Jiti loads
+   it directly without a build step. A private package can never resolve from a
+   registry, and package managers resolve transitive `file:` dependencies
+   against the consumer root (verified empirically with pnpm), so
+   `pi-code-mode` carries the runtime by value and imports it **only by a computed
+   relative path** through one boundary door (`src/boundary/codemode-runtime.ts`).
+   The boundary owns the narrow structural API used by Pi, so the vendored tree
+   remains checked under its separate upstream-compatible TypeScript project
+   instead of inheriting the extension's stricter diagnostics. The relative
+   import also guarantees the runtime shares the extension's single
+   `effect` instance. The runtime's `acorn`/`typescript`/`effect` dependencies
+   are declared by `pi-code-mode` itself so packed consumers install them. Only
+   `runtime/src/` and the runtime's legal/provenance docs ship in the tarball;
+   the nested workspace manifest is repository-only.
 2. `packages/pi-code-mode/` is the public Pi extension that owns registration,
    trusted-project-only scoped settings, session lifecycle,
    `/code-mode-settings`, the read-only Pi tool adapters
@@ -152,20 +154,20 @@ of that limitation; they do not remove it.
   upstream comparability is the review mechanism (documented in the package
   `ARCHITECTURE.md` and `PROVENANCE.md`).
 - The workspace catalog pins `acorn@8.15.0` and `typescript@6.0.3`; both the
-  runtime package and `pi-code-mode` (which ships the runtime's built output and
+  runtime package and `pi-code-mode` (which ships the runtime source and
   therefore owns its external dependencies for consumers) consume `acorn`,
   `effect`, and `typescript` via the catalog.
 - Upstream behavioral test suites (codemode, enumeration, parity, promise,
   signature, stdlib) run under Vitest and gate the package, alongside the local
   `confinement` suite (together, the runtime suite). The `pi-code-mode`
   extension suites additionally run real interpreter integration tests over
-  the built runtime, including the final model-visible byte-bound (all early
+  the source-loaded runtime, including the final model-visible byte-bound (all early
   paths) and deactivation-handoff cases.
 - The nested-package layout is reflected in `pnpm-workspace.yaml`
   (`packages/pi-code-mode/runtime`), the layout/version check scripts, and the
-  packed-tarball smoke test, which asserts the runtime `dist` and its
-  legal/provenance docs ship inside the installed `pi-code-mode` package while
-  the nested workspace manifest and runtime dev files stay out.
+  packed-tarball smoke test, which asserts the runtime TypeScript source and its
+  legal/provenance docs ship inside the installed `pi-code-mode` package and load
+  through Jiti while the nested workspace manifest and runtime dev files stay out.
 - A future Effect or TypeScript bump revalidates this package like any other,
   but upstream resyncs remain deliberate, pinned, and manually reviewed.
 

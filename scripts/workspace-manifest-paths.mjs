@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 
 /**
  * Nested workspace packages (currently only the private Code Mode runtime, which lives inside
- * the public pi-code-mode package so its build ships in that package's tarball). Keep in sync
+ * the public pi-code-mode package so its source ships in that package's tarball). Keep in sync
  * with `pnpm-workspace.yaml`; the layout check refuses any nested manifest not listed here.
  */
 export const NESTED_PACKAGE_DIRECTORIES = ["pi-code-mode/runtime"];

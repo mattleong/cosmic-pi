@@ -54,7 +54,7 @@ pnpm effect:lsp:check
 pnpm validate
 ```
 
-The workspace uses TypeScript, Oxlint, and the Effect language service. Editors must use the workspace TypeScript installation. See [`docs/architecture/effect-v4.md`](docs/architecture/effect-v4.md) for the Effect v4 conventions.
+The workspace uses TypeScript, Oxlint, and the Effect language service. Pi's Jiti loader consumes every Cosmic Pi package directly from TypeScript source, so local development and published packages require no build step or generated `dist/`. Editors must use the workspace TypeScript installation. See [`docs/architecture/effect-v4.md`](docs/architecture/effect-v4.md) for the Effect v4 conventions.
 
 Run a command for one package with a filter:
 
@@ -62,7 +62,7 @@ Run a command for one package with a filter:
 pnpm --filter pi-advisor test
 pnpm --filter pi-ask-user test
 pnpm --filter pi-better-openai test
-pnpm --filter pi-code-previews build
+pnpm --filter pi-code-previews test
 pnpm --filter pi-cosmic-ui test
 pnpm --filter pi-directory-models test
 pnpm --filter pi-herdr-fork test

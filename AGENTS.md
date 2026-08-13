@@ -8,14 +8,14 @@
 - `packages/pi-better-xai/` contains the Better xAI subscription usage extension.
 - `packages/pi-background-terminals/` contains the session-scoped background process extension.
 - `packages/pi-code-mode/` contains the Code Mode Pi extension: the `code_mode` agent tool (confined interpreted programs over all seven `tools.pi` built-ins), trusted-project-only scoped settings, session lifecycle, and `/code-mode-settings`. Nested built-ins deliberately use direct fresh definitions rather than Pi middleware or registered overrides (ADR 0004).
-- `packages/pi-code-mode/runtime/` contains the private, host-neutral Code Mode execution runtime vendored from OpenCode 2 (no Pi imports; see its `PROVENANCE.md`). It is a nested workspace package whose built `dist/` ships inside the `pi-code-mode` tarball; `pi-code-mode` imports it only through its `src/boundary/codemode-runtime.ts` door.
+- `packages/pi-code-mode/runtime/` contains the private, host-neutral Code Mode execution runtime vendored from OpenCode 2 (no Pi imports; see its `PROVENANCE.md`). It is a nested workspace package whose TypeScript `src/` ships inside the `pi-code-mode` tarball; Pi/Jiti loads it only through `pi-code-mode`'s `src/boundary/codemode-runtime.ts` door.
 - `packages/pi-code-previews/` contains the code-preview pi extension.
 - `packages/pi-cosmic-core/` contains shared Effect-first runtime foundations for the extension packages.
 - `packages/pi-cosmic-ui/` contains composable shared UI elements, including the responsive footer.
 - `packages/pi-directory-models/` contains per-directory model and thinking-level preference restoration.
 - `packages/pi-herdr-fork/` contains the deterministic, user-owned Herdr pane-fork command extension.
 - `packages/pi-subagents/` contains the session-scoped background subagent extension.
-- The repository is a pnpm workspace. Keep shared workspace configuration at the root and package-specific source, tests, and build configuration inside each package.
+- The repository is a pnpm workspace. Pi/Jiti loads all Cosmic Pi packages directly from TypeScript source; do not add generated `dist/` runtime dependencies or package build prerequisites. Keep shared workspace configuration at the root and package-specific source and tests inside each package.
 
 ## Package layout conventions
 
