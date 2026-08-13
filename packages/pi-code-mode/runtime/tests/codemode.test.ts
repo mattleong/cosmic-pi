@@ -7,7 +7,7 @@ const run = (tool: Tool.Definition<never>) =>
     CodeMode.make({ tools: { host: { call: tool } } }).execute("return await tools.host.call({})"),
   );
 
-class UnsafeHostError extends Schema.TaggedErrorClass<UnsafeHostError>()("UnsafeHostError", {
+class UnsafeHostError extends Schema.TaggedError<UnsafeHostError>()("UnsafeHostError", {
   reason: Schema.String,
 }) {}
 

@@ -32,13 +32,13 @@ import {
   type CodeModeConfig,
 } from "./schema.ts";
 
-export class CodeModeConfigError extends Schema.TaggedErrorClass<CodeModeConfigError>()(
+export class CodeModeConfigError extends Schema.TaggedError<CodeModeConfigError>()(
   "CodeModeConfigError",
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
 
 /** Project-scope reads and writes are refused entirely while the project is untrusted. */
-export class CodeModeUntrustedScopeError extends Schema.TaggedErrorClass<CodeModeUntrustedScopeError>()(
+export class CodeModeUntrustedScopeError extends Schema.TaggedError<CodeModeUntrustedScopeError>()(
   "CodeModeUntrustedScopeError",
   { message: Schema.String },
 ) {}

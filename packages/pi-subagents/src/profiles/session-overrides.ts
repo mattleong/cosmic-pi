@@ -25,7 +25,7 @@ export interface SessionProfilePatch {
   readonly expectedRevision: number;
 }
 
-export class SessionProfileConflictError extends Schema.TaggedErrorClass<SessionProfileConflictError>()(
+export class SessionProfileConflictError extends Schema.TaggedError<SessionProfileConflictError>()(
   "SessionProfileConflictError",
   {
     expectedRevision: Schema.Number,

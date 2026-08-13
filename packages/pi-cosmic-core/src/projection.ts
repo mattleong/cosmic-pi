@@ -3,7 +3,7 @@ import * as MutableRef from "effect/MutableRef";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
-export class ProjectionError extends Schema.TaggedErrorClass<ProjectionError>()("ProjectionError", {
+export class ProjectionError extends Schema.TaggedError<ProjectionError>()("ProjectionError", {
   path: Schema.String,
   message: Schema.String,
 }) {}

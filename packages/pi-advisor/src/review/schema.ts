@@ -105,7 +105,7 @@ export interface AdvisorReview {
   findings: AdvisorFinding[];
 }
 
-export class AdvisorReviewParseError extends Schema.TaggedErrorClass<AdvisorReviewParseError>()(
+export class AdvisorReviewParseError extends Schema.TaggedError<AdvisorReviewParseError>()(
   "AdvisorReviewParseError",
   { message: Schema.String },
 ) {}

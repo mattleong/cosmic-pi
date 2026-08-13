@@ -61,7 +61,7 @@ const REPLY_TIMEOUT = "10 seconds";
 
 const tokenPattern = /^[a-f0-9]{64}$/;
 
-export class SupervisorChannelError extends Schema.TaggedErrorClass<SupervisorChannelError>()(
+export class SupervisorChannelError extends Schema.TaggedError<SupervisorChannelError>()(
   "SupervisorChannelError",
   {
     operation: Schema.String,

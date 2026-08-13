@@ -11,7 +11,7 @@ Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, fail
 - Import Effect modules through explicit namespace subpaths, for example `import * as Effect from "effect/Effect"`.
 - Declare services as classes with `Context.Service` and deterministic language-service keys.
 - Give every live implementation an explicit Layer. Compose the dependency graph before providing it.
-- In beta.99, use `Layer.effect` with `Effect.acquireRelease` for layer-owned scoped resources.
+- Use `Layer.effect` with `Effect.acquireRelease` for layer-owned scoped resources.
 - Use `Effect.sync` only for operations that are total by contract. Wrap hostile or throwing
   synchronous callbacks with `Effect.try` and a schema-backed boundary error, then recover that
   typed failure deliberately where the host callback is best effort.
@@ -56,15 +56,16 @@ Cosmic-pi is Effect-first. Effect owns application lifecycle, dependencies, fail
   higher-order use when a function is overloaded, generic, or accepts optional extra arguments.
 - Add spans around provider requests, refreshes, image streams, advisor checkpoints, and resource initialization without recording secrets.
 
-## Beta-specific rules
+## RC-specific rules
 
 Pinned declarations are the source of truth when older documentation disagrees:
 
 - Services are `Context.Service`, not `ServiceMap.Service`.
-- Layer-owned resources use `Layer.effect`; beta.99 has no `Layer.scoped` constructor.
+- Schema-backed yieldable errors use `Schema.TaggedError`; the earlier `Schema.TaggedErrorClass` name was removed before the RC.
+- Layer-owned resources use `Layer.effect` with `Effect.acquireRelease`; there is no `Layer.scoped` constructor.
 - `ManagedRuntime.make(layer, { memoMap })` uses an options object.
 - HTTP is imported from `effect/unstable/http` and provided separately by a Node HTTP layer. Streaming JSON bodies are encoded through a caller-supplied Codec; true streaming responses expose explicitly named raw bytes and discard operations.
-- `@effect/vitest` beta.99 provides `it.effect`, `it.live`, and `layer`; it does not provide the older `it.scoped` helpers.
+- `@effect/vitest` RC provides `it.effect`, `it.live`, and `layer`; it does not provide the older `it.scoped` helpers.
 
 ## Package navigation
 

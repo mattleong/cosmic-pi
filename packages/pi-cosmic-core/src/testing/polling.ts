@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-export class TestPollingTimeout extends Schema.TaggedErrorClass<TestPollingTimeout>()(
+export class TestPollingTimeout extends Schema.TaggedError<TestPollingTimeout>()(
   "TestPollingTimeout",
   { attempts: Schema.Number },
 ) {}

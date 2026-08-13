@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { snapshotData } from "../domain/safe-data.ts";
 
-export class AdvisorHostContextError extends Schema.TaggedErrorClass<AdvisorHostContextError>()(
+export class AdvisorHostContextError extends Schema.TaggedError<AdvisorHostContextError>()(
   "AdvisorHostContextError",
   { operation: Schema.String, message: Schema.String },
 ) {}

@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
-export class ModelRegistryAuthError extends Schema.TaggedErrorClass<ModelRegistryAuthError>()(
+export class ModelRegistryAuthError extends Schema.TaggedError<ModelRegistryAuthError>()(
   "ModelRegistryAuthError",
   {
     operation: Schema.Literals(["lookup", "oauth-status"]),

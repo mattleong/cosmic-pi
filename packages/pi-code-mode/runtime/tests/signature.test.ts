@@ -306,6 +306,13 @@ describe("non-identifier property names render as quoted keys", () => {
       ["{", '  "foo-bar": string,', "  plain?: number,", "}"].join("\n"),
     );
   });
+
+  test("Effect RC number sentinel enum renders as number", () => {
+    const rcNumberSchema = {
+      anyOf: [{ type: "number" }, { type: "string", enum: ["Infinity", "-Infinity", "NaN"] }],
+    } as const;
+    expect(jsonSchemaToTypeScript(rcNumberSchema)).toBe("number");
+  });
 });
 
 describe("union schemas render every alternative", () => {

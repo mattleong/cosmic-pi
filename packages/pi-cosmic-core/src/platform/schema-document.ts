@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { JsonDocumentStore, type JsonObject } from "./json-document.ts";
 
-export class SchemaDocumentError extends Schema.TaggedErrorClass<SchemaDocumentError>()(
+export class SchemaDocumentError extends Schema.TaggedError<SchemaDocumentError>()(
   "SchemaDocumentError",
   {
     operation: Schema.String,

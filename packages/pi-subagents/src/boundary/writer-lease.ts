@@ -63,12 +63,12 @@ export const WriterLeaseEvidenceSchema = Schema.Union([
 
 export type WriterLeaseEvidence = Schema.Schema.Type<typeof WriterLeaseEvidenceSchema>;
 
-export class WriterCwdCanonicalizationError extends Schema.TaggedErrorClass<WriterCwdCanonicalizationError>()(
+export class WriterCwdCanonicalizationError extends Schema.TaggedError<WriterCwdCanonicalizationError>()(
   "WriterCwdCanonicalizationError",
   { message: Schema.String },
 ) {}
 
-export class WriterLeaseConflictError extends Schema.TaggedErrorClass<WriterLeaseConflictError>()(
+export class WriterLeaseConflictError extends Schema.TaggedError<WriterLeaseConflictError>()(
   "WriterLeaseConflictError",
   {
     message: Schema.String,
@@ -86,17 +86,17 @@ export class WriterLeaseConflictError extends Schema.TaggedErrorClass<WriterLeas
   },
 ) {}
 
-export class WriterLeaseAcquireError extends Schema.TaggedErrorClass<WriterLeaseAcquireError>()(
+export class WriterLeaseAcquireError extends Schema.TaggedError<WriterLeaseAcquireError>()(
   "WriterLeaseAcquireError",
   { message: Schema.String },
 ) {}
 
-export class WriterLeaseMarkError extends Schema.TaggedErrorClass<WriterLeaseMarkError>()(
+export class WriterLeaseMarkError extends Schema.TaggedError<WriterLeaseMarkError>()(
   "WriterLeaseMarkError",
   { message: Schema.String },
 ) {}
 
-export class WriterLeaseReleaseError extends Schema.TaggedErrorClass<WriterLeaseReleaseError>()(
+export class WriterLeaseReleaseError extends Schema.TaggedError<WriterLeaseReleaseError>()(
   "WriterLeaseReleaseError",
   { message: Schema.String },
 ) {}

@@ -136,7 +136,7 @@ src/
 
 ## Effect architecture
 
-- The workspace is being rearchitected around the exact Effect v4 beta versions in `pnpm-workspace.yaml`.
+- The workspace is being rearchitected around the exact Effect v4 prerelease versions in `pnpm-workspace.yaml`.
 - Read `docs/adr/0001-effect-v4-beta.md` and `docs/architecture/` before changing application architecture.
 - Treat the pinned Effect declarations as authoritative when older documentation differs.
 - New or migrated packages must extend `tsconfig.effect.json`; all packages must inherit the Effect language-service plugin.

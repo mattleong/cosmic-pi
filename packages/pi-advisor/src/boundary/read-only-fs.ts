@@ -10,14 +10,11 @@ import { isContainedPath, isContainedPathWith } from "pi-cosmic-core";
 
 export { isContainedPath, isContainedPathWith };
 
-export class AdvisorFileError extends Schema.TaggedErrorClass<AdvisorFileError>()(
-  "AdvisorFileError",
-  {
-    operation: Schema.String,
-    path: Schema.String,
-    message: Schema.String,
-  },
-) {}
+export class AdvisorFileError extends Schema.TaggedError<AdvisorFileError>()("AdvisorFileError", {
+  operation: Schema.String,
+  path: Schema.String,
+  message: Schema.String,
+}) {}
 export interface ReadOnlyInfo {
   readonly type: "file" | "directory" | "symlink" | "other";
   readonly size: number;

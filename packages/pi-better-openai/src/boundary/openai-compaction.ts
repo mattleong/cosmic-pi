@@ -34,7 +34,7 @@ const CompactedResponseSchema = Schema.Struct({
   }),
 });
 
-export class OpenAICompactionBoundaryError extends Schema.TaggedErrorClass<OpenAICompactionBoundaryError>()(
+export class OpenAICompactionBoundaryError extends Schema.TaggedError<OpenAICompactionBoundaryError>()(
   "OpenAICompactionBoundaryError",
   {
     operation: Schema.Literals(["auth", "encode", "request", "response", "decode"]),

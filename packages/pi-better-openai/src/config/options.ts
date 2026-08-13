@@ -12,7 +12,7 @@ import {
   ImageSaveModeSchema,
 } from "./schema.ts";
 
-export class InvalidSettingError extends Schema.TaggedErrorClass<InvalidSettingError>()(
+export class InvalidSettingError extends Schema.TaggedError<InvalidSettingError>()(
   "InvalidSettingError",
   { id: Schema.String, message: Schema.String },
 ) {}

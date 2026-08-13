@@ -24,7 +24,7 @@ import {
   type UsageConfig,
 } from "./schema.ts";
 
-export class OpenAIConfigError extends Schema.TaggedErrorClass<OpenAIConfigError>()(
+export class OpenAIConfigError extends Schema.TaggedError<OpenAIConfigError>()(
   "OpenAIConfigError",
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}

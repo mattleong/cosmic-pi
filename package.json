@@ -33,7 +33,7 @@
     "version:set": "node scripts/set-version.mjs"
   },
   "devDependencies": {
-    "@effect/language-service": "0.87.0",
+    "@effect/language-service": "0.87.2",
     "@types/node": "catalog:",
     "jiti": "2.7.0",
     "oxfmt": "catalog:",

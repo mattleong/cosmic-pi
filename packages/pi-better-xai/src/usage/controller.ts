@@ -39,10 +39,10 @@ import {
   type XaiProjection,
 } from "./projection.ts";
 
-export class XaiBoundaryError extends Schema.TaggedErrorClass<XaiBoundaryError>()(
-  "XaiBoundaryError",
-  { operation: Schema.String, message: Schema.String },
-) {}
+export class XaiBoundaryError extends Schema.TaggedError<XaiBoundaryError>()("XaiBoundaryError", {
+  operation: Schema.String,
+  message: Schema.String,
+}) {}
 
 export type RefreshOptions = RefreshRequest;
 

@@ -8,7 +8,7 @@ import type { AdvisorEffectExecutor } from "./executor.ts";
 export function advisorNow(executor: Pick<AdvisorEffectExecutor, "now">): number {
   return executor.now();
 }
-export class AdvisorClockTaskError extends Schema.TaggedErrorClass<AdvisorClockTaskError>()(
+export class AdvisorClockTaskError extends Schema.TaggedError<AdvisorClockTaskError>()(
   "AdvisorClockTaskError",
   { message: Schema.String },
 ) {}

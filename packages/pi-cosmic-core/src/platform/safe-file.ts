@@ -8,7 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { isStrictlyInsidePath } from "./paths.ts";
 
-export class SafeFileError extends Schema.TaggedErrorClass<SafeFileError>()("SafeFileError", {
+export class SafeFileError extends Schema.TaggedError<SafeFileError>()("SafeFileError", {
   operation: Schema.String,
   message: Schema.String,
 }) {}

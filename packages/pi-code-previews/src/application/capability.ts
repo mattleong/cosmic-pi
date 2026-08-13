@@ -24,7 +24,7 @@ type SessionRequirements =
 
 export type CodePreviewSessionFiber<A, E> = Fiber.Fiber<A, E | CodePreviewRuntimeError>;
 
-export class CodePreviewSessionUnavailable extends Schema.TaggedErrorClass<CodePreviewSessionUnavailable>()(
+export class CodePreviewSessionUnavailable extends Schema.TaggedError<CodePreviewSessionUnavailable>()(
   "CodePreviewSessionUnavailable",
   { operation: Schema.String, message: Schema.String },
 ) {}

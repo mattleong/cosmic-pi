@@ -1,4 +1,4 @@
-# ADR 0001: Effect v4 beta-first architecture
+# ADR 0001: Effect v4 prerelease-first architecture
 
 - Status: Accepted
 - Date: 2026-07-19
@@ -9,7 +9,7 @@ The extensions in this workspace independently manage asynchronous work, mutable
 
 ## Decision
 
-Cosmic-pi will be rearchitected around Effect v4 beta.
+Cosmic-pi will be rearchitected around Effect v4 prereleases through the release-candidate phase.
 
 1. All fallible, asynchronous, stateful, concurrent, resource-owning, time-dependent, or dependency-driven application behavior is expressed with Effect.
 2. Pure deterministic code may remain pure. Effect is permitted everywhere, but fake effects are not required around arithmetic, formatting, or other total calculations.
@@ -23,15 +23,15 @@ Cosmic-pi will be rearchitected around Effect v4 beta.
 
 ## Version policy
 
-The implementation kickoff verified and pinned these exact versions:
+The implementation kickoff pinned Effect v4 beta.99. On 2026-08-13, the workspace advanced to the first release candidate and now pins:
 
-- `effect@4.0.0-beta.99`
-- `@effect/platform-node@4.0.0-beta.99`
-- `@effect/vitest@4.0.0-beta.99`
-- `@effect/language-service@0.87.0`
+- `effect@4.0.0-rc.108`
+- `@effect/platform-node@4.0.0-rc.108`
+- `@effect/vitest@4.0.0-rc.108`
+- `@effect/language-service@0.87.2`
 - `typescript@6.0.3`
 
-Effect ecosystem beta versions are synchronized in the pnpm catalog. No caret, tilde, or moving dist-tag is permitted. Every beta upgrade is isolated, reviewed as potentially breaking, and followed by the complete validation gate.
+Jointly released Effect ecosystem packages are synchronized in the pnpm catalog. The independently versioned language service is pinned separately. No caret, tilde, or moving dist-tag is permitted. Every prerelease upgrade is isolated, reviewed as potentially breaking, and followed by the complete validation gate.
 
 ## Consequences
 
@@ -43,8 +43,9 @@ Effect ecosystem beta versions are synchronized in the pnpm catalog. No caret, t
 
 ## Primary references
 
-- [Effect v4 beta announcement](https://effect.website/blog/releases/effect/40-beta/)
+- [Effect v4 RC announcement](https://www.effect.website/blog/releases/effect/40-rc)
+- [Effect v4 migration instructions](https://github.com/Effect-TS/effect/blob/main/MIGRATION.md)
 - [Effect language-service setup](https://effect.website/docs/getting-started/devtools/#effect-lsp)
-- [Effect v4 beta.99 Context source](https://github.com/Effect-TS/effect/blob/effect%404.0.0-beta.99/packages/effect/src/Context.ts)
-- [Effect v4 beta.99 Layer source](https://github.com/Effect-TS/effect/blob/effect%404.0.0-beta.99/packages/effect/src/Layer.ts)
-- [Effect v4 beta.99 ManagedRuntime source](https://github.com/Effect-TS/effect/blob/effect%404.0.0-beta.99/packages/effect/src/ManagedRuntime.ts)
+- [Effect v4 rc.108 Context source](https://github.com/Effect-TS/effect/blob/effect%404.0.0-rc.108/packages/effect/src/Context.ts)
+- [Effect v4 rc.108 Layer source](https://github.com/Effect-TS/effect/blob/effect%404.0.0-rc.108/packages/effect/src/Layer.ts)
+- [Effect v4 rc.108 ManagedRuntime source](https://github.com/Effect-TS/effect/blob/effect%404.0.0-rc.108/packages/effect/src/ManagedRuntime.ts)

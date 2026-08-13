@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-export class XaiHostUiError extends Schema.TaggedErrorClass<XaiHostUiError>()("XaiHostUiError", {
+export class XaiHostUiError extends Schema.TaggedError<XaiHostUiError>()("XaiHostUiError", {
   operation: Schema.String,
   message: Schema.String,
 }) {}

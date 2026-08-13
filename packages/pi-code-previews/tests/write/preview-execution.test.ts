@@ -38,10 +38,9 @@ import {
 import { lookupBeforeWrite } from "../../src/write/projection";
 import { CodePreviewWriteService } from "../../src/write/service";
 
-class TestFileSystemError extends Schema.TaggedErrorClass<TestFileSystemError>()(
-  "TestFileSystemError",
-  { operation: Schema.String },
-) {}
+class TestFileSystemError extends Schema.TaggedError<TestFileSystemError>()("TestFileSystemError", {
+  operation: Schema.String,
+}) {}
 
 const testFileSystem = <A>(
   operation: string,

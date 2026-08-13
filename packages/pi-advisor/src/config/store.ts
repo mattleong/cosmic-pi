@@ -98,7 +98,7 @@ export const writeAdvisorConfigPatchEffect = Effect.fn("AdvisorConfig.patch")(fu
   return normalizeAdvisorConfig(next ?? {}, path);
 });
 
-export class AdvisorConfigStoreError extends Schema.TaggedErrorClass<AdvisorConfigStoreError>()(
+export class AdvisorConfigStoreError extends Schema.TaggedError<AdvisorConfigStoreError>()(
   "AdvisorConfigStoreError",
   { operation: Schema.String, message: Schema.String },
 ) {}

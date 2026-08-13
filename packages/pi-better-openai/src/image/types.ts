@@ -91,12 +91,9 @@ export type ExtractedImageResult = Omit<
   "prompt" | "savedPath" | "model" | "action" | "outputFormat"
 >;
 
-export class OpenAIImageError extends Schema.TaggedErrorClass<OpenAIImageError>()(
-  "OpenAIImageError",
-  {
-    operation: Schema.String,
-    message: Schema.String,
-  },
-) {}
+export class OpenAIImageError extends Schema.TaggedError<OpenAIImageError>()("OpenAIImageError", {
+  operation: Schema.String,
+  message: Schema.String,
+}) {}
 export const fail = (operation: string, message: string) =>
   new OpenAIImageError({ operation, message });

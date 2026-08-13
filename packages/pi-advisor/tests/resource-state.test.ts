@@ -5,7 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { makeAdvisorResourceState } from "../src/runtime/resource-state.ts";
 
-class AcquireFailure extends Schema.TaggedErrorClass<AcquireFailure>()("AcquireFailure", {
+class AcquireFailure extends Schema.TaggedError<AcquireFailure>()("AcquireFailure", {
   message: Schema.String,
 }) {}
 

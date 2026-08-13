@@ -36,7 +36,7 @@ export const ResolvedAdvisorConfigSchema = Schema.Struct({
   configured: Schema.Boolean,
 });
 
-export class AdvisorConfigError extends Schema.TaggedErrorClass<AdvisorConfigError>()(
+export class AdvisorConfigError extends Schema.TaggedError<AdvisorConfigError>()(
   "AdvisorConfigError",
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}

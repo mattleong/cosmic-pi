@@ -45,7 +45,7 @@ export interface LocalProcessHandle {
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, LocalProcessError>;
 }
 
-export class LocalProcessError extends Schema.TaggedErrorClass<LocalProcessError>()(
+export class LocalProcessError extends Schema.TaggedError<LocalProcessError>()(
   "LocalProcessError",
   { operation: Schema.String, message: Schema.String },
 ) {}

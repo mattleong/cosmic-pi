@@ -11,10 +11,9 @@ import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import { piHostFileLoggerLayer, type PiHostLogTarget } from "../src/runtime/runtime.ts";
 
-class TestFileSystemError extends Schema.TaggedErrorClass<TestFileSystemError>()(
-  "TestFileSystemError",
-  { operation: Schema.String },
-) {}
+class TestFileSystemError extends Schema.TaggedError<TestFileSystemError>()("TestFileSystemError", {
+  operation: Schema.String,
+}) {}
 
 const testFileSystem = <A>(
   operation: string,

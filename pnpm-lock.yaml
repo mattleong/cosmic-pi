@@ -16,11 +16,11 @@ catalogs:
       specifier: 0.84.0
       version: 0.84.0
     '@effect/platform-node':
-      specifier: 4.0.0-beta.99
-      version: 4.0.0-beta.99
+      specifier: 4.0.0-rc.108
+      version: 4.0.0-rc.108
     '@effect/vitest':
-      specifier: 4.0.0-beta.99
-      version: 4.0.0-beta.99
+      specifier: 4.0.0-rc.108
+      version: 4.0.0-rc.108
     '@types/node':
       specifier: ~22.19.0
       version: 22.19.21
@@ -28,8 +28,8 @@ catalogs:
       specifier: 8.15.0
       version: 8.15.0
     effect:
-      specifier: 4.0.0-beta.99
-      version: 4.0.0-beta.99
+      specifier: 4.0.0-rc.108
+      version: 4.0.0-rc.108
     oxfmt:
       specifier: ^0.47.0
       version: 0.47.0
@@ -51,8 +51,8 @@ importers:
   .:
     devDependencies:
       '@effect/language-service':
-        specifier: 0.87.0
-        version: 0.87.0
+        specifier: 0.87.2
+        version: 0.87.2
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -73,10 +73,10 @@ importers:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(ioredis@5.11.1)
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(ioredis@5.11.1)
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
@@ -98,7 +98,7 @@ importers:
         version: 0.84.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -116,7 +116,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
       pi-code-previews:
         specifier: workspace:*
         version: link:../pi-code-previews
@@ -141,7 +141,7 @@ importers:
         version: 0.84.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -159,7 +159,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
       pi-code-previews:
         specifier: workspace:*
         version: link:../pi-code-previews
@@ -184,7 +184,7 @@ importers:
         version: 0.84.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -202,7 +202,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
       pi-code-previews:
         specifier: workspace:*
         version: link:../pi-code-previews
@@ -227,7 +227,7 @@ importers:
         version: 0.84.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -245,7 +245,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
@@ -261,7 +261,7 @@ importers:
         version: 0.84.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -282,7 +282,7 @@ importers:
         version: 8.15.0
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
       pi-code-previews:
         specifier: workspace:*
         version: link:../pi-code-previews
@@ -307,7 +307,7 @@ importers:
         version: 0.84.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -328,7 +328,7 @@ importers:
         version: 8.15.0
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
@@ -353,7 +353,7 @@ importers:
         version: 8.0.4
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
@@ -372,10 +372,10 @@ importers:
         version: 0.84.0
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(ioredis@5.11.1)
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(ioredis@5.11.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -396,17 +396,17 @@ importers:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(ioredis@5.11.1)
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(ioredis@5.11.1)
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
         version: 0.84.0(ws@8.21.1)(zod@4.4.3)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -424,7 +424,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
@@ -437,7 +437,7 @@ importers:
         version: 0.84.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -455,7 +455,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
@@ -465,7 +465,7 @@ importers:
         version: 0.84.0(ws@8.21.1)(zod@4.4.3)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -483,7 +483,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
@@ -508,7 +508,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.99
+        version: 4.0.0-rc.108
       pi-better-openai:
         specifier: workspace:*
         version: link:../pi-better-openai
@@ -536,7 +536,7 @@ importers:
         version: 0.84.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.0-rc.108(effect@4.0.0-rc.108)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -692,28 +692,28 @@ packages:
     resolution: {integrity: sha512-nbs0FeZJ5rWDD6VpKfXXmYbEHnHqb40V9glE2l9f8ftoWpsP8nw0WcXK8jOjfRsDPnT9dJHy3dItOHdn/AFGjA==}
     engines: {node: '>=22.19.0'}
 
-  '@effect/language-service@0.87.0':
-    resolution: {integrity: sha512-GwZtEwBaOMyKea6YAtN0T0OGBtzJ8/y0KUIfyg29u3hnMRiXKlR2BRDqJmi+SbgaODJNNB3YOd6KuRB/vsxnWw==}
+  '@effect/language-service@0.87.2':
+    resolution: {integrity: sha512-CfiSoaVQO8pZgaMZGw5VvMvRGybsJ2LaSDoLYaqiVGvo/YYPYVR2GzUKY0h1NtIweq/+SQ5XLrvtzPIttWQ0GQ==}
     hasBin: true
 
-  '@effect/platform-node-shared@4.0.0-beta.99':
-    resolution: {integrity: sha512-POBAowafsAAb3bH1x1rJlWnv32yMAazFgEuRW5LhkW/JJA5VGoEk9OnuoUkIH1OW6K/X6IrdNpqcO+5e9lPQJA==}
+  '@effect/platform-node-shared@4.0.0-rc.108':
+    resolution: {integrity: sha512-g5dSRR+tHzFcWav5A6zbug78oV8WPJL5BJqgKlKtow0cQ2IpULcLZaP2xCYR3RJDvz5SETREmPCJ+BNONIsalw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-beta.99
+      effect: ^4.0.0-rc.108
 
-  '@effect/platform-node@4.0.0-beta.99':
-    resolution: {integrity: sha512-jnK2KMW4W50AEOKK+Tgvab3YPHBxa3ApLQE8BCad+LH57JOziKzOjqtEpAgJgmao3t77x1UESK4JraaHJDHaYA==}
+  '@effect/platform-node@4.0.0-rc.108':
+    resolution: {integrity: sha512-Nof78154BaHGdSYr4TPQFZ5+Dg+HkpmbI3SQUdwsby5QNs6yahGJPu2AgdIVqdx7pKZ2w7j/bvdnqoMmkG0PbA==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-beta.99
-      ioredis: ^5.7.0
+      effect: ^4.0.0-rc.108
+      ioredis: '>=5.7.0 <6.0.0'
 
-  '@effect/vitest@4.0.0-beta.99':
-    resolution: {integrity: sha512-SiZo3UGTsG2itbqLU1SJVmFraK+0AkrEU7ZLRpQALx3lFRBaohzB/7UQKVsRjCHHjDg0kNkGitZusGRN3mVAhg==}
+  '@effect/vitest@4.0.0-rc.108':
+    resolution: {integrity: sha512-XD2GP1JATN28wnIeFGsBqYMuQDCHIodKKgFulGyG91GvuHqgf2gz+WxR2LPdyNoKMtr7lsbRzVj07niSYtIKzA==}
     peerDependencies:
-      effect: ^4.0.0-beta.99
-      vitest: ^3.0.0 || ^4.0.0
+      effect: ^4.0.0-rc.108
+      vitest: '>=4.1.0 <5.0.0'
 
   '@emnapi/core@1.11.1':
     resolution: {integrity: sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ==}
@@ -1781,8 +1781,8 @@ packages:
   ecdsa-sig-formatter@1.0.11:
     resolution: {integrity: sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==}
 
-  effect@4.0.0-beta.99:
-    resolution: {integrity: sha512-hP1C61uzINfLl/4kKMwcqksxd34s4sQ3VSjsWjhGrkx9CRlXaqnfOK9dpTEKynQ6rA7wU9rb3c+48eDYw7uzxA==}
+  effect@4.0.0-rc.108:
+    resolution: {integrity: sha512-KmI3DlKZWPvCL4QQ2FMaPOuxMt/7DrKMENCY/gQ+MkDR5QYw25wgU5Zmh/wVLboNjIci1gNOgNCFe4xqgxli3A==}
 
   es-module-lexer@2.3.1:
     resolution: {integrity: sha512-shc1dbU90Yl/xq1QrC7QRtfcwURZuVRfPhZbDoldJ1cn1gzDvBaBWlv0eFolj5+0znnPJz5TXLxsN77X/12KTA==}
@@ -1818,9 +1818,6 @@ packages:
   fetch-blob@3.2.0:
     resolution: {integrity: sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==}
     engines: {node: ^12.20 || >= 14.13}
-
-  find-my-way-ts@0.1.6:
-    resolution: {integrity: sha512-a85L9ZoXtNAey3Y6Z+eBWW658kO/MwR7zIafkIUPUMf3isZG0NCs2pjW2wtjxAKuJPxMAsHUIP4ZPGv0o5gyTA==}
 
   formdata-polyfill@4.0.10:
     resolution: {integrity: sha512-buewHzMvYL29jdeQTVILecSaZKnt/RJWjoZCF5OW60Z67/GmSLBkOFM7qh1PI3zFNtJbaZL5eQu1vLfazOwj4g==}
@@ -1889,10 +1886,6 @@ packages:
   ignore@7.0.5:
     resolution: {integrity: sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg==}
     engines: {node: '>= 4'}
-
-  ini@7.0.0:
-    resolution: {integrity: sha512-ifK0CgjALofS5bkrcTy4RaQ9Vx2Knf/eLeIO+NaswQEpH1UblrtTSCIvN71qQDMq0PeQ/SSPojvEJp9vvvfr+w==}
-    engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
   ioredis@5.11.1:
     resolution: {integrity: sha512-ehuGcf94bQXhfagULNXrJdfnWO38v070jxSx/qE87Kjzmu2fU7ro5EFAb+OPituLqgfyuQaym5DlrNydW2sJ9A==}
@@ -2050,9 +2043,6 @@ packages:
 
   msgpackr@2.0.4:
     resolution: {integrity: sha512-o1C5KRmuRt+apqMr1HuGSqWStZoRBUpEsCsl15uM9VdAF1qHLtvMOU2En747EnTyEl6c4pzPewRMFF31s1CNbA==}
-
-  multipasta@0.2.8:
-    resolution: {integrity: sha512-ZPWuMKyv0cSO29f7hozp+k6+crZbQijV8ipMvxNxRf2SwtYGTX1ZX89Kd20VV4H9Znonx+EQn+iy1wGQsJ+b+Q==}
 
   nanoid@3.3.16:
     resolution: {integrity: sha512-bzlKTyNJ7+LdGIIwy8ijFpIqEQIvafahV7eYykJ8Cvh42EdJeODoJ6gUJXpQJvej1BddH8OqTXZNE/KfbWAu8Q==}
@@ -2257,10 +2247,6 @@ packages:
     resolution: {integrity: sha512-Bf+ILmBgretUrdJxzXM0SgXLZ3XfiaUuOj/IKQHuTXip+05Xn+uyEYdVg0kYDipTBcLrCVyUzAPz7QmArb0mmw==}
     engines: {node: '>=14.0.0'}
 
-  toml@4.3.0:
-    resolution: {integrity: sha512-lVb8X9BsPVuH0M4BKeS91tXAmJvCjQ5UIyAbQFaxkKGyUFK2RPkhwaFSQH8vbpl1d23eu/IBH+dwVMHWaq9A5A==}
-    engines: {node: '>=20'}
-
   trim-lines@3.0.1:
     resolution: {integrity: sha512-kRj8B+YHZCc9kQYdWfJB2/oUl9rA99qbowYYBtr4ui4mZyAQ2JpvVBd/6U2YloATfqBhBTSMhTpgBHtU0Mf3Rg==}
 
@@ -2288,10 +2274,6 @@ packages:
 
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
-
-  undici@8.7.0:
-    resolution: {integrity: sha512-N7iQtfyLhIMOFgQubvmLV26svHpO0bqKnAiWotTQCVKCmWrcGbBotPuW1x+xwYZ2VHdSTVUfPQQnlEt1/LouTQ==}
-    engines: {node: '>=22.19.0'}
 
   undici@8.9.0:
     resolution: {integrity: sha512-aWZpUj7XoGonMClx4gdDRfgBjqeA+F473aDmROQQbM9n6PRfK/u1q/a0X4wMTgcHfT8H6fpbt98PFuDUwFg2YA==}
@@ -2758,31 +2740,31 @@ snapshots:
       get-east-asian-width: 1.6.0
       marked: 18.0.5
 
-  '@effect/language-service@0.87.0': {}
+  '@effect/language-service@0.87.2': {}
 
-  '@effect/platform-node-shared@4.0.0-beta.99(effect@4.0.0-beta.99)':
+  '@effect/platform-node-shared@4.0.0-rc.108(effect@4.0.0-rc.108)':
     dependencies:
       '@types/ws': 8.18.1
-      effect: 4.0.0-beta.99
+      effect: 4.0.0-rc.108
       ws: 8.21.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@4.0.0-beta.99(effect@4.0.0-beta.99)(ioredis@5.11.1)':
+  '@effect/platform-node@4.0.0-rc.108(effect@4.0.0-rc.108)(ioredis@5.11.1)':
     dependencies:
-      '@effect/platform-node-shared': 4.0.0-beta.99(effect@4.0.0-beta.99)
-      effect: 4.0.0-beta.99
+      '@effect/platform-node-shared': 4.0.0-rc.108(effect@4.0.0-rc.108)
+      effect: 4.0.0-rc.108
       ioredis: 5.11.1
       mime: 4.1.0
-      undici: 8.7.0
+      undici: 8.9.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/vitest@4.0.0-beta.99(effect@4.0.0-beta.99)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))':
+  '@effect/vitest@4.0.0-rc.108(effect@4.0.0-rc.108)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))':
     dependencies:
-      effect: 4.0.0-beta.99
+      effect: 4.0.0-rc.108
       vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
   '@emnapi/core@1.11.1':
@@ -3505,18 +3487,13 @@ snapshots:
     dependencies:
       safe-buffer: 5.2.1
 
-  effect@4.0.0-beta.99:
+  effect@4.0.0-rc.108:
     dependencies:
       '@standard-schema/spec': 1.1.0
       fast-check: 4.9.0
-      find-my-way-ts: 0.1.6
-      ini: 7.0.0
       kubernetes-types: 1.30.0
       msgpackr: 2.0.4
-      multipasta: 0.2.8
-      toml: 4.3.0
       uuid: 14.0.1
-      yaml: 2.9.0
 
   es-module-lexer@2.3.1: {}
 
@@ -3569,8 +3546,6 @@ snapshots:
     dependencies:
       node-domexception: 1.0.0
       web-streams-polyfill: 3.3.3
-
-  find-my-way-ts@0.1.6: {}
 
   formdata-polyfill@4.0.10:
     dependencies:
@@ -3661,8 +3636,6 @@ snapshots:
       - supports-color
 
   ignore@7.0.5: {}
-
-  ini@7.0.0: {}
 
   ioredis@5.11.1:
     dependencies:
@@ -3815,8 +3788,6 @@ snapshots:
   msgpackr@2.0.4:
     optionalDependencies:
       msgpackr-extract: 3.0.4
-
-  multipasta@0.2.8: {}
 
   nanoid@3.3.16: {}
 
@@ -4071,8 +4042,6 @@ snapshots:
 
   tinyrainbow@3.1.0: {}
 
-  toml@4.3.0: {}
-
   trim-lines@3.0.1: {}
 
   ts-algebra@2.0.0: {}
@@ -4092,8 +4061,6 @@ snapshots:
   typescript@6.0.3: {}
 
   undici-types@6.21.0: {}
-
-  undici@8.7.0: {}
 
   undici@8.9.0: {}
 

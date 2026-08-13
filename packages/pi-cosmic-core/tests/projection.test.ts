@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot, makeFrozenProjection, ProjectionError } from "../src/projection.ts";
 
-class TransitionFailure extends Schema.TaggedErrorClass<TransitionFailure>()("TransitionFailure", {
+class TransitionFailure extends Schema.TaggedError<TransitionFailure>()("TransitionFailure", {
   message: Schema.String,
 }) {}
 

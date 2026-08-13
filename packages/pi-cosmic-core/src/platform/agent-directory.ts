@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
-export class AgentDirectoryError extends Schema.TaggedErrorClass<AgentDirectoryError>()(
+export class AgentDirectoryError extends Schema.TaggedError<AgentDirectoryError>()(
   "AgentDirectoryError",
   { message: Schema.String },
 ) {}

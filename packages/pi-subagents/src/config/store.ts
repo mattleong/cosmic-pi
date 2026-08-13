@@ -18,7 +18,7 @@ import {
   SUBAGENT_CONFIG_VERSION,
 } from "./schema.ts";
 
-export class SubagentConfigStoreError extends Schema.TaggedErrorClass<SubagentConfigStoreError>()(
+export class SubagentConfigStoreError extends Schema.TaggedError<SubagentConfigStoreError>()(
   "SubagentConfigStoreError",
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}

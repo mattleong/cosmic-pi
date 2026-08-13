@@ -6,7 +6,7 @@ import { FiniteNumberSchema, FOOTER_MODES, FooterModeSchema } from "./schema.ts"
 
 export type SettingsOptionSection = "usage" | "footer";
 
-export class InvalidSettingError extends Schema.TaggedErrorClass<InvalidSettingError>()(
+export class InvalidSettingError extends Schema.TaggedError<InvalidSettingError>()(
   "InvalidSettingError",
   { id: Schema.String, message: Schema.String },
 ) {}

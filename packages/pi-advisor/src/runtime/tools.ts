@@ -26,7 +26,7 @@ const PACKAGE_TOOL_IDENTITY = Symbol("pi-advisor-read-only-tool");
 type ToolDetails = { root: string; truncated: boolean };
 type AdvisorToolDefinition = ToolDefinition & { readonly [PACKAGE_TOOL_IDENTITY]: true };
 
-export class AdvisorToolSafetyError extends Schema.TaggedErrorClass<AdvisorToolSafetyError>()(
+export class AdvisorToolSafetyError extends Schema.TaggedError<AdvisorToolSafetyError>()(
   "AdvisorToolSafetyError",
   { message: Schema.String },
 ) {}

@@ -20,7 +20,7 @@ export const ADVISOR_MODEL_ERROR_KINDS = [
   "unknown",
 ] as const;
 export type AdvisorModelErrorKind = (typeof ADVISOR_MODEL_ERROR_KINDS)[number];
-export class AdvisorModelError extends Schema.TaggedErrorClass<AdvisorModelError>()(
+export class AdvisorModelError extends Schema.TaggedError<AdvisorModelError>()(
   "AdvisorModelError",
   {
     message: Schema.String,

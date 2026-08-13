@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-export class JsonDocumentError extends Schema.TaggedErrorClass<JsonDocumentError>()(
+export class JsonDocumentError extends Schema.TaggedError<JsonDocumentError>()(
   "JsonDocumentError",
   {
     operation: Schema.String,
@@ -9,12 +9,12 @@ export class JsonDocumentError extends Schema.TaggedErrorClass<JsonDocumentError
   },
 ) {}
 
-export class JsonHttpError extends Schema.TaggedErrorClass<JsonHttpError>()("JsonHttpError", {
+export class JsonHttpError extends Schema.TaggedError<JsonHttpError>()("JsonHttpError", {
   operation: Schema.Literals(["request", "response", "decode"]),
   message: Schema.String,
 }) {}
 
-export class StreamingHttpError extends Schema.TaggedErrorClass<StreamingHttpError>()(
+export class StreamingHttpError extends Schema.TaggedError<StreamingHttpError>()(
   "StreamingHttpError",
   {
     operation: Schema.Literals(["encode", "request", "stream"]),

@@ -8,7 +8,7 @@ import type * as Scope from "effect/Scope";
 export type SynchronousIngressOverflow = "drop" | "coalesce-latest";
 export type SynchronousIngressOfferResult = "accepted" | "dropped" | "coalesced" | "closed";
 
-export class SynchronousIngressError extends Schema.TaggedErrorClass<SynchronousIngressError>()(
+export class SynchronousIngressError extends Schema.TaggedError<SynchronousIngressError>()(
   "SynchronousIngressError",
   { message: Schema.String },
 ) {}

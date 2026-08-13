@@ -9,7 +9,7 @@ import { createHighlighter } from "shiki";
 
 export type ShikiHighlighter = Awaited<ReturnType<typeof createHighlighter>>;
 
-export class ShikiBoundaryError extends Schema.TaggedErrorClass<ShikiBoundaryError>()(
+export class ShikiBoundaryError extends Schema.TaggedError<ShikiBoundaryError>()(
   "ShikiBoundaryError",
   { operation: Schema.String, message: Schema.String },
 ) {}

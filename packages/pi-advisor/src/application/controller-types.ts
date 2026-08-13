@@ -13,7 +13,7 @@ import type { AdvisorRuntimeService } from "../runtime/runtime.ts";
 import type { AdvisorControllerSnapshot } from "../ui/projection.ts";
 import type { AdvisorHostBindings } from "../boundary/host-bindings.ts";
 
-export class AdvisorExtensionError extends Schema.TaggedErrorClass<AdvisorExtensionError>()(
+export class AdvisorExtensionError extends Schema.TaggedError<AdvisorExtensionError>()(
   "AdvisorExtensionError",
   { operation: Schema.String, message: Schema.String },
 ) {}

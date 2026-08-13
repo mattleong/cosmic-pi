@@ -35,7 +35,7 @@ const JwtPayloadSchema = Schema.Struct({
   team_id: Schema.optional(Schema.String),
 });
 
-export class XaiAuthError extends Schema.TaggedErrorClass<XaiAuthError>()("XaiAuthError", {
+export class XaiAuthError extends Schema.TaggedError<XaiAuthError>()("XaiAuthError", {
   operation: Schema.String,
   message: Schema.String,
 }) {}

@@ -15,7 +15,7 @@ export interface DirectoryIdentity {
   readonly preferencePath: string;
 }
 
-export class DirectoryModelStoreError extends Schema.TaggedErrorClass<DirectoryModelStoreError>()(
+export class DirectoryModelStoreError extends Schema.TaggedError<DirectoryModelStoreError>()(
   "DirectoryModelStoreError",
   { operation: Schema.String, message: Schema.String },
 ) {}

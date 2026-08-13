@@ -40,7 +40,7 @@ import {
   type OpenAIProjection,
 } from "./projection.ts";
 
-export class OpenAIBoundaryError extends Schema.TaggedErrorClass<OpenAIBoundaryError>()(
+export class OpenAIBoundaryError extends Schema.TaggedError<OpenAIBoundaryError>()(
   "OpenAIBoundaryError",
   { operation: Schema.String, message: Schema.String },
 ) {}

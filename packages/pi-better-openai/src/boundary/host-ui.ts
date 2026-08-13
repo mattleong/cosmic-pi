@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { captureHostSignal, invokeHostCallback } from "pi-cosmic-core";
 
-export class OpenAIHostUiError extends Schema.TaggedErrorClass<OpenAIHostUiError>()(
+export class OpenAIHostUiError extends Schema.TaggedError<OpenAIHostUiError>()(
   "OpenAIHostUiError",
   { operation: Schema.String, message: Schema.String },
 ) {}

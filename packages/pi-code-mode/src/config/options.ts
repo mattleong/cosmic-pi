@@ -21,7 +21,7 @@ export interface CodeModeResolution {
   readonly provenance: CodeModeProvenance;
 }
 
-export class InvalidCodeModeSettingError extends Schema.TaggedErrorClass<InvalidCodeModeSettingError>()(
+export class InvalidCodeModeSettingError extends Schema.TaggedError<InvalidCodeModeSettingError>()(
   "InvalidCodeModeSettingError",
   { id: Schema.String, message: Schema.String },
 ) {}

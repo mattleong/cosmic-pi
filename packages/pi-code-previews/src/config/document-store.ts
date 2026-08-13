@@ -28,7 +28,7 @@ export type LoadedSettingsState = {
   readonly saveContext: SettingsSaveContext;
 };
 
-export class CodePreviewSettingsLoadError extends Schema.TaggedErrorClass<CodePreviewSettingsLoadError>()(
+export class CodePreviewSettingsLoadError extends Schema.TaggedError<CodePreviewSettingsLoadError>()(
   "CodePreviewSettingsLoadError",
   {
     reason: Schema.Literals(["malformed", "permission", "document"]),

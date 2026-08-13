@@ -53,7 +53,7 @@ export type CodexUsageResponse = typeof CodexUsageSchema.Type;
 type UsageWindow = typeof UsageWindowSchema.Type;
 type RateLimitBucket = typeof RateLimitBucketSchema.Type;
 
-export class CodexUsageError extends Schema.TaggedErrorClass<CodexUsageError>()("CodexUsageError", {
+export class CodexUsageError extends Schema.TaggedError<CodexUsageError>()("CodexUsageError", {
   operation: Schema.String,
   message: Schema.String,
 }) {}

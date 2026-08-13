@@ -1,31 +1,31 @@
 import * as Schema from "effect/Schema";
 
-export class InvalidSubagentRequestError extends Schema.TaggedErrorClass<InvalidSubagentRequestError>()(
+export class InvalidSubagentRequestError extends Schema.TaggedError<InvalidSubagentRequestError>()(
   "InvalidSubagentRequestError",
   { message: Schema.String, code: Schema.optional(Schema.String) },
 ) {}
 
-export class SubagentNotFoundError extends Schema.TaggedErrorClass<SubagentNotFoundError>()(
+export class SubagentNotFoundError extends Schema.TaggedError<SubagentNotFoundError>()(
   "SubagentNotFoundError",
   { id: Schema.String, message: Schema.String },
 ) {}
 
-export class SubagentCapacityError extends Schema.TaggedErrorClass<SubagentCapacityError>()(
+export class SubagentCapacityError extends Schema.TaggedError<SubagentCapacityError>()(
   "SubagentCapacityError",
   { limit: Schema.Number, message: Schema.String },
 ) {}
 
-export class SubagentHistoryCapacityError extends Schema.TaggedErrorClass<SubagentHistoryCapacityError>()(
+export class SubagentHistoryCapacityError extends Schema.TaggedError<SubagentHistoryCapacityError>()(
   "SubagentHistoryCapacityError",
   { limit: Schema.Number, code: Schema.String, message: Schema.String },
 ) {}
 
-export class SubagentWriterConflictError extends Schema.TaggedErrorClass<SubagentWriterConflictError>()(
+export class SubagentWriterConflictError extends Schema.TaggedError<SubagentWriterConflictError>()(
   "SubagentWriterConflictError",
   { activeId: Schema.String, activeName: Schema.String, message: Schema.String },
 ) {}
 
-export class UnsupportedSafeWriterOwnershipError extends Schema.TaggedErrorClass<UnsupportedSafeWriterOwnershipError>()(
+export class UnsupportedSafeWriterOwnershipError extends Schema.TaggedError<UnsupportedSafeWriterOwnershipError>()(
   "UnsupportedSafeWriterOwnershipError",
   {
     code: Schema.Literal("unsupported_safe_writer_ownership"),
@@ -34,7 +34,7 @@ export class UnsupportedSafeWriterOwnershipError extends Schema.TaggedErrorClass
   },
 ) {}
 
-export class SubagentProcessError extends Schema.TaggedErrorClass<SubagentProcessError>()(
+export class SubagentProcessError extends Schema.TaggedError<SubagentProcessError>()(
   "SubagentProcessError",
   { operation: Schema.String, message: Schema.String, code: Schema.optional(Schema.String) },
 ) {}
@@ -58,17 +58,17 @@ export const isOutcomeUncertain = (error: { readonly code?: string | undefined }
 export const isCleanupUnconfirmed = (error: { readonly code?: string | undefined }): boolean =>
   error.code?.endsWith("_cleanup_unconfirmed") === true;
 
-export class SubagentProtocolError extends Schema.TaggedErrorClass<SubagentProtocolError>()(
+export class SubagentProtocolError extends Schema.TaggedError<SubagentProtocolError>()(
   "SubagentProtocolError",
   { message: Schema.String },
 ) {}
 
-export class SubagentRuntimeClosedError extends Schema.TaggedErrorClass<SubagentRuntimeClosedError>()(
+export class SubagentRuntimeClosedError extends Schema.TaggedError<SubagentRuntimeClosedError>()(
   "SubagentRuntimeClosedError",
   { message: Schema.String },
 ) {}
 
-export class UnsupportedSubagentCapabilityError extends Schema.TaggedErrorClass<UnsupportedSubagentCapabilityError>()(
+export class UnsupportedSubagentCapabilityError extends Schema.TaggedError<UnsupportedSubagentCapabilityError>()(
   "UnsupportedSubagentCapabilityError",
   { backend: Schema.String, capability: Schema.String, message: Schema.String },
 ) {}

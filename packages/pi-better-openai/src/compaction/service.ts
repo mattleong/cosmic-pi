@@ -28,7 +28,7 @@ import {
   type OpenAICompactionCheckpoint,
 } from "./protocol.ts";
 
-export class OpenAICompactionError extends Schema.TaggedErrorClass<OpenAICompactionError>()(
+export class OpenAICompactionError extends Schema.TaggedError<OpenAICompactionError>()(
   "OpenAICompactionError",
   {
     operation: Schema.Literals(["context", "projection"]),

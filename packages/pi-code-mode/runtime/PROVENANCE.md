@@ -53,8 +53,12 @@ confined to the additions listed there and do not alter upstream execution resul
 1. `src/index.ts` no longer exports `OpenAPI` (excluded subsystem).
 2. Tests import from `vitest` instead of `bun:test` and live under `tests/`
    (repository rule) instead of `test/`; Node + Vitest replace Bun as the runner.
-3. `effect` is consumed at the workspace-pinned `4.0.0-beta.99` instead of the
-   upstream catalog `4.0.0-beta.83`; no source changes were required.
+3. `effect` is consumed at the workspace-pinned `4.0.0-rc.108` instead of the
+   upstream catalog `4.0.0-beta.83`; the RC migration renamed the local
+   schema-backed `ToolError` base from `Schema.TaggedErrorClass` to
+   `Schema.TaggedError`. The model-visible signature renderer also recognizes
+   the RC's combined string enum for non-finite `Schema.Number` encodings while
+   retaining compatibility with the earlier per-sentinel enum shape.
 4. `typescript` is consumed at the workspace-pinned `6.0.3` instead of the
    upstream catalog `5.8.2`; no source changes were required.
 5. All files are formatted with the repository's `oxfmt` configuration

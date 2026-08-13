@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import sharp from "sharp";
 
-export class SharpError extends Schema.TaggedErrorClass<SharpError>()("SharpError", {
+export class SharpError extends Schema.TaggedError<SharpError>()("SharpError", {
   operation: Schema.String,
   message: Schema.String,
 }) {}

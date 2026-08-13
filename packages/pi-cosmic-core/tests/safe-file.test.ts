@@ -13,10 +13,9 @@ import { SafeFile } from "../index.ts";
 import { closeSafeFileHandle } from "../src/platform/safe-file.ts";
 import { makeCapturedTracer } from "../testing.ts";
 
-class TestFileSystemError extends Schema.TaggedErrorClass<TestFileSystemError>()(
-  "TestFileSystemError",
-  { operation: Schema.String },
-) {}
+class TestFileSystemError extends Schema.TaggedError<TestFileSystemError>()("TestFileSystemError", {
+  operation: Schema.String,
+}) {}
 
 const testFileSystem = <A>(
   operation: string,

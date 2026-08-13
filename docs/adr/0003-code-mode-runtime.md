@@ -54,7 +54,7 @@ The runtime is vendored from the OpenCode repository
 `d4704347465c1ee63d0c213ed00e648e7f0231c5`, package `packages/codemode`
 (`@opencode-ai/codemode@1.18.16`, MIT). Upstream file structure and behavior are
 preserved for diffability; the mechanical local deviations (Effect
-4.0.0-beta.99, TypeScript 6.0.3, Node + Vitest, oxfmt formatting, OpenAPI
+4.0.0-rc.108, TypeScript 6.0.3, Node + Vitest, oxfmt formatting, OpenAPI
 removal) are enumerated in `packages/pi-code-mode/runtime/PROVENANCE.md`. The
 upstream `interpreter/language-v1` wording and `1.x` semver name the interpreter
 contract inside OpenCode 2; they are not the legacy OpenCode product-v1
@@ -177,4 +177,4 @@ of that limitation; they do not remove it.
   <https://github.com/anomalyco/opencode/tree/d4704347465c1ee63d0c213ed00e648e7f0231c5/packages/codemode>
 - `packages/pi-code-mode/runtime/PROVENANCE.md`
 - `packages/pi-code-mode/runtime/ARCHITECTURE.md`
-- ADR 0001: Effect v4 beta-first architecture
+- ADR 0001: Effect v4 prerelease-first architecture

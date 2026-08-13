@@ -1,31 +1,31 @@
 import * as Schema from "effect/Schema";
 
-export class InvalidBackgroundCommandError extends Schema.TaggedErrorClass<InvalidBackgroundCommandError>()(
+export class InvalidBackgroundCommandError extends Schema.TaggedError<InvalidBackgroundCommandError>()(
   "InvalidBackgroundCommandError",
   { message: Schema.String },
 ) {}
 
-export class InvalidBackgroundCwdError extends Schema.TaggedErrorClass<InvalidBackgroundCwdError>()(
+export class InvalidBackgroundCwdError extends Schema.TaggedError<InvalidBackgroundCwdError>()(
   "InvalidBackgroundCwdError",
   { cwd: Schema.String, message: Schema.String },
 ) {}
 
-export class BackgroundJobNotFoundError extends Schema.TaggedErrorClass<BackgroundJobNotFoundError>()(
+export class BackgroundJobNotFoundError extends Schema.TaggedError<BackgroundJobNotFoundError>()(
   "BackgroundJobNotFoundError",
   { id: Schema.String, message: Schema.String },
 ) {}
 
-export class BackgroundJobCapacityError extends Schema.TaggedErrorClass<BackgroundJobCapacityError>()(
+export class BackgroundJobCapacityError extends Schema.TaggedError<BackgroundJobCapacityError>()(
   "BackgroundJobCapacityError",
   { limit: Schema.Number, message: Schema.String },
 ) {}
 
-export class BackgroundSpawnError extends Schema.TaggedErrorClass<BackgroundSpawnError>()(
+export class BackgroundSpawnError extends Schema.TaggedError<BackgroundSpawnError>()(
   "BackgroundSpawnError",
   { message: Schema.String },
 ) {}
 
-export class BackgroundRuntimeClosedError extends Schema.TaggedErrorClass<BackgroundRuntimeClosedError>()(
+export class BackgroundRuntimeClosedError extends Schema.TaggedError<BackgroundRuntimeClosedError>()(
   "BackgroundRuntimeClosedError",
   { message: Schema.String },
 ) {}

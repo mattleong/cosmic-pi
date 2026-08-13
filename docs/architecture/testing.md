@@ -2,14 +2,14 @@
 
 ## Test APIs
 
-Effectful tests use the exact beta-compatible `@effect/vitest` API:
+Effectful tests use the exact RC-compatible `@effect/vitest` API:
 
 - `it.effect` for deterministic Effect tests with test services and Scope,
 - `it.live` only when live time or live platform behavior is intentional,
 - `layer(...)` for a shared test Layer,
 - ordinary Vitest tests for total deterministic functions.
 
-Do not use stale examples containing `it.scoped` or `it.scopedLive`; those helpers are not exported by `@effect/vitest@4.0.0-beta.99`.
+Do not use stale examples containing `it.scoped` or `it.scopedLive`; those helpers are not exported by `@effect/vitest@4.0.0-rc.108`.
 
 ## Required coverage
 

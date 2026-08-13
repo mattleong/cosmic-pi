@@ -49,13 +49,10 @@ export const resetProjection = (
   projection: MutableRef.MutableRef<CosmicUiProjection>,
   totals = emptyTotals(),
 ): void => void MutableRef.set(projection, immutable(initialProjection(totals)));
-export class CosmicProbeError extends Schema.TaggedErrorClass<CosmicProbeError>()(
-  "CosmicProbeError",
-  {
-    operation: Schema.String,
-    message: Schema.String,
-  },
-) {}
+export class CosmicProbeError extends Schema.TaggedError<CosmicProbeError>()("CosmicProbeError", {
+  operation: Schema.String,
+  message: Schema.String,
+}) {}
 export interface CosmicUiServiceShape {
   readonly refreshGit: (force?: boolean) => Effect.Effect<void>;
   readonly refreshPullRequest: (force?: boolean) => Effect.Effect<void>;

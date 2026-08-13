@@ -16,7 +16,7 @@ import {
   type ResolvedConfig,
 } from "./schema.ts";
 
-export class XaiConfigError extends Schema.TaggedErrorClass<XaiConfigError>()("XaiConfigError", {
+export class XaiConfigError extends Schema.TaggedError<XaiConfigError>()("XaiConfigError", {
   operation: Schema.String,
   path: Schema.String,
   message: Schema.String,

@@ -36,7 +36,7 @@ type SessionInput = {
   readonly notifyFailure: () => void;
 };
 
-class CodePreviewRendererRegistrationError extends Schema.TaggedErrorClass<CodePreviewRendererRegistrationError>()(
+class CodePreviewRendererRegistrationError extends Schema.TaggedError<CodePreviewRendererRegistrationError>()(
   "CodePreviewRendererRegistrationError",
   {
     operation: Schema.Literals(["register-renderers"]),

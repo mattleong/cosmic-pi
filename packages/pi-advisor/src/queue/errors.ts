@@ -17,36 +17,36 @@ const isQueueErrorTag = (tag: unknown): boolean => {
   }
 };
 
-export class AdvisorQueueError extends Schema.TaggedErrorClass<AdvisorQueueError>()(
+export class AdvisorQueueError extends Schema.TaggedError<AdvisorQueueError>()(
   "AdvisorQueueError",
   QueueErrorFields,
 ) {}
 
-export class AdvisorQueueDisposedError extends Schema.TaggedErrorClass<AdvisorQueueDisposedError>()(
+export class AdvisorQueueDisposedError extends Schema.TaggedError<AdvisorQueueDisposedError>()(
   "Disposed",
   QueueErrorFields,
 ) {}
-export class AdvisorQueueBacklogExceededError extends Schema.TaggedErrorClass<AdvisorQueueBacklogExceededError>()(
+export class AdvisorQueueBacklogExceededError extends Schema.TaggedError<AdvisorQueueBacklogExceededError>()(
   "BacklogExceeded",
   QueueErrorFields,
 ) {}
-export class AdvisorQueueResetRequiredError extends Schema.TaggedErrorClass<AdvisorQueueResetRequiredError>()(
+export class AdvisorQueueResetRequiredError extends Schema.TaggedError<AdvisorQueueResetRequiredError>()(
   "ResetRequired",
   QueueErrorFields,
 ) {}
-export class AdvisorQueueBatchDroppedError extends Schema.TaggedErrorClass<AdvisorQueueBatchDroppedError>()(
+export class AdvisorQueueBatchDroppedError extends Schema.TaggedError<AdvisorQueueBatchDroppedError>()(
   "BatchDropped",
   QueueErrorFields,
 ) {}
-export class AdvisorQueueCorrelationMismatchError extends Schema.TaggedErrorClass<AdvisorQueueCorrelationMismatchError>()(
+export class AdvisorQueueCorrelationMismatchError extends Schema.TaggedError<AdvisorQueueCorrelationMismatchError>()(
   "CorrelationMismatch",
   QueueErrorFields,
 ) {}
-export class AdvisorQueueCancelledError extends Schema.TaggedErrorClass<AdvisorQueueCancelledError>()(
+export class AdvisorQueueCancelledError extends Schema.TaggedError<AdvisorQueueCancelledError>()(
   "Cancelled",
   QueueErrorFields,
 ) {}
-export class AdvisorQueueStaleEpochError extends Schema.TaggedErrorClass<AdvisorQueueStaleEpochError>()(
+export class AdvisorQueueStaleEpochError extends Schema.TaggedError<AdvisorQueueStaleEpochError>()(
   "StaleEpoch",
   QueueErrorFields,
 ) {}

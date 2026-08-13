@@ -8,7 +8,7 @@ import {
 } from "../src/coordination/synchronous-ingress.ts";
 import { yieldUntil } from "../testing.ts";
 
-class CallbackFailure extends Schema.TaggedErrorClass<CallbackFailure>()("CallbackFailure", {
+class CallbackFailure extends Schema.TaggedError<CallbackFailure>()("CallbackFailure", {
   message: Schema.String,
 }) {}
 

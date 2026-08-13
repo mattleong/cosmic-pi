@@ -27,7 +27,7 @@ const JwtPayloadSchema = Schema.Struct({
   ),
 });
 
-export class CodexAuthError extends Schema.TaggedErrorClass<CodexAuthError>()("CodexAuthError", {
+export class CodexAuthError extends Schema.TaggedError<CodexAuthError>()("CodexAuthError", {
   operation: Schema.String,
   message: Schema.String,
 }) {}

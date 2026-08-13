@@ -150,7 +150,7 @@ export interface NativeRuntimeModel {
   readonly isDefault: boolean;
 }
 
-export class NativeModelCatalogError extends Schema.TaggedErrorClass<NativeModelCatalogError>()(
+export class NativeModelCatalogError extends Schema.TaggedError<NativeModelCatalogError>()(
   "NativeModelCatalogError",
   {
     runtime: Schema.Literals(["claude", "codex"]),

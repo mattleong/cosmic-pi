@@ -7,7 +7,7 @@ import type { PiManagedRuntime } from "./runtime.ts";
 
 declare const PiSessionRuntimeSlotRuntimeError: unique symbol;
 
-export class PiSessionRuntimeError extends Schema.TaggedErrorClass<PiSessionRuntimeError>()(
+export class PiSessionRuntimeError extends Schema.TaggedError<PiSessionRuntimeError>()(
   "PiSessionRuntimeError",
   { operation: Schema.String, message: Schema.String },
 ) {}

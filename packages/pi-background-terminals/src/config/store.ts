@@ -17,7 +17,7 @@ import { FiniteNumberSchema, type BackgroundTerminalConfig } from "./schema.ts";
 
 const CONFIG_BASENAME = "pi-background-terminals.json";
 
-export class BackgroundTerminalConfigError extends Schema.TaggedErrorClass<BackgroundTerminalConfigError>()(
+export class BackgroundTerminalConfigError extends Schema.TaggedError<BackgroundTerminalConfigError>()(
   "BackgroundTerminalConfigError",
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}

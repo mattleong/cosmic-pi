@@ -49,7 +49,7 @@ const WeeklyBillingSchema = Schema.Struct({
   }),
 });
 
-export class XaiUsageError extends Schema.TaggedErrorClass<XaiUsageError>()("XaiUsageError", {
+export class XaiUsageError extends Schema.TaggedError<XaiUsageError>()("XaiUsageError", {
   operation: Schema.String,
   message: Schema.String,
 }) {}

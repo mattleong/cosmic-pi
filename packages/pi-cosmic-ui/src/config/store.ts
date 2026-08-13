@@ -24,7 +24,7 @@ import {
 
 export const CONFIG_BASENAME = "pi-cosmic-ui.json";
 
-export class CosmicUiConfigError extends Schema.TaggedErrorClass<CosmicUiConfigError>()(
+export class CosmicUiConfigError extends Schema.TaggedError<CosmicUiConfigError>()(
   "CosmicUiConfigError",
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}

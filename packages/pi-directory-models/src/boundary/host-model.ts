@@ -13,7 +13,7 @@ export interface SelectedModel {
   readonly id: string;
 }
 
-export class DirectoryModelHostError extends Schema.TaggedErrorClass<DirectoryModelHostError>()(
+export class DirectoryModelHostError extends Schema.TaggedError<DirectoryModelHostError>()(
   "DirectoryModelHostError",
   { operation: Schema.String, message: Schema.String },
 ) {}

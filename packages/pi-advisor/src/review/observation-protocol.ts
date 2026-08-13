@@ -91,7 +91,7 @@ export const AdvisorObservationWireSchema = Schema.Union([
     requestSequence: ObservationIndexSchema,
   }),
 ]);
-export class AdvisorObservationError extends Schema.TaggedErrorClass<AdvisorObservationError>()(
+export class AdvisorObservationError extends Schema.TaggedError<AdvisorObservationError>()(
   "AdvisorObservationError",
   { message: Schema.String },
 ) {}
