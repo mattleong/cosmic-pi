@@ -42,6 +42,10 @@ import {
   type CodeModeToolDefinition,
 } from "./tools/controller.ts";
 import { makeCodeModeToolExecute } from "./tools/execution.ts";
+import {
+  applyRetainedCodeModeFailureDetails,
+  makeFailureDetailsRetention,
+} from "./tools/retention.ts";
 
 /** Host boundaries injected here so tests can control settings latency and nested tools. */
 export interface CodeModeApplicationBoundaries {
@@ -92,6 +96,12 @@ export function registerCodeModeApplication(
   let currentSessionKey: CodeModeSessionKey | undefined;
 
   const handoff = (boundaries.makeDeactivationHandoff ?? makeCodeModeDeactivationHandoff)();
+  const failureDetails = makeFailureDetailsRetention();
+
+  // Pi correctly turns a thrown tool error into `isError: true`, but its generic catch path
+  // replaces structured details with `{}`. Reattach only details retained by this extension
+  // for this exact Code Mode call; content and error semantics remain untouched.
+  pi.on("tool_result", (event) => applyRetainedCodeModeFailureDetails(failureDetails, event));
 
   /** Removes `code_mode` from the active list and records that this extension did so. */
   const tearDownTool = (): void => {
@@ -197,6 +207,7 @@ export function registerCodeModeApplication(
         getState: () => MutableRef.get(stateRef),
         runInSession: (effect, signal) => slot.run(effect, signal),
         definitions: boundaries.makeNestedDefinitions(captured.cwd),
+        retainFailureDetails: failureDetails.retain,
       }),
     });
     let wrapped: CodeModeToolDefinition;

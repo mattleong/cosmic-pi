@@ -88,7 +88,7 @@ describe("code mode Pi registration", () => {
   it("registers only /code-mode-settings and session lifecycle handlers at load time", () => {
     const h = harness();
     expect(h.registeredCommands).toEqual(["code-mode-settings"]);
-    expect(h.registeredEvents).toEqual(["session_start", "session_shutdown"]);
+    expect(h.registeredEvents).toEqual(["tool_result", "session_start", "session_shutdown"]);
     // The code_mode tool is registered per session start, never at extension load.
     expect(h.registerTool).not.toHaveBeenCalled();
   });

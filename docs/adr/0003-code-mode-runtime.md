@@ -1,6 +1,6 @@
 # ADR 0003: Vendored Code Mode runtime and two-package architecture
 
-- Status: Accepted
+- Status: Accepted; integration policy superseded in part by ADR 0004
 - Date: 2026-08-11
 
 ## Context
@@ -128,6 +128,9 @@ process memory only; Pi re-instantiates extensions in the same process, so no
 cross-process persistence is attempted.
 
 ### The integration is read-only, and nested dispatch is a prerequisite for more
+
+> Superseded by ADR 0004. This section records the original MVP policy; the runtime and
+> two-package decisions elsewhere in this ADR remain authoritative.
 
 The implemented `pi-code-mode` MVP exposes exactly the read-only Pi tools
 `tools.pi.read`, `tools.pi.grep`, `tools.pi.find`, and `tools.pi.ls` (plus the

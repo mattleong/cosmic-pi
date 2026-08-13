@@ -32,17 +32,22 @@ const parameters = Type.Object({
 });
 
 const DESCRIPTION_HEADER =
-  "Run one confined JavaScript program that orchestrates read-only Pi tools " +
-  "(tools.pi.read, tools.pi.grep, tools.pi.find, tools.pi.ls) in a single tool call: " +
-  "sequence, transform, filter, branch, and parallelize nested calls, then return only the " +
-  "data you need. The program runs in a sandboxed tree-walk interpreter with no filesystem, " +
-  "network, process, module, or timer authority of its own; session-configured limits bound " +
-  "execution time, nested tool calls, nested output bytes, and returned output bytes.\n" +
+  "Run one confined JavaScript program that orchestrates all seven Pi built-ins " +
+  "(tools.pi.read, tools.pi.bash, tools.pi.edit, tools.pi.write, tools.pi.grep, " +
+  "tools.pi.find, tools.pi.ls) in a single tool call: sequence, transform, filter, branch, " +
+  "and parallelize nested calls, then return only the data you need. The tree-walk " +
+  "interpreter itself has no ambient filesystem, network, process, module, or timer APIs; " +
+  "authority comes from supplied tools. In particular, bash/edit/write grant full local-user " +
+  "process, network, environment, and unrestricted filesystem authority. Session-configured " +
+  "limits bound interpreter time, call count, and model-visible bytes but cannot prevent or " +
+  "undo tool side effects.\n" +
   "\n" +
-  "Nested tool calls are dispatched directly inside this tool: they BYPASS Pi extension " +
-  "middleware that observes or wraps top-level tool calls, and their filesystem authority " +
-  "matches the direct read/grep/find/ls tools — including absolute paths outside the " +
-  "project. code_mode does not confine reads to the project directory.";
+  "Nested Pi calls are dispatched directly against fresh built-in definitions: they BYPASS " +
+  "Pi tool_call/tool_result middleware, approval and preview extensions, registered tool " +
+  "overrides, and session-specific tool operations. Nested bash therefore uses Pi's default " +
+  "local shell implementation rather than any configured or overridden top-level Bash. Paths " +
+  "may be relative, absolute, or home-relative; code_mode does not confine tool effects to " +
+  "the project directory.";
 
 export interface CodeModeToolDefinitionInput {
   /** Discovery catalog budget (estimated tokens) captured at registration time. */
@@ -57,11 +62,11 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
     label: "Code Mode",
     description: `${DESCRIPTION_HEADER}\n\n${describeCodeModeCatalog(input.catalogBudget)}`,
     promptSnippet:
-      "Run one confined script that orchestrates read-only read/grep/find/ls tool calls",
+      "Run one confined script that orchestrates Pi read/bash/edit/write/grep/find/ls calls",
     promptGuidelines: [
-      "Use code_mode when one investigation needs several dependent or parallel read-only " +
-        "lookups (read/grep/find/ls) whose intermediate results you would otherwise echo " +
-        "through the transcript; write one small program and return only the distilled result.",
+      "Use code_mode when one task needs several dependent or parallel Pi built-in calls whose " +
+        "intermediate results you would otherwise echo through the transcript; write one small " +
+        "program and return only the distilled result.",
       "Always pass the optional code_mode intent parameter: a short human-readable phrase " +
         'describing what the program is for (e.g. "Inspect the extension"); the UI shows it ' +
         "in place of the raw program source.",

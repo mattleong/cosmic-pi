@@ -324,6 +324,25 @@ describe("Promise.allSettled", () => {
 });
 
 describe("Promise.race", () => {
+  test("lifecycle marks the losing call cancelled", async () => {
+    const events: Array<CodeMode.ToolCallLifecycleEvent> = [];
+    const trace = makeTrace();
+    const result = await Effect.runPromise(
+      CodeMode.execute({
+        tools: { host: { sleepy: sleepyTool(trace) } },
+        code: `
+          const fast = tools.host.sleepy({ id: 1, ms: 10 })
+          const slow = tools.host.sleepy({ id: 2, ms: 5000 })
+          return await Promise.race([fast, slow])
+        `,
+        onToolCallLifecycle: (event) => Effect.sync(() => events.push(event)),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(events.filter((event) => event.status === "succeeded")).toHaveLength(1);
+    expect(events.filter((event) => event.status === "cancelled")).toHaveLength(1);
+  });
+
   test("first settlement wins and losers are interrupted", async () => {
     const trace = makeTrace();
     const result = await value(
@@ -410,6 +429,21 @@ describe("Promise.resolve / Promise.reject", () => {
 });
 
 describe("timeout interruption of forked calls", () => {
+  test("lifecycle reports timeout interruption as cancelled", async () => {
+    const events: Array<CodeMode.ToolCallLifecycleEvent> = [];
+    const trace = makeTrace();
+    const result = await Effect.runPromise(
+      CodeMode.execute({
+        tools: { host: { sleepy: sleepyTool(trace) } },
+        code: `return await tools.host.sleepy({ id: 1, ms: 60000 })`,
+        limits: { timeoutMs: 50 },
+        onToolCallLifecycle: (event) => Effect.sync(() => events.push(event)),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(events.at(-1)).toMatchObject({ status: "cancelled", started: true });
+  });
+
   test("the execution timeout interrupts in-flight forked fibers", async () => {
     const trace = makeTrace();
     const result = await run(

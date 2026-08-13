@@ -1,7 +1,7 @@
 {
   "name": "pi-code-mode",
   "version": "0.2.0",
-  "description": "Code Mode for pi: a confined code_mode agent tool that orchestrates read-only Pi tools from one interpreted program, with trusted-project scoped settings.",
+  "description": "Code Mode for pi: a confined code_mode agent tool that orchestrates all seven Pi built-ins from one interpreted program, with trusted-project scoped settings.",
   "keywords": [
     "code-mode",
     "pi",

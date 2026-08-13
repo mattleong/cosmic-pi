@@ -103,6 +103,16 @@ describe("makeCumulativeOutputBudget", () => {
     expect(budget.admit("a").admitted).toBe(false);
   });
 
+  it("bounds and consumes nested failure text from the same budget", () => {
+    const budget = makeCumulativeOutputBudget(7);
+    expect(budget.admit("ok").admitted).toBe(true);
+    expect(budget.admitFailure("ééé")).toBe("éé");
+    expect(budget.used()).toBe(6);
+    expect(budget.admitFailure("xy")).toBe("x");
+    expect(budget.used()).toBe(7);
+    expect(budget.admitFailure("later")).toBe("");
+  });
+
   it("stays deterministic under interleaved admissions of equal size", () => {
     // Check-and-consume is one synchronous step, so any settle order of 5 equal-sized
     // results against a 3-result budget admits exactly 3 and refuses exactly 2.

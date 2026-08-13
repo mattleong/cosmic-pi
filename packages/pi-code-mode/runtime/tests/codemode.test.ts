@@ -173,6 +173,45 @@ describe("CodeMode tool-call observation", () => {
     ]);
   });
 
+  test("observes queued, running, and terminal lifecycle states with stable ids", async () => {
+    const events: Array<CodeMode.ToolCallLifecycleEvent> = [];
+    const sleepy = Tool.make({
+      description: "Sleep briefly",
+      input: Schema.Struct({ id: Schema.Number }),
+      output: Schema.Number,
+      run: ({ id }) => Effect.sleep(20).pipe(Effect.as(id)),
+    });
+    const calls = Array.from(
+      { length: 12 },
+      (_, index) => `tools.context.sleepy({ id: ${index} })`,
+    ).join(", ");
+
+    const result = await Effect.runPromise(
+      CodeMode.execute({
+        tools: { context: { sleepy } },
+        code: `return await Promise.all([${calls}])`,
+        onToolCallLifecycle: (event) => Effect.sync(() => events.push(event)),
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    const queued = events.filter((event) => event.status === "queued");
+    const running = events.filter((event) => event.status === "running");
+    const succeeded = events.filter((event) => event.status === "succeeded");
+    expect(queued).toHaveLength(12);
+    expect(running).toHaveLength(12);
+    expect(succeeded).toHaveLength(12);
+    expect(new Set(queued.map((event) => event.id)).size).toBe(12);
+    for (const event of events) {
+      if (event.status === "running") expect(event.queueDurationMs).toBeGreaterThanOrEqual(0);
+      if (event.status === "succeeded") expect(event.durationMs).toBeGreaterThanOrEqual(0);
+    }
+    const ninthQueued = events.findIndex((event) => event.status === "queued" && event.id === 8);
+    const firstSucceeded = events.findIndex((event) => event.status === "succeeded");
+    expect(ninthQueued).toBeGreaterThanOrEqual(0);
+    expect(ninthQueued).toBeLessThan(firstSucceeded);
+  });
+
   test("observes settled calls with outcome and duration", async () => {
     const events: Array<{
       phase: string;

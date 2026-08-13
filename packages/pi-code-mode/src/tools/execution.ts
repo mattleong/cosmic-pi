@@ -24,6 +24,7 @@ import {
   formatCodeModeFailure,
   formatCodeModeSuccess,
   progressResult,
+  type CodeModeCallCounts,
   type CodeModeCallEntry,
   type CodeModeToolDetails,
 } from "./format.ts";
@@ -48,16 +49,68 @@ export interface CodeModeExecutionEnvironment {
   readonly getState: () => CodeModeState | undefined;
   /** Runs one effect on the current session runtime; the signal interrupts the fiber. */
   readonly runInSession: <A>(effect: Effect.Effect<A>, signal?: AbortSignal) => Promise<A>;
-  /** Built-in read/grep/find/ls definitions captured for this registration's cwd. */
+  /** All seven built-in Pi definitions captured for this registration's cwd. */
   readonly definitions: NestedPiToolDefinitions;
+  /** One-shot handoff to the `tool_result` hook for failures Pi converts to details `{}`. */
+  readonly retainFailureDetails?: (toolCallId: string, details: CodeModeToolDetails) => void;
 }
 
+const MAX_TRACKED_CALL_ENTRIES = 256;
+
+type MutableCallCounts = { -readonly [Key in keyof CodeModeCallCounts]: CodeModeCallCounts[Key] };
+
 interface MutableCallEntry {
+  id: number;
   tool: string;
   status: CodeModeCallEntry["status"];
   /** Bounded human-readable label derived from the decoded input; never nested output. */
   activity: string;
+  durationMs?: number;
 }
+
+const snapshotCalls = (calls: ReadonlyArray<MutableCallEntry>): ReadonlyArray<CodeModeCallEntry> =>
+  calls.map(({ tool, status, activity, durationMs }) => ({
+    tool,
+    status,
+    activity,
+    ...(durationMs === undefined ? {} : { durationMs }),
+  }));
+
+const emptyCounts = (): MutableCallCounts => ({
+  total: 0,
+  queued: 0,
+  running: 0,
+  succeeded: 0,
+  failed: 0,
+  cancelled: 0,
+});
+
+const statusCountKey = (
+  status: CodeModeCallEntry["status"],
+): Exclude<keyof CodeModeCallCounts, "total"> =>
+  status === "completed" ? "succeeded" : status === "error" ? "failed" : status;
+
+const transitionCall = (
+  call: MutableCallEntry,
+  status: CodeModeCallEntry["status"],
+  counts: MutableCallCounts,
+): void => {
+  if (call.status === status) return;
+  counts[statusCountKey(call.status)] -= 1;
+  counts[statusCountKey(status)] += 1;
+  call.status = status;
+};
+
+const settlePendingAsCancelled = (
+  calls: ReadonlyArray<MutableCallEntry>,
+  counts: MutableCallCounts,
+): void => {
+  for (const call of calls) {
+    if (call.status === "queued" || call.status === "running") {
+      transitionCall(call, "cancelled", counts);
+    }
+  }
+};
 
 // The cancellation text goes through the same authoritative clamp as every other
 // model-visible result (maxOutputBytes = 0 yields empty text).
@@ -80,10 +133,6 @@ export type CodeModeToolExecute = (
 export const makeCodeModeToolExecute =
   (environment: CodeModeExecutionEnvironment): CodeModeToolExecute =>
   async (toolCallId, params, signal, onUpdate, ctx) => {
-    // Defensive gate: a stale definition can remain registered after replacement, and the
-    // session's availability can change between registration and execution. With no current
-    // state there is no configured clamp, so the refusal is the fixed bounded constant; a
-    // current-but-unavailable session clamps the same refusal through its own budget.
     const state = environment.getState();
     if (!environment.isCurrent() || state === undefined) {
       throw new Error(CODE_MODE_UNAVAILABLE_MESSAGE);
@@ -96,9 +145,23 @@ export const makeCodeModeToolExecute =
     const { config } = state;
 
     const calls: MutableCallEntry[] = [];
-    // A function read defeats stale control-flow narrowing: the host aborts concurrently.
+    const callById = new Map<number, MutableCallEntry>();
+    const counts = emptyCounts();
+    const publish = () => publisher.publish(progressResult(snapshotCalls(calls), counts));
+    const trackQueued = (entry: MutableCallEntry): boolean => {
+      if (counts.total > config.maxToolCalls) return false;
+      if (calls.length >= MAX_TRACKED_CALL_ENTRIES) {
+        const evictedIndex = calls.findIndex((call) => call.status === "completed");
+        if (evictedIndex < 0) return false;
+        const [evicted] = calls.splice(evictedIndex, 1);
+        if (evicted !== undefined) callById.delete(evicted.id);
+      }
+      calls.push(entry);
+      callById.set(entry.id, entry);
+      return true;
+    };
     const aborted = () => signal?.aborted === true;
-    if (aborted()) return cancelledResult(calls, config.maxOutputBytes);
+    if (aborted()) return cancelledResult([], config.maxOutputBytes);
 
     const sourceRefusal = checkSourceSize(params.code, config.maxSourceBytes);
     if (sourceRefusal !== undefined) {
@@ -122,22 +185,58 @@ export const makeCodeModeToolExecute =
         maxToolCalls: config.maxToolCalls,
         maxOutputBytes: config.maxOutputBytes,
       },
-      onToolCallStart: ({ index, name, input }) =>
+      onToolCallLifecycle: (event) =>
         Effect.sync(() => {
-          calls[index] = {
-            tool: name,
-            status: "running",
-            activity: describeNestedActivity(name, input),
-          };
-          publisher.publish(progressResult(calls));
-        }),
-      onToolCallEnd: ({ index, outcome }) =>
-        Effect.sync(() => {
-          const current = calls[index];
-          if (current !== undefined) {
-            current.status = outcome === "success" ? "completed" : "error";
+          if (event.status === "queued") {
+            counts.total += 1;
+            counts.queued += 1;
+            const entry: MutableCallEntry = {
+              id: event.id,
+              tool: event.name,
+              status: "queued",
+              activity: describeNestedActivity(event.name, undefined),
+            };
+            if (!trackQueued(entry)) return;
+          } else {
+            const entry = callById.get(event.id);
+            const nextStatus =
+              event.status === "running"
+                ? "running"
+                : event.status === "succeeded"
+                  ? "completed"
+                  : event.status === "failed"
+                    ? "error"
+                    : "cancelled";
+            if (entry !== undefined) {
+              transitionCall(entry, nextStatus, counts);
+              if (event.status !== "running") entry.durationMs = event.durationMs;
+            } else {
+              if (event.status !== "running") {
+                counts.queued -= 1;
+                counts[statusCountKey(nextStatus)] += 1;
+              }
+              return;
+            }
           }
-          publisher.publish(progressResult(calls));
+          publish();
+        }),
+      onToolCallStart: ({ index, lifecycleId, name, input }) =>
+        Effect.sync(() => {
+          const current = lifecycleId === undefined ? calls[index] : callById.get(lifecycleId);
+          if (current !== undefined) {
+            transitionCall(current, "running", counts);
+            current.activity = describeNestedActivity(name, input);
+          }
+          publish();
+        }),
+      onToolCallEnd: ({ index, lifecycleId, outcome, durationMs }) =>
+        Effect.sync(() => {
+          const current = lifecycleId === undefined ? calls[index] : callById.get(lifecycleId);
+          if (current !== undefined) {
+            transitionCall(current, outcome === "success" ? "completed" : "error", counts);
+            current.durationMs = durationMs;
+          }
+          publish();
         }),
     });
 
@@ -145,13 +244,20 @@ export const makeCodeModeToolExecute =
     try {
       result = await environment.runInSession(execution, signal);
     } catch (error) {
-      // Interruption: outer abort, or the session runtime was replaced/shut down mid-run.
+      settlePendingAsCancelled(calls, counts);
+      counts.cancelled += counts.queued + counts.running;
+      counts.queued = 0;
+      counts.running = 0;
+      const details = callEntryDetails(snapshotCalls(calls), counts);
+      publisher.publish(progressResult(snapshotCalls(calls), counts));
       publisher.settle();
       if (aborted() || !environment.isCurrent()) {
-        return cancelledResult(calls, config.maxOutputBytes);
+        return {
+          ...cancelledResult(snapshotCalls(calls), config.maxOutputBytes),
+          details: { ...callEntryDetails(snapshotCalls(calls), counts), cancelled: true },
+        };
       }
-      // Unexpected runtime error: the composed message (which embeds a message an adapter
-      // or hostile nested layer influenced) is clamped before the Error is constructed.
+      environment.retainFailureDetails?.(toolCallId, details);
       throw new Error(
         clampModelVisibleText(
           `code_mode execution did not complete: ${
@@ -162,15 +268,25 @@ export const makeCodeModeToolExecute =
       );
     }
 
+    settlePendingAsCancelled(calls, counts);
+    counts.cancelled += counts.queued + counts.running;
+    counts.queued = 0;
+    counts.running = 0;
+    publisher.publish(progressResult(snapshotCalls(calls), counts));
     publisher.settle();
-    if (aborted()) return cancelledResult(calls, config.maxOutputBytes);
+    if (aborted()) {
+      return {
+        ...cancelledResult(snapshotCalls(calls), config.maxOutputBytes),
+        details: { ...callEntryDetails(snapshotCalls(calls), counts), cancelled: true },
+      };
+    }
 
-    // One final clamp over the entire model-visible text - success string or thrown-failure
-    // string - so the model never sees more than maxOutputBytes after the extension has
-    // appended logs, separators, diagnostic framing, and any runtime truncation markers. The
-    // failure message is clamped *before* the Error is constructed, so a hostile program's
-    // huge thrown string never materializes in full inside the thrown Error.
+    const details: CodeModeToolDetails = {
+      ...callEntryDetails(snapshotCalls(calls), counts),
+      ...(result.truncated === true ? { truncated: true } : {}),
+    };
     if (!result.ok) {
+      environment.retainFailureDetails?.(toolCallId, details);
       throw new Error(clampModelVisibleText(formatCodeModeFailure(result), config.maxOutputBytes));
     }
     return {
@@ -183,9 +299,6 @@ export const makeCodeModeToolExecute =
           ),
         },
       ],
-      details: {
-        ...callEntryDetails(calls),
-        ...(result.truncated === true ? { truncated: true } : {}),
-      },
+      details,
     };
   };

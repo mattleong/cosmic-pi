@@ -71,8 +71,11 @@ describe("describeCodeModeIntent", () => {
 });
 
 describe("describeNestedActivity", () => {
-  it("summarizes all five known nested tools", () => {
+  it("summarizes all eight known nested tools", () => {
     expect(describeNestedActivity("pi.read", { path: "src/app.ts" })).toBe("Read src/app.ts");
+    expect(describeNestedActivity("pi.bash", { command: "pnpm test" })).toBe("Run pnpm test");
+    expect(describeNestedActivity("pi.edit", { path: "src/app.ts" })).toBe("Edit src/app.ts");
+    expect(describeNestedActivity("pi.write", { path: "src/new.ts" })).toBe("Write src/new.ts");
     expect(describeNestedActivity("pi.grep", { pattern: "TODO", path: "src" })).toBe(
       "Search TODO in src",
     );
@@ -87,6 +90,9 @@ describe("describeNestedActivity", () => {
 
   it("uses safe defaults when optional fields are absent", () => {
     expect(describeNestedActivity("pi.read", {})).toBe("Read file");
+    expect(describeNestedActivity("pi.bash", {})).toBe("Run command");
+    expect(describeNestedActivity("pi.edit", {})).toBe("Edit file");
+    expect(describeNestedActivity("pi.write", {})).toBe("Write file");
     expect(describeNestedActivity("pi.grep", { pattern: "x" })).toBe("Search x in cwd");
     expect(describeNestedActivity("pi.find", {})).toBe("Find pattern in cwd");
     expect(describeNestedActivity("pi.ls", {})).toBe("List cwd");
@@ -196,8 +202,35 @@ describe("renderCodeModeToolResult", () => {
     );
     expect(text).toContain("✓ Read src/app.ts");
     expect(text).toContain("… Search TODO in src");
-    expect(text).toContain("1 of 2 completed");
+    expect(text).toContain("1 of 2 settled · 1 succeeded · 1 running");
     expect(text).not.toContain("code_mode: 2 nested tool calls");
+  });
+
+  it("renders queued, cancelled, durations, and accurate lifecycle counts", () => {
+    const details: CodeModeToolDetails = {
+      toolCalls: [
+        { tool: "pi.read", status: "queued", activity: "Read queued" },
+        { tool: "pi.bash", status: "cancelled", activity: "Run sleep", durationMs: 1_250 },
+      ],
+      counts: {
+        total: 2,
+        queued: 1,
+        running: 0,
+        succeeded: 0,
+        failed: 0,
+        cancelled: 1,
+      },
+    };
+    const text = rendered(
+      renderCodeModeToolResult(resultOf("", details), { isPartial: true }, markingTheme, {
+        expanded: false,
+        isError: false,
+      }),
+    );
+    expect(text).toContain("<dim>◌</dim>");
+    expect(text).toContain("<muted>⊘</muted>");
+    expect(text).toContain("<muted> · 1.3s</muted>");
+    expect(text).toContain("1 of 2 settled · 1 queued · 1 cancelled");
   });
 
   it("colors running, success, and error rows distinctly", () => {
@@ -217,7 +250,7 @@ describe("renderCodeModeToolResult", () => {
     expect(text).toContain("<success>✓</success>");
     expect(text).toContain("<error>✗</error>");
     expect(text).toContain("<warning>…</warning>");
-    expect(text).toContain("<muted>2 of 3 completed</muted>");
+    expect(text).toContain("<muted>2 of 3 settled · 1 succeeded · 1 failed · 1 running</muted>");
   });
 
   it("final success shows completed rows and an operations footer, hiding raw output", () => {
@@ -314,6 +347,33 @@ describe("renderCodeModeToolResult", () => {
       }),
     );
     expect(text).toContain("1 operation completed · output truncated");
+  });
+
+  it("shows +N earlier for exact modern counts", () => {
+    const details: CodeModeToolDetails = {
+      toolCalls: Array.from({ length: 32 }, (_, index) => ({
+        tool: "pi.read",
+        status: "completed" as const,
+        activity: `Read recent-${index}`,
+      })),
+      totalToolCalls: 40,
+      counts: {
+        total: 40,
+        queued: 0,
+        running: 0,
+        succeeded: 39,
+        failed: 1,
+        cancelled: 0,
+      },
+    };
+    const text = rendered(
+      renderCodeModeToolResult(resultOf("", details), { isPartial: false }, theme, {
+        expanded: false,
+        isError: false,
+      }),
+    );
+    expect(text).toContain("+8 earlier");
+    expect(text).toContain("39 succeeded · 1 failed");
   });
 
   it("shows +N more beyond the bounded entries without exposing raw data", () => {

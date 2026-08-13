@@ -20,11 +20,12 @@ import {
   MAX_INTENT_LENGTH,
   MAX_PROGRESS_ENTRIES,
   truncateDisplay,
+  type CodeModeCallCounts,
   type CodeModeCallEntry,
 } from "../tools/format.ts";
 
 /** Neutral headline when the model provided no usable intent. */
-export const CODE_MODE_FALLBACK_INTENT = "Read-only investigation";
+export const CODE_MODE_FALLBACK_INTENT = "Tool orchestration";
 
 /**
  * Display safety bound (code points) for the expanded program source: the configured
@@ -49,18 +50,36 @@ export const describeCodeModeIntent = (intent: unknown): string => {
 export interface CodeModeRenderDetails {
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
   readonly totalToolCalls: number;
+  readonly counts: CodeModeCallCounts;
+  readonly hasExactCounts: boolean;
   readonly cancelled: boolean;
   readonly truncated: boolean;
 }
+
+const safeInteger = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 
 const decodeCallEntry = (value: unknown): CodeModeCallEntry | undefined => {
   if (typeof value !== "object" || value === null) return undefined;
   const entry = value as Record<string, unknown>;
   const status = entry.status;
-  if (status !== "running" && status !== "completed" && status !== "error") return undefined;
+  if (
+    status !== "queued" &&
+    status !== "running" &&
+    status !== "completed" &&
+    status !== "error" &&
+    status !== "cancelled"
+  )
+    return undefined;
   const tool = typeof entry.tool === "string" ? entry.tool : "";
   const activity = typeof entry.activity === "string" ? entry.activity : undefined;
-  return { tool, status, ...(activity === undefined ? {} : { activity }) };
+  const durationMs = safeInteger(entry.durationMs);
+  return {
+    tool,
+    status,
+    ...(activity === undefined ? {} : { activity }),
+    ...(durationMs === undefined ? {} : { durationMs }),
+  };
 };
 
 /**
@@ -68,8 +87,8 @@ const decodeCallEntry = (value: unknown): CodeModeCallEntry | undefined => {
  * anything, so at most `MAX_PROGRESS_ENTRIES` raw entries are ever inspected or
  * materialized (a huge or sparse hostile array never drives unbounded decode work),
  * malformed entries inside the bound are dropped, and the total stays consistent: it never
- * undercounts the raw array length (so `+N more` covers everything beyond the bounded
- * rows even without a valid persisted total) and accepts a larger persisted total only as
+ * undercounts the raw array length (so legacy `+N more` or modern `+N earlier` covers
+ * everything beyond the bounded rows) and accepts a larger persisted total only as
  * a safe non-negative integer.
  */
 export const decodeCodeModeRenderDetails = (details: unknown): CodeModeRenderDetails => {
@@ -80,17 +99,51 @@ export const decodeCodeModeRenderDetails = (details: unknown): CodeModeRenderDet
     const decoded = decodeCallEntry(entry);
     return decoded === undefined ? [] : [decoded];
   });
-  const suppliedTotal =
-    typeof record.totalToolCalls === "number" &&
-    Number.isSafeInteger(record.totalToolCalls) &&
-    record.totalToolCalls >= 0
-      ? record.totalToolCalls
-      : 0;
-  // An array length is always a bounded (≤ 2^32 − 1) safe integer, even for sparse arrays.
-  const total = Math.max(toolCalls.length, rawCalls.length, suppliedTotal);
+  const suppliedTotal = safeInteger(record.totalToolCalls) ?? 0;
+  const rawCounts =
+    typeof record.counts === "object" && record.counts !== null
+      ? (record.counts as Record<string, unknown>)
+      : undefined;
+  const hasExactCounts =
+    rawCounts !== undefined &&
+    ["total", "queued", "running", "succeeded", "failed", "cancelled"].every(
+      (key) => safeInteger(rawCounts[key]) !== undefined,
+    );
+  const visible = {
+    queued: toolCalls.filter((call) => call.status === "queued").length,
+    running: toolCalls.filter((call) => call.status === "running").length,
+    succeeded: toolCalls.filter((call) => call.status === "completed").length,
+    failed: toolCalls.filter((call) => call.status === "error").length,
+    cancelled: toolCalls.filter((call) => call.status === "cancelled").length,
+  };
+  const suppliedCounts = hasExactCounts
+    ? {
+        queued: Math.max(visible.queued, safeInteger(rawCounts.queued) ?? 0),
+        running: Math.max(visible.running, safeInteger(rawCounts.running) ?? 0),
+        succeeded: Math.max(visible.succeeded, safeInteger(rawCounts.succeeded) ?? 0),
+        failed: Math.max(visible.failed, safeInteger(rawCounts.failed) ?? 0),
+        cancelled: Math.max(visible.cancelled, safeInteger(rawCounts.cancelled) ?? 0),
+      }
+    : undefined;
+  const suppliedCountTotal =
+    suppliedCounts === undefined
+      ? 0
+      : Object.values(suppliedCounts).reduce((total, count) => total + count, 0);
+  const total = Math.max(
+    toolCalls.length,
+    rawCalls.length,
+    suppliedTotal,
+    hasExactCounts ? (safeInteger(rawCounts.total) ?? 0) : 0,
+    suppliedCountTotal,
+  );
+  const hiddenLegacySucceeded = hasExactCounts ? 0 : Math.max(0, total - toolCalls.length);
   return {
     toolCalls,
     totalToolCalls: total,
+    counts: hasExactCounts
+      ? { total, ...(suppliedCounts ?? visible) }
+      : { total, ...visible, succeeded: visible.succeeded + hiddenLegacySucceeded },
+    hasExactCounts,
     cancelled: record.cancelled === true,
     truncated: record.truncated === true,
   };
@@ -162,16 +215,29 @@ export const renderCodeModeToolCall = (
 };
 
 const ACTIVITY_SYMBOLS = {
+  queued: { symbol: "◌", color: "dim" },
   running: { symbol: "…", color: "warning" },
   completed: { symbol: "✓", color: "success" },
   error: { symbol: "✗", color: "error" },
+  cancelled: { symbol: "⊘", color: "muted" },
 } as const;
+
+export const formatCallDuration = (durationMs: number): string =>
+  durationMs < 1_000
+    ? `${durationMs}ms`
+    : durationMs < 10_000
+      ? `${(durationMs / 1_000).toFixed(1)}s`
+      : `${Math.round(durationMs / 1_000)}s`;
 
 const activityRow = (entry: CodeModeCallEntry, theme: Theme): string => {
   const { symbol, color } = ACTIVITY_SYMBOLS[entry.status];
   const label = entry.activity ?? describeNestedActivity(entry.tool, undefined);
   const sanitized = truncateDisplay(sanitizeTerminalLine(label), MAX_INTENT_LENGTH);
-  return `${theme.fg(color, symbol)} ${theme.fg("toolOutput", sanitized)}`;
+  const duration =
+    entry.durationMs === undefined
+      ? ""
+      : theme.fg("muted", ` · ${formatCallDuration(entry.durationMs)}`);
+  return `${theme.fg(color, symbol)} ${theme.fg("toolOutput", sanitized)}${duration}`;
 };
 
 const footerLine = (
@@ -180,17 +246,28 @@ const footerLine = (
   isError: boolean,
   theme: Theme,
 ): string => {
-  const total = details.totalToolCalls;
-  const settled = details.toolCalls.filter((call) => call.status !== "running").length;
+  const { total, queued, running, succeeded, failed, cancelled } = details.counts;
+  const settled = succeeded + failed + cancelled;
+  const summary = [
+    succeeded > 0 ? `${succeeded} succeeded` : undefined,
+    failed > 0 ? `${failed} failed` : undefined,
+    running > 0 ? `${running} running` : undefined,
+    queued > 0 ? `${queued} queued` : undefined,
+    cancelled > 0 ? `${cancelled} cancelled` : undefined,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(" · ");
   const status = details.cancelled
-    ? "Cancelled"
-    : isError
-      ? "Failed"
-      : isPartial
-        ? `${settled} of ${total} completed`
+    ? `Cancelled${summary.length === 0 ? "" : ` · ${summary}`}`
+    : isPartial
+      ? `${settled} of ${total} settled${summary.length === 0 ? "" : ` · ${summary}`}`
+      : isError
+        ? `Failed${summary.length === 0 ? "" : ` · ${summary}`}`
         : total === 0
           ? "Completed"
-          : `${total} operation${total === 1 ? "" : "s"} completed`;
+          : failed === 0 && cancelled === 0
+            ? `${succeeded} operation${succeeded === 1 ? "" : "s"} completed`
+            : summary;
   const truncatedNote = details.truncated ? " · output truncated" : "";
   return theme.fg("muted", `${status}${truncatedNote}`);
 };
@@ -224,8 +301,8 @@ const expandHintLine = (isError: boolean, theme: Theme): string => {
 };
 
 /**
- * Result projection: activity rows (running `…`, success `✓`, error `✗`), a `+N more`
- * marker beyond the bounded entries, and a muted status footer. Raw output stays hidden
+ * Result projection: activity rows (queued `◌`, running `…`, success `✓`, error `✗`,
+ * cancelled `⊘`), a bounded hidden-row marker, and an accurate status footer. Raw output stays hidden
  * while collapsed and appears complete (sanitized) under an `Output`/`Error` label when
  * expanded; partial snapshots never surface their placeholder progress text.
  */
@@ -239,11 +316,16 @@ export const renderCodeModeToolResult = (
   const isError = context?.isError === true;
   const expanded = context?.expanded === true;
   const container = new Container();
+  const hidden = details.totalToolCalls - details.toolCalls.length;
+  if (hidden > 0 && details.hasExactCounts) {
+    container.addChild(new Text(theme.fg("dim", `+${hidden} earlier`), 0, 0));
+  }
   for (const entry of details.toolCalls) {
     container.addChild(new Text(activityRow(entry, theme), 0, 0));
   }
-  const hidden = details.totalToolCalls - details.toolCalls.length;
-  if (hidden > 0) container.addChild(new Text(theme.fg("dim", `+${hidden} more`), 0, 0));
+  if (hidden > 0 && !details.hasExactCounts) {
+    container.addChild(new Text(theme.fg("dim", `+${hidden} more`), 0, 0));
+  }
   container.addChild(new Text(footerLine(details, options.isPartial, isError, theme), 0, 0));
   if (options.isPartial) return container;
   if (expanded) {

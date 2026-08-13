@@ -40,6 +40,12 @@ export const describeNestedActivity = (name: unknown, input: unknown): string =>
   switch (toolName) {
     case "pi.read":
       return `Read ${at("file")}`;
+    case "pi.bash":
+      return `Run ${activityField(input, "command") ?? "command"}`;
+    case "pi.edit":
+      return `Edit ${at("file")}`;
+    case "pi.write":
+      return `Write ${at("file")}`;
     case "pi.grep":
       return `Search ${activityField(input, "pattern") ?? "pattern"} in ${at("cwd")}`;
     case "pi.find":
@@ -65,14 +71,27 @@ export const describeNestedActivity = (name: unknown, input: unknown): string =>
  */
 export interface CodeModeCallEntry {
   readonly tool: string;
-  readonly status: "running" | "completed" | "error";
+  readonly status: "queued" | "running" | "completed" | "error" | "cancelled";
   readonly activity?: string;
+  /** Total wall-clock duration from queue admission through settlement. */
+  readonly durationMs?: number;
+}
+
+export interface CodeModeCallCounts {
+  readonly total: number;
+  readonly queued: number;
+  readonly running: number;
+  readonly succeeded: number;
+  readonly failed: number;
+  readonly cancelled: number;
 }
 
 /** Structured details persisted on the final `code_mode` tool result. */
 export interface CodeModeToolDetails {
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
-  /** Total admitted nested calls; present only when it exceeds the bounded entries. */
+  /** Exact lifecycle counts, including calls hidden by bounded display selection. */
+  readonly counts?: CodeModeCallCounts;
+  /** Legacy total retained for tolerant older renderers. */
   readonly totalToolCalls?: number;
   readonly truncated?: boolean;
   readonly cancelled?: boolean;
@@ -81,23 +100,50 @@ export interface CodeModeToolDetails {
 /** Progress entries stay bounded no matter how many nested calls a program admits. */
 export const MAX_PROGRESS_ENTRIES = 32;
 
-/** Bounded, defensively copied entries: later host-side retention never observes mutation. */
-export const boundedCallEntries = (
-  calls: ReadonlyArray<CodeModeCallEntry>,
-): ReadonlyArray<CodeModeCallEntry> =>
-  calls.slice(0, MAX_PROGRESS_ENTRIES).map((call) => ({ ...call }));
+export const countCallEntries = (calls: ReadonlyArray<CodeModeCallEntry>): CodeModeCallCounts => ({
+  total: calls.length,
+  queued: calls.filter((call) => call.status === "queued").length,
+  running: calls.filter((call) => call.status === "running").length,
+  succeeded: calls.filter((call) => call.status === "completed").length,
+  failed: calls.filter((call) => call.status === "error").length,
+  cancelled: calls.filter((call) => call.status === "cancelled").length,
+});
 
 /**
- * The bounded call-entry portion of the persisted details: defensively copied entries plus
- * the true total only when calls beyond the bound exist (so renderers can show `+N more`).
+ * Keep active/problem rows plus the most recent successes, then restore chronological order.
+ * Every returned row is copied so later mutations never affect retained progress snapshots.
  */
+export const boundedCallEntries = (
+  calls: ReadonlyArray<CodeModeCallEntry>,
+): ReadonlyArray<CodeModeCallEntry> => {
+  if (calls.length <= MAX_PROGRESS_ENTRIES) return calls.map((call) => ({ ...call }));
+  const important = calls
+    .map((call, index) => ({ call, index }))
+    .filter(({ call }) => call.status !== "completed");
+  const keptImportant = important.slice(-MAX_PROGRESS_ENTRIES);
+  const remaining = Math.max(0, MAX_PROGRESS_ENTRIES - keptImportant.length);
+  const keptSuccesses =
+    remaining === 0
+      ? []
+      : calls
+          .map((call, index) => ({ call, index }))
+          .filter(({ call }) => call.status === "completed")
+          .slice(-remaining);
+  return [...keptImportant, ...keptSuccesses]
+    .sort((left, right) => left.index - right.index)
+    .map(({ call }) => ({ ...call }));
+};
+
+/** Bounded display rows plus exact counts for accurate hidden-row projection. */
 export const callEntryDetails = (
   calls: ReadonlyArray<CodeModeCallEntry>,
-): Pick<CodeModeToolDetails, "toolCalls" | "totalToolCalls"> => {
+  exactCounts: CodeModeCallCounts = countCallEntries(calls),
+): Pick<CodeModeToolDetails, "toolCalls" | "totalToolCalls" | "counts"> => {
   const toolCalls = boundedCallEntries(calls);
   return {
     toolCalls,
-    ...(calls.length > toolCalls.length ? { totalToolCalls: calls.length } : {}),
+    counts: { ...exactCounts },
+    ...(exactCounts.total > toolCalls.length ? { totalToolCalls: exactCounts.total } : {}),
   };
 };
 
@@ -113,26 +159,37 @@ const withLogs = (text: string, logs: ReadonlyArray<string> | undefined): string
  */
 export const progressResult = (
   calls: ReadonlyArray<CodeModeCallEntry>,
+  exactCounts: CodeModeCallCounts = countCallEntries(calls),
 ): AgentToolResult<CodeModeToolDetails> => {
-  const settled = calls.filter((call) => call.status !== "running").length;
+  const counts = { ...exactCounts };
+  const settled = counts.succeeded + counts.failed + counts.cancelled;
   const shown = boundedCallEntries(calls);
   const names = shown
-    .map(
-      (call) =>
-        `${call.tool}${call.status === "running" ? "…" : call.status === "error" ? " ✗" : " ✓"}`,
-    )
+    .map((call) => {
+      const symbol =
+        call.status === "queued"
+          ? " ◌"
+          : call.status === "running"
+            ? "…"
+            : call.status === "error"
+              ? " ✗"
+              : call.status === "cancelled"
+                ? " ⊘"
+                : " ✓";
+      return `${call.tool}${symbol}`;
+    })
     .join(", ");
-  const suffix = calls.length > shown.length ? `, +${calls.length - shown.length} more` : "";
+  const suffix = calls.length > shown.length ? `, +${calls.length - shown.length} earlier` : "";
   return {
     content: [
       {
         type: "text",
-        text: `code_mode: ${calls.length} nested tool call${calls.length === 1 ? "" : "s"} (${settled} settled)${
+        text: `code_mode: ${counts.total} nested tool call${counts.total === 1 ? "" : "s"} (${settled} settled, ${counts.running} running, ${counts.queued} queued)${
           names.length > 0 ? `: ${names}${suffix}` : ""
         }`,
       },
     ],
-    details: callEntryDetails(calls),
+    details: callEntryDetails(calls, counts),
   };
 };
 

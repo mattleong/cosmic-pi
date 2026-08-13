@@ -3,9 +3,8 @@
 `pi-code-mode` is the Effect-managed Pi extension for Code Mode. It owns scoped configuration,
 the trusted-project availability policy, the session runtime lifecycle, `/code-mode-settings`,
 and the one extension-owned `code_mode` agent tool: one confined, interpreted JavaScript
-program per tool call, orchestrating the read-only guest tools `tools.pi.read`,
-`tools.pi.grep`, `tools.pi.find`, and `tools.pi.ls` (plus the runtime-owned
-`tools.$codemode.search`).
+program per tool call, orchestrating all seven Pi built-ins under `tools.pi` (`read`, `bash`,
+`edit`, `write`, `grep`, `find`, `ls`) plus the runtime-owned `tools.$codemode.search`.
 
 The confined interpreter itself is the private, host-neutral `pi-code-mode-runtime`
 workspace package **nested at `runtime/` inside this package** (ADR 0003). Its built
@@ -30,9 +29,9 @@ package's `type: module` and dependency declarations.
   registration, and active-list reconciliation that only ever adds or removes the one
   `code_mode` name.
 - `src/tools/execution.ts` — one execution: defensive stale/availability gating, host limits,
-  guest catalog assembly, runtime execution with composed cancellation, bounded progress
-  (call name/status plus a bounded human-readable activity label derived from the decoded
-  input at call start), and model-safe result/diagnostic mapping.
+  guest catalog assembly, runtime execution with composed cancellation, and bounded live
+  lifecycle progress (queued/running/succeeded/failed/cancelled, human-readable activity,
+  and duration) plus model-safe result/diagnostic mapping.
 - `src/tools/catalog.ts` — the exact guest tool tree (`pi` namespace, Effect Schema inputs),
   cumulative-output admission composition, and the description-only catalog renderer.
 - `src/tools/limits.ts` — pure host limits: UTF-8 program-source budget, the concurrency-safe
@@ -41,9 +40,11 @@ package's `type: module` and dependency declarations.
   model-visible tool text (success and thrown failure), with truncation markers reserved
   inside the budget.
 - `src/tools/format.ts` — pure model-visible formatting: success output with logs, normalized
-  diagnostics (kind/location/suggestions), bounded progress projections (entries carry
-  tool/status/activity only, never nested output; the true total is recorded only when it
-  exceeds the bounded entries).
+  diagnostics (kind/location/suggestions), accurate lifecycle counters, and bounded progress
+  selection that retains active/problem/recent rows without ever storing nested output.
+- `src/tools/retention.ts` — bounded one-shot in-memory handoff that reattaches structured
+  Code Mode details in `tool_result` after Pi converts a thrown execution error to its generic
+  error result; it does not modify error text or `isError` semantics.
 - `src/ui/tool-renderer.ts` — pure humanized TUI presentation for the `code_mode` tool: the
   sanitized intent headline (`Code Mode · <intent>` with a neutral fallback), the bounded
   nested-call activity summaries (`Read <path>`, `Search <pattern> in <path>`, …), and the
@@ -56,10 +57,11 @@ package's `type: module` and dependency declarations.
   that preserves a deliberate `code_mode` deactivation across Pi recreating the extension
   module on reload/new/resume/fork, keyed **only** by the stable Pi session id (no cwd or
   other ambient-identity fallback; see the lifecycle notes below).
-- `src/boundary/host-builtin-tools.ts` — adapters over Pi's built-in
-  `create{Read,Grep,Find,Ls}ToolDefinition`: direct nested dispatch with a composed abort
+- `src/boundary/host-builtin-tools.ts` — adapters over all seven Pi built-in definition
+  factories: deliberate direct dispatch against fresh definitions with a composed abort
   signal, Schema-validated result conversion to plain guest text, image refusal, and
-  model-safe `toolError` mapping.
+  model-safe `toolError` mapping. This boundary does not inherit middleware, registered
+  overrides, or session-specific operations (ADR 0004).
 - `src/boundary/host-tool-update.ts` — guarded `onUpdate` publisher (undefined hosts, sync
   throws, rejecting thenables; no updates after settle or replacement).
 - `src/config/schema.ts` — configuration shape, locked defaults, documented bounds, field codecs.
@@ -146,8 +148,10 @@ the next successful operation re-derives from the committed document.
   (`src/ui/tool-renderer.ts`); `withCodePreviewShell` preserves them and its cooperative
   shell delegates to them. Collapsed, the call shows `Code Mode · <intent>` (the optional
   bounded `intent` parameter, neutral fallback otherwise) and the result shows sanitized
-  activity rows (`✓`/`…`/`✗` per nested call, `+N more` beyond the bounded entries) with a
-  muted status footer plus a dim hint naming the configured `app.tools.expand` key when
+  activity rows (`◌` queued, `…` running, `✓` success, `✗` failure, `⊘` cancelled), optional
+  duration suffixes, an exact lifecycle footer, and `+N earlier` while prioritizing active,
+  failed, cancelled, and recent rows beyond the bound, plus a dim hint naming the configured
+  `app.tools.expand` key when
   bound (`▸ output · ctrl+o expand`, keyless otherwise); expanded, the full sanitized
   program source and the complete
   model-visible output/error stay inspectable. Rendering is pure presentation: it never
@@ -189,30 +193,43 @@ the next successful operation re-derives from the committed document.
   against and is therefore a short fixed bounded constant
   (`CODE_MODE_UNAVAILABLE_MESSAGE`). `maxSourceBytes` rejects oversized programs
   before execution; and
-  `maxCumulativeChildOutputBytes` bounds the exact UTF-8 bytes of nested tool output entering
-  the guest, counted exactly once per admitted result, with a synchronous check-and-consume
-  step that stays exact at the runtime's fixed nested concurrency of 8. `catalogBudget`
+  `maxCumulativeChildOutputBytes` bounds the exact UTF-8 bytes of successful nested output and
+  catchable nested failure text entering the guest, counted synchronously and exactly under
+  the runtime's fixed nested concurrency of 8. This post-settlement bound cannot prevent or
+  undo side effects. `catalogBudget`
   bounds the description's discovery catalog at registration time. The runtime's fixed
   constants (concurrency 8, data depth 32) are not configurable here.
 - Cancellation composes the outer execute signal, session replacement/shutdown (managed
   runtime disposal interrupts the fiber), and the runtime timeout. Nested built-in calls
   receive a per-call `AbortSignal.any` of the outer signal and Effect interruption.
-- Progress goes through a guarded `onUpdate` publisher: bounded deterministic call
-  name/status snapshots only (never nested output), tolerant of undefined/throwing/
-  rejecting-thenable host callbacks, and silent after settle or replacement.
+- Progress goes through a guarded `onUpdate` publisher: bounded deterministic lifecycle
+  snapshots only (never nested output), tolerant of undefined/throwing/rejecting-thenable host
+  callbacks, and silent after settle or replacement. The runtime's additive lifecycle hook
+  observes queue admission before the concurrency semaphore and terminal interruption, while
+  retaining legacy start/end hook compatibility. Thrown execution failures retain their final
+  bounded rows through the extension-owned one-shot `tool_result` handoff.
 
-## Read-only boundary and middleware bypass (ADR 0003)
+## Full built-in catalog and middleware bypass (ADR 0004)
 
-- The guest catalog is exactly `tools.pi.{read,grep,find,ls}` plus the runtime-owned
-  `tools.$codemode.search`. No bash, edit, write, MCP, network, process, timer, or dynamic
-  dispatch of any kind is exposed, and no additional namespace may be added until a canonical
-  nested-tool dispatcher routes nested calls through the same middleware pipeline as
-  top-level calls.
-- Nested calls dispatch **directly** against the built-in definitions and bypass Pi
-  middleware (tool_call events, approval wrappers, preview shells, other extensions'
-  overrides). Their filesystem authority matches the direct Pi tools, including absolute
-  paths outside the project; the tool description discloses this and never claims project
-  confinement.
-- Nested results are converted to plain guest text deterministically; non-text content (for
-  example images from `read`) is refused with a model-safe `toolError` so non-JSON authority
-  never leaks into the confined program.
+- The guest catalog is exactly all seven `tools.pi.{read,bash,edit,write,grep,find,ls}` leaves
+  plus runtime-owned `tools.$codemode.search`. MCP and arbitrary dynamic dispatch remain
+  outside the package.
+- Nested calls dispatch **directly** against fresh built-in definitions and deliberately
+  bypass `tool_call`/`tool_result` middleware, approval and preview extensions, registered
+  overrides, and session-specific operations. Nested Bash is Pi's default local
+  implementation, not a configured prefix, shell hook, sandbox, or remote override.
+- Interpreter confinement limits the JavaScript language, not supplied-tool authority. Bash
+  grants full local-user process, network, environment, and filesystem authority; read,
+  edit, and write accept unrestricted relative, absolute, and home-relative paths. No tool
+  effect is project-confined.
+- Bash owns per-command timeout, output-tail truncation, PID tracking, and process-tree kill
+  attempts. Oversized full output is persisted to an unbounded temporary log named in its
+  text result, and fully daemonized descendants may escape process-group cleanup.
+- Edit and write share Pi's same-file in-process mutation queue; different files remain
+  concurrent, reads are not queued with mutations, writes are non-atomic, and cancellation
+  cannot roll back an applied mutation. Canonical guest edit input requires non-empty
+  `edits[]`; top-level legacy `prepareArguments` compatibility is not reproduced.
+- Nested result conversion keeps only text. Image content is refused, while edit diff/patch
+  details and Bash details are dropped. Nested tools receive no streaming `onUpdate`; the
+  outer progress projection records bounded start/end activity, and interruption may leave a
+  child row displayed as running while the final outer result is marked cancelled.

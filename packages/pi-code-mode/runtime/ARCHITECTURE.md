@@ -13,9 +13,9 @@ directory so its built `dist/` output (tsdown: `dist/index.js` +
 `dist/index.d.ts`) ships inside the `pi-code-mode` tarball; `pi-code-mode`
 consumes it exclusively through the relative-path boundary door
 `src/boundary/codemode-runtime.ts`. The `pi-code-mode` extension owns every
-Pi-facing concern above this boundary: the outer `code_mode` agent tool, the
-`tools.pi.read/grep/find/ls` adapters, and the Pi host limits (program source
-size, cumulative nested output).
+Pi-facing concern above this boundary: the outer `code_mode` agent tool, adapters for all
+seven `tools.pi` built-ins, their deliberate direct-dispatch authority policy (ADR 0004),
+and the Pi host limits (program source size, cumulative nested output).
 
 ## Source map
 
@@ -26,7 +26,7 @@ src/
   tool.ts               # Tool.make and tool definition types
   tool-error.ts         # ToolError: safe model-visible tool refusal
   tool-runtime.ts       # tool tree walking, catalog/search/instructions, limits,
-                        # data-boundary copying, diagnostics (internal)
+                        # data-boundary copying, diagnostics + lifecycle types (internal)
   tool-schema.ts        # Effect Schema / JSON Schema signature rendering (internal)
   values.ts             # sandbox value wrappers (Date, RegExp, Map, Set, URL, promises)
   interpreter/
@@ -46,7 +46,8 @@ tests/                  # ported upstream behavioral suites (Vitest)
 
 The only public entry is `src/index.ts` (`pi-code-mode-runtime` package export):
 
-- `CodeMode` - `make`, `execute`, result/diagnostic schemas and types.
+- `CodeMode` - `make`, `execute`, result/diagnostic schemas and types, plus optional
+  queued/running/terminal tool-call lifecycle observation.
 - `Tool` - `make`, `Definition`, `Options`, `SchemaType`, `JsonSchema`.
 - `ToolError` / `toolError` - the explicit safe-message failure channel.
 

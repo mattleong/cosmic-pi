@@ -46,10 +46,9 @@ behavior for diffability:
 
 ## Intentional local deviations
 
-Deviations 1-7 are mechanical (behavioral semantics unchanged). Deviation 8 is a
-deliberate, security-motivated behavioral change layered on top of the vendored
-interpreter; it is confined to the additions listed there and does not alter the
-upstream files' own logic beyond the enumerated call-site guards.
+Deviations 1-7 are mechanical (behavioral semantics unchanged). Deviations 8-9 are
+deliberate local behavior layered on top of the vendored interpreter; they are
+confined to the additions listed there and do not alter upstream execution results.
 
 1. `src/index.ts` no longer exports `OpenAPI` (excluded subsystem).
 2. Tests import from `vitest` instead of `bun:test` and live under `tests/`
@@ -158,6 +157,17 @@ upstream files' own logic beyond the enumerated call-site guards.
    cases (both marked as local, non-upstream). A resync (below) must re-apply
    these guards.
 
+9. **Additive tool lifecycle observation.** The optional `onToolCallLifecycle`
+   callback reports each eagerly forked call as `queued`, `running`, then exactly
+   one of `succeeded`, `failed`, or `cancelled`, with a stable execution-local id
+   and bounded wall-clock durations. Queue admission is observed before the fixed
+   concurrency-8 semaphore; interruption from timeout, host cancellation, or a
+   losing `Promise.race` reports cancellation. Existing `onToolCallStart` and
+   `onToolCallEnd` payloads and post-permit semantics remain unchanged when the
+   new callback is absent. This powers live Pi UI status only and never changes a
+   guest-visible result. Covered by local lifecycle tests in
+   `tests/codemode.test.ts` and `tests/promise.test.ts`.
+
 ## Resync policy
 
 Upstream updates are pulled by pinned manual review only:
@@ -166,8 +176,9 @@ Upstream updates are pulled by pinned manual review only:
 2. Diff upstream `packages/codemode` between the old and new pinned commits and
    review every hunk (security posture: this code interprets model-generated
    programs).
-3. Re-apply the mechanical deviations above **and the deviation-8 confinement**
-   (the `confinement.ts` module and its call-site guards); do not adopt upstream
-   OpenAPI or host-adapter code. Re-run `tests/confinement.test.ts`.
+3. Re-apply the mechanical deviations above, **the deviation-8 confinement**
+   (`confinement.ts` and its call-site guards), and **the deviation-9 lifecycle
+   hook**; do not adopt upstream OpenAPI or host-adapter code. Re-run the
+   confinement and lifecycle tests.
 4. Update the pinned commit here and in `docs/adr/0003-code-mode-runtime.md`,
    then run the full package and workspace validation gates.

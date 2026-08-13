@@ -1,3 +1,5 @@
+// Lifecycle telemetry deliberately follows the vendored runtime's existing Date.now()-based durations.
+// @effect-diagnostics effect/globalDateInEffect:off
 import { parse } from "acorn";
 import { Cause, Effect, Exit, Fiber, Semaphore } from "effect";
 import {
@@ -749,7 +751,12 @@ class Interpreter<R> {
   private readonly invokeTool: (
     path: ReadonlyArray<string>,
     args: Array<unknown>,
+    lifecycleId?: number,
   ) => Effect.Effect<unknown, unknown, R>;
+  private readonly onToolCallLifecycle:
+    | ((event: ToolRuntime.ToolCallLifecycleEvent) => Effect.Effect<void, never, R>)
+    | undefined;
+  private nextToolCallLifecycleId = 0;
   // Enumerable namespace/tool names at a node of the host tool tree, threaded from
   // ToolRuntime.make like invokeTool: the interpreter never holds the tree itself.
   private readonly toolKeys: (path: ReadonlyArray<string>) => ReadonlyArray<string>;
@@ -770,14 +777,19 @@ class Interpreter<R> {
     invokeTool: (
       path: ReadonlyArray<string>,
       args: Array<unknown>,
+      lifecycleId?: number,
     ) => Effect.Effect<unknown, unknown, R>,
     toolKeys: (path: ReadonlyArray<string>) => ReadonlyArray<string>,
     logs: Array<string> = [],
     deadline: ExecutionDeadline = new ExecutionDeadline(undefined),
+    onToolCallLifecycle?: (
+      event: ToolRuntime.ToolCallLifecycleEvent,
+    ) => Effect.Effect<void, never, R>,
   ) {
     const globalScope = new Map<string, Binding>();
     this.scopes = [globalScope];
     this.invokeTool = invokeTool;
+    this.onToolCallLifecycle = onToolCallLifecycle;
     this.toolKeys = toolKeys;
     this.logs = logs;
     this.deadline = deadline;
@@ -892,26 +904,69 @@ class Interpreter<R> {
 
   // Eagerly starts a tool call on a supervised child fiber (so the execution timeout and
   // scope teardown interrupt it) gated by the concurrency semaphore, and wraps the fiber in a
-  // first-class promise value. `startImmediately` makes the runtime admit the call - charging
-  // the tool-call budget and firing onToolCallStart - at the call site, before any await.
+  // first-class promise value. The additive lifecycle observer sees queue admission before
+  // semaphore acquisition and terminal interruption as cancellation; the legacy start/end
+  // hooks retain their existing post-permit semantics.
   private createToolCallPromise(
     path: ReadonlyArray<string>,
     args: Array<unknown>,
   ): Effect.Effect<SandboxPromise, never, R> {
     const self = this;
-    return Effect.map(
-      Effect.forkChild(
-        this.callPermits.withPermit(Effect.suspend(() => self.invokeTool(path, args))),
-        {
-          startImmediately: true,
-        },
-      ),
-      (fiber) => {
-        const promise = new SandboxPromise(fiber);
-        self.pendingSettlements.add(promise);
-        return promise;
-      },
+    const id = this.nextToolCallLifecycleId++;
+    const name = path.join(".");
+    const queuedAt = Date.now();
+    const emit = (event: ToolRuntime.ToolCallLifecycleEvent): Effect.Effect<void, never, R> =>
+      self.onToolCallLifecycle?.(event) ?? Effect.void;
+    const lifecycle = Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        yield* emit({ id, name, status: "queued" });
+        let startedAt = queuedAt;
+        let started = false;
+        const invoked = self.callPermits.withPermit(
+          Effect.gen(function* () {
+            startedAt = Date.now();
+            started = true;
+            yield* emit({
+              id,
+              name,
+              status: "running",
+              queueDurationMs: Math.max(0, startedAt - queuedAt),
+            });
+            return yield* restore(
+              Effect.suspend(() =>
+                self.invokeTool(
+                  path,
+                  args,
+                  self.onToolCallLifecycle === undefined ? undefined : id,
+                ),
+              ),
+            );
+          }),
+        );
+        const exit = yield* Effect.exit(restore(invoked));
+        const endedAt = Date.now();
+        const queueDurationMs = Math.max(0, startedAt - queuedAt);
+        yield* emit({
+          id,
+          name,
+          status: Exit.isSuccess(exit)
+            ? "succeeded"
+            : Cause.hasInterruptsOnly(exit.cause)
+              ? "cancelled"
+              : "failed",
+          started,
+          durationMs: Math.max(0, endedAt - queuedAt),
+          queueDurationMs: started ? queueDurationMs : Math.max(0, endedAt - queuedAt),
+        });
+        if (Exit.isSuccess(exit)) return exit.value;
+        return yield* Effect.failCause(exit.cause);
+      }),
     );
+    return Effect.map(Effect.forkChild(lifecycle, { startImmediately: true }), (fiber) => {
+      const promise = new SandboxPromise(fiber);
+      self.pendingSettlements.add(promise);
+      return promise;
+    });
   }
 
   // The promise's settlement as an Exit, marking it observed for unhandled-rejection tracking.
@@ -4031,6 +4086,9 @@ export const executeWithLimits = <const Tools extends Record<string, unknown>>(
   searchIndex: ToolRuntime.DiscoveryPlan["searchIndex"],
 ): Effect.Effect<Result, never, Services<Tools>> => {
   const hooks = {
+    ...(options.onToolCallLifecycle === undefined
+      ? {}
+      : { onToolCallLifecycle: options.onToolCallLifecycle }),
     ...(options.onToolCallStart === undefined ? {} : { onToolCallStart: options.onToolCallStart }),
     ...(options.onToolCallEnd === undefined ? {} : { onToolCallEnd: options.onToolCallEnd }),
   };
@@ -4056,7 +4114,13 @@ export const executeWithLimits = <const Tools extends Record<string, unknown>>(
   const deadline = new ExecutionDeadline(limits.timeoutMs);
   const operation = Effect.gen(function* () {
     const program = parseProgram(options.code);
-    const interpreter = new Interpreter<Services<Tools>>(tools.invoke, tools.keys, logs, deadline);
+    const interpreter = new Interpreter<Services<Tools>>(
+      tools.invoke,
+      tools.keys,
+      logs,
+      deadline,
+      options.onToolCallLifecycle,
+    );
     const value = yield* interpreter.run(program);
     // A program whose final synchronous operation ran past the deadline must not race the
     // (event-loop-starved) Effect timer into an ok result.

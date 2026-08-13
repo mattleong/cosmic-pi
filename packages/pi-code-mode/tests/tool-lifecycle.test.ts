@@ -143,19 +143,17 @@ describe("availability gating", () => {
     expect(h.activeTools()).toEqual([...OTHER_TOOLS, CODE_MODE_TOOL_NAME]);
   });
 
-  it("describes the middleware bypass and absolute-path authority honestly", async () => {
+  it("describes full built-in authority and the intentional middleware bypass honestly", async () => {
     const h = harness();
     await h.startSession(h.makeContext(newCwd()));
     const description = h.registered[0]?.description ?? "";
-    expect(description).toContain("BYPASS Pi extension middleware");
-    expect(description).toContain("absolute paths outside the project");
-    expect(description).toContain("does not confine reads to the project directory");
-    expect(description).toContain("tools.pi.read");
-    expect(description).toContain("tools.pi.grep");
-    expect(description).toContain("tools.pi.find");
-    expect(description).toContain("tools.pi.ls");
-    // No Phase 4 tool ever appears in the advertised catalog.
-    expect(description).not.toMatch(/tools\.pi\.(bash|edit|write)/);
+    expect(description).toContain("BYPASS Pi tool_call/tool_result middleware");
+    expect(description).toContain("full local-user");
+    expect(description).toContain("does not confine tool effects to the project directory");
+    for (const name of ["read", "bash", "edit", "write", "grep", "find", "ls"]) {
+      expect(description).toContain(`tools.pi.${name}`);
+    }
+    expect(description).toContain("default local shell implementation");
   });
 
   it("keeps code required while intent stays an optional bounded parameter", async () => {

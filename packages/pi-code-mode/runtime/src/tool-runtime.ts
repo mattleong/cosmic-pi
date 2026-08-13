@@ -54,9 +54,35 @@ export type ToolCall = {
   readonly name: string;
 };
 
+/** Full lifecycle event for one eagerly forked tool call. */
+export type ToolCallLifecycleEvent =
+  | {
+      readonly id: number;
+      readonly name: string;
+      readonly status: "queued";
+    }
+  | {
+      readonly id: number;
+      readonly name: string;
+      readonly status: "running";
+      readonly queueDurationMs: number;
+    }
+  | {
+      readonly id: number;
+      readonly name: string;
+      readonly status: "succeeded" | "failed" | "cancelled";
+      /** Whether this call acquired a concurrency permit before terminal settlement. */
+      readonly started: boolean;
+      /** Wall-clock time from queue admission through terminal settlement. */
+      readonly durationMs: number;
+      readonly queueDurationMs: number;
+    };
+
 /** Decoded tool call observed immediately before tool execution. */
 export type ToolCallStarted = {
   readonly index: number;
+  /** Correlates this admitted call with `onToolCallLifecycle`, when that hook is enabled. */
+  readonly lifecycleId?: number;
   readonly name: string;
   readonly input: unknown;
 };
@@ -64,6 +90,8 @@ export type ToolCallStarted = {
 /** Completed tool call observed immediately after tool execution settles. */
 export type ToolCallEnded = {
   readonly index: number;
+  /** Correlates this admitted call with `onToolCallLifecycle`, when that hook is enabled. */
+  readonly lifecycleId?: number;
   readonly name: string;
   readonly input: unknown;
   readonly durationMs: number;
@@ -74,6 +102,9 @@ export type ToolCallEnded = {
 
 /** Non-throwing observation hooks fired around each admitted tool call. */
 export type ToolCallHooks<R = never> = {
+  readonly onToolCallLifecycle?:
+    | ((event: ToolCallLifecycleEvent) => Effect.Effect<void, never, R>)
+    | undefined;
   readonly onToolCallStart?: ((call: ToolCallStarted) => Effect.Effect<void, never, R>) | undefined;
   readonly onToolCallEnd?: ((call: ToolCallEnded) => Effect.Effect<void, never, R>) | undefined;
 };
@@ -800,6 +831,7 @@ export type ToolRuntime<R = never> = {
   readonly invoke: (
     path: ReadonlyArray<string>,
     args: Array<unknown>,
+    lifecycleId?: number,
   ) => Effect.Effect<unknown, unknown, R>;
   /** Enumerable namespace/tool names at one node of the callable tool tree; see `namespaceKeys`. */
   readonly keys: (path: ReadonlyArray<string>) => ReadonlyArray<string>;
@@ -864,7 +896,7 @@ export const make = <R>(
     root: new ToolReference([]),
     calls,
     keys: (path) => namespaceKeys(callableTools, path),
-    invoke: (path, args) =>
+    invoke: (path, args, lifecycleId) =>
       Effect.gen(function* () {
         const name = path.join(".");
         const externalArgs = args.map((arg) =>
@@ -876,7 +908,15 @@ export const make = <R>(
             recordCall(call);
             return calls.length - 1;
           }).pipe(
-            Effect.tap((index) => hooks?.onToolCallStart?.({ index, name, input }) ?? Effect.void),
+            Effect.tap(
+              (index) =>
+                hooks?.onToolCallStart?.({
+                  index,
+                  ...(lifecycleId === undefined ? {} : { lifecycleId }),
+                  name,
+                  input,
+                }) ?? Effect.void,
+            ),
           );
         const tool = resolve(callableTools, path);
         let describedInput: unknown;
@@ -897,7 +937,12 @@ export const make = <R>(
         }
         const input = isDefinition(tool) ? describedInput : externalArgs;
         const index = yield* recordAndObserve(input);
-        const currentCall = { index, name, input };
+        const currentCall = {
+          index,
+          ...(lifecycleId === undefined ? {} : { lifecycleId }),
+          name,
+          input,
+        };
         if (isDefinition(tool)) {
           return yield* observeEnd(
             Effect.gen(function* () {

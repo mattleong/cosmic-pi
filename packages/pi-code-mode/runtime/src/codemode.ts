@@ -13,6 +13,7 @@ export type {
   ToolCall,
   ToolCallEnded,
   ToolCallHooks,
+  ToolCallLifecycleEvent,
   ToolCallStarted,
   ToolDescription,
 } from "./tool-runtime.js";
@@ -51,6 +52,10 @@ export type ExecuteOptions<Tools extends Record<string, unknown> = {}> = {
   tools?: Tools & ToolTree<Services<Tools>>;
   /** Per-execution overrides for the default resource limits. */
   limits?: ExecutionLimits;
+  /** Observes queued, running, and terminal lifecycle states for every eagerly forked call. */
+  onToolCallLifecycle?: (
+    event: ToolRuntime.ToolCallLifecycleEvent,
+  ) => Effect.Effect<void, never, Services<Tools>>;
   /** Observes decoded tool input immediately before tool execution. */
   onToolCallStart?: (
     call: ToolRuntime.ToolCallStarted,

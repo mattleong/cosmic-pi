@@ -22,7 +22,7 @@ import {
   makeCodeModeToolExecute,
   type CodeModeExecutionEnvironment,
 } from "../src/tools/execution.ts";
-import type { CodeModeToolDetails } from "../src/tools/format.ts";
+import { MAX_PROGRESS_ENTRIES, type CodeModeToolDetails } from "../src/tools/format.ts";
 import { utf8ByteLength } from "../src/tools/limits.ts";
 
 const tempDirectories: string[] = [];
@@ -36,7 +36,15 @@ const newCwd = (): string => {
   return cwd;
 };
 
-const ctx = { cwd: "/" } as unknown as ExtensionContext;
+const ctx = {
+  cwd: "/",
+  sessionManager: {
+    getSessionId: () => "test-session",
+    getSessionFile: () => undefined,
+  },
+  model: undefined,
+  thinkingLevel: undefined,
+} as unknown as ExtensionContext;
 
 const makeState = (overrides: Partial<CodeModeConfig> = {}, available = true): CodeModeState => {
   const config: CodeModeConfig = { ...DEFAULT_CODE_MODE_CONFIG, ...overrides };
@@ -93,6 +101,9 @@ const fakeDefinitions = (
   });
   return {
     read: definition("read"),
+    bash: definition("bash"),
+    edit: definition("edit"),
+    write: definition("write"),
     grep: definition("grep"),
     find: definition("find"),
     ls: definition("ls"),
@@ -107,6 +118,7 @@ interface HarnessOptions {
   readonly definitions?: NestedPiToolDefinitions;
   readonly isCurrent?: () => boolean;
   readonly runInSession?: CodeModeExecutionEnvironment["runInSession"];
+  readonly retainFailureDetails?: CodeModeExecutionEnvironment["retainFailureDetails"];
 }
 
 const makeHarness = (cwd: string, options: HarnessOptions = {}) => {
@@ -118,6 +130,9 @@ const makeHarness = (cwd: string, options: HarnessOptions = {}) => {
       options.runInSession ??
       ((effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined)),
     definitions: options.definitions ?? testDefinitions(cwd),
+    ...(options.retainFailureDetails === undefined
+      ? {}
+      : { retainFailureDetails: options.retainFailureDetails }),
   });
 };
 
@@ -128,7 +143,7 @@ const textOf = (result: { content: ReadonlyArray<{ type: string; text?: string }
     .join("\n");
 
 describe("guest catalog", () => {
-  it("exposes exactly tools.pi.{read,grep,find,ls} plus runtime discovery — nothing else", async () => {
+  it("exposes exactly all seven Pi built-ins plus runtime discovery", async () => {
     const execute = makeHarness(newCwd());
     const result = await execute(
       "call-catalog",
@@ -139,29 +154,44 @@ describe("guest catalog", () => {
     );
     const value = JSON.parse(textOf(result)) as { top: string[]; pi: string[] };
     expect([...value.top].sort()).toEqual(["$codemode", "pi"]);
-    expect([...value.pi].sort()).toEqual(["find", "grep", "ls", "read"]);
+    expect([...value.pi].sort()).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
   });
 
-  it("refuses forbidden tools as unknown, with discovery suggestions", async () => {
+  it("keeps Pi built-ins namespaced and refuses guessed top-level paths", async () => {
     const execute = makeHarness(newCwd());
+    const result = await execute(
+      "call-bash",
+      { code: "return await tools.pi.bash({ command: 'printf nested-bash' });" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(textOf(result)).toBe("nested-bash");
     await expect(
       execute(
         "call-forbidden",
-        { code: "return await tools.pi.bash({ command: 'true' });" },
-        undefined,
-        undefined,
-        ctx,
-      ),
-    ).rejects.toThrow(/\[UnknownTool\].*pi\.bash/s);
-    await expect(
-      execute(
-        "call-forbidden-2",
         { code: "return await tools.bash({ command: 'true' });" },
         undefined,
         undefined,
         ctx,
       ),
     ).rejects.toThrow(/\[UnknownTool\]/);
+  });
+
+  it("validates canonical non-empty edit input before dispatch", async () => {
+    const calls: FakeCall[] = [];
+    const definitions = fakeDefinitions({ edit: async () => "should not run" }, calls);
+    const execute = makeHarness(newCwd(), { definitions });
+    await expect(
+      execute(
+        "call-empty-edit",
+        { code: "return await tools.pi.edit({ path: 'x', edits: [] });" },
+        undefined,
+        undefined,
+        ctx,
+      ),
+    ).rejects.toThrow(/\[InvalidToolInput\]/);
+    expect(calls).toHaveLength(0);
   });
 
   it("searches the catalog through the runtime-owned $codemode.search", async () => {
@@ -229,6 +259,48 @@ describe("real nested tools", () => {
       ctx,
     );
     expect(textOf(result)).toContain("listed.txt");
+  });
+
+  it("applies the outer runtime timeout to a real nested bash process", async () => {
+    const cwd = newCwd();
+    const execute = makeHarness(cwd, { config: { timeoutMs: 100 } });
+    const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+      "setInterval(() => {}, 1000)",
+    )}`;
+    await expect(
+      execute(
+        "call-real-bash-timeout",
+        { code: `return await tools.pi.bash({ command: ${JSON.stringify(command)} });` },
+        undefined,
+        undefined,
+        ctx,
+      ),
+    ).rejects.toThrow(/\[TimeoutExceeded\].*100ms/s);
+  });
+
+  it("writes, reads, edits, and greps through the mutating built-ins", async () => {
+    const cwd = newCwd();
+    const target = join(cwd, "nested", "created.txt");
+    const execute = makeHarness(cwd);
+    const result = await execute(
+      "call-mutate",
+      {
+        code: `
+          await tools.pi.write({ path: ${JSON.stringify(target)}, content: "before\\n" });
+          const first = await tools.pi.read({ path: ${JSON.stringify(target)} });
+          await tools.pi.edit({
+            path: ${JSON.stringify(target)},
+            edits: [{ oldText: "before", newText: "after" }]
+          });
+          const hits = await tools.pi.grep({ pattern: "after", path: ${JSON.stringify(target)} });
+          return { wrote: first.includes("before"), edited: hits.includes("after") };
+        `,
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(JSON.parse(textOf(result))).toEqual({ wrote: true, edited: true });
   });
 
   it("finds files through the real find tool with filesystem glob operations", async () => {
@@ -783,6 +855,39 @@ describe("cancellation", () => {
 });
 
 describe("progress", () => {
+  it("keeps tracked rows bounded while preserving exact counts above 256 calls", async () => {
+    const cwd = newCwd();
+    const definitions = fakeDefinitions({ read: async () => "ok" });
+    const execute = makeHarness(cwd, {
+      definitions,
+      config: { maxToolCalls: 300 },
+    });
+    const result = await execute(
+      "call-many-progress",
+      {
+        code: `
+          const pending = [];
+          for (let index = 0; index < 300; index += 1) {
+            pending.push(tools.pi.read({ path: "same" }));
+          }
+          const values = await Promise.all(pending);
+          return values.length;
+        `,
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(result.details.counts).toMatchObject({
+      total: 300,
+      succeeded: 300,
+      failed: 0,
+      queued: 0,
+      running: 0,
+    });
+    expect(result.details.toolCalls).toHaveLength(MAX_PROGRESS_ENTRIES);
+  });
+
   it("forwards bounded start/end progress without nested output and stops after settle", async () => {
     const cwd = newCwd();
     const secret = "SECRET-NESTED-OUTPUT";
@@ -806,7 +911,8 @@ describe("progress", () => {
       expect(update.text).toContain("pi.read");
       expect(update.details.toolCalls[0]?.tool).toBe("pi.read");
     }
-    expect(updates[0]?.details.toolCalls[0]?.status).toBe("running");
+    expect(updates[0]?.details.toolCalls[0]?.status).toBe("queued");
+    expect(updates.some((update) => update.details.toolCalls[0]?.status === "running")).toBe(true);
     expect(updates.at(-1)?.details.toolCalls[0]?.status).toBe("completed");
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(updates.length).toBe(updateCountAtSettle);
@@ -874,6 +980,60 @@ describe("diagnostics and errors", () => {
     await expect(
       execute("call-parse", { code: "return await (" }, undefined, undefined, ctx),
     ).rejects.toThrow(/\[ParseError\]/);
+  });
+
+  it("charges catchable nested failure text to the cumulative child-output budget", async () => {
+    const cwd = newCwd();
+    const definitions = fakeDefinitions({
+      bash: async () => {
+        throw new Error("failure-" + "x".repeat(1_000));
+      },
+    });
+    const execute = makeHarness(cwd, {
+      definitions,
+      config: { maxCumulativeChildOutputBytes: 48 },
+    });
+    const result = await execute(
+      "call-bounded-error",
+      {
+        code: `
+          try {
+            await tools.pi.bash({ command: "false" });
+            return "unexpected";
+          } catch (error) {
+            return { message: error.message, length: error.message.length };
+          }
+        `,
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+    const observed = JSON.parse(textOf(result)) as { message: string; length: number };
+    expect(observed.length).toBeLessThanOrEqual(48);
+    expect(observed.message).toContain("Nested tool 'bash' failed");
+    expect(observed.message).not.toContain("x".repeat(100));
+  });
+
+  it("retains settled lifecycle details before an uncaught runtime failure is thrown", async () => {
+    const cwd = newCwd();
+    const retained: Array<{ id: string; details: CodeModeToolDetails }> = [];
+    const execute = makeHarness(cwd, {
+      retainFailureDetails: (id, details) => retained.push({ id, details }),
+    });
+    await expect(
+      execute(
+        "call-retained-failure",
+        { code: `return await tools.pi.read({ path: ${JSON.stringify(join(cwd, "missing"))} });` },
+        undefined,
+        undefined,
+        ctx,
+      ),
+    ).rejects.toThrow(/ToolFailure/);
+    expect(retained).toHaveLength(1);
+    expect(retained[0]?.id).toBe("call-retained-failure");
+    expect(retained[0]?.details.toolCalls[0]?.status).toBe("error");
+    expect(retained[0]?.details.counts).toMatchObject({ total: 1, failed: 1 });
   });
 
   it("lets programs observe nested tool failures with try/catch", async () => {

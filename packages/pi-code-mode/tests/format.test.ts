@@ -42,7 +42,7 @@ describe("formatCodeModeFailure", () => {
       ok: false,
       error: {
         kind: "UnknownTool",
-        message: "Unknown tool 'pi.bash'.",
+        message: "Unknown tool 'pi.missing'.",
         location: { line: 2, column: 7 },
         suggestions: ["Use tools.$codemode.search({ query }) to find available described tools."],
       },
@@ -51,7 +51,7 @@ describe("formatCodeModeFailure", () => {
     });
     expect(message).toContain("[UnknownTool]");
     expect(message).toContain("(line 2, column 7)");
-    expect(message).toContain("Unknown tool 'pi.bash'.");
+    expect(message).toContain("Unknown tool 'pi.missing'.");
     expect(message).toContain("$codemode.search");
     expect(message).toContain("Logs:\nprobe");
   });
@@ -80,8 +80,8 @@ describe("progress containment", () => {
     expect(partial.details.toolCalls).toHaveLength(MAX_PROGRESS_ENTRIES);
     expect(partial.content).toHaveLength(1);
     const text = partial.content[0]?.type === "text" ? partial.content[0].text : "";
-    expect(text).toContain("100 nested tool calls (50 settled)");
-    expect(text).toContain("+68 more");
+    expect(text).toContain("100 nested tool calls (50 settled, 50 running, 0 queued)");
+    expect(text).toContain("+68 earlier");
     expect(text.length).toBeLessThan(2_000);
   });
 
@@ -94,9 +94,37 @@ describe("progress containment", () => {
     expect(bounded[0]?.activity).toBe("Read a");
   });
 
+  it("keeps problem and active rows plus recent successes beyond the display bound", () => {
+    const calls: CodeModeCallEntry[] = [
+      ...Array.from({ length: 40 }, (_, index) => ({
+        tool: `pi.read-${index}`,
+        status: "completed" as const,
+      })),
+      { tool: "pi.grep", status: "running" as const },
+      { tool: "pi.edit", status: "error" as const },
+    ];
+    const details = callEntryDetails(calls);
+    expect(details.toolCalls).toHaveLength(MAX_PROGRESS_ENTRIES);
+    expect(details.toolCalls.some((call) => call.tool === "pi.grep")).toBe(true);
+    expect(details.toolCalls.some((call) => call.tool === "pi.edit")).toBe(true);
+    expect(details.toolCalls.some((call) => call.tool === "pi.read-39")).toBe(true);
+    expect(details.toolCalls.some((call) => call.tool === "pi.read-0")).toBe(false);
+    expect(details.counts).toMatchObject({ total: 42, running: 1, failed: 1, succeeded: 40 });
+  });
+
   it("records the true total only when calls exceed the bounded entries", () => {
     const few: CodeModeCallEntry[] = [{ tool: "pi.read", status: "completed" }];
-    expect(callEntryDetails(few)).toEqual({ toolCalls: few });
+    expect(callEntryDetails(few)).toEqual({
+      toolCalls: few,
+      counts: {
+        total: 1,
+        queued: 0,
+        running: 0,
+        succeeded: 1,
+        failed: 0,
+        cancelled: 0,
+      },
+    });
     const many: CodeModeCallEntry[] = Array.from({ length: MAX_PROGRESS_ENTRIES + 8 }, () => ({
       tool: "pi.read",
       status: "completed" as const,

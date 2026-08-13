@@ -24,9 +24,12 @@ pi-code-mode-runtime build`) ships inside the `pi-code-mode` tarball.
   `pi-code-mode`'s top-level `type: module`, and `pi-code-mode` declares the
   runtime's external dependencies (`acorn`, `effect`, `typescript`) itself.
 - **Host-neutral.** It registers no Pi extension and imports nothing from Pi.
-  The `pi-code-mode` extension owns the Pi-facing integration: the read-only
-  `code_mode` agent tool, the `tools.pi.*` adapters, and the Pi-specific host
-  limits are layered above this boundary.
+  The `pi-code-mode` extension owns the Pi-facing integration: the `code_mode`
+  agent tool, adapters for all seven `tools.pi` built-ins, their supplied-tool
+  authority policy, and the Pi-specific host limits are layered above this boundary.
+- **Observable.** An optional additive lifecycle callback reports queued, running, succeeded,
+  failed, and cancelled tool calls with stable execution-local ids and durations. Existing
+  start/end hooks and guest-visible execution semantics remain compatible.
 
 ## Documentation
 

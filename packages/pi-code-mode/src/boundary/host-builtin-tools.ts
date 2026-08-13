@@ -1,18 +1,21 @@
 /**
- * Package-local adapters over Pi's built-in read/grep/find/ls tool definitions.
+ * Package-local adapters over all seven Pi built-in tool definitions.
  *
- * These adapters dispatch nested Code Mode tool calls **directly** against the built-in
- * implementations. Nested calls therefore bypass Pi middleware that observes or wraps
- * top-level tool calls (tool_call events, approval wrappers, preview shells, other
- * extensions' overrides), and their filesystem authority matches the direct Pi tools —
- * including absolute paths outside the project. The `code_mode` tool description discloses
- * both properties to the model.
+ * These adapters deliberately dispatch nested Code Mode calls directly against fresh built-in
+ * definitions. Nested calls therefore bypass Pi middleware, approval/preview extensions,
+ * registered overrides, and session-specific tool operations. In particular, nested bash is
+ * the default local shell implementation, while bash/edit/write confer the full process,
+ * network, and unrestricted filesystem authority of the local Pi process. The `code_mode`
+ * description discloses that contract to the model.
  */
 import {
+  createBashToolDefinition,
+  createEditToolDefinition,
   createFindToolDefinition,
   createGrepToolDefinition,
   createLsToolDefinition,
   createReadToolDefinition,
+  createWriteToolDefinition,
   type AgentToolResult,
   type ExtensionContext,
   type ToolDefinition,
@@ -21,18 +24,21 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { toolError, type ToolError } from "./codemode-runtime.ts";
 
-export const PI_GUEST_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
+export const PI_GUEST_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 export type PiGuestToolName = (typeof PI_GUEST_TOOL_NAMES)[number];
 
 // oxlint-disable-next-line no-explicit-any -- Pi's own AnyToolDefinition shape.
 type AnyToolDefinition = ToolDefinition<any, any, any>;
 
-/** The four built-in definitions one Code Mode session dispatches against. */
+/** The seven built-in definitions one Code Mode session dispatches against. */
 export type NestedPiToolDefinitions = Readonly<Record<PiGuestToolName, AnyToolDefinition>>;
 
 /** Live factory: current built-in definitions bound to the session working directory. */
 export const makeNestedPiToolDefinitions = (cwd: string): NestedPiToolDefinitions => ({
   read: createReadToolDefinition(cwd),
+  bash: createBashToolDefinition(cwd),
+  edit: createEditToolDefinition(cwd),
+  write: createWriteToolDefinition(cwd),
   grep: createGrepToolDefinition(cwd),
   find: createFindToolDefinition(cwd),
   ls: createLsToolDefinition(cwd),

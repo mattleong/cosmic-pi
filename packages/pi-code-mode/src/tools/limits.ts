@@ -58,6 +58,12 @@ export interface CumulativeOutputBudget {
    * deterministic, model-safe message and consumes nothing.
    */
   readonly admit: (guestData: string) => CumulativeOutputAdmission;
+  /**
+   * Bounds and consumes guest-visible nested failure text from the same cumulative budget.
+   * When only part of the budget remains, the returned text is code-point-safe truncated to
+   * that remainder; an exhausted budget yields an empty safe failure message.
+   */
+  readonly admitFailure: (message: string) => string;
   readonly used: () => number;
 }
 
@@ -81,6 +87,12 @@ export const makeCumulativeOutputBudget = (limitBytes: number): CumulativeOutput
       }
       used += bytes;
       return { admitted: true };
+    },
+    admitFailure: (message) => {
+      const remaining = Math.max(0, limitBytes - used);
+      const admitted = utf8Truncate(message, remaining);
+      used += utf8ByteLength(admitted);
+      return admitted;
     },
     used: () => used,
   };

@@ -1,14 +1,17 @@
 # pi-code-mode
 
 Code Mode for pi: one `code_mode` agent tool that runs a confined, interpreted JavaScript
-program orchestrating read-only Pi tools (`tools.pi.read`, `tools.pi.grep`, `tools.pi.find`,
-`tools.pi.ls`) in a single tool call, with trusted-project-only scoped settings.
+program orchestrating all seven Pi built-ins (`tools.pi.read`, `tools.pi.bash`,
+`tools.pi.edit`, `tools.pi.write`, `tools.pi.grep`, `tools.pi.find`, `tools.pi.ls`) in a
+single tool call, with trusted-project-only scoped settings.
 
 The program is TypeScript-transpiled, Acorn-parsed, and executed by a vendored tree-walk
 interpreter (OpenCode 2 Code Mode; see ADR 0003) — never `eval`, `Function`, `node:vm`, or a
-child process. Programs have no filesystem, network, process, module, or timer authority of
-their own; they can only call the four read-only guest tools and the runtime's own
-`tools.$codemode.search` discovery tool. The interpreter lives in the private
+child JavaScript process. The interpreter provides no ambient filesystem, network, process,
+environment, module, or timer APIs; programs can only call the supplied tool tree and the
+runtime's own `tools.$codemode.search` discovery tool. Supplied Bash, edit, and write tools
+intentionally confer full local-user process, network, environment, and unrestricted
+filesystem authority (ADR 0004). The interpreter lives in the private
 `pi-code-mode-runtime` workspace package nested at `runtime/` inside this package; its built
 output ships inside this package.
 
@@ -33,25 +36,28 @@ See the runtime `PROVENANCE.md` (deviation 8) for the exact rules.
 In the TUI a `code_mode` call renders compactly as `Code Mode · <intent>` — the optional
 `intent` tool parameter (a short human-readable purpose the model is asked to provide),
 falling back to a neutral phrase. While the program runs, nested calls appear as bounded
-activity rows derived from their inputs (`… Search TODO in src`, `✓ Read src/app.ts`,
-`✗ List missing/`), followed by a muted status footer (`4 operations completed`,
-`2 of 4 completed`, `Cancelled`, `Failed`; `+N more` beyond 32 rows). Expanding the call
+activity rows derived from their inputs (`◌` queued, `…` running, `✓` succeeded, `✗` failed,
+`⊘` cancelled), with settled durations and an exact lifecycle footer. Beyond 32 rows, active,
+failed, cancelled, and recent calls stay visible under a `+N earlier` marker. Expanding the call
 shows the full program source; expanding the result shows the complete model-visible output
 or error, and the collapsed hint names the configured `app.tools.expand` key when one is
 bound (`▸ output · ctrl+o expand`). All displayed text is sanitized against terminal
 control injection, and
 presentation never changes the model-visible result, details, or any execution limit.
 
-## Known limitation: nested calls bypass Pi middleware
+## Full built-in authority and direct nested dispatch
 
-Tools invoked from inside a Code Mode program are dispatched **directly** against Pi's
-built-in read/grep/find/ls implementations. They bypass Pi extension middleware that observes
-or wraps top-level tool calls (tool_call events, approval wrappers, preview shells, other
-extensions' overrides), and their filesystem authority matches the direct Pi tools —
-**including absolute paths outside the project**. `code_mode` does not confine reads to the
-project directory; the tool description states this to the model. This is why the catalog is
-read-only: bash, edit, write, MCP, and arbitrary dispatch stay excluded until a canonical
-nested-tool dispatcher exists (ADR 0003).
+Tools invoked from inside a Code Mode program are dispatched **directly** against fresh Pi
+built-in definitions. They intentionally bypass `tool_call`/`tool_result` middleware,
+approval and preview extensions, registered tool overrides, and session-specific tool
+operations. Nested Bash therefore uses Pi's default local implementation rather than a
+configured prefix, shell hook, sandbox, remote operation, or other top-level override.
+
+Bash can execute processes, use the inherited shell environment and network, and mutate
+arbitrary paths. Read, edit, and write accept paths outside the project, including absolute
+and home-relative paths. `code_mode` is an orchestration runtime, not a permission, process,
+network, filesystem, or project-containment sandbox. MCP and arbitrary dynamic dispatch remain
+separate. See ADR 0004.
 
 ## Availability policy
 
@@ -85,10 +91,14 @@ thrown string is bounded before it is ever surfaced). The one exception is the
 stale/unavailable refusal, which can fire when no current configuration exists and is
 therefore a short fixed bounded message. `maxSourceBytes` rejects oversized programs
 (exact UTF-8 bytes) before execution; and
-`maxCumulativeChildOutputBytes` bounds the cumulative UTF-8 bytes of nested tool output
-entering the program — an exact fit is admitted, the first overrun is refused with a
-model-safe message, and accounting stays exact under the interpreter's fixed nested
-concurrency of 8. Nested results are plain text; image content is refused.
+`maxCumulativeChildOutputBytes` bounds the cumulative UTF-8 bytes of successful nested tool
+output and catchable nested failure text entering the program. An exact success fit is
+admitted, the first success overrun is refused, failure text is truncated to the remaining
+budget, and accounting stays exact under the interpreter's fixed nested concurrency of 8.
+This is a post-settlement context/reliability bound: it cannot prevent or roll back a tool's
+side effects. Nested results are plain text; image content is refused. Edit diff/patch details
+and Bash result details are not passed into the guest, although Bash's text truncation notice
+and temporary full-output path remain visible.
 
 ## `/code-mode-settings`
 
