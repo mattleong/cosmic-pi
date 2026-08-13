@@ -9,9 +9,9 @@ const projection = (...states: ReadonlyArray<SubagentRunState>): SubagentProject
 
 describe("subagent footer projection", () => {
   it("uses natural singular and plural status text", () => {
-    expect(fleetStatus(projection("running"))).toBe("1 working");
+    expect(fleetStatus(projection("running"))).toBe("1 subagent working");
     expect(fleetStatus(projection("running", "starting", "waiting_for_parent"))).toBe(
-      "2 working · 1 awaiting reply",
+      "2 subagents working · 1 awaiting reply",
     );
     expect(fleetStatus(projection("waiting_for_parent", "waiting_for_parent"))).toBe(
       "2 awaiting replies",

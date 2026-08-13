@@ -21,7 +21,7 @@ export const fleetStatus = (projection: SubagentProjection): string | undefined 
   const retained = projection.runs.filter((run) => run.state === "reported").length;
   if (owned === 0) return undefined;
   return [
-    working ? `${working} working` : undefined,
+    working ? `${working} subagent${working === 1 ? "" : "s"} working` : undefined,
     waiting ? `${waiting} awaiting ${waiting === 1 ? "reply" : "replies"}` : undefined,
     paused ? `${paused} paused` : undefined,
     retained ? `${retained} retained` : undefined,
