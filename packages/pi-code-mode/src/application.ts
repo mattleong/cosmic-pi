@@ -93,6 +93,12 @@ export function registerCodeModeApplication(
 
   const handoff = (boundaries.makeDeactivationHandoff ?? makeCodeModeDeactivationHandoff)();
 
+  /** Removes `code_mode` from the active list and records that this extension did so. */
+  const tearDownTool = (): void => {
+    deactivateCodeModeTool(pi);
+    expectedActive = false;
+  };
+
   const observeUserIntent = (): void => {
     if (!hasRegisteredTool) return;
     if (observeCodeModeToolActive(pi)) userDeactivated = false;
@@ -124,8 +130,7 @@ export function registerCodeModeApplication(
     startup: () => CodeModeConfigStore.use(() => Effect.void),
     onDeactivated: () => {
       MutableRef.set(stateRef, undefined);
-      deactivateCodeModeTool(pi);
-      expectedActive = false;
+      tearDownTool();
     },
     onStartFailure: ({ ctx }) => {
       notifyAtHostBoundary(ctx, "Code Mode failed to start.", "warning");
@@ -154,8 +159,7 @@ export function registerCodeModeApplication(
     if (restored !== undefined) userDeactivated = restored;
     // No registered code_mode implementation may stay exposed while capture, startup,
     // settings, or replacement is pending; a stale definition also self-gates in execute.
-    deactivateCodeModeTool(pi);
-    expectedActive = false;
+    tearDownTool();
     MutableRef.set(stateRef, undefined);
 
     const captured = captureSessionHost(ctx);
@@ -219,8 +223,7 @@ export function registerCodeModeApplication(
     // reload/new/resume/fork restores it. Prefer the shutdown ctx's identity, falling back to
     // the key captured at this session's start.
     publishUserIntent((ctx ? codeModeSessionKey(ctx) : undefined) ?? currentSessionKey);
-    deactivateCodeModeTool(pi);
-    expectedActive = false;
+    tearDownTool();
     return slot.shutdown();
   });
 }

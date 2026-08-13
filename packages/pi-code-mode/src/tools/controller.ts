@@ -11,11 +11,9 @@ import { Type } from "typebox";
 import { renderCodeModeToolCall, renderCodeModeToolResult } from "../ui/tool-renderer.ts";
 import { describeCodeModeCatalog } from "./catalog.ts";
 import type { CodeModeToolExecute } from "./execution.ts";
+import { MAX_INTENT_LENGTH } from "./format.ts";
 
 export const CODE_MODE_TOOL_NAME = "code_mode";
-
-/** Schema bound for the optional human-readable intent (also the display bound). */
-export const MAX_INTENT_LENGTH = 160;
 
 const parameters = Type.Object({
   code: Type.String({

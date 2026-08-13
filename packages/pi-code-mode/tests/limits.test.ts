@@ -18,19 +18,17 @@ describe("utf8ByteLength", () => {
 
 describe("checkSourceSize", () => {
   it("accepts an exact fit and refuses one byte over", () => {
-    expect(checkSourceSize("a".repeat(16), 16).ok).toBe(true);
-    const over = checkSourceSize("a".repeat(17), 16);
-    expect(over.ok).toBe(false);
-    expect(over.bytes).toBe(17);
-    expect(over.message).toContain("17 UTF-8 bytes");
-    expect(over.message).toContain("maxSourceBytes limit of 16");
+    expect(checkSourceSize("a".repeat(16), 16)).toBeUndefined();
+    const refusal = checkSourceSize("a".repeat(17), 16);
+    expect(refusal).toContain("17 UTF-8 bytes");
+    expect(refusal).toContain("maxSourceBytes limit of 16");
   });
 
   it("measures multibyte source in exact UTF-8 bytes", () => {
     // 8 × "🙂" = 32 UTF-8 bytes but only 16 UTF-16 code units.
     const emoji = "🙂".repeat(8);
-    expect(checkSourceSize(emoji, 32).ok).toBe(true);
-    expect(checkSourceSize(emoji, 31).ok).toBe(false);
+    expect(checkSourceSize(emoji, 32)).toBeUndefined();
+    expect(checkSourceSize(emoji, 31)).toBeDefined();
   });
 });
 
@@ -74,8 +72,8 @@ describe("clampModelVisibleText (final model-visible bound)", () => {
 describe("makeCumulativeOutputBudget", () => {
   it("admits an exact cumulative fit and counts each admission exactly once", () => {
     const budget = makeCumulativeOutputBudget(10);
-    expect(budget.admit("aaaa")).toEqual({ admitted: true, bytes: 4 });
-    expect(budget.admit("bbbb")).toEqual({ admitted: true, bytes: 4 });
+    expect(budget.admit("aaaa")).toEqual({ admitted: true });
+    expect(budget.admit("bbbb")).toEqual({ admitted: true });
     expect(budget.used()).toBe(8);
     // Exact threshold: the remaining 2 bytes are admitted.
     expect(budget.admit("cc").admitted).toBe(true);
@@ -87,7 +85,6 @@ describe("makeCumulativeOutputBudget", () => {
     expect(budget.admit("aaaaaaaa").admitted).toBe(true);
     const refused = budget.admit("bbb");
     expect(refused.admitted).toBe(false);
-    expect(refused).toMatchObject({ bytes: 3 });
     if (!refused.admitted) {
       expect(refused.message).toContain("3 bytes");
       expect(refused.message).toContain("8 of 10 bytes already used");

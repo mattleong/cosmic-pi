@@ -48,6 +48,8 @@ const NestedToolResultSchema = Schema.Struct({
   ),
 });
 
+const decodeNestedToolResult = Schema.decodeUnknownEffect(NestedToolResultSchema);
+
 /**
  * Deterministically converts a nested built-in `AgentToolResult` into the plain string that
  * enters the guest program. Text blocks join with a newline; any non-text block (for example
@@ -58,7 +60,7 @@ export const nestedResultToGuestData = (
   name: PiGuestToolName,
   result: AgentToolResult<unknown>,
 ): Effect.Effect<string, ToolError> =>
-  Schema.decodeUnknownEffect(NestedToolResultSchema)(result).pipe(
+  decodeNestedToolResult(result).pipe(
     Effect.mapError(() =>
       toolError(`Nested tool '${name}' returned an unrecognized result shape.`),
     ),

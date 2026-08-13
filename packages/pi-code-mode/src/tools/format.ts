@@ -1,7 +1,63 @@
-/** Pure model-visible formatting for Code Mode execution results and bounded progress. */
+/**
+ * Pure formatting for Code Mode execution results, bounded progress, and the bounded
+ * nested-call activity labels persisted alongside them.
+ */
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type { CodeMode } from "../boundary/codemode-runtime.ts";
 import { utf8ByteLength } from "./limits.ts";
+
+/** Schema and display bound (code points) for the human-readable `intent` parameter. */
+export const MAX_INTENT_LENGTH = 160;
+
+/** Display bound (code points) for one path/pattern/query inside an activity label. */
+export const MAX_ACTIVITY_FIELD_LENGTH = 48;
+
+/** Code-point-safe truncation with a single-character ellipsis inside the budget. */
+export const truncateDisplay = (text: string, maxCodePoints: number): string => {
+  const points = [...text];
+  if (points.length <= maxCodePoints) return text;
+  return `${points.slice(0, Math.max(0, maxCodePoints - 1)).join("")}…`;
+};
+
+/** One sanitized bounded field read from a decoded nested-call input, if present. */
+const activityField = (input: unknown, key: string): string | undefined => {
+  if (typeof input !== "object" || input === null) return undefined;
+  const value = (input as Record<string, unknown>)[key];
+  if (typeof value !== "string") return undefined;
+  const sanitized = sanitizeTerminalLine(value);
+  return sanitized.length === 0 ? undefined : truncateDisplay(sanitized, MAX_ACTIVITY_FIELD_LENGTH);
+};
+
+/**
+ * A bounded human-readable activity label for one nested call, derived only from the
+ * runtime-decoded input at call start (never from nested output). Unknown names and
+ * hostile inputs collapse to a safe bounded fallback; raw objects are never stringified.
+ */
+export const describeNestedActivity = (name: unknown, input: unknown): string => {
+  const toolName = typeof name === "string" ? name : "";
+  const at = (fallback: string) => activityField(input, "path") ?? fallback;
+  switch (toolName) {
+    case "pi.read":
+      return `Read ${at("file")}`;
+    case "pi.grep":
+      return `Search ${activityField(input, "pattern") ?? "pattern"} in ${at("cwd")}`;
+    case "pi.find":
+      return `Find ${activityField(input, "pattern") ?? "pattern"} in ${at("cwd")}`;
+    case "pi.ls":
+      return `List ${at("cwd")}`;
+    case "$codemode.search": {
+      const query = activityField(input, "query");
+      return query === undefined ? "Discover tools" : `Discover tools for ${query}`;
+    }
+    default: {
+      const sanitized = sanitizeTerminalLine(toolName);
+      return sanitized.length === 0
+        ? "Call tool"
+        : `Call ${truncateDisplay(sanitized, MAX_ACTIVITY_FIELD_LENGTH)}`;
+    }
+  }
+};
 
 /**
  * One bounded nested-call progress entry; never contains nested tool output. `activity` is

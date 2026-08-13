@@ -37,9 +37,7 @@ const HANDOFF_SLOT_KEY = Symbol.for("@cosmic-pi/pi-code-mode/code-mode-deactivat
 const SESSION_KEY_TTL_MS = 60 * 60 * 1_000;
 
 /** The stable Pi session id used as the one handoff identity. */
-export type CodeModeSessionKey = {
-  readonly value: string;
-};
+export type CodeModeSessionKey = string;
 
 interface HandoffEnvelope {
   readonly version: 2;
@@ -82,7 +80,7 @@ export const codeModeSessionKey = (ctx: ExtensionContext): CodeModeSessionKey | 
   try {
     const sessionId = ctx.sessionManager?.getSessionId?.();
     if (typeof sessionId === "string" && sessionId.length > 0) {
-      return { value: sessionId };
+      return sessionId;
     }
   } catch {
     // No stable identity available.
@@ -98,15 +96,13 @@ export interface CodeModeDeactivationHandoff {
   readonly capture: (key: CodeModeSessionKey | undefined) => boolean | undefined;
   /** Publishes the observed intent for `key` so a recreated instance can restore it. */
   readonly publish: (key: CodeModeSessionKey | undefined, deactivated: boolean) => void;
-  /** Clears the slot when it belongs to `key` (or unconditionally when `key` is undefined). */
-  readonly clear: (key?: CodeModeSessionKey) => void;
 }
 
 export const makeCodeModeDeactivationHandoff = (): CodeModeDeactivationHandoff => ({
   capture: (key) => {
     if (key === undefined) return undefined;
     const envelope = readEnvelope();
-    if (envelope === undefined || envelope.key !== key.value) return undefined;
+    if (envelope === undefined || envelope.key !== key) return undefined;
     delete processState()[HANDOFF_SLOT_KEY];
     return envelope.deactivated;
   },
@@ -114,19 +110,9 @@ export const makeCodeModeDeactivationHandoff = (): CodeModeDeactivationHandoff =
     if (key === undefined) return;
     processState()[HANDOFF_SLOT_KEY] = Object.freeze({
       version: 2,
-      key: key.value,
+      key,
       deactivated,
       expiresAt: Date.now() + SESSION_KEY_TTL_MS,
     } satisfies HandoffEnvelope);
-  },
-  clear: (key) => {
-    if (key === undefined) {
-      delete processState()[HANDOFF_SLOT_KEY];
-      return;
-    }
-    const envelope = readEnvelope();
-    if (envelope !== undefined && envelope.key === key.value) {
-      delete processState()[HANDOFF_SLOT_KEY];
-    }
   },
 });

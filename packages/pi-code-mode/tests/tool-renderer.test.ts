@@ -12,13 +12,16 @@ import {
   CODE_MODE_FALLBACK_INTENT,
   decodeCodeModeRenderDetails,
   describeCodeModeIntent,
-  describeNestedActivity,
-  MAX_ACTIVITY_FIELD_LENGTH,
-  MAX_INTENT_DISPLAY_LENGTH,
   renderCodeModeToolCall,
   renderCodeModeToolResult,
 } from "../src/ui/tool-renderer.ts";
-import { MAX_PROGRESS_ENTRIES, type CodeModeToolDetails } from "../src/tools/format.ts";
+import {
+  describeNestedActivity,
+  MAX_ACTIVITY_FIELD_LENGTH,
+  MAX_INTENT_LENGTH,
+  MAX_PROGRESS_ENTRIES,
+  type CodeModeToolDetails,
+} from "../src/tools/format.ts";
 
 /** Identity theme: no ANSI, so assertions read plain text. */
 const theme = {
@@ -59,9 +62,9 @@ describe("describeCodeModeIntent", () => {
   });
 
   it("truncates code-point-safely at the display bound", () => {
-    const intent = "🌍".repeat(MAX_INTENT_DISPLAY_LENGTH + 20);
+    const intent = "🌍".repeat(MAX_INTENT_LENGTH + 20);
     const shown = describeCodeModeIntent(intent);
-    expect([...shown]).toHaveLength(MAX_INTENT_DISPLAY_LENGTH);
+    expect([...shown]).toHaveLength(MAX_INTENT_LENGTH);
     expect(shown.endsWith("…")).toBe(true);
     expect(shown).not.toContain("�");
   });

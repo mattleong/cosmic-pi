@@ -46,38 +46,33 @@ const GUEST_TOOL_DESCRIPTIONS: Readonly<Record<PiGuestToolName, string>> = {
   ls: "List directory contents. Optional path (defaults to the session cwd) and entry limit.",
 };
 
+const GUEST_TOOL_INPUTS = {
+  read: ReadInput,
+  grep: GrepInput,
+  find: FindInput,
+  ls: LsInput,
+} as const;
+
 export type GuestInvoke = (
   name: PiGuestToolName,
   input: unknown,
 ) => Effect.Effect<string, ToolError>;
 
+const guestTool = <Name extends PiGuestToolName>(name: Name, invoke: GuestInvoke) =>
+  Tool.make({
+    description: GUEST_TOOL_DESCRIPTIONS[name],
+    input: GUEST_TOOL_INPUTS[name],
+    output: Schema.String,
+    run: (input) => invoke(name, input),
+  });
+
 /** The `pi` namespace exposed to programs; every leaf validates input with Effect Schema. */
 export const makeCodeModeGuestTools = (invoke: GuestInvoke) => ({
   pi: {
-    read: Tool.make({
-      description: GUEST_TOOL_DESCRIPTIONS.read,
-      input: ReadInput,
-      output: Schema.String,
-      run: (input) => invoke("read", input),
-    }),
-    grep: Tool.make({
-      description: GUEST_TOOL_DESCRIPTIONS.grep,
-      input: GrepInput,
-      output: Schema.String,
-      run: (input) => invoke("grep", input),
-    }),
-    find: Tool.make({
-      description: GUEST_TOOL_DESCRIPTIONS.find,
-      input: FindInput,
-      output: Schema.String,
-      run: (input) => invoke("find", input),
-    }),
-    ls: Tool.make({
-      description: GUEST_TOOL_DESCRIPTIONS.ls,
-      input: LsInput,
-      output: Schema.String,
-      run: (input) => invoke("ls", input),
-    }),
+    read: guestTool("read", invoke),
+    grep: guestTool("grep", invoke),
+    find: guestTool("find", invoke),
+    ls: guestTool("ls", invoke),
   },
 });
 

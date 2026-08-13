@@ -162,14 +162,10 @@ export function registerCodeModeSettingsController(
     ctx: ExtensionCommandContext,
     request: ApplyRequest,
     signal: AbortSignal | undefined,
-    view?: {
-      readonly applied: (currentValue: string) => void;
-      readonly reverted: (currentValue: string) => void;
-    },
+    updateDisplay?: (currentValue: string) => void,
   ): Promise<void> => {
-    const before = scopeDisplayValue(snapshot(), request.scope, request.id);
     const revertOptimisticDisplay = () => {
-      view?.reverted(scopeDisplayValue(snapshot(), request.scope, request.id) ?? before);
+      updateDisplay?.(scopeDisplayValue(snapshot(), request.scope, request.id));
     };
     const effect = CodeModeConfigStore.use((store) =>
       request.kind === "set"
@@ -190,7 +186,7 @@ export function registerCodeModeSettingsController(
           return;
         }
         const display = scopeDisplayValue(outcome.state, request.scope, request.id);
-        if (view) view.applied(display);
+        if (updateDisplay) updateDisplay(display);
         else notifyAtHostBoundary(ctx, `${request.scope} ${request.id} = ${display}`, "info");
         if (request.id === "enabled") {
           notifyAtHostBoundary(ctx, availabilityLine(outcome.state), "info");
@@ -216,12 +212,9 @@ export function registerCodeModeSettingsController(
     scope: CodeModeSettingScope,
     id: string,
     signal: AbortSignal | undefined,
-    view: {
-      readonly applied: (currentValue: string) => void;
-      readonly reverted: (currentValue: string) => void;
-    },
+    updateDisplay: (currentValue: string) => void,
   ): Promise<void> => {
-    const revert = () => view.reverted(scopeDisplayValue(snapshot(), scope, id));
+    const revert = () => updateDisplay(scopeDisplayValue(snapshot(), scope, id));
     const descriptor = findCodeModeSettingDescriptor(id);
     if (descriptor === undefined || descriptor.kind !== "integer") {
       revert();
@@ -243,7 +236,12 @@ export function registerCodeModeSettingsController(
         revert();
         return;
       }
-      return applySetting(ctx, { kind: "set", scope, id, value: result.value }, signal, view);
+      return applySetting(
+        ctx,
+        { kind: "set", scope, id, value: result.value },
+        signal,
+        updateDisplay,
+      );
     });
   };
 
@@ -287,16 +285,15 @@ export function registerCodeModeSettingsController(
                 tui.requestRender();
               }, undefined);
             };
-            const view = { applied: show, reverted: show };
             if (value === CUSTOM_VALUE) {
-              void promptCustomInteger(ctx, scope, id, signal, view);
+              void promptCustomInteger(ctx, scope, id, signal, show);
               return;
             }
             const request: ApplyRequest =
               value === INHERIT_VALUE
                 ? { kind: "clear", scope, id }
                 : { kind: "set", scope, id, value };
-            void applySetting(ctx, request, signal, view);
+            void applySetting(ctx, request, signal, show);
           },
           onCancel: () => invokeHostCallback(() => done(undefined), undefined),
           matchesKeybinding: invokeHostCallback(

@@ -14,30 +14,25 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Container, getKeybindings, Text, type Component } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
-import { MAX_PROGRESS_ENTRIES, type CodeModeCallEntry } from "../tools/format.ts";
+import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
+import {
+  describeNestedActivity,
+  MAX_INTENT_LENGTH,
+  MAX_PROGRESS_ENTRIES,
+  truncateDisplay,
+  type CodeModeCallEntry,
+} from "../tools/format.ts";
 
 /** Neutral headline when the model provided no usable intent. */
 export const CODE_MODE_FALLBACK_INTENT = "Read-only investigation";
 
-/** Display bound (code points) for the sanitized intent headline. */
-export const MAX_INTENT_DISPLAY_LENGTH = 160;
-
-/** Display bound (code points) for one path/pattern/query inside an activity label. */
-export const MAX_ACTIVITY_FIELD_LENGTH = 48;
-
 /**
- * Display safety bound (code points) for the expanded program source. The configured
- * `maxSourceBytes` never exceeds 1 MiB, so any program `execute` accepts stays fully
- * inspectable; only hostile host-supplied argument blobs beyond that are bounded.
+ * Display safety bound (code points) for the expanded program source: the configured
+ * `maxSourceBytes` maximum (code points never exceed UTF-8 bytes), so any program `execute`
+ * accepts stays fully inspectable; only hostile host-supplied argument blobs beyond that
+ * are bounded.
  */
-export const MAX_SOURCE_DISPLAY_LENGTH = 1_048_576;
-
-/** Code-point-safe truncation with a single-character ellipsis inside the budget. */
-const truncateDisplay = (text: string, maxCodePoints: number): string => {
-  const points = [...text];
-  if (points.length <= maxCodePoints) return text;
-  return `${points.slice(0, Math.max(0, maxCodePoints - 1)).join("")}…`;
-};
+export const MAX_SOURCE_DISPLAY_LENGTH = CODE_MODE_INTEGER_BOUNDS.maxSourceBytes.maximum;
 
 /**
  * The sanitized bounded intent headline for one call, falling back to a neutral phrase for
@@ -47,46 +42,7 @@ export const describeCodeModeIntent = (intent: unknown): string => {
   if (typeof intent !== "string") return CODE_MODE_FALLBACK_INTENT;
   const sanitized = sanitizeTerminalLine(intent);
   if (sanitized.length === 0) return CODE_MODE_FALLBACK_INTENT;
-  return truncateDisplay(sanitized, MAX_INTENT_DISPLAY_LENGTH);
-};
-
-/** One sanitized bounded field read from a decoded nested-call input, if present. */
-const activityField = (input: unknown, key: string): string | undefined => {
-  if (typeof input !== "object" || input === null) return undefined;
-  const value = (input as Record<string, unknown>)[key];
-  if (typeof value !== "string") return undefined;
-  const sanitized = sanitizeTerminalLine(value);
-  return sanitized.length === 0 ? undefined : truncateDisplay(sanitized, MAX_ACTIVITY_FIELD_LENGTH);
-};
-
-/**
- * A bounded human-readable activity label for one nested call, derived only from the
- * runtime-decoded input at call start (never from nested output). Unknown names and
- * hostile inputs collapse to a safe bounded fallback; raw objects are never stringified.
- */
-export const describeNestedActivity = (name: unknown, input: unknown): string => {
-  const toolName = typeof name === "string" ? name : "";
-  const at = (fallback: string) => activityField(input, "path") ?? fallback;
-  switch (toolName) {
-    case "pi.read":
-      return `Read ${at("file")}`;
-    case "pi.grep":
-      return `Search ${activityField(input, "pattern") ?? "pattern"} in ${at("cwd")}`;
-    case "pi.find":
-      return `Find ${activityField(input, "pattern") ?? "pattern"} in ${at("cwd")}`;
-    case "pi.ls":
-      return `List ${at("cwd")}`;
-    case "$codemode.search": {
-      const query = activityField(input, "query");
-      return query === undefined ? "Discover tools" : `Discover tools for ${query}`;
-    }
-    default: {
-      const sanitized = sanitizeTerminalLine(toolName);
-      return sanitized.length === 0
-        ? "Call tool"
-        : `Call ${truncateDisplay(sanitized, MAX_ACTIVITY_FIELD_LENGTH)}`;
-    }
-  }
+  return truncateDisplay(sanitized, MAX_INTENT_LENGTH);
 };
 
 /** Presentation-side projection of the persisted `code_mode` result details. */
@@ -214,7 +170,7 @@ const ACTIVITY_SYMBOLS = {
 const activityRow = (entry: CodeModeCallEntry, theme: Theme): string => {
   const { symbol, color } = ACTIVITY_SYMBOLS[entry.status];
   const label = entry.activity ?? describeNestedActivity(entry.tool, undefined);
-  const sanitized = truncateDisplay(sanitizeTerminalLine(label), MAX_INTENT_DISPLAY_LENGTH);
+  const sanitized = truncateDisplay(sanitizeTerminalLine(label), MAX_INTENT_LENGTH);
   return `${theme.fg(color, symbol)} ${theme.fg("toolOutput", sanitized)}`;
 };
 

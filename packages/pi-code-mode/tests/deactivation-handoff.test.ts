@@ -34,7 +34,7 @@ describe("codeModeSessionKey", () => {
       cwd: "/project",
       sessionManager: { getSessionId: () => "session-123" },
     } as unknown as ExtensionContext;
-    expect(codeModeSessionKey(ctx)).toEqual({ value: "session-123" });
+    expect(codeModeSessionKey(ctx)).toBe("session-123");
   });
 
   it("never falls back to the cwd when no usable session id is exposed", () => {
@@ -65,7 +65,7 @@ describe("codeModeSessionKey", () => {
 });
 
 describe("makeCodeModeDeactivationHandoff", () => {
-  const sessionKey = { value: "S1" } as const;
+  const sessionKey = "S1";
 
   it("captures the exact intent published for a matching key, then clears it", () => {
     const handoff = makeCodeModeDeactivationHandoff();
@@ -84,8 +84,8 @@ describe("makeCodeModeDeactivationHandoff", () => {
 
   it("never returns another session's intent (no cross-session leakage)", () => {
     const handoff = makeCodeModeDeactivationHandoff();
-    handoff.publish({ value: "S1" }, true);
-    expect(handoff.capture({ value: "S2" })).toBeUndefined();
+    handoff.publish("S1", true);
+    expect(handoff.capture("S2")).toBeUndefined();
   });
 
   it("expires a session entry after its bounded TTL", () => {

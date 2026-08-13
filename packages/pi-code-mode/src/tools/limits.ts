@@ -47,8 +47,8 @@ export const clampModelVisibleText = (text: string, maxOutputBytes: number): str
 };
 
 export type CumulativeOutputAdmission =
-  | { readonly admitted: true; readonly bytes: number }
-  | { readonly admitted: false; readonly bytes: number; readonly message: string };
+  | { readonly admitted: true }
+  | { readonly admitted: false; readonly message: string };
 
 export interface CumulativeOutputBudget {
   /**
@@ -73,7 +73,6 @@ export const makeCumulativeOutputBudget = (limitBytes: number): CumulativeOutput
       if (used + bytes > limitBytes) {
         return {
           admitted: false,
-          bytes,
           message:
             `Nested tool output refused: admitting ${bytes} bytes would exceed the cumulative ` +
             `nested-output budget (${used} of ${limitBytes} bytes already used). ` +
@@ -81,26 +80,21 @@ export const makeCumulativeOutputBudget = (limitBytes: number): CumulativeOutput
         };
       }
       used += bytes;
-      return { admitted: true, bytes };
+      return { admitted: true };
     },
     used: () => used,
   };
 };
 
-export interface SourceSizeCheck {
-  readonly ok: boolean;
-  readonly bytes: number;
-  readonly message: string;
-}
-
-/** Pre-execution program source budget in exact UTF-8 bytes; an exact fit is accepted. */
-export const checkSourceSize = (code: string, maxSourceBytes: number): SourceSizeCheck => {
+/**
+ * Pre-execution program source budget in exact UTF-8 bytes; an exact fit is accepted.
+ * Returns the model-safe refusal message, or undefined when the source is within budget.
+ */
+export const checkSourceSize = (code: string, maxSourceBytes: number): string | undefined => {
   const bytes = utf8ByteLength(code);
-  return {
-    ok: bytes <= maxSourceBytes,
-    bytes,
-    message:
-      `Program source is ${bytes} UTF-8 bytes, which exceeds the configured ` +
-      `maxSourceBytes limit of ${maxSourceBytes}. Send a smaller program.`,
-  };
+  if (bytes <= maxSourceBytes) return undefined;
+  return (
+    `Program source is ${bytes} UTF-8 bytes, which exceeds the configured ` +
+    `maxSourceBytes limit of ${maxSourceBytes}. Send a smaller program.`
+  );
 };

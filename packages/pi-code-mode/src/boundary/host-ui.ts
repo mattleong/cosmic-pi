@@ -36,37 +36,37 @@ export function hasCustomSurface(ctx: ExtensionCommandContext): boolean {
   }
 }
 
-/** Guarded `ctx.ui.select`: missing APIs, synchronous throws, and rejections never escape. */
-export function selectAtHostBoundary(
+/**
+ * One guarded Promise-shaped dialog invocation: missing APIs, synchronous throws, and
+ * rejections all resolve to `Unavailable` instead of escaping into extension code.
+ */
+function dialogAtHostBoundary(
   ctx: ExtensionCommandContext,
-  title: string,
-  options: readonly string[],
+  invoke: (ui: ExtensionCommandContext["ui"]) => unknown,
 ): Promise<HostDialogResult> {
   try {
-    const select = ctx.ui.select;
-    if (typeof select !== "function") return Promise.resolve(UNAVAILABLE);
-    return Promise.resolve(select.call(ctx.ui, title, [...options])).then(
-      settled,
-      () => UNAVAILABLE,
-    );
+    return Promise.resolve(invoke(ctx.ui)).then(settled, () => UNAVAILABLE);
   } catch {
     return Promise.resolve(UNAVAILABLE);
   }
 }
 
-/** Guarded `ctx.ui.input`: missing APIs, synchronous throws, and rejections never escape. */
+/** Guarded `ctx.ui.select`. */
+export function selectAtHostBoundary(
+  ctx: ExtensionCommandContext,
+  title: string,
+  options: readonly string[],
+): Promise<HostDialogResult> {
+  return dialogAtHostBoundary(ctx, (ui) => ui.select(title, [...options]));
+}
+
+/** Guarded `ctx.ui.input`. */
 export function inputAtHostBoundary(
   ctx: ExtensionCommandContext,
   title: string,
   placeholder?: string,
 ): Promise<HostDialogResult> {
-  try {
-    const input = ctx.ui.input;
-    if (typeof input !== "function") return Promise.resolve(UNAVAILABLE);
-    return Promise.resolve(input.call(ctx.ui, title, placeholder)).then(settled, () => UNAVAILABLE);
-  } catch {
-    return Promise.resolve(UNAVAILABLE);
-  }
+  return dialogAtHostBoundary(ctx, (ui) => ui.input(title, placeholder));
 }
 
 /** Factory shape accepted by the settings custom surface (`ctx.ui.custom<undefined>`). */

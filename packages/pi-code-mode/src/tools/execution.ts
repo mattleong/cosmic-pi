@@ -17,10 +17,10 @@ import {
 } from "../boundary/host-builtin-tools.ts";
 import { makeGuardedToolUpdatePublisher } from "../boundary/host-tool-update.ts";
 import type { CodeModeState } from "../config/store.ts";
-import { describeNestedActivity } from "../ui/tool-renderer.ts";
 import { makeExecutionGuestTools } from "./catalog.ts";
 import {
   callEntryDetails,
+  describeNestedActivity,
   formatCodeModeFailure,
   formatCodeModeSuccess,
   progressResult,
@@ -100,8 +100,10 @@ export const makeCodeModeToolExecute =
     const aborted = () => signal?.aborted === true;
     if (aborted()) return cancelledResult(calls, config.maxOutputBytes);
 
-    const source = checkSourceSize(params.code, config.maxSourceBytes);
-    if (!source.ok) throw new Error(clampModelVisibleText(source.message, config.maxOutputBytes));
+    const sourceRefusal = checkSourceSize(params.code, config.maxSourceBytes);
+    if (sourceRefusal !== undefined) {
+      throw new Error(clampModelVisibleText(sourceRefusal, config.maxOutputBytes));
+    }
 
     const publisher = makeGuardedToolUpdatePublisher(onUpdate, environment.isCurrent);
     const budget = makeCumulativeOutputBudget(config.maxCumulativeChildOutputBytes);
