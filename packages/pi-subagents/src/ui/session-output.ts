@@ -136,8 +136,8 @@ function addToolGroup(
     first.state === "running"
       ? animatedRunStateGlyph("running", frame)
       : first.state === "failed"
-        ? "×"
-        : "✓";
+        ? runStateGlyph("failed")
+        : runStateGlyph("completed");
   const color =
     first.state === "running" ? "accent" : first.state === "failed" ? "error" : "success";
   const count = events.length > 1 ? ` ×${events.length}` : "";

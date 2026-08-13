@@ -969,7 +969,7 @@ describe("profile settings workspace", () => {
     await vi.waitFor(() => expect(component.render(130).join("\n")).toContain("write conflict"));
     expect(component.render(130).join("\n")).toContain("Reopen /subagents profiles");
     expect(component.render(52).join("\n")).toContain("editing again");
-    expect(component.render(52).join("\n")).toContain("× write conflict");
+    expect(component.render(52).join("\n")).toContain("✗ write conflict");
     expect(component.render(130).join("\n")).not.toContain("saved changes pending reload");
     component.handleInput(input.enter);
     component.handleInput(input.down);
@@ -1076,7 +1076,7 @@ describe("profile settings workspace", () => {
     const invalid = makeComponent(inspection({ version: 4, profiles: { generalist: null } }))
       .component.render(120)
       .join("\n");
-    expect(invalid).toContain("× fails closed");
+    expect(invalid).toContain("✗ fails closed");
   });
 
   it("offers exact choices for every editable non-model field", () => {

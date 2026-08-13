@@ -6,7 +6,7 @@ export const runStateGlyph = (state: SubagentRunState): string => {
     case "starting":
       return "◌";
     case "running":
-      return "●";
+      return brailleSpinnerFrame(0);
     case "waiting_for_parent":
       return "?";
     case "paused":

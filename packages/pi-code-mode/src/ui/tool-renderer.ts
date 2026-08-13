@@ -15,6 +15,7 @@ import type {
 import { Container, getKeybindings, Text, type Component } from "@earendil-works/pi-tui";
 import * as codePreviews from "pi-code-previews";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
+import { brailleSpinnerFrame, managerStateGlyph, startingSpinnerFrame } from "pi-cosmic-ui/manager";
 import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import {
   describeNestedActivity,
@@ -221,11 +222,10 @@ export const renderCodeModeToolCall = (
 };
 
 const ACTIVITY_SYMBOLS = {
-  queued: { symbol: "◌", color: "dim" },
-  running: { symbol: "…", color: "warning" },
-  completed: { symbol: "✓", color: "success" },
-  error: { symbol: "✗", color: "error" },
-  cancelled: { symbol: "⊘", color: "muted" },
+  queued: { symbol: startingSpinnerFrame(0), color: "dim" },
+  completed: { symbol: managerStateGlyph("done"), color: "success" },
+  error: { symbol: managerStateGlyph("failed"), color: "error" },
+  cancelled: { symbol: managerStateGlyph("stopped"), color: "muted" },
 } as const;
 
 export const formatCallDuration = (durationMs: number): string =>
@@ -253,8 +253,11 @@ export const nestedToolIcon = (
   }
 };
 
-const activityRow = (entry: CodeModeCallEntry, theme: Theme): string => {
-  const { symbol, color } = ACTIVITY_SYMBOLS[entry.status];
+const activityRow = (entry: CodeModeCallEntry, theme: Theme, animationFrame: number): string => {
+  const { symbol, color } =
+    entry.status === "running"
+      ? { symbol: brailleSpinnerFrame(animationFrame), color: "warning" as const }
+      : ACTIVITY_SYMBOLS[entry.status];
   const icon = nestedToolIcon(entry.tool);
   const toolPrefix = icon === undefined ? "" : `${theme.fg("toolTitle", icon)} `;
   const label = entry.activity ?? describeNestedActivity(entry.tool, undefined);
@@ -354,7 +357,7 @@ const expandHintLine = (isError: boolean, theme: Theme): string => {
 
 /**
  * Result projection: activity rows with the standalone built-in tool emoji plus queued `◌`,
- * running `…`, success `✓`, error `✗`, or cancelled `⊘` status, a bounded hidden-row marker,
+ * animated Braille running status, success `✓`, error `✗`, or cancelled `⊘`, a bounded hidden-row marker,
  * and an accurate status footer. Raw output stays hidden
  * while collapsed and appears complete (sanitized) under an `Output`/`Error` label when
  * expanded; partial snapshots never surface their placeholder progress text.
@@ -364,6 +367,7 @@ const renderCodeModeToolResultUnsafe = (
   options: Pick<ToolRenderResultOptions, "isPartial">,
   theme: Theme,
   context: CodeModeRenderContext | undefined,
+  animationFrame: number,
 ): Component => {
   const details = decodeCodeModeRenderDetails(result.details);
   const isError = context?.isError === true;
@@ -374,7 +378,7 @@ const renderCodeModeToolResultUnsafe = (
     container.addChild(new Text(theme.fg("dim", `+${hidden} earlier`), 0, 0));
   }
   for (const entry of details.toolCalls) {
-    container.addChild(new Text(activityRow(entry, theme), 0, 0));
+    container.addChild(new Text(activityRow(entry, theme, animationFrame), 0, 0));
   }
   if (hidden > 0 && !details.hasExactCounts) {
     container.addChild(new Text(theme.fg("dim", `+${hidden} more`), 0, 0));
@@ -410,9 +414,10 @@ export const renderCodeModeToolResult = (
   options: Pick<ToolRenderResultOptions, "isPartial">,
   theme: Theme,
   context: CodeModeRenderContext | undefined,
+  animationFrame = 0,
 ): Component => {
   try {
-    return renderCodeModeToolResultUnsafe(result, options, theme, context);
+    return renderCodeModeToolResultUnsafe(result, options, theme, context, animationFrame);
   } catch {
     const isError = context?.isError === true;
     const expanded = context?.expanded === true;

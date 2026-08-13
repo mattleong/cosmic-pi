@@ -172,7 +172,7 @@ export const progressResult = (
         call.status === "queued"
           ? " ◌"
           : call.status === "running"
-            ? "…"
+            ? " ⠋"
             : call.status === "error"
               ? " ✗"
               : call.status === "cancelled"

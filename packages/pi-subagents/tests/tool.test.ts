@@ -739,8 +739,8 @@ describe("subagent tool", () => {
       expect(rendered).toContain(
         "<toolOutput>local/pi · openai-codex/gpt-5.6-sol:high</toolOutput>",
       );
-      expect(rendered).toContain("<error>× failed-agent · agent-3</error>");
-      expect(rendered).toContain("<muted>■ stopped-agent · agent-4</muted>");
+      expect(rendered).toContain("<error>✗ failed-agent · agent-3</error>");
+      expect(rendered).toContain("<muted>⊘ stopped-agent · agent-4</muted>");
       expect(progress([view({ state: "running" })], "any_finished")).toContain(
         "Waiting for first subagent · 0 of 1 subagents finished · 1 running",
       );
@@ -1172,8 +1172,8 @@ describe("subagent tool", () => {
     )
       .render(120)
       .join("\n");
-    expect(compact).toContain("<success>● good-agent · agent-1</success>");
-    expect(compact).toContain("<error>× broken-agent</error> · <error>failed to start</error>");
+    expect(compact).toContain("<success>⠋ good-agent · agent-1</success>");
+    expect(compact).toContain("<error>✗ broken-agent</error> · <error>failed to start</error>");
     expect(compact).toContain("<dim>spawn failed</dim>");
     expect(compact).toContain("▸ failure details · expand to view");
 
@@ -2460,7 +2460,7 @@ describe("subagent tool", () => {
       context,
     );
     expect(updates).toEqual([
-      "Waiting for all subagents · 0 of 2 subagents finished · 2 running\n● auth-review (agent-1) · running\n● test-review (agent-2) · running",
+      "Waiting for all subagents · 0 of 2 subagents finished · 2 running\n⠋ auth-review (agent-1) · running\n⠋ test-review (agent-2) · running",
     ]);
     expect(awaited?.content[0]?.text).toContain("First report.");
     expect(awaited?.content[0]?.text).toContain("Second report.");

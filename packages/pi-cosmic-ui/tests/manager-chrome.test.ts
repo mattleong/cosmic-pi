@@ -4,6 +4,7 @@ import {
   brailleSpinnerFrame,
   managerLayoutTier,
   managerNoticeGlyph,
+  managerStateGlyph,
   renderResponsiveManagerFooter,
   startingSpinnerFrame,
 } from "../src/manager/chrome.ts";
@@ -38,6 +39,10 @@ describe("shared manager chrome", () => {
     expect(managerNoticeGlyph("info")).toBe("ℹ");
     expect(managerNoticeGlyph("success")).toBe("✓");
     expect(managerNoticeGlyph("warning")).toBe("⚠");
-    expect(managerNoticeGlyph("error")).toBe("×");
+    expect(managerNoticeGlyph("error")).toBe("✗");
+    expect(managerStateGlyph("done")).toBe("✓");
+    expect(managerStateGlyph("failed")).toBe("✗");
+    expect(managerStateGlyph("stopped")).toBe("⊘");
+    expect(managerStateGlyph("stopping")).toBe("◒");
   });
 });

@@ -7,8 +7,14 @@ import {
   type ExtensionAPI,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { Type } from "typebox";
 import { renderCodeModeToolCall, renderCodeModeToolResult } from "../ui/tool-renderer.ts";
+import {
+  codeModeAnimationFrame,
+  shouldAnimateCodeModeResult,
+  syncCodeModeProgressTicker,
+} from "./animation.ts";
 import { describeCodeModeCatalog } from "./catalog.ts";
 import type { CodeModeToolExecute } from "./execution.ts";
 import { MAX_INTENT_LENGTH } from "./format.ts";
@@ -53,6 +59,8 @@ export interface CodeModeToolDefinitionInput {
   /** Discovery catalog budget (estimated tokens) captured at registration time. */
   readonly catalogBudget: number;
   readonly execute: CodeModeToolExecute;
+  /** Test seam for the host-render ticker; production uses the shared Cosmic UI boundary. */
+  readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
 }
 
 /** Builds the one extension-owned `code_mode` tool definition (unwrapped). */
@@ -77,8 +85,14 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
     parameters,
     execute: input.execute,
     renderCall: (args, theme, context) => renderCodeModeToolCall(args, theme, context),
-    renderResult: (result, options, theme, context) =>
-      renderCodeModeToolResult(result, options, theme, context),
+    renderResult: (result, options, theme, context) => {
+      syncCodeModeProgressTicker(
+        shouldAnimateCodeModeResult(options.isPartial, result),
+        context,
+        input.startUiTicker ?? startHostUiTicker,
+      );
+      return renderCodeModeToolResult(result, options, theme, context, codeModeAnimationFrame());
+    },
   });
 }
 

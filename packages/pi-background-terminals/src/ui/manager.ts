@@ -76,7 +76,11 @@ const statePresentation = (job: BackgroundJobView, frame: number) => {
     case "stopped":
       return { glyph: managerStateGlyph("stopped"), color: "muted", label: "stopped" } as const;
     case "timed_out":
-      return { glyph: "⧖", color: "error", label: "timed out" } as const;
+      return {
+        glyph: managerStateGlyph("failed"),
+        color: "error",
+        label: "timed out",
+      } as const;
   }
 };
 

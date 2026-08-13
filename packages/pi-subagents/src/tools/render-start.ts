@@ -1,7 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { managerStateGlyph } from "pi-cosmic-ui/manager";
 import { synchronousNow } from "../boundary/native-clock.ts";
-import { animatedRunStateGlyph } from "../ui/run-state.ts";
+import { animatedRunStateGlyph, runStateGlyph } from "../ui/run-state.ts";
 import { sanitizeTerminalLine } from "../ui/sanitize.ts";
 import { clipWithMarker } from "../run/state.ts";
 import type { SubagentRunCard, SubagentStartEntry } from "./details.ts";
@@ -18,7 +19,7 @@ export const renderStartFailures = (
     .map((failure) => {
       const name = sanitizeTerminalLine(failure.name ?? `start #${failure.index + 1}`);
       const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
-      const summary = `${theme.fg("error", `× ${name}`)} · ${theme.fg("error", `failed to start${code}`)}`;
+      const summary = `${theme.fg("error", `${managerStateGlyph("failed")} ${name}`)} · ${theme.fg("error", `failed to start${code}`)}`;
       const raw = sanitizeTerminalLine(failure.message);
       const detail = clipWithMarker(raw, expanded ? 2_048 : 240, "… [truncated]");
       const recovery = failureRecovery(failure.code, failure.message, "start");
@@ -74,7 +75,7 @@ class StartProgressComponent implements Component {
                   truncateToWidth(
                     this.theme.fg(
                       "warning",
-                      `${animatedRunStateGlyph("starting", frame)} ${sanitizeTerminalLine(entry.name)}${entry.profile ? ` · [${entry.profile}]` : ""} · pending`,
+                      `${runStateGlyph("starting")} ${sanitizeTerminalLine(entry.name)}${entry.profile ? ` · [${entry.profile}]` : ""} · pending`,
                     ),
                     safeWidth,
                   ),
@@ -91,7 +92,12 @@ class StartProgressComponent implements Component {
                     .split("\n")
                     .filter(Boolean)
                     .map((line) => truncateToWidth(line, safeWidth))
-                : [this.theme.fg("error", `× ${sanitizeTerminalLine(entry.name)} · failed`)];
+                : [
+                    this.theme.fg(
+                      "error",
+                      `${managerStateGlyph("failed")} ${sanitizeTerminalLine(entry.name)} · failed`,
+                    ),
+                  ];
             });
     const usage = aggregateRunUsage(this.runs);
     return [

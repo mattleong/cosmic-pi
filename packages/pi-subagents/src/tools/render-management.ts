@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { managerStateGlyph } from "pi-cosmic-ui/manager";
 import { sanitizeTerminalLine } from "../ui/sanitize.ts";
 import { formatToolModel, formatToolRoute } from "./format.ts";
 import type {
@@ -254,7 +255,7 @@ const renderActionFailures = (
       truncateToWidth(
         theme.fg(
           "error",
-          `× ${sanitizeTerminalLine(failure.id)}${code} · ${sanitizeTerminalLine(failure.message)}`,
+          `${managerStateGlyph("failed")} ${sanitizeTerminalLine(failure.id)}${code} · ${sanitizeTerminalLine(failure.message)}`,
         ),
         width,
       ),

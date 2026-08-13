@@ -1,3 +1,4 @@
+import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import type { ProfileSettingsInspection, ProfileSettingsScope } from "../profile-route-editor.ts";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import type {
@@ -98,7 +99,7 @@ export const draftKindLabel = (draft: ProfileRouteDraft, scope: ProfileSettingsS
     case "disabled":
       return "— disabled";
     case "invalid":
-      return "× invalid · fails closed";
+      return `${managerNoticeGlyph("error")} invalid · fails closed`;
     case "inherit":
       return scope === "session" ? "inherits active config" : "inherits global";
     case "reset":
@@ -145,7 +146,7 @@ export const effectiveProfileSummary = (
   const first = route.candidates[0];
   if (!first)
     return inspection.session.effectiveConfig.profileSources[profile].endsWith("-invalid")
-      ? `${source} · × fails closed`
+      ? `${source} · ${managerNoticeGlyph("error")} fails closed`
       : `${source} · — disabled`;
   const count = route.candidates.length;
   const effort = candidateEffortLabel(profile, first, parentEffort);
@@ -159,7 +160,7 @@ export const profileRouteDraftSummary = (
   parentEffort: SubagentEffort,
   parentModel?: string | undefined,
 ): string => {
-  if (draft.kind === "invalid") return "× invalid · fails closed";
+  if (draft.kind === "invalid") return `${managerNoticeGlyph("error")} invalid · fails closed`;
   const first = draft.candidates[0];
   if (!first) return "— disabled";
   const count = draft.candidates.length;

@@ -24,7 +24,7 @@ const MANAGER_NOTICE_GLYPHS: Readonly<Record<ManagerNoticeKind, string>> = {
   info: "ℹ",
   success: "✓",
   warning: "⚠",
-  error: "×",
+  error: "✗",
 };
 
 /** Shared status glyph vocabulary for manager notices and feedback lines. */
@@ -34,9 +34,9 @@ export type ManagerStateGlyphKind = "done" | "failed" | "stopped" | "stopping";
 
 const MANAGER_STATE_GLYPHS: Readonly<Record<ManagerStateGlyphKind, string>> = {
   done: "✓",
-  failed: "×",
-  stopped: "■",
-  stopping: "◐",
+  failed: "✗",
+  stopped: "⊘",
+  stopping: "◒",
 };
 
 /** Shared terminal-state glyph pairs for manager rows (`/subagents`, `/ps`). */

@@ -37,7 +37,8 @@ In the TUI a `code_mode` call renders compactly as `Code Mode · <intent>` — t
 `intent` tool parameter (a short human-readable purpose the model is asked to provide),
 falling back to a neutral phrase. While the program runs, nested calls appear as bounded
 activity rows derived from their inputs, reusing the standalone built-in tool emojis alongside
-status (`◌` queued, `…` running, `✓` succeeded, `✗` failed, `⊘` cancelled), with settled
+status (`◌` queued, an animated Braille spinner while running, `✓` succeeded, `✗` failed,
+`⊘` cancelled), with settled
 durations and an exact lifecycle footer. Beyond 32 rows, active,
 failed, cancelled, and recent calls stay visible under a `+N earlier` marker. Expanding the call
 shows the full program source; expanding the result shows the complete model-visible output

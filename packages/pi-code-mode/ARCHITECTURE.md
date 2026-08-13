@@ -41,6 +41,8 @@ external dependencies.
 - `src/tools/format.ts` — pure model-visible formatting: success output with logs, normalized
   diagnostics (kind/location/suggestions), accurate lifecycle counters, and bounded progress
   selection that retains active/problem/recent rows without ever storing nested output.
+- `src/tools/animation.ts` — per-tool weak host ticker ownership and shared-cadence frame
+  projection for visible running nested calls.
 - `src/tools/retention.ts` — bounded one-shot in-memory handoff that reattaches structured
   Code Mode details in `tool_result` after Pi converts a thrown execution error to its generic
   error result; it does not modify error text or `isError` semantics.
@@ -71,6 +73,7 @@ external dependencies.
   overrides, or session-specific operations (ADR 0004).
 - `src/boundary/host-tool-update.ts` — guarded `onUpdate` publisher (undefined hosts, sync
   throws, rejecting thenables; no updates after settle or replacement).
+- `src/boundary/native-clock.ts` — synchronous host clock door for TUI animation frames.
 - `src/config/schema.ts` — configuration shape, locked defaults, documented bounds, field codecs.
 - `src/config/options.ts` — field-wise project/global/default resolution with provenance, and
   the setting descriptors (labels, descriptions, bounded integer parsing).
@@ -159,8 +162,9 @@ the next successful operation re-derives from the committed document.
   `Code Mode · <intent>` (the optional
   bounded `intent` parameter, neutral fallback otherwise) and the result shows sanitized
   activity rows that reuse `pi-code-previews`' standalone built-in tool emojis alongside status
-  (`◌` queued, `…` running, `✓` success, `✗` failure, `⊘` cancelled), optional duration
-  suffixes, an exact lifecycle footer, and `+N earlier` while prioritizing active,
+  (`◌` queued, a shared animated Braille running spinner, `✓` success, `✗` failure, `⊘`
+  cancelled), optional duration suffixes, an exact lifecycle footer, and `+N earlier` while
+  prioritizing active,
   failed, cancelled, and recent rows beyond the bound, plus a dim hint naming the configured
   `app.tools.expand` key when
   bound (`▸ output · ctrl+o expand`, keyless otherwise); expanded, the full sanitized

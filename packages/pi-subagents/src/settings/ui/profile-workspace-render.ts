@@ -1,6 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { managerNoticeGlyph, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import {
+  managerNoticeGlyph,
+  renderResponsiveManagerFooter,
+  startingSpinnerFrame,
+} from "pi-cosmic-ui/manager";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
 
@@ -350,7 +354,7 @@ const routePage = (
     visible.length === 0
       ? [
           state.draft.kind === "invalid"
-            ? "  × Invalid declaration · route fails closed"
+            ? `  ${managerNoticeGlyph("error")} Invalid declaration · route fails closed`
             : "  — No candidates · route is disabled",
         ]
       : visible.map((candidate, offset) => {
@@ -568,7 +572,7 @@ const compactWorkspacePage = (
               state.parentModel,
             )
           : state.draft.kind === "invalid"
-            ? "× Invalid declaration · route fails closed"
+            ? `${managerNoticeGlyph("error")} Invalid declaration · route fails closed`
             : "— No candidates · route disabled"
         : field
           ? `${field.label}: ${boundedMiddle(field.value, Math.max(1, width - field.label.length - 12))} · ${field.fixed ? "fixed" : "edit"}`
@@ -647,10 +651,14 @@ export const renderProfileWorkspace = (
   const theme = options.theme;
   const inner = width - 2;
   const sessionOverrides = Object.keys(state.inspection.session.overrides).length;
+  const pending = startingSpinnerFrame(0);
   const status = state.busy
-    ? theme.fg("warning", state.cancellableBusy ? "◌ loading catalog" : "◌ saving/reloading")
+    ? theme.fg(
+        "warning",
+        state.cancellableBusy ? `${pending} loading catalog` : `${pending} saving/reloading`,
+      )
     : state.reloadRequired
-      ? theme.fg("warning", "● saved changes pending reload · r Reload")
+      ? theme.fg("warning", `${pending} saved changes pending reload · r Reload`)
       : sessionOverrides > 0
         ? theme.fg(
             "accent",

@@ -217,7 +217,7 @@ describe("renderCodeModeToolResult", () => {
       }),
     );
     expect(text).toContain("✓ 📖 Read src/app.ts");
-    expect(text).toContain("… 🔎 Search TODO in src");
+    expect(text).toContain("⠋ 🔎 Search TODO in src");
     expect(text).toContain("1 of 2 settled · 1 succeeded · 1 running");
     expect(text).not.toContain("code_mode: 2 nested tool calls");
   });
@@ -297,8 +297,22 @@ describe("renderCodeModeToolResult", () => {
     );
     expect(text).toContain("<success>✓</success>");
     expect(text).toContain("<error>✗</error>");
-    expect(text).toContain("<warning>…</warning>");
+    expect(text).toContain("<warning>⠋</warning>");
     expect(text).toContain("<muted>2 of 3 settled · 1 succeeded · 1 failed · 1 running</muted>");
+  });
+
+  it("selects the running Braille glyph from the supplied animation frame", () => {
+    const text = rendered(
+      renderCodeModeToolResult(
+        resultOf("", runningDetails),
+        { isPartial: true },
+        theme,
+        { expanded: false, isError: false },
+        1,
+      ),
+    );
+    expect(text).toContain("⠙ 🔎 Search TODO in src");
+    expect(text).not.toContain("⠋ 🔎 Search TODO in src");
   });
 
   it("final success shows completed rows and an operations footer, hiding raw output", () => {
