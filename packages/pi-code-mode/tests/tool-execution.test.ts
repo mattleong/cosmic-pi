@@ -375,6 +375,29 @@ describe("host limits", () => {
     ).rejects.toThrow(/257 UTF-8 bytes.*maxSourceBytes limit of 256/s);
   });
 
+  it("records exact extension-only output kind without changing model-visible text", async () => {
+    const execute = makeHarness(newCwd());
+    const textResult = await execute(
+      "call-text-kind",
+      { code: String.raw`return '{"status":"one\\ntwo"}';` },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(textOf(textResult)).toBe('{"status":"one\\ntwo"}');
+    expect((textResult.details as CodeModeToolDetails).outputKind).toBe("text");
+
+    const structuredResult = await execute(
+      "call-structured-kind",
+      { code: `return { status: "one\\ntwo" };` },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(textOf(structuredResult)).toBe(JSON.stringify({ status: "one\ntwo" }, null, 2));
+    expect((structuredResult.details as CodeModeToolDetails).outputKind).toBe("structured");
+  });
+
   it("applies maxToolCalls exactly", async () => {
     const cwd = newCwd();
     const definitions = fakeDefinitions({ read: async () => "data" });

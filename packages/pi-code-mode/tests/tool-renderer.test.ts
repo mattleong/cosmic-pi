@@ -12,6 +12,7 @@ import {
   CODE_MODE_FALLBACK_INTENT,
   decodeCodeModeRenderDetails,
   describeCodeModeIntent,
+  nestedToolIcon,
   renderCodeModeToolCall,
   renderCodeModeToolResult,
 } from "../src/ui/tool-renderer.ts";
@@ -119,6 +120,21 @@ describe("describeNestedActivity", () => {
     expect(describeNestedActivity("pi.grep", { pattern: { toString: () => "x" } })).toBe(
       "Search pattern in cwd",
     );
+  });
+});
+
+describe("nestedToolIcon", () => {
+  it("degrades when a stale or hostile optional icon API is missing", () => {
+    expect(nestedToolIcon("pi.read", null)).toBeUndefined();
+    expect(
+      nestedToolIcon("pi.read", () => {
+        throw new Error("stale preview helper");
+      }),
+    ).toBeUndefined();
+    expect(nestedToolIcon("read", () => "📖")).toBeUndefined();
+    expect(nestedToolIcon("pi.read", () => 42 as never)).toBeUndefined();
+    expect(nestedToolIcon("pi.read", () => "📖\u001b]0;title\u0007")).toBe("📖");
+    expect(nestedToolIcon("pi.read", () => "📖")).toBe("📖");
   });
 });
 
@@ -326,6 +342,58 @@ describe("renderCodeModeToolResult", () => {
     expect(text).not.toContain("");
   });
 
+  it("projects multiline structured results as labeled sections without changing content", () => {
+    const output = `${JSON.stringify(
+      {
+        status: " M src/a.ts\n M src/b.ts\n",
+        protectedQueryFiles: "src/protected/a.ts\nsrc/protected/b.ts",
+        nestedIndexes: "No files found matching pattern",
+        diffCheck: "(no output)",
+      },
+      null,
+      2,
+    )}\n\nLogs:\ninspection complete`;
+    const result = resultOf(output, {
+      toolCalls: [{ tool: "pi.bash", status: "completed", activity: "Run git status --short" }],
+      outputKind: "structured",
+    });
+    const text = rendered(
+      renderCodeModeToolResult(result, { isPartial: false }, theme, {
+        expanded: true,
+        isError: false,
+      }),
+    );
+    for (const expected of [
+      "Output",
+      "status",
+      " M src/a.ts",
+      " M src/b.ts",
+      "protectedQueryFiles",
+      "src/protected/a.ts",
+      "src/protected/b.ts",
+      "nestedIndexes",
+      "No files found matching pattern",
+      "Logs",
+      "inspection complete",
+    ])
+      expect(text).toContain(expected);
+    expect(text).not.toContain("\\n M src/b.ts");
+  });
+
+  it("does not reinterpret a text result merely because the string contains valid JSON", () => {
+    const jsonText = JSON.stringify({ status: "one\ntwo" }, null, 2);
+    const text = rendered(
+      renderCodeModeToolResult(
+        resultOf(jsonText, { toolCalls: [], outputKind: "text" }),
+        { isPartial: false },
+        theme,
+        { expanded: true, isError: false },
+      ),
+    );
+    expect(text).toContain('"status": "one\\ntwo"');
+    expect(text).not.toContain("status\none\ntwo");
+  });
+
   it("errors show a Failed footer and the sanitized error text when expanded", () => {
     const result = resultOf("[ToolFailure] nested read refused", undefined);
     const collapsed = rendered(
@@ -346,6 +414,39 @@ describe("renderCodeModeToolResult", () => {
     expect(expanded).toContain("Failed");
     expect(expanded).toContain("Error");
     expect(expanded).toContain("[ToolFailure] nested read refused");
+  });
+
+  it("degrades to a bounded custom result instead of throwing into Pi's generic fallback", () => {
+    const throwingTheme = {
+      bold: () => {
+        throw new Error("theme unavailable");
+      },
+      fg: () => {
+        throw new Error("theme unavailable");
+      },
+    } as unknown as Theme;
+    const result = resultOf("SECRET-MODEL-OUTPUT", {
+      toolCalls: [{ tool: "pi.read", status: "completed", activity: "Read a" }],
+    });
+    const collapsed = rendered(
+      renderCodeModeToolResult(result, { isPartial: false }, throwingTheme, {
+        expanded: false,
+        isError: false,
+      }),
+    );
+    expect(collapsed).toContain("Code Mode completed");
+    expect(collapsed).toContain("▸ output · expand");
+    expect(collapsed).not.toContain("SECRET-MODEL-OUTPUT");
+
+    const expanded = rendered(
+      renderCodeModeToolResult(result, { isPartial: false }, throwingTheme, {
+        expanded: true,
+        isError: false,
+      }),
+    );
+    expect(expanded).toContain("Code Mode completed");
+    expect(expanded).toContain("Output");
+    expect(expanded).toContain("SECRET-MODEL-OUTPUT");
   });
 
   it("cancelled details show a Cancelled footer even with settled rows", () => {

@@ -156,6 +156,15 @@ describe("availability gating", () => {
     expect(description).toContain("default local shell implementation");
   });
 
+  it("guides programs toward distilled strings or small purpose-built objects", async () => {
+    const h = harness();
+    await h.startSession(h.makeContext(newCwd()));
+    const guidelines = h.registered[0]?.promptGuidelines?.join("\n") ?? "";
+    expect(guidelines).toContain("Prefer a concise distilled string");
+    expect(guidelines).toContain("small object containing only the requested fields");
+    expect(guidelines).toContain("never raw nested tool results or whole files");
+  });
+
   it("keeps code required while intent stays an optional bounded parameter", async () => {
     const h = harness();
     await h.startSession(h.makeContext(newCwd()));
@@ -362,6 +371,88 @@ describe("preview shell integration", () => {
     expect(text).toContain("✓ 📖 Read a");
     expect(text).toContain("1 operation completed");
     expect(text).toContain("model output");
+  });
+
+  it("keeps the custom result inside the border shell for realistic multiline JSON", async () => {
+    const { withCodePreviewShell } = await import("pi-code-previews");
+    const h = harness({
+      wrapTool: (tool) => withCodePreviewShell(tool, { mode: "border" }),
+    });
+    await h.startSession(h.makeContext(newCwd()));
+    const wrapped = h.registered[0];
+    const theme = {
+      bold: (text: string) => text,
+      fg: (_key: string, text: string) => text,
+    } as never;
+    const args = { code: "return { status };", intent: "Audit query migration structure" };
+    const state = {};
+    const context = (expanded: boolean, isPartial: boolean, lastComponent: unknown) =>
+      ({
+        args,
+        toolCallId: "call-border-render",
+        invalidate: () => undefined,
+        lastComponent,
+        state,
+        cwd: "/tmp",
+        executionStarted: true,
+        argsComplete: true,
+        isPartial,
+        expanded,
+        showImages: false,
+        isError: false,
+      }) as never;
+
+    let shell = wrapped?.renderCall?.(args, theme, context(false, true, undefined));
+    shell = wrapped?.renderCall?.(args, theme, context(true, false, shell));
+    wrapped?.renderResult?.(
+      {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                status: " M src/a.ts\n M src/b.ts\n",
+                protectedQueryFiles: "src/protected/a.ts\nsrc/protected/b.ts",
+                nestedIndexes: "No files found matching pattern",
+                diffCheck: "(no output)",
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+        details: {
+          toolCalls: [
+            {
+              tool: "pi.bash",
+              status: "completed",
+              activity: "Run git status --short",
+              durationMs: 141,
+            },
+          ],
+          counts: {
+            total: 1,
+            queued: 0,
+            running: 0,
+            succeeded: 1,
+            failed: 0,
+            cancelled: 0,
+          },
+          outputKind: "structured",
+        },
+      },
+      { expanded: true, isPartial: false },
+      theme,
+      context(true, false, undefined),
+    );
+    const text = shell?.render(200).join("\n") ?? "";
+    expect(text).toContain("Code Mode · Audit query migration structure");
+    expect(text).toContain("✓ 🔧 Run git status --short · 141ms");
+    expect(text).toContain("1 operation completed");
+    expect(text).toContain("status");
+    expect(text).toContain(" M src/a.ts");
+    expect(text).toContain(" M src/b.ts");
+    expect(text).not.toContain('"status": " M src/a.ts\\n');
   });
 
   it("still registers the tool when preview settings loading fails", async () => {

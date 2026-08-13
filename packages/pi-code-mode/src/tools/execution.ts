@@ -307,14 +307,18 @@ export const makeCodeModeToolExecute =
       };
     }
 
-    const details: CodeModeToolDetails = {
+    const baseDetails: CodeModeToolDetails = {
       ...callEntryDetails(snapshotCalls(calls), counts),
       ...(result.truncated === true ? { truncated: true } : {}),
     };
     if (!result.ok) {
-      environment.retainFailureDetails?.(toolCallId, details);
+      environment.retainFailureDetails?.(toolCallId, baseDetails);
       throw new Error(clampModelVisibleText(formatCodeModeFailure(result), config.maxOutputBytes));
     }
+    const details: CodeModeToolDetails = {
+      ...baseDetails,
+      outputKind: typeof result.value === "string" ? "text" : "structured",
+    };
     return {
       content: [
         {

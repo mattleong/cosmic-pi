@@ -93,6 +93,8 @@ export interface CodeModeToolDetails {
   readonly counts?: CodeModeCallCounts;
   /** Legacy total retained for tolerant older renderers. */
   readonly totalToolCalls?: number;
+  /** Extension-only presentation hint; model-visible content remains the authoritative result. */
+  readonly outputKind?: "text" | "structured";
   readonly truncated?: boolean;
   readonly cancelled?: boolean;
 }

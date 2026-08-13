@@ -48,9 +48,15 @@ package's `type: module` and dependency declarations.
 - `src/ui/tool-renderer.ts` — pure humanized TUI presentation for the `code_mode` tool: the
   sanitized intent headline (`Code Mode · <intent>` with a neutral fallback), the bounded
   nested-call activity summaries (`Read <path>`, `Search <pattern> in <path>`, …), and the
-  collapsed/expanded call/result projections with a defensive details decode. Presentation
-  only: no Effect services, no host registration, and no influence on model-visible text,
-  result details, or any security budget.
+  collapsed/expanded call/result projections with a defensive details decode and a plain
+  fail-soft result when custom result projection fails, before Pi can select its raw generic
+  fallback.
+- `src/ui/result-output.ts` — pure presentation-only projection of extension-identified
+  structured results: small top-level objects containing only string fields and at least one
+  multiline value become labeled sections; malformed, mixed, noncanonical, ambiguous,
+  oversized, or field-heavy values stay on the complete plain
+  output path. Presentation only: neither UI module has Effect services, host registration, or
+  influence on model-visible text or any execution limit.
 - `src/boundary/codemode-runtime.ts` — the single relative-path import door for the nested
   private runtime (`runtime/dist/`).
 - `src/boundary/host-deactivation-handoff.ts` — process-memory bridge (globalThis symbol slot)
@@ -146,7 +152,10 @@ the next successful operation re-derives from the committed document.
   rendering rule.
 - The unwrapped definition carries its own humanized `renderCall`/`renderResult`
   (`src/ui/tool-renderer.ts`); `withCodePreviewShell` preserves them and its cooperative
-  shell delegates to them. Collapsed, the call shows `Code Mode · <intent>` (the optional
+  shell delegates to them. Successful execution details record only whether the returned value
+  was text or structured data, allowing `src/ui/result-output.ts` to project multiline object
+  fields without guessing from model-visible JSON text. Collapsed, the call shows
+  `Code Mode · <intent>` (the optional
   bounded `intent` parameter, neutral fallback otherwise) and the result shows sanitized
   activity rows that reuse `pi-code-previews`' standalone built-in tool emojis alongside status
   (`◌` queued, `…` running, `✓` success, `✗` failure, `⊘` cancelled), optional duration

@@ -13,7 +13,7 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Container, getKeybindings, Text, type Component } from "@earendil-works/pi-tui";
-import { getCodePreviewToolIcon } from "pi-code-previews";
+import * as codePreviews from "pi-code-previews";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
 import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import {
@@ -24,6 +24,7 @@ import {
   type CodeModeCallCounts,
   type CodeModeCallEntry,
 } from "../tools/format.ts";
+import { codeModeOutputText, projectStructuredCodeModeOutput } from "./result-output.ts";
 
 /** Neutral headline when the model provided no usable intent. */
 export const CODE_MODE_FALLBACK_INTENT = "Tool orchestration";
@@ -53,6 +54,7 @@ export interface CodeModeRenderDetails {
   readonly totalToolCalls: number;
   readonly counts: CodeModeCallCounts;
   readonly hasExactCounts: boolean;
+  readonly outputKind?: "text" | "structured";
   readonly cancelled: boolean;
   readonly truncated: boolean;
 }
@@ -145,6 +147,9 @@ export const decodeCodeModeRenderDetails = (details: unknown): CodeModeRenderDet
       ? { total, ...(suppliedCounts ?? visible) }
       : { total, ...visible, succeeded: visible.succeeded + hiddenLegacySucceeded },
     hasExactCounts,
+    ...(record.outputKind === "text" || record.outputKind === "structured"
+      ? { outputKind: record.outputKind }
+      : {}),
     cancelled: record.cancelled === true,
     truncated: record.truncated === true,
   };
@@ -230,8 +235,23 @@ export const formatCallDuration = (durationMs: number): string =>
       ? `${(durationMs / 1_000).toFixed(1)}s`
       : `${Math.round(durationMs / 1_000)}s`;
 
-const nestedToolIcon = (tool: string): string | undefined =>
-  tool.startsWith("pi.") ? getCodePreviewToolIcon(tool.slice("pi.".length)) : undefined;
+type ToolIconLookup = (tool: string) => string | undefined;
+
+/** Optional cross-package presentation must never take down the complete result renderer. */
+export const nestedToolIcon = (
+  tool: string,
+  lookup: unknown = codePreviews.getCodePreviewToolIcon,
+): string | undefined => {
+  if (!tool.startsWith("pi.") || typeof lookup !== "function") return undefined;
+  try {
+    const icon = (lookup as ToolIconLookup)(tool.slice("pi.".length));
+    if (typeof icon !== "string") return undefined;
+    const sanitized = truncateDisplay(sanitizeTerminalLine(icon), 8);
+    return sanitized.length === 0 ? undefined : sanitized;
+  } catch {
+    return undefined;
+  }
+};
 
 const activityRow = (entry: CodeModeCallEntry, theme: Theme): string => {
   const { symbol, color } = ACTIVITY_SYMBOLS[entry.status];
@@ -278,19 +298,35 @@ const footerLine = (
   return theme.fg("muted", `${status}${truncatedNote}`);
 };
 
-const outputSection = (
-  result: AgentToolResult<unknown>,
-  isError: boolean,
-  theme: Theme,
-): ReadonlyArray<Component> => {
-  const text = stripTerminalControls(textContentOf(result));
-  if (text.length === 0) return [];
-  const color = isError ? "error" : "toolOutput";
-  const body = text
+const coloredLines = (text: string, color: "error" | "toolOutput", theme: Theme): string =>
+  text
     .split("\n")
     .map((line) => theme.fg(color, line))
     .join("\n");
-  return [new Text(theme.fg("muted", isError ? "Error" : "Output"), 0, 0), new Text(body, 0, 0)];
+
+const outputSection = (
+  result: AgentToolResult<unknown>,
+  details: CodeModeRenderDetails,
+  isError: boolean,
+  theme: Theme,
+): ReadonlyArray<Component> => {
+  const raw = textContentOf(result);
+  if (raw.length === 0) return [];
+  const color = isError ? "error" : "toolOutput";
+  const components: Component[] = [new Text(theme.fg("muted", isError ? "Error" : "Output"), 0, 0)];
+  const fields =
+    !isError && details.outputKind === "structured"
+      ? projectStructuredCodeModeOutput(raw)
+      : undefined;
+  if (fields === undefined) {
+    components.push(new Text(coloredLines(codeModeOutputText(raw), color, theme), 0, 0));
+    return components;
+  }
+  for (const field of fields) {
+    components.push(new Text(theme.fg("muted", field.label), 0, 0));
+    components.push(new Text(coloredLines(field.body, color, theme), 0, 0));
+  }
+  return components;
 };
 
 /**
@@ -301,7 +337,17 @@ const outputSection = (
  * `pi-code-previews` and `pi-background-terminals` hints.
  */
 const expandHintLine = (isError: boolean, theme: Theme): string => {
-  const keys = getKeybindings().getKeys("app.tools.expand").join("/");
+  let keys = "";
+  try {
+    keys = getKeybindings()
+      .getKeys("app.tools.expand")
+      .slice(0, 4)
+      .map((key) => truncateDisplay(sanitizeTerminalLine(key), 32))
+      .filter((key) => key.length > 0)
+      .join("/");
+  } catch {
+    // Renderer-only host metadata is optional; never surrender the whole custom result renderer.
+  }
   const label = keys.length === 0 ? "expand" : `${keys} expand`;
   return theme.fg("dim", `▸ ${isError ? "error" : "output"} · ${label}`);
 };
@@ -313,7 +359,7 @@ const expandHintLine = (isError: boolean, theme: Theme): string => {
  * while collapsed and appears complete (sanitized) under an `Output`/`Error` label when
  * expanded; partial snapshots never surface their placeholder progress text.
  */
-export const renderCodeModeToolResult = (
+const renderCodeModeToolResultUnsafe = (
   result: AgentToolResult<unknown>,
   options: Pick<ToolRenderResultOptions, "isPartial">,
   theme: Theme,
@@ -336,11 +382,60 @@ export const renderCodeModeToolResult = (
   container.addChild(new Text(footerLine(details, options.isPartial, isError, theme), 0, 0));
   if (options.isPartial) return container;
   if (expanded) {
-    for (const component of outputSection(result, isError, theme)) container.addChild(component);
+    for (const component of outputSection(result, details, isError, theme))
+      container.addChild(component);
     return container;
   }
   if (stripTerminalControls(textContentOf(result)).length > 0) {
     container.addChild(new Text(expandHintLine(isError, theme), 0, 0));
   }
   return container;
+};
+
+const emergencyResultText = (result: AgentToolResult<unknown>): string => {
+  try {
+    return codeModeOutputText(textContentOf(result));
+  } catch {
+    return "";
+  }
+};
+
+/**
+ * A custom renderer must not throw into Pi: Pi silently replaces it with an unframed generic
+ * text fallback, which can expose enormous escaped JSON. Keep a plain, dependency-light last
+ * resort so optional theme/keybinding/persisted-detail failures retain Code Mode semantics.
+ */
+export const renderCodeModeToolResult = (
+  result: AgentToolResult<unknown>,
+  options: Pick<ToolRenderResultOptions, "isPartial">,
+  theme: Theme,
+  context: CodeModeRenderContext | undefined,
+): Component => {
+  try {
+    return renderCodeModeToolResultUnsafe(result, options, theme, context);
+  } catch {
+    const isError = context?.isError === true;
+    const expanded = context?.expanded === true;
+    const output = emergencyResultText(result);
+    const container = new Container();
+    container.addChild(
+      new Text(
+        options.isPartial
+          ? "Code Mode running"
+          : isError
+            ? "Code Mode failed"
+            : "Code Mode completed",
+        0,
+        0,
+      ),
+    );
+    if (options.isPartial || output.length === 0) return container;
+    if (!expanded) {
+      container.addChild(new Text(`▸ ${isError ? "error" : "output"} · expand`, 0, 0));
+      return container;
+    }
+    container.addChild(new Text(isError ? "Error" : "Output", 0, 0));
+    container.addChild(new Text(output, 0, 0));
+    return container;
+  }
 };

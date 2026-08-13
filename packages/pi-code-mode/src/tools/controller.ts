@@ -70,6 +70,9 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
       "Always pass the optional code_mode intent parameter: a short human-readable phrase " +
         'describing what the program is for (e.g. "Inspect the extension"); the UI shows it ' +
         "in place of the raw program source.",
+      "Prefer a concise distilled string when structure is unnecessary; otherwise return a " +
+        "small object containing only the requested fields, never raw nested tool results or " +
+        "whole files.",
     ],
     parameters,
     execute: input.execute,

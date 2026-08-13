@@ -41,10 +41,14 @@ status (`◌` queued, `…` running, `✓` succeeded, `✗` failed, `⊘` cancel
 durations and an exact lifecycle footer. Beyond 32 rows, active,
 failed, cancelled, and recent calls stay visible under a `+N earlier` marker. Expanding the call
 shows the full program source; expanding the result shows the complete model-visible output
-or error, and the collapsed hint names the configured `app.tools.expand` key when one is
-bound (`▸ output · ctrl+o expand`). All displayed text is sanitized against terminal
-control injection, and
-presentation never changes the model-visible result, details, or any execution limit.
+or error. Successful object results containing only top-level string fields, including at least
+one multiline value, are projected as labeled sections instead of escaped JSON, using
+extension-only result metadata so a string that merely
+contains JSON is never reinterpreted. The collapsed hint names the configured
+`app.tools.expand` key when one is bound (`▸ output · ctrl+o expand`). All displayed text is
+sanitized against terminal control injection, and result-projection failures retain a fail-soft
+custom result instead of surrendering to Pi's raw generic fallback.
+Presentation never changes the model-visible result, details, or any execution limit.
 
 ## Full built-in authority and direct nested dispatch
 
