@@ -12,7 +12,11 @@ import { join } from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { afterEach, test } from "vitest";
-import codePreviews, { loadCodePreviewSettings, withCodePreviewShell } from "../index";
+import codePreviews, {
+  getCodePreviewToolIcon,
+  loadCodePreviewSettings,
+  withCodePreviewShell,
+} from "../index";
 import type { CodePreviewSettings, ToolCallBackgroundMode } from "../index";
 import { defaultCodePreviewSettings } from "../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
@@ -33,6 +37,7 @@ test("root public API exposes stable package-author helpers", () => {
   assert.equal(typeof codePreviews, "function");
   assert.equal(typeof loadCodePreviewSettings, "function");
   assert.equal(typeof withCodePreviewShell, "function");
+  assert.equal(getCodePreviewToolIcon("read"), "📖");
 });
 
 test("cooperative shell captures mode when the tool is wrapped", () => {

@@ -148,8 +148,9 @@ the next successful operation re-derives from the committed document.
   (`src/ui/tool-renderer.ts`); `withCodePreviewShell` preserves them and its cooperative
   shell delegates to them. Collapsed, the call shows `Code Mode · <intent>` (the optional
   bounded `intent` parameter, neutral fallback otherwise) and the result shows sanitized
-  activity rows (`◌` queued, `…` running, `✓` success, `✗` failure, `⊘` cancelled), optional
-  duration suffixes, an exact lifecycle footer, and `+N earlier` while prioritizing active,
+  activity rows that reuse `pi-code-previews`' standalone built-in tool emojis alongside status
+  (`◌` queued, `…` running, `✓` success, `✗` failure, `⊘` cancelled), optional duration
+  suffixes, an exact lifecycle footer, and `+N earlier` while prioritizing active,
   failed, cancelled, and recent rows beyond the bound, plus a dim hint naming the configured
   `app.tools.expand` key when
   bound (`▸ output · ctrl+o expand`, keyless otherwise); expanded, the full sanitized

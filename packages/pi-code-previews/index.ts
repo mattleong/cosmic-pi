@@ -12,5 +12,8 @@ export { loadCodePreviewSettings } from "./src/settings/bootstrap";
 /** Decorate a package-owned tool, capturing the current visual shell mode at wrapping time. */
 export { withCodePreviewShell, type CodePreviewShellOptions } from "./src/tools/cooperative-tools";
 
+/** Reuse the canonical standalone-call icon in compound or nested tool renderers. */
+export { getCodePreviewToolIcon } from "./src/tools/presentation";
+
 /** Public settings types used by package authors integrating with pi-code-previews. */
 export type { CodePreviewSettings, ToolCallBackgroundMode } from "./src/config/schema";

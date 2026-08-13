@@ -168,6 +168,10 @@ does not change that tool's `renderShell`; wrap/register it only after the desir
 If an extension imports `pi-code-previews`, it should list it in `dependencies` so users do not
 need to install it separately.
 
+Compound renderers can call `getCodePreviewToolIcon(toolName)` to reuse the same emoji as the
+standalone `bash`, `read`, `write`, `edit`, `grep`, `find`, or `ls` call. Unsupported names return
+`undefined`, allowing the caller to keep a neutral fallback.
+
 ### Prompt for extension authors
 
 Give this to an agent working on another pi extension:

@@ -13,6 +13,7 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Container, getKeybindings, Text, type Component } from "@earendil-works/pi-tui";
+import { getCodePreviewToolIcon } from "pi-code-previews";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
 import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import {
@@ -229,15 +230,20 @@ export const formatCallDuration = (durationMs: number): string =>
       ? `${(durationMs / 1_000).toFixed(1)}s`
       : `${Math.round(durationMs / 1_000)}s`;
 
+const nestedToolIcon = (tool: string): string | undefined =>
+  tool.startsWith("pi.") ? getCodePreviewToolIcon(tool.slice("pi.".length)) : undefined;
+
 const activityRow = (entry: CodeModeCallEntry, theme: Theme): string => {
   const { symbol, color } = ACTIVITY_SYMBOLS[entry.status];
+  const icon = nestedToolIcon(entry.tool);
+  const toolPrefix = icon === undefined ? "" : `${theme.fg("toolTitle", icon)} `;
   const label = entry.activity ?? describeNestedActivity(entry.tool, undefined);
   const sanitized = truncateDisplay(sanitizeTerminalLine(label), MAX_INTENT_LENGTH);
   const duration =
     entry.durationMs === undefined
       ? ""
       : theme.fg("muted", ` · ${formatCallDuration(entry.durationMs)}`);
-  return `${theme.fg(color, symbol)} ${theme.fg("toolOutput", sanitized)}${duration}`;
+  return `${theme.fg(color, symbol)} ${toolPrefix}${theme.fg("toolOutput", sanitized)}${duration}`;
 };
 
 const footerLine = (
@@ -301,8 +307,9 @@ const expandHintLine = (isError: boolean, theme: Theme): string => {
 };
 
 /**
- * Result projection: activity rows (queued `◌`, running `…`, success `✓`, error `✗`,
- * cancelled `⊘`), a bounded hidden-row marker, and an accurate status footer. Raw output stays hidden
+ * Result projection: activity rows with the standalone built-in tool emoji plus queued `◌`,
+ * running `…`, success `✓`, error `✗`, or cancelled `⊘` status, a bounded hidden-row marker,
+ * and an accurate status footer. Raw output stays hidden
  * while collapsed and appears complete (sanitized) under an `Output`/`Error` label when
  * expanded; partial snapshots never surface their placeholder progress text.
  */

@@ -22,7 +22,7 @@ Provides syntax-highlighted previews, structured diffs, safer write/edit present
 - `src/settings/` owns host commands (`controller.ts`), pre-session bootstrap (`bootstrap.ts`), and the persistence-aware `/code-preview-settings` controller in `panel.ts`; the host wraps its nested `SettingsList` tree with the pure `pi-cosmic-ui/manager/settings-adapter` Vim adapter. `tsdown.config.ts` explicitly bundles that source-only shared UI subpath so the compiled package never imports TypeScript from installed `node_modules`. Pure menus, submenus, and summaries remain under `settings/ui/`. Settings modules import config directly; there is no settings re-export barrel.
 - `src/syntax/` and `src/write/` are the other primary stateful features; `syntax/service.ts` owns Shiki state/lifecycle while `syntax/ingress.ts` owns the bounded synchronous renderer request bridge.
 - `src/diff/`, `src/paths/`, `src/tools/` (including grep/path-list/shell helpers), and `src/warnings/` contain deterministic preview policy and transformation logic.
-- `src/tools/` owns tool names/policy, cooperative shell API (`cooperative-tools.ts`), tool argument/result helpers (`data/`), and synchronous tool renderers (`renderers/`).
+- `src/tools/` owns tool names/policy, cooperative shell API (`cooperative-tools.ts`), the canonical built-in tool emoji lookup (`presentation.ts`, exported for compound renderers), tool argument/result helpers (`data/`), and synchronous tool renderers (`renderers/`).
 - `src/boundary/` wraps Pi/Node/Shiki/environment/JSON boundaries.
 - `src/preview/` and feature render modules are synchronous UI (no top-level `ui/` folder).
 - Package tests live under `tests/`, mirroring `src/` paths, with `*.test.ts` suffix.

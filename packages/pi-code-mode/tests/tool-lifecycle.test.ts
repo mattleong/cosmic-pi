@@ -359,7 +359,7 @@ describe("preview shell integration", () => {
       context as never,
     );
     const text = result?.render(200).join("\n") ?? "";
-    expect(text).toContain("✓ Read a");
+    expect(text).toContain("✓ 📖 Read a");
     expect(text).toContain("1 operation completed");
     expect(text).toContain("model output");
   });

@@ -200,10 +200,42 @@ describe("renderCodeModeToolResult", () => {
         isError: false,
       }),
     );
-    expect(text).toContain("✓ Read src/app.ts");
-    expect(text).toContain("… Search TODO in src");
+    expect(text).toContain("✓ 📖 Read src/app.ts");
+    expect(text).toContain("… 🔎 Search TODO in src");
     expect(text).toContain("1 of 2 settled · 1 succeeded · 1 running");
     expect(text).not.toContain("code_mode: 2 nested tool calls");
+  });
+
+  it("uses the standalone built-in tool emojis while preserving lifecycle status", () => {
+    const details: CodeModeToolDetails = {
+      toolCalls: [
+        { tool: "pi.bash", status: "completed", activity: "Run command" },
+        { tool: "pi.read", status: "completed", activity: "Read file" },
+        { tool: "pi.write", status: "completed", activity: "Write file" },
+        { tool: "pi.edit", status: "completed", activity: "Edit file" },
+        { tool: "pi.grep", status: "completed", activity: "Search pattern in cwd" },
+        { tool: "pi.find", status: "completed", activity: "Find pattern in cwd" },
+        { tool: "pi.ls", status: "completed", activity: "List cwd" },
+        { tool: "$codemode.search", status: "completed", activity: "Discover tools" },
+        { tool: "read", status: "completed", activity: "Bare read" },
+      ],
+    };
+    const text = rendered(
+      renderCodeModeToolResult(resultOf("", details), { isPartial: false }, theme, {
+        expanded: false,
+        isError: false,
+      }),
+    );
+    expect(text).toContain("✓ 🔧 Run command");
+    expect(text).toContain("✓ 📖 Read file");
+    expect(text).toContain("✓ ✏️ Write file");
+    expect(text).toContain("✓ ✂️ Edit file");
+    expect(text).toContain("✓ 🔎 Search pattern in cwd");
+    expect(text).toContain("✓ 🎯 Find pattern in cwd");
+    expect(text).toContain("✓ 📂 List cwd");
+    expect(text).toContain("✓ Discover tools");
+    expect(text).toContain("✓ Bare read");
+    expect(text).not.toContain("✓ 📖 Bare read");
   });
 
   it("renders queued, cancelled, durations, and accurate lifecycle counts", () => {
@@ -227,8 +259,8 @@ describe("renderCodeModeToolResult", () => {
         isError: false,
       }),
     );
-    expect(text).toContain("<dim>◌</dim>");
-    expect(text).toContain("<muted>⊘</muted>");
+    expect(text).toContain("<dim>◌</dim> <toolTitle>📖</toolTitle>");
+    expect(text).toContain("<muted>⊘</muted> <toolTitle>🔧</toolTitle>");
     expect(text).toContain("<muted> · 1.3s</muted>");
     expect(text).toContain("1 of 2 settled · 1 queued · 1 cancelled");
   });
@@ -267,8 +299,8 @@ describe("renderCodeModeToolResult", () => {
         isError: false,
       }),
     );
-    expect(collapsed).toContain("✓ Read a");
-    expect(collapsed).toContain("✓ Search x in cwd");
+    expect(collapsed).toContain("✓ 📖 Read a");
+    expect(collapsed).toContain("✓ 🔎 Search x in cwd");
     expect(collapsed).toContain("2 operations completed");
     expect(collapsed).not.toContain("SECRET-MODEL-OUTPUT");
     expect(collapsed).toContain("▸ output · expand");
@@ -285,7 +317,7 @@ describe("renderCodeModeToolResult", () => {
         isError: false,
       }),
     );
-    expect(text).toContain("✓ Read a");
+    expect(text).toContain("✓ 📖 Read a");
     expect(text).toContain("1 operation completed");
     expect(text).toContain("Output");
     expect(text).toContain("line one");
@@ -425,7 +457,7 @@ describe("renderCodeModeToolResult", () => {
         isError: false,
       }),
     );
-    expect(text).toContain("✓ Read evil");
+    expect(text).toContain("✓ 📖 Read evil");
     expect(text).not.toContain("");
   });
 
@@ -449,7 +481,7 @@ describe("renderCodeModeToolResult", () => {
         isError: false,
       }),
     );
-    expect(text).toContain("✓ Read file");
+    expect(text).toContain("✓ 📖 Read file");
   });
 });
 
@@ -605,7 +637,7 @@ describe("renderCodeModeToolResult hostile raw details bounding", () => {
       { expanded: false, isError: false },
     );
     const text = rendered(component);
-    const rows = text.split("\n").filter((line) => line.startsWith("✓ Read file-"));
+    const rows = text.split("\n").filter((line) => line.startsWith("✓ 📖 Read file-"));
     expect(rows).toHaveLength(MAX_PROGRESS_ENTRIES);
     expect(text).toContain(`Read file-${MAX_PROGRESS_ENTRIES - 1}`);
     expect(text).not.toContain(`Read file-${MAX_PROGRESS_ENTRIES}`);
