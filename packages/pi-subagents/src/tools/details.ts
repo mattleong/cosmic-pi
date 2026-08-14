@@ -1,9 +1,12 @@
 import { freezeSnapshot, stripTerminalControls } from "pi-cosmic-core";
 import {
+  SUBAGENT_EFFORTS,
   type PendingParentQuestion,
   type SubagentCapability,
   type SubagentContextMode,
   type SubagentEffort,
+  type SubagentHost,
+  type SubagentRuntime,
   type SubagentRunState,
   type SubagentRunView,
   type SubagentUsage,
@@ -19,7 +22,6 @@ import {
   sanitizeOutputText,
 } from "../run/state.ts";
 import {
-  isProfileId,
   normalizeProfileId,
   type ProfileId,
   type ProfileRouteSource,
@@ -73,8 +75,17 @@ export interface SubagentCardFailure {
 export interface SubagentStartEntry {
   readonly index: number;
   readonly name: string;
-  readonly profile?: ProfileId | undefined;
+  /** Requested profile, retained even when an invalid raw request fails before resolution. */
+  readonly profile: string;
   readonly status: "pending" | "started" | "failed";
+  readonly routeStatus: "resolving" | "selected" | "unavailable";
+  readonly host?: SubagentHost | undefined;
+  readonly runtime?: SubagentRuntime | undefined;
+  readonly model?: string | undefined;
+  readonly effort?: SubagentEffort | undefined;
+  readonly fastMode?: boolean | undefined;
+  /** Zero-based selected fallback candidate index; shown only in expanded receipts. */
+  readonly candidateIndex?: number | undefined;
   readonly runId?: string | undefined;
 }
 
@@ -322,14 +333,55 @@ const projectStartEntries = (
   entries: ReadonlyArray<SubagentStartEntry> | undefined,
 ): ReadonlyArray<SubagentStartEntry> | undefined => {
   if (!entries || entries.length === 0) return undefined;
-  return entries.slice(0, MAX_TARGET_RUNS).map((entry) => ({
-    index: Math.max(0, Math.floor(entry.index)),
-    name: clean(entry.name, MAX_NAME_CHARS),
-    ...(entry.profile && isProfileId(entry.profile) ? { profile: entry.profile } : {}),
-    status: entry.status,
-    ...(entry.runId ? { runId: clean(entry.runId, MAX_PROTOCOL_ID_CHARS) } : {}),
-  }));
+  return entries.slice(0, MAX_TARGET_RUNS).map((entry) => {
+    const selected =
+      entry.routeStatus === "selected" &&
+      (entry.host === "local" || entry.host === "herdr") &&
+      (entry.runtime === "pi" || entry.runtime === "claude" || entry.runtime === "codex") &&
+      typeof entry.model === "string" &&
+      clean(entry.model, MAX_CARD_MODEL_CHARS).length > 0 &&
+      entry.effort !== undefined &&
+      SUBAGENT_EFFORTS.includes(entry.effort);
+    const routeStatus =
+      entry.status === "pending" ? "resolving" : selected ? "selected" : "unavailable";
+    return {
+      index: Math.max(0, Math.floor(entry.index)),
+      name: clean(entry.name, MAX_NAME_CHARS),
+      profile: clean(entry.profile || "generalist", 64) || "generalist",
+      status: entry.status,
+      routeStatus,
+      ...(selected
+        ? {
+            host: entry.host,
+            runtime: entry.runtime,
+            model: clean(entry.model ?? "", MAX_CARD_MODEL_CHARS),
+            effort: entry.effort,
+            ...(entry.fastMode ? { fastMode: true } : {}),
+            ...(entry.candidateIndex === undefined
+              ? {}
+              : { candidateIndex: Math.floor(boundedNonNegative(entry.candidateIndex)) }),
+          }
+        : {}),
+      ...(entry.runId ? { runId: clean(entry.runId, MAX_PROTOCOL_ID_CHARS) } : {}),
+    } satisfies SubagentStartEntry;
+  });
 };
+
+const compactStartEntryFallback = (
+  entry: SubagentStartEntry,
+  limits: {
+    readonly name: number;
+    readonly profile: number;
+    readonly model: number;
+    readonly id: number;
+  },
+): SubagentStartEntry => ({
+  ...entry,
+  name: clean(entry.name, limits.name),
+  profile: clean(entry.profile, limits.profile) || "generalist",
+  ...(entry.model === undefined ? {} : { model: clean(entry.model, limits.model) }),
+  ...(entry.runId === undefined ? {} : { runId: clean(entry.runId, limits.id) }),
+});
 
 const projectProfiles = (
   profiles: ReadonlyArray<SubagentProfileRouteCard> | undefined,
@@ -396,9 +448,16 @@ export function makeStartAwaitCardDetails(
     ),
     ...(details.cards.some((card) => card.finalText || card.error) ? { contentOmitted: true } : {}),
   };
+  const compactStartEntries = startEntries?.map((entry) =>
+    compactStartEntryFallback(entry, { name: 64, profile: 48, model: 192, id: 96 }),
+  );
+  const minimalStartEntries = startEntries?.map((entry) =>
+    compactStartEntryFallback(entry, { name: 48, profile: 24, model: 96, id: 32 }),
+  );
   const compact: SubagentStartAwaitCardDetails = {
     ...withoutReports,
     cards: withoutReports.cards.map(compactCardFallback),
+    ...(compactStartEntries ? { startEntries: compactStartEntries } : {}),
     ...(withoutReports.startFailures
       ? { startFailures: withoutReports.startFailures.map(compactFailureFallback) }
       : {}),
@@ -407,7 +466,8 @@ export function makeStartAwaitCardDetails(
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: input.action,
     cards: [],
-    ...(startEntries ? { startEntries } : {}),
+    ...(minimalStartEntries ? { startEntries: minimalStartEntries } : {}),
+    ...(failures ? { startFailures: failures.map(compactFailureFallback) } : {}),
     ...(input.awaitUntil ? { awaitUntil: input.awaitUntil } : {}),
     ...(input.timedOut ? { timedOut: true } : {}),
     ...(input.attentionRequired ? { attentionRequired: true } : {}),

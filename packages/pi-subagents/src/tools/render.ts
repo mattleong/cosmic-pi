@@ -15,7 +15,7 @@ import { clipWithMarker, safeTextPrefix } from "../run/state.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { sanitizeTerminalLine, sanitizeTerminalText } from "../ui/sanitize.ts";
 import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
-import type { SubagentRunCard, SubagentStartEntry } from "./details.ts";
+import type { SubagentRunCard } from "./details.ts";
 import { attentionRecoveryText, boundToolOutput, selectionSourceLabel } from "./format.ts";
 import {
   renderCompactResultComponent,
@@ -24,7 +24,11 @@ import {
 } from "./render-management.ts";
 import { renderAwaitProgressComponent } from "./render-await.ts";
 import { aggregateRunUsage, renderResponsiveRunRows } from "./render-run-rows.ts";
-import { renderStartFailures, renderStartProgressComponent } from "./render-start.ts";
+import {
+  renderStartFailures,
+  renderStartProgressComponent,
+  renderStartReceiptComponent,
+} from "./render-start.ts";
 import type { SubagentStartFailure } from "./subagent.ts";
 
 interface RunReportSection {
@@ -393,19 +397,6 @@ export const awaitResultBanner = (details: {
   };
 };
 
-const startResultBanner = (
-  runs: ReadonlyArray<SubagentRunCard>,
-  failures: ReadonlyArray<SubagentStartFailure>,
-  entries: ReadonlyArray<SubagentStartEntry> | undefined,
-): SemanticOutcomeBanner => {
-  const requested = entries?.length ?? runs.length + failures.length;
-  const text = `Started ${runs.length} of ${requested} subagent${requested === 1 ? "" : "s"}${failures.length > 0 ? ` · ${failures.length} failed` : ""}`;
-  return {
-    color: failures.length === 0 ? "success" : runs.length > 0 ? "warning" : "error",
-    text,
-  };
-};
-
 const includeContentOmission = (
   banner: SemanticOutcomeBanner | undefined,
   omitted: boolean | undefined,
@@ -477,15 +468,22 @@ export const renderSubagentResult = (
       details.cards,
       details.startFailures ?? [],
       details.startEntries ?? [],
+      expanded,
       theme,
     );
   }
   if (!isPartial && details) {
     const failures = details.startFailures ?? [];
+    if (details.action === "start")
+      return renderStartReceiptComponent(
+        details.cards,
+        failures,
+        details.startEntries ?? [],
+        expanded,
+        theme,
+      );
     const banner = includeContentOmission(
-      details.action === "await"
-        ? awaitResultBanner({ ...details, runs: details.cards })
-        : startResultBanner(details.cards, failures, details.startEntries),
+      awaitResultBanner({ ...details, runs: details.cards }),
       details.contentOmitted,
     );
     if (expanded) {

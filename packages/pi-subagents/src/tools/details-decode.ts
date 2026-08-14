@@ -4,6 +4,8 @@ import {
   SUBAGENT_RUN_STATES,
   type SubagentCapability,
   type SubagentEffort,
+  type SubagentHost,
+  type SubagentRuntime,
   type SubagentRunState,
   type SubagentUsage,
 } from "../run/model.ts";
@@ -244,14 +246,37 @@ const decodeStartEntries = (value: unknown): ReadonlyArray<SubagentStartEntry> |
       (record.status !== "pending" && record.status !== "started" && record.status !== "failed")
     )
       return [];
-    const profile =
-      typeof record.profile === "string" ? normalizeProfileId(record.profile) : undefined;
+    const selected =
+      record.routeStatus === "selected" &&
+      (record.host === "local" || record.host === "herdr") &&
+      (record.runtime === "pi" || record.runtime === "claude" || record.runtime === "codex") &&
+      typeof record.model === "string" &&
+      clean(record.model, MAX_CARD_MODEL_CHARS).length > 0 &&
+      typeof record.effort === "string" &&
+      EFFORTS.has(record.effort);
+    const routeStatus =
+      record.status === "pending" ? "resolving" : selected ? "selected" : "unavailable";
+    const candidateIndex = finiteNumber(record.candidateIndex);
     return [
       {
         index: Math.max(0, Math.floor(index)),
         name: clean(record.name, MAX_NAME_CHARS),
-        ...(profile ? { profile } : {}),
+        profile:
+          (typeof record.profile === "string" ? clean(record.profile, 64) : "") || "generalist",
         status: record.status,
+        routeStatus,
+        ...(selected
+          ? {
+              host: record.host as SubagentHost,
+              runtime: record.runtime as SubagentRuntime,
+              model: clean(record.model as string, MAX_CARD_MODEL_CHARS),
+              effort: record.effort as SubagentEffort,
+              ...(record.fastMode === true ? { fastMode: true } : {}),
+              ...(candidateIndex === undefined
+                ? {}
+                : { candidateIndex: Math.max(0, Math.floor(candidateIndex)) }),
+            }
+          : {}),
         ...(typeof record.runId === "string"
           ? { runId: clean(record.runId, MAX_PROTOCOL_ID_CHARS) }
           : {}),

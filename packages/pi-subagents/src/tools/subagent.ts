@@ -11,6 +11,8 @@ import { SubagentProfileService } from "../profiles/service.ts";
 import type {
   SubagentContextMode,
   SubagentEffort,
+  SubagentHost,
+  SubagentRuntime,
   SubagentRunView,
   SubagentWriteIntent,
 } from "../run/model.ts";
@@ -19,6 +21,7 @@ import { decodeStartAwaitCardDetails } from "./details-decode.ts";
 import { executeSubagentAction } from "./execute.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
+import { renderSubagentStartCall } from "./render-start.ts";
 
 import {
   AwaitParameters,
@@ -67,12 +70,27 @@ export interface SubagentStartFailure {
   readonly code?: string;
 }
 
+export interface SubagentStartResolvedRoute {
+  readonly profile: string;
+  readonly host: SubagentHost;
+  readonly runtime: SubagentRuntime;
+  readonly model: string;
+  readonly effort: SubagentEffort;
+  readonly fastMode: boolean;
+  readonly candidateIndex?: number | undefined;
+}
+
 export type SubagentStartOutcome =
   | {
       readonly index: number;
       readonly run: SubagentRunView;
     }
-  | { readonly index: number; readonly failure: SubagentStartFailure };
+  | {
+      readonly index: number;
+      readonly failure: SubagentStartFailure;
+      /** Present only after a concrete route/model was selected and attempted. */
+      readonly resolvedRoute?: SubagentStartResolvedRoute | undefined;
+    };
 
 export interface SubagentActionFailure {
   readonly id: string;
@@ -158,17 +176,8 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     prepareArguments: prepareSubagentStartArguments,
     execute: (_id, input, signal, onUpdate, ctx) =>
       executeSubagentAction(pi, runtime, { ...input, action: "start" }, signal, onUpdate, ctx),
-    renderCall: (args, theme) =>
-      renderSubagentCall(
-        `Start ${args.agents.length} subagent${args.agents.length === 1 ? "" : "s"}`,
-        args.agents
-          .map(
-            (agent, index) =>
-              `${agent.name ?? `#${index + 1}`} [${agent.profile ?? "generalist"}]: ${agent.task}`,
-          )
-          .join(" · "),
-        theme,
-      ),
+    renderCall: (args, theme, context) =>
+      renderSubagentStartCall(args.agents, theme, context?.expanded === true),
     renderResult: sharedRenderResult,
   });
 

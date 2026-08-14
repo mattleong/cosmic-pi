@@ -20,7 +20,11 @@ import {
   subagentErrorCode,
   type SubagentError,
 } from "../run/errors.ts";
-import { isAssignmentFinishedRunState, type SubagentRunView } from "../run/model.ts";
+import {
+  isAssignmentFinishedRunState,
+  type StartSubagentRequest,
+  type SubagentRunView,
+} from "../run/model.ts";
 import { MAX_TARGET_RUNS } from "../run/limits.ts";
 import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
 import { runStateLabel } from "../ui/run-state.ts";
@@ -51,6 +55,7 @@ import type {
   SubagentProfileView,
   SubagentStartFailure,
   SubagentStartOutcome,
+  SubagentStartResolvedRoute,
   SubagentToolRuntime,
 } from "./subagent.ts";
 
@@ -366,22 +371,58 @@ export const executeSubagentAction = async (
       case "start": {
         const specs = yield* startSpecs(input.agents);
         const partialOutcomes = new Map<number, SubagentStartOutcome>();
-        const startEntriesFor = (outcomes: ReadonlyMap<number, SubagentStartOutcome>) =>
+        const requestedProfileFor = (spec: SubagentStartSpec): string =>
+          sanitizeTerminalLine(spec.profile?.trim() || "generalist");
+        const routeForRequest = (request: StartSubagentRequest): SubagentStartResolvedRoute => ({
+          profile: request.profile ?? "generalist",
+          host: request.host,
+          runtime: request.runtime,
+          model: request.model,
+          effort: request.effort,
+          fastMode: request.fastMode,
+          ...(request.selection?.candidateIndex === undefined
+            ? {}
+            : { candidateIndex: request.selection.candidateIndex }),
+        });
+        const startEntriesFor = (
+          outcomes: ReadonlyMap<number, SubagentStartOutcome>,
+        ): ReadonlyArray<SubagentStartEntry> =>
           specs.map((spec, index) => {
             const outcome = outcomes.get(index);
-            const profile = spec.profile ? normalizeProfileId(spec.profile) : undefined;
-            return {
+            const base = {
               index,
               name: sanitizeTerminalLine(spec.name?.trim() || `launch ${index + 1}`),
-              ...(profile ? { profile } : {}),
-              status: outcome ? ("run" in outcome ? "started" : "failed") : "pending",
-              ...(outcome && "run" in outcome ? { runId: outcome.run.id } : {}),
+              profile: requestedProfileFor(spec),
             } as const;
+            if (!outcome) return { ...base, status: "pending", routeStatus: "resolving" };
+            if ("run" in outcome)
+              return {
+                ...base,
+                profile: outcome.run.profile ?? base.profile,
+                status: "started",
+                routeStatus: "selected",
+                host: outcome.run.host,
+                runtime: outcome.run.runtime,
+                model: outcome.run.model,
+                effort: outcome.run.effort,
+                fastMode: outcome.run.fastMode,
+                ...(outcome.run.selection.candidateIndex === undefined
+                  ? {}
+                  : { candidateIndex: outcome.run.selection.candidateIndex }),
+                runId: outcome.run.id,
+              };
+            return {
+              ...base,
+              status: "failed",
+              routeStatus: outcome.resolvedRoute ? "selected" : "unavailable",
+              ...outcome.resolvedRoute,
+            };
           });
         const failureFor = (
           spec: SubagentStartSpec,
           index: number,
           error: SubagentError,
+          resolvedRoute?: SubagentStartResolvedRoute,
         ): SubagentStartOutcome => ({
           index,
           failure: {
@@ -390,6 +431,7 @@ export const executeSubagentAction = async (
             message: error.message,
             code: subagentErrorCode(error),
           },
+          ...(resolvedRoute ? { resolvedRoute } : {}),
         });
         const publishOutcome = (outcome: SubagentStartOutcome): Effect.Effect<void> => {
           partialOutcomes.set(outcome.index, outcome);
@@ -435,6 +477,9 @@ export const executeSubagentAction = async (
                     index,
                     run,
                   }),
+                ),
+                Effect.catch((error) =>
+                  Effect.succeed(failureFor(spec, index, error, routeForRequest(request))),
                 ),
               ),
             ),

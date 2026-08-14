@@ -550,18 +550,21 @@ describe("subagent tool", () => {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
     } as unknown as Theme;
-    const rendered = (name: string, args: unknown): string => {
-      const component = tools.get(name)?.renderCall?.(args, theme) as
+    const rendered = (name: string, args: unknown, expanded = false): string => {
+      const component = tools.get(name)?.renderCall?.(args, theme, { expanded } as never) as
         | { readonly render: (width: number) => ReadonlyArray<string> }
         | undefined;
       return component?.render(240).join("\n") ?? "";
     };
 
-    expect(
-      rendered("subagent_start", {
-        agents: [{ name: "auth-review", profile: "reviewer", task: "Review token refresh" }],
-      }),
-    ).toContain("Start 1 subagent auth-review [reviewer]: Review token refresh");
+    const startArgs = {
+      agents: [{ name: "auth-review", profile: "reviewer", task: "Review token refresh" }],
+    };
+    expect(rendered("subagent_start", startArgs)).toContain(
+      "Start 1 subagent auth-review [reviewer]",
+    );
+    expect(rendered("subagent_start", startArgs)).not.toContain("Review token refresh");
+    expect(rendered("subagent_start", startArgs, true)).toContain("Task: Review token refresh");
     expect(
       rendered("subagent_await", { runIds: ["agent-1", "agent-2"], until: "all_finished" }),
     ).toContain("Await 2 subagents until all finish · agent-1, agent-2");
@@ -890,7 +893,10 @@ describe("subagent tool", () => {
     ) as { render: (width: number) => string[] } | undefined;
     const rendered = component?.render(100).join("\n") ?? "";
     expect(rendered).toContain("Started 1 of 3");
-    expect(rendered).toMatch(/<success>[^ ]+ scout-one · agent-1<\/success>/);
+    expect(rendered).toContain("<success>✓</success> <toolTitle>scout-one</toolTitle>");
+    expect(rendered).toContain("<muted>generalist</muted>");
+    expect(rendered).toContain("<toolOutput>local/pi · openai-codex/gpt-5.6-sol:high</toolOutput>");
+    expect(rendered).toContain("<muted>agent-1</muted>");
   });
 
   it("keeps partial batch-start outcomes in requested order, including pending launches", () => {
@@ -906,15 +912,32 @@ describe("subagent tool", () => {
           action: "start",
           runs: [view({ id: "agent-2", name: "second-started" })],
           startEntries: [
-            { index: 0, name: "first-pending", profile: "scout", status: "pending" },
+            {
+              index: 0,
+              name: "first-pending",
+              profile: "scout",
+              status: "pending",
+              routeStatus: "resolving",
+            },
             {
               index: 1,
               name: "second-started",
               profile: "reviewer",
               status: "started",
+              routeStatus: "selected",
+              host: "local",
+              runtime: "pi",
+              model: "openai-codex/gpt-5.6-sol",
+              effort: "high",
               runId: "agent-2",
             },
-            { index: 2, name: "third-failed", profile: "worker", status: "failed" },
+            {
+              index: 2,
+              name: "third-failed",
+              profile: "worker",
+              status: "failed",
+              routeStatus: "unavailable",
+            },
           ],
           startFailures: [{ index: 2, name: "third-failed", message: "No route" }],
         }),
@@ -923,9 +946,215 @@ describe("subagent tool", () => {
       theme,
     ) as { render: (width: number) => string[] } | undefined;
     const rendered = component?.render(120).join("\n") ?? "";
-    expect(rendered).toContain("Processed 2 of 3 launches · 1 started · 1 failed · 1 pending");
+    expect(rendered).toContain("Launching 2 of 3 · 1 started · 1 failed · 1 pending");
     expect(rendered.indexOf("first-pending")).toBeLessThan(rendered.indexOf("second-started"));
     expect(rendered.indexOf("second-started")).toBeLessThan(rendered.indexOf("third-failed"));
+
+    const expanded = startTool?.renderResult?.(
+      {
+        content: [{ type: "text", text: "fallback progress" }],
+        details: makeStartAwaitCardDetails({
+          action: "start",
+          runs: [],
+          startEntries: [
+            {
+              index: 0,
+              name: "failed-expanded",
+              profile: "reviewer",
+              status: "failed",
+              routeStatus: "unavailable",
+            },
+          ],
+          startFailures: [
+            { index: 0, name: "failed-expanded", code: "no_route", message: "No route" },
+          ],
+        }),
+      },
+      { expanded: true, isPartial: true },
+      theme,
+    ) as { render: (width: number) => string[] } | undefined;
+    const expandedText = expanded?.render(100).join("\n") ?? "";
+    expect(expandedText).toContain("Failure — failed-expanded [no_route]");
+    expect(expandedText).toContain("No route");
+    expect(expandedText).not.toContain("expand to view");
+  });
+
+  it("renders final starts as ordered immutable receipts with profile and route/model", () => {
+    const startTool = captureSubagentTools({} as SubagentServiceShape).get("subagent_start");
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const details = makeStartAwaitCardDetails({
+      action: "start",
+      runs: [
+        view({
+          id: "agent-very-secret-1",
+          name: "auth-review",
+          profile: "reviewer",
+          currentTool: "stale-tool",
+          progress: "stale progress",
+          usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+        }),
+      ],
+      startEntries: [
+        {
+          index: 0,
+          name: "auth-review",
+          profile: "reviewer",
+          status: "started",
+          routeStatus: "selected",
+          host: "local",
+          runtime: "pi",
+          model: "openai-codex/gpt-5.6-sol",
+          effort: "high",
+          candidateIndex: 1,
+          runId: "agent-very-secret-1",
+        },
+        {
+          index: 1,
+          name: "docs-review",
+          profile: "scout",
+          status: "failed",
+          routeStatus: "unavailable",
+        },
+      ],
+      startFailures: [
+        {
+          index: 1,
+          name: "docs-review",
+          code: "profile_no_eligible_model",
+          message: "No eligible candidate remained.",
+        },
+      ],
+    });
+    const collapsed = startTool?.renderResult?.(
+      { content: [{ type: "text", text: "model result" }], details },
+      { expanded: false, isPartial: false },
+      theme,
+    ) as { render: (width: number) => string[] } | undefined;
+    const text = collapsed?.render(160).join("\n") ?? "";
+    expect(text).toContain("⚠ Started 1 of 2 subagents · 1 failed");
+    expect(text).toContain(
+      "✓ auth-review · reviewer · local/pi · openai-codex/gpt-5.6-sol:high · …very-secret-1",
+    );
+    expect(text).toContain("✗ docs-review · scout · no eligible route/model");
+    expect(text.indexOf("auth-review")).toBeLessThan(text.indexOf("docs-review"));
+    expect(text).toContain("→ /subagents for live status");
+    expect(text).not.toContain("stale-tool");
+    expect(text).not.toContain("stale progress");
+    expect(text).not.toContain("tokens");
+
+    const narrowLines = collapsed?.render(30) ?? [];
+    const narrow = narrowLines.join("\n");
+    expect(narrowLines.every((line) => visibleWidth(line) <= 30)).toBe(true);
+    expect(narrow).toContain("auth-review");
+    expect(narrow).toContain("reviewer");
+    expect(narrow).toContain("local/pi");
+    expect(narrow).toContain("openai-codex/gpt-5.6-sol");
+    expect(narrow).toContain("…very-secret-1");
+
+    const expanded = startTool?.renderResult?.(
+      { content: [{ type: "text", text: "model result" }], details },
+      { expanded: true, isPartial: false },
+      theme,
+    ) as { render: (width: number) => string[] } | undefined;
+    const expandedText = expanded?.render(100).join("\n") ?? "";
+    expect(expandedText).toContain(
+      "Selected candidate 2 after 1 earlier candidate was unavailable.",
+    );
+    expect(expandedText).toContain("Failure — docs-review [profile_no_eligible_model]");
+    expect(expandedText).toContain("No eligible candidate remained.");
+  });
+
+  it("reconciles malformed persisted receipt slots without hiding failures", () => {
+    const startTool = captureSubagentTools({} as SubagentServiceShape).get("subagent_start");
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const malformed = {
+      version: 1,
+      action: "start",
+      cards: [],
+      startEntries: [
+        {
+          index: 0,
+          name: "valid-start",
+          profile: "reviewer",
+          status: "started",
+          routeStatus: "selected",
+          host: "local",
+          runtime: "pi",
+          model: "provider/model",
+          effort: "high",
+          runId: "agent-1",
+        },
+        { index: 1, name: "malformed-failure", status: "not-a-status" },
+      ],
+      startFailures: [
+        { index: 1, name: "failed-start", code: "spawn_failed", message: "Spawn failed." },
+      ],
+    };
+    const component = startTool?.renderResult?.(
+      { content: [{ type: "text", text: "model result" }], details: malformed },
+      { expanded: true, isPartial: false },
+      theme,
+    ) as { render: (width: number) => string[] } | undefined;
+    const text = component?.render(120).join("\n") ?? "";
+    expect(text).toContain("⚠ Started 1 of 2 subagents · 1 failed");
+    expect(text).toContain("✗ failed-start · generalist · no eligible route/model");
+    expect(text).toContain("Failure — failed-start [spawn_failed]");
+
+    const empty = startTool?.renderResult?.(
+      {
+        content: [{ type: "text", text: "model result" }],
+        details: { version: 1, action: "start", cards: [] },
+      },
+      { expanded: false, isPartial: false },
+      theme,
+    ) as { render: (width: number) => string[] } | undefined;
+    expect(empty?.render(80).join("\n")).toContain("⚠ Launch receipt unavailable");
+    expect(empty?.render(80).join("\n")).not.toContain("Started 0");
+  });
+
+  it("keeps an attempted route/model on failed launch receipts and marks all-failed batches", () => {
+    const startTool = captureSubagentTools({} as SubagentServiceShape).get("subagent_start");
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const details = makeStartAwaitCardDetails({
+      action: "start",
+      runs: [],
+      startEntries: [
+        {
+          index: 0,
+          name: "worker-start",
+          profile: "worker",
+          status: "failed",
+          routeStatus: "selected",
+          host: "herdr",
+          runtime: "claude",
+          model: "claude-opus-4-1",
+          effort: "high",
+          candidateIndex: 2,
+        },
+      ],
+      startFailures: [
+        { index: 0, name: "worker-start", code: "spawn_failed", message: "Spawn failed." },
+      ],
+    });
+    const component = startTool?.renderResult?.(
+      { content: [{ type: "text", text: "model result" }], details },
+      { expanded: true, isPartial: false },
+      theme,
+    ) as { render: (width: number) => string[] } | undefined;
+    const text = component?.render(120).join("\n") ?? "";
+    expect(text).toContain("✗ Failed to start 1 subagent");
+    expect(text).toContain("✗ worker-start · worker · herdr/claude · claude-opus-4-1:high");
+    expect(text).toContain("Attempted candidate 3 after 2 earlier candidates were unavailable.");
+    expect(text).not.toContain("→ /subagents for live status");
   });
 
   it("projects timeout, cancellation, and first-finished await outcomes", () => {
@@ -1057,7 +1286,7 @@ describe("subagent tool", () => {
     expect(compact).toContain("completed without a final report");
   });
 
-  it("shows bounded raw tool output when persisted card content was omitted", () => {
+  it("keeps final start rendering as an immutable receipt when card content was omitted", () => {
     const theme = {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
@@ -1079,15 +1308,17 @@ describe("subagent tool", () => {
       theme,
     ) as { readonly render: (width: number) => ReadonlyArray<string> } | undefined;
     const rendered = component?.render(100).join("\n") ?? "";
-    expect(rendered).toContain("Recovered omitted output");
-    expect(rendered).toContain("Recovered bounded report text.");
+    expect(rendered).toContain("✓ Started 1 subagent");
+    expect(rendered).toContain("auth-review · generalist · local/pi");
+    expect(rendered).toContain("→ /subagents for live status");
+    expect(rendered).not.toContain("Recovered bounded report text.");
     expect(rendered).not.toContain("completed without a final report");
     const collapsed = tool?.renderResult?.(
       { content: [{ type: "text", text: "Recovered bounded report text." }], details },
       { isPartial: false, expanded: false },
       theme,
     ) as { readonly render: (width: number) => ReadonlyArray<string> } | undefined;
-    expect(collapsed?.render(120).join("\n")).toContain("Some report content was omitted");
+    expect(collapsed?.render(120).join("\n")).not.toContain("report content was omitted");
   });
 
   it("aligns wide summary columns and truncates models first on narrow terminals", () => {
@@ -1752,6 +1983,20 @@ describe("subagent tool", () => {
     );
     expect(requests).toEqual([]);
     expect(result?.details).toMatchObject({
+      startEntries: [
+        {
+          index: 0,
+          profile: "future",
+          status: "failed",
+          routeStatus: "unavailable",
+        },
+        {
+          index: 1,
+          profile: "reviewer",
+          status: "failed",
+          routeStatus: "unavailable",
+        },
+      ],
       startFailures: [
         { index: 0, code: "profile_unknown" },
         { index: 1, code: "profile_no_eligible_model" },
@@ -1834,6 +2079,34 @@ describe("subagent tool", () => {
     expect(result?.details).toMatchObject({
       action: "start",
       cards: [{ id: "agent-1" }, { id: "agent-3" }],
+      startEntries: [
+        {
+          index: 0,
+          profile: "generalist",
+          status: "started",
+          routeStatus: "selected",
+          host: "local",
+          runtime: "pi",
+          model: "openai-codex/gpt-5.6-sol",
+          runId: "agent-1",
+        },
+        {
+          index: 1,
+          profile: "generalist",
+          status: "failed",
+          routeStatus: "selected",
+          host: "local",
+          runtime: "pi",
+          model: "openai-codex/gpt-5.6-sol",
+        },
+        {
+          index: 2,
+          profile: "generalist",
+          status: "started",
+          routeStatus: "selected",
+          runId: "agent-3",
+        },
+      ],
       startFailures: [{ index: 1, name: "broken", message: "simulated launch failure" }],
     });
   });

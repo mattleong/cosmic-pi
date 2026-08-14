@@ -115,6 +115,102 @@ describe("persisted subagent card details", () => {
     ).toBeUndefined();
   });
 
+  it("preserves bounded immutable start receipts through projection and hostile decoding", () => {
+    const details = makeStartAwaitCardDetails({
+      action: "start",
+      runs: [],
+      startEntries: [
+        {
+          index: 0,
+          name: "auth-review",
+          profile: "reviewer",
+          status: "started",
+          routeStatus: "selected",
+          host: "herdr",
+          runtime: "claude",
+          model: "m".repeat(2_000),
+          effort: "high",
+          fastMode: true,
+          candidateIndex: 2,
+          runId: "agent-r1-1",
+        },
+        {
+          index: 1,
+          name: "future-review",
+          profile: "future-profile",
+          status: "failed",
+          routeStatus: "unavailable",
+        },
+      ],
+    });
+    expect(details.startEntries?.[0]).toMatchObject({
+      profile: "reviewer",
+      routeStatus: "selected",
+      host: "herdr",
+      runtime: "claude",
+      effort: "high",
+      candidateIndex: 2,
+    });
+    expect(details.startEntries?.[0]?.model).toHaveLength(512);
+    expect(details.startEntries?.[1]).toMatchObject({
+      profile: "future-profile",
+      routeStatus: "unavailable",
+    });
+    expect(Object.isFrozen(details.startEntries)).toBe(true);
+    expect(decodeStartAwaitCardDetails(details)?.startEntries).toEqual(details.startEntries);
+
+    expect(
+      decodeStartAwaitCardDetails({
+        version: 1,
+        action: "start",
+        cards: [],
+        startEntries: [
+          {
+            index: 0,
+            name: "hostile",
+            status: "started",
+            routeStatus: "selected",
+            host: "unknown",
+            runtime: "shell",
+            model: "forged",
+            effort: "extreme",
+          },
+        ],
+      })?.startEntries?.[0],
+    ).toMatchObject({ profile: "generalist", routeStatus: "unavailable" });
+  });
+
+  it("keeps hostile receipt identity and route fields inside the aggregate JSON bound", () => {
+    const hostile = `${"\\".repeat(20_000)}${"\ud800".repeat(4_000)}`;
+    const details = makeStartAwaitCardDetails({
+      action: "start",
+      runs: [],
+      startEntries: Array.from({ length: 12 }, (_, index) => ({
+        index,
+        name: hostile,
+        profile: hostile,
+        status: "started" as const,
+        routeStatus: "selected" as const,
+        host: "local" as const,
+        runtime: "pi" as const,
+        model: hostile,
+        effort: "high" as const,
+        runId: hostile,
+      })),
+      startFailures: Array.from({ length: 12 }, (_, index) => ({
+        index,
+        name: hostile,
+        code: hostile,
+        message: hostile,
+      })),
+    });
+    expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
+    expect(details.startEntries).toHaveLength(12);
+    expect(details.startEntries?.every((entry) => entry.profile.length > 0)).toBe(true);
+    expect(details.startEntries?.every((entry) => entry.routeStatus === "selected")).toBe(true);
+    expect(Object.isFrozen(details.startEntries)).toBe(true);
+  });
+
   it("keeps non-card tool details compact, frozen, and serialization-bounded", () => {
     const hostile = `${"\\".repeat(2_000)}${"\ud800".repeat(500)}`;
     const details = makeCompactToolDetails({
