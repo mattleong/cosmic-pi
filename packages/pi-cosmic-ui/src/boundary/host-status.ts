@@ -1,28 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import { createCosmicFooterClient } from "../footer/client.ts";
 import type { CosmicFooterStatusContribution } from "../protocol/protocol.ts";
+import { makeHostUiTickerPool } from "./host-ui-ticker-pool.ts";
 
-export const startHostUiTicker = (intervalMs: number, tick: () => void): (() => void) => {
-  const fiber = Effect.runFork(
-    Effect.sleep(intervalMs).pipe(
-      Effect.andThen(
-        Effect.sync(() => {
-          try {
-            tick();
-          } catch {
-            // The host UI may be tearing down between timer ticks.
-          }
-        }),
-      ),
-      Effect.forever,
-    ),
-  );
-  return () => {
-    void Effect.runFork(Fiber.interrupt(fiber));
-  };
-};
+const hostUiTickerPool = makeHostUiTickerPool();
+
+/** Shares one underlying Effect timer across all host-UI consumers at the same cadence. */
+export const startHostUiTicker = hostUiTickerPool.start;
 
 export const makeSetStatusSafely =
   (statusKey: string) =>
