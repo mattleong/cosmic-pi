@@ -30,7 +30,8 @@ external dependencies.
 - `src/tools/execution.ts` — one execution: defensive stale/availability gating, host limits,
   guest catalog assembly, runtime execution with composed cancellation, and bounded live
   lifecycle progress (queued/running/succeeded/failed/cancelled, human-readable activity,
-  and duration) plus model-safe result/diagnostic mapping.
+  and duration) plus model-safe result/diagnostic mapping; modern lifecycle/start/end overlap is
+  collapsed before host publication.
 - `src/tools/catalog.ts` — the exact guest tool tree (`pi` namespace, Effect Schema inputs),
   cumulative-output admission composition, and the description-only catalog renderer.
 - `src/tools/limits.ts` — pure host limits: UTF-8 program-source budget, the concurrency-safe
@@ -71,8 +72,10 @@ external dependencies.
   signal, Schema-validated result conversion to plain guest text, image refusal, and
   model-safe `toolError` mapping. This boundary does not inherit middleware, registered
   overrides, or session-specific operations (ADR 0004).
-- `src/boundary/host-tool-update.ts` — guarded `onUpdate` publisher (undefined hosts, sync
-  throws, rejecting thenables; no updates after settle or replacement).
+- `src/boundary/host-tool-update.ts` — guarded semantic-leading-edge and frame-coalesced
+  `onUpdate` publisher (new rows can join Pi's already-pending next render; undefined hosts,
+  sync throws, and rejecting thenables are contained; latest pending snapshot flushes on settle;
+  no updates after settle or replacement).
 - `src/boundary/native-clock.ts` — synchronous host clock door for TUI animation frames.
 - `src/config/schema.ts` — configuration shape, locked defaults, documented bounds, field codecs.
 - `src/config/options.ts` — field-wise project/global/default resolution with provenance, and
@@ -97,7 +100,8 @@ external dependencies.
 - `tests/**/*.test.ts` — dispatch, config, store, store-atomic, settings-controller,
   application, lifecycle, limits (incl. the final model-visible clamp), format, tool-adapters,
   tool-execution (real interpreter integration, incl. final byte-bound cases), tool-lifecycle,
-  tool-renderer (humanized presentation incl. hostile-input containment), and
+  host-tool-update (leading/frame/trailing publication semantics), tool-renderer (humanized
+  presentation incl. hostile-input containment), and
   deactivation-handoff (module-recreation reload/new/resume/fork) suites.
   `vitest.config.ts` scopes discovery to this package's `tests/`; the nested runtime package
   runs its own vendored suites (incl. `confinement.test.ts`).
@@ -217,12 +221,18 @@ the next successful operation re-derives from the committed document.
 - Cancellation composes the outer execute signal, session replacement/shutdown (managed
   runtime disposal interrupts the fiber), and the runtime timeout. Nested built-in calls
   receive a per-call `AbortSignal.any` of the outer signal and Effect interruption.
-- Progress goes through a guarded `onUpdate` publisher: bounded deterministic lifecycle
-  snapshots only (never nested output), tolerant of undefined/throwing/rejecting-thenable host
-  callbacks, and silent after settle or replacement. The runtime's additive lifecycle hook
-  observes queue admission before the concurrency semaphore and terminal interruption, while
-  retaining legacy start/end hook compatibility. Thrown execution failures retain their final
-  bounded rows through the extension-owned one-shot `tool_result` handoff.
+- Progress begins with one immediate `Starting…` snapshot, then goes through a guarded
+  semantic-leading-edge and 16 ms frame-coalesced `onUpdate` publisher. New row admissions and
+  decoded-running labels publish synchronously so they can join Pi's already-scheduled next
+  host render instead of sitting behind a second frame timer; only the latest status-only
+  snapshot is retained between frames, and settlement synchronously flushes that latest state.
+  Nested output is never included, undefined/throwing/rejecting-thenable host callbacks are
+  tolerated, and publication stays silent after settle or replacement. Modern runtimes publish
+  queued, decoded-running, and authoritative terminal states once each; the legacy start/end
+  hooks remain a fallback when a reload-cached runtime emits no lifecycle events. Sub-frame
+  calls are never artificially delayed merely to preserve a transient running animation and
+  may first paint as completed. Thrown execution failures retain their final bounded rows
+  through the extension-owned one-shot `tool_result` handoff.
 
 ## Full built-in catalog and middleware bypass (ADR 0004)
 

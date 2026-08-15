@@ -35,11 +35,16 @@ See the runtime `PROVENANCE.md` (deviation 8) for the exact rules.
 
 In the TUI a `code_mode` call renders compactly as `Code Mode · <intent>` — the optional
 `intent` tool parameter (a short human-readable purpose the model is asked to provide),
-falling back to a neutral phrase. While the program runs, nested calls appear as bounded
-activity rows derived from their inputs, reusing the standalone built-in tool emojis alongside
-status (`◌` queued, an animated Braille spinner while running, `✓` succeeded, `✗` failed,
-`⊘` cancelled), with settled
-durations and an exact lifecycle footer. Beyond 32 rows, active,
+falling back to a neutral phrase. Execution publishes an immediate `Starting…` state. New
+nested rows and their enriched running labels bypass extension-side scheduling so they can join
+Pi's already-pending next render; status-only churn is coalesced to Pi's 16 ms host-render
+cadence, and settlement always flushes the latest state. This avoids stacking two frame delays
+or slowing the program merely to preserve transient animation; a sub-frame call may still first
+paint as completed. While the program runs, nested calls appear as bounded activity rows
+derived from their inputs,
+reusing the standalone built-in tool emojis alongside status (`◌` queued, an animated Braille
+spinner while running, `✓` succeeded, `✗` failed, `⊘` cancelled), with settled durations and an
+exact lifecycle footer. Beyond 32 rows, active,
 failed, cancelled, and recent calls stay visible under a `+N earlier` marker. Expanding the call
 shows the full program source; expanding the result shows the complete model-visible output
 or error. Successful object results containing only top-level string fields, including at least

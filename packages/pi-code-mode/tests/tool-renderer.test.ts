@@ -208,6 +208,19 @@ describe("renderCodeModeToolResult", () => {
     ],
   };
 
+  it("shows an immediate starting state before the first nested call is admitted", () => {
+    const text = rendered(
+      renderCodeModeToolResult(
+        resultOf("code_mode: starting", { toolCalls: [] }),
+        { isPartial: true },
+        theme,
+        { expanded: false, isError: false },
+      ),
+    );
+    expect(text).toContain("Starting…");
+    expect(text).not.toContain("code_mode: starting");
+  });
+
   it("partial shows activity rows with symbols and a progress footer, not raw text", () => {
     const result = resultOf("code_mode: 2 nested tool calls (1 settled)", runningDetails);
     const text = rendered(

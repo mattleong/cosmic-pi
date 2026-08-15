@@ -186,9 +186,12 @@ export const progressResult = (
     content: [
       {
         type: "text",
-        text: `code_mode: ${counts.total} nested tool call${counts.total === 1 ? "" : "s"} (${settled} settled, ${counts.running} running, ${counts.queued} queued)${
-          names.length > 0 ? `: ${names}${suffix}` : ""
-        }`,
+        text:
+          counts.total === 0
+            ? "code_mode: starting"
+            : `code_mode: ${counts.total} nested tool call${counts.total === 1 ? "" : "s"} (${settled} settled, ${counts.running} running, ${counts.queued} queued)${
+                names.length > 0 ? `: ${names}${suffix}` : ""
+              }`,
       },
     ],
     details: callEntryDetails(calls, counts),

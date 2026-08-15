@@ -914,7 +914,7 @@ describe("progress", () => {
     expect(result.details.toolCalls).toHaveLength(MAX_PROGRESS_ENTRIES);
   });
 
-  it("forwards bounded start/end progress without nested output and stops after settle", async () => {
+  it("starts immediately, frame-coalesces fast calls, and stops after settle", async () => {
     const cwd = newCwd();
     const secret = "SECRET-NESTED-OUTPUT";
     const definitions = fakeDefinitions({ read: async () => secret });
@@ -931,17 +931,56 @@ describe("progress", () => {
     );
     expect(textOf(result)).toBe(secret);
     expect(updates.length).toBeGreaterThanOrEqual(2);
-    const updateCountAtSettle = updates.length;
-    for (const update of updates) {
+    expect(updates[0]).toMatchObject({
+      text: "code_mode: starting",
+      details: { toolCalls: [] },
+    });
+    const callUpdates = updates.slice(1);
+    for (const update of callUpdates) {
       expect(update.text).not.toContain(secret);
       expect(update.text).toContain("pi.read");
       expect(update.details.toolCalls[0]?.tool).toBe("pi.read");
     }
-    expect(updates[0]?.details.toolCalls[0]?.status).toBe("queued");
-    expect(updates.some((update) => update.details.toolCalls[0]?.status === "running")).toBe(true);
-    expect(updates.at(-1)?.details.toolCalls[0]?.status).toBe("completed");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Admission and the enriched running row bypass extension-side frame coalescing so Pi can
+    // include them in its own already-scheduled frame; settlement still flushes the final state.
+    expect(callUpdates[0]?.details.toolCalls[0]?.status).toBe("queued");
+    expect(callUpdates.some((update) => update.details.toolCalls[0]?.status === "running")).toBe(
+      true,
+    );
+    expect(callUpdates.at(-1)?.details.toolCalls[0]?.status).toBe("completed");
+    const updateCountAtSettle = updates.length;
+    await new Promise((resolve) => setTimeout(resolve, 25));
     expect(updates.length).toBe(updateCountAtSettle);
+  });
+
+  it("publishes a running snapshot when a nested call spans a host render frame", async () => {
+    const cwd = newCwd();
+    let releaseRead: ((value: string) => void) | undefined;
+    const definitions = fakeDefinitions({
+      read: () =>
+        new Promise((resolve) => {
+          releaseRead = resolve;
+        }),
+    });
+    const execute = makeHarness(cwd, { definitions });
+    const updates: CodeModeToolDetails[] = [];
+    const pending = execute(
+      "call-progress-frame",
+      { code: "return await tools.pi.read({ path: 'slow.txt' });" },
+      undefined,
+      (partial) => updates.push(partial.details),
+      ctx,
+    );
+    while (!updates.some((details) => details.toolCalls[0]?.status === "running")) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    releaseRead?.("slow-data");
+    const result = await pending;
+
+    expect(textOf(result)).toBe("slow-data");
+    expect(updates[0]?.toolCalls).toEqual([]);
+    expect(updates.some((details) => details.toolCalls[0]?.status === "running")).toBe(true);
+    expect(updates.at(-1)?.toolCalls[0]?.status).toBe("completed");
   });
 
   it("falls back to legacy start/end hooks when a reload-cached runtime emits no lifecycle events", async () => {

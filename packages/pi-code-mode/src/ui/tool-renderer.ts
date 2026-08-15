@@ -289,7 +289,9 @@ const footerLine = (
   const status = details.cancelled
     ? `Cancelled${summary.length === 0 ? "" : ` · ${summary}`}`
     : isPartial
-      ? `${settled} of ${total} settled${summary.length === 0 ? "" : ` · ${summary}`}`
+      ? total === 0
+        ? "Starting…"
+        : `${settled} of ${total} settled${summary.length === 0 ? "" : ` · ${summary}`}`
       : isError
         ? `Failed${summary.length === 0 ? "" : ` · ${summary}`}`
         : total === 0

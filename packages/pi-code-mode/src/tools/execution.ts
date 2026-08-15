@@ -106,12 +106,15 @@ const transitionCall = (
 const settlePendingAsCancelled = (
   calls: ReadonlyArray<MutableCallEntry>,
   counts: MutableCallCounts,
-): void => {
+): boolean => {
+  let changed = false;
   for (const call of calls) {
     if (call.status === "queued" || call.status === "running") {
       transitionCall(call, "cancelled", counts);
+      changed = true;
     }
   }
+  return changed;
 };
 
 // The cancellation text goes through the same authoritative clamp as every other
@@ -155,6 +158,7 @@ export const makeCodeModeToolExecute =
     const legacyCallByIndex = new Map<number, MutableCallEntry>();
     const counts = emptyCounts();
     const publish = () => publisher.publish(progressResult(snapshotCalls(calls), counts));
+    const publishNow = () => publisher.publishNow(progressResult(snapshotCalls(calls), counts));
     const trackQueued = (entry: MutableCallEntry): boolean => {
       if (counts.total > config.maxToolCalls) return false;
       if (calls.length >= MAX_TRACKED_CALL_ENTRIES) {
@@ -176,6 +180,10 @@ export const makeCodeModeToolExecute =
     }
 
     const publisher = makeGuardedToolUpdatePublisher(onUpdate, environment.isCurrent);
+    // Give the host one leading-edge snapshot before interpreter work begins. Row admission
+    // and enriched running labels publish synchronously into Pi's next frame; status-only
+    // snapshots are frame-coalesced, with the newest state flushed on settlement.
+    publisher.publish(progressResult([], counts));
     const budget = makeCumulativeOutputBudget(config.maxCumulativeChildOutputBytes);
     const dispatch = makeNestedPiToolDispatch({
       definitions: environment.definitions,
@@ -224,8 +232,13 @@ export const makeCodeModeToolExecute =
               }
               return;
             }
+            // The start hook immediately follows the modern running event and enriches the
+            // row with decoded activity. Publish that one snapshot instead of two equivalent
+            // running updates; terminal lifecycle events remain authoritative.
+            if (event.status === "running") return;
           }
-          publish();
+          if (event.status === "queued") publishNow();
+          else publish();
         }),
       onToolCallStart: ({ index, lifecycleId, name, input }) =>
         Effect.sync(() => {
@@ -246,18 +259,22 @@ export const makeCodeModeToolExecute =
             transitionCall(current, "running", counts);
             current.activity = describeNestedActivity(name, input);
           }
-          publish();
+          // Do not place a newly admitted/enriched row behind our frame timer: Pi already has
+          // a render queued, so synchronous delivery lets the row join that next host frame.
+          publishNow();
         }),
       onToolCallEnd: ({ index, lifecycleId, outcome, durationMs }) =>
         Effect.sync(() => {
-          const current =
-            lifecycleId === undefined ? legacyCallByIndex.get(index) : callById.get(lifecycleId);
+          // Modern runtimes emit one authoritative terminal lifecycle event immediately after
+          // this compatibility hook. Avoid publishing and rebuilding the same settled row twice.
+          if (lifecycleId !== undefined) return;
+          const current = legacyCallByIndex.get(index);
           const nextStatus = outcome === "success" ? "completed" : "error";
           if (current !== undefined) {
             transitionCall(current, nextStatus, counts);
             current.durationMs = durationMs;
-            if (lifecycleId === undefined) legacyCallByIndex.delete(index);
-          } else if (lifecycleId === undefined) {
+            legacyCallByIndex.delete(index);
+          } else {
             // The legacy call was counted but its row exceeded the bounded host-side cap.
             counts.running -= 1;
             counts[statusCountKey(nextStatus)] += 1;
@@ -270,12 +287,12 @@ export const makeCodeModeToolExecute =
     try {
       result = await environment.runInSession(execution, signal);
     } catch (error) {
-      settlePendingAsCancelled(calls, counts);
+      const changed = settlePendingAsCancelled(calls, counts);
       counts.cancelled += counts.queued + counts.running;
       counts.queued = 0;
       counts.running = 0;
       const details = callEntryDetails(snapshotCalls(calls), counts);
-      publisher.publish(progressResult(snapshotCalls(calls), counts));
+      if (changed) publisher.publish(progressResult(snapshotCalls(calls), counts));
       publisher.settle();
       if (aborted() || !environment.isCurrent()) {
         return {
@@ -294,11 +311,11 @@ export const makeCodeModeToolExecute =
       );
     }
 
-    settlePendingAsCancelled(calls, counts);
+    const changed = settlePendingAsCancelled(calls, counts);
     counts.cancelled += counts.queued + counts.running;
     counts.queued = 0;
     counts.running = 0;
-    publisher.publish(progressResult(snapshotCalls(calls), counts));
+    if (changed) publisher.publish(progressResult(snapshotCalls(calls), counts));
     publisher.settle();
     if (aborted()) {
       return {
