@@ -15,7 +15,7 @@ import {
   UnsupportedSubagentCapabilityError,
   type SubagentError,
 } from "../run/errors.ts";
-import type { SubagentRuntime } from "../run/model.ts";
+import type { SubagentRuntime } from "../domain/routing.ts";
 import { herdrAssignmentEpochLine } from "./herdr-assignment.ts";
 import type { BackendDriver, BackendEvent, BackendLaunchRequest } from "./model.ts";
 

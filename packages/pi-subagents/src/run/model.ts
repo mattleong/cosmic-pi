@@ -1,3 +1,10 @@
+import type {
+  SubagentContextMode,
+  SubagentEffort,
+  SubagentHost,
+  SubagentRuntime,
+  SubagentWriteIntent,
+} from "../domain/routing.ts";
 import type { ProfileId, SubagentSelectionProvenance } from "../profiles/model.ts";
 
 export const SUBAGENT_RUN_STATES = [
@@ -13,10 +20,6 @@ export const SUBAGENT_RUN_STATES = [
 ] as const;
 export type SubagentRunState = (typeof SUBAGENT_RUN_STATES)[number];
 
-export type SubagentContextMode = "fresh" | "fork";
-export type SubagentWriteIntent = "writer" | "read-only";
-export type SubagentHost = "local" | "herdr";
-export type SubagentRuntime = "pi" | "claude" | "codex";
 export type SubagentCapability =
   | "steer"
   | "interrupt"
@@ -25,40 +28,6 @@ export type SubagentCapability =
   | "parent-contact"
   | "peer-notice"
   | "native-fork";
-export const SUBAGENT_EFFORTS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-export type SubagentEffort = (typeof SUBAGENT_EFFORTS)[number];
-
-/** Runtime-native effort policy shared by config, settings, and launch preflight. */
-export const SUBAGENT_RUNTIME_EFFORTS = {
-  pi: SUBAGENT_EFFORTS,
-  claude: ["low", "medium", "high", "xhigh", "max"],
-  codex: ["minimal", "low", "medium", "high", "xhigh", "max"],
-} as const satisfies Readonly<Record<SubagentRuntime, ReadonlyArray<SubagentEffort>>>;
-
-export const subagentRuntimeEfforts = (runtime: SubagentRuntime): ReadonlyArray<SubagentEffort> =>
-  SUBAGENT_RUNTIME_EFFORTS[runtime];
-
-export const subagentRuntimeSupportsEffort = (
-  runtime: SubagentRuntime,
-  effort: SubagentEffort,
-): boolean => subagentRuntimeEfforts(runtime).includes(effort);
-
-/** Decodes an untyped host-reported thinking level; unknown or malformed values are rejected. */
-export const decodeSubagentEffort = (value: unknown): SubagentEffort | undefined => {
-  if (typeof value !== "string") return undefined;
-  const normalized = value.trim().toLowerCase();
-  return (SUBAGENT_EFFORTS as ReadonlyArray<string>).includes(normalized)
-    ? (normalized as SubagentEffort)
-    : undefined;
-};
 
 export const PI_SUBAGENT_CAPABILITIES = [
   "steer",

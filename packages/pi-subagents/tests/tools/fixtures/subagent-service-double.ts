@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
-import type { SubagentNotFoundError } from "../src/run/errors.ts";
-import type { SubagentRunObservation, SubagentServiceShape } from "../src/run/service.ts";
+import type { SubagentNotFoundError } from "../../../src/run/errors.ts";
+import type { SubagentRunObservation, SubagentServiceShape } from "../../../src/run/service.ts";
 
 type ObservationMethods = Pick<
   SubagentServiceShape,

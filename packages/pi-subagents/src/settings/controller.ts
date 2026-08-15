@@ -17,7 +17,8 @@ import {
   type SessionProfilePatch,
 } from "../profiles/session-overrides.ts";
 import { supportsSubagentFastMode } from "../run/fast-mode.ts";
-import { decodeSubagentEffort, isActiveRunState, type SubagentEffort } from "../run/model.ts";
+import { decodeSubagentEffort, type SubagentEffort } from "../domain/routing.ts";
+import { isActiveRunState } from "../run/model.ts";
 import { SubagentFleetComponent } from "../ui/fleet.ts";
 import {
   declaredRouteForDraft,

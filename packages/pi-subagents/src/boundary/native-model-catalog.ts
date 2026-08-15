@@ -20,13 +20,13 @@ import {
   claudeInitializeFrame,
   type ClaudeInitializeFrame,
 } from "../backend/local-claude-protocol.ts";
-import type { SubagentEffort } from "../run/model.ts";
+import type { SubagentEffort } from "../domain/routing.ts";
 import {
   codexArgv,
   prepareCodexCatalogHarness,
   sanitizeLocalCliEnvironment,
-  type LocalCliRuntime,
-} from "./local-cli-process.ts";
+} from "./local-cli-harness.ts";
+import type { LocalCliRuntime } from "./local-cli-process.ts";
 import { terminateProcessTree } from "./process-tree.ts";
 
 const MAX_OUTPUT_BYTES = 512 * 1024;

@@ -9,7 +9,7 @@ import {
 } from "pi-cosmic-ui/manager/keymap";
 import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
-import type { SubagentEffort } from "../../run/model.ts";
+import type { SubagentEffort } from "../../domain/routing.ts";
 import {
   declaredRouteForDraft,
   inheritProjectDraft,

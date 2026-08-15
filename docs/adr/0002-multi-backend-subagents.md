@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-07-30
 
+This ADR records the historical Phase One contract. The current implementation and invariants are indexed from [`packages/pi-subagents/ARCHITECTURE.md`](../../packages/pi-subagents/ARCHITECTURE.md).
+
 ## Context
 
 Before the unified implementation, `pi-subagents` owned session-scoped Pi children while a separate extension owned persistent read-only Claude, Pi, and Codex panes. The Phase One multi-backend MVP presents one profile-routed subagent product without preserving both lifetime models or exposing backend mechanics at every launch.

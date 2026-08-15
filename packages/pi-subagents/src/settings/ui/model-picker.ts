@@ -5,7 +5,7 @@ import type { Component, SelectItem } from "@earendil-works/pi-tui";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
 import type { ProfileId } from "../../profiles/model.ts";
 import { SUBAGENT_FAST_SERVICE_TIER, supportsSubagentFastMode } from "../../run/fast-mode.ts";
-import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../run/model.ts";
+import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../domain/routing.ts";
 import { isSafeNativeModelSelector } from "../../run/native-model-selector.ts";
 import { SearchableSelectPage, type SettingsSelectKeybindingId } from "./searchable-select-page.ts";
 

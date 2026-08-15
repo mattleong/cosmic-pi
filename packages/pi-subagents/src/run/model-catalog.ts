@@ -1,4 +1,4 @@
-import type { SubagentEffort } from "./model.ts";
+import type { SubagentEffort } from "../domain/routing.ts";
 
 const MAX_NEAR_MATCHES = 6;
 

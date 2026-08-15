@@ -9,7 +9,7 @@ import type { BackendStartupState } from "../backend/model.ts";
 import type { WriterLeaseShape } from "../boundary/writer-lease.ts";
 import { processCapacityError, writerConflictError } from "./admission.ts";
 import { hasCompletionGenerationCapacity } from "./completion.ts";
-import { validateParentMessage } from "./coordination.ts";
+import { validateParentMessage } from "./tool-policy.ts";
 import {
   InvalidSubagentRequestError,
   type SubagentError,

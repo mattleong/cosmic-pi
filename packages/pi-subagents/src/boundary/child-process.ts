@@ -25,15 +25,12 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
-import {
-  ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,
-  piToolsForWriteIntent,
-} from "../run/coordination.ts";
+import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT, piToolsForWriteIntent } from "../run/tool-policy.ts";
 import { SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
 import { terminateProcessTree } from "./process-tree.ts";
 import type { ParentReply, PeerNotice, RpcCommand } from "../backend/local-pi-protocol.ts";
-import type { SubagentContextMode, SubagentEffort } from "../run/model.ts";
+import type { SubagentContextMode, SubagentEffort } from "../domain/routing.ts";
 
 const MAX_RPC_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_RPC_QUEUED_BYTES = 8 * 1024 * 1024;
@@ -56,7 +53,7 @@ export interface ChildLaunchRequest {
   readonly name: string;
   readonly cwd: string;
   readonly context: SubagentContextMode;
-  readonly writeIntent: import("../run/model.ts").SubagentWriteIntent;
+  readonly writeIntent: import("../domain/routing.ts").SubagentWriteIntent;
   readonly fastMode: boolean;
   readonly model: string;
   readonly effort: SubagentEffort;
@@ -164,7 +161,7 @@ const reclaimChildRunState = (
 
 export const childToolPolicy = (
   activeTools: ReadonlyArray<string>,
-  writeIntent: import("../run/model.ts").SubagentWriteIntent,
+  writeIntent: import("../domain/routing.ts").SubagentWriteIntent,
 ): { readonly enabled: ReadonlyArray<string>; readonly excluded: string } => ({
   enabled: piToolsForWriteIntent(activeTools, writeIntent),
   excluded: ORCHESTRATION_TOOL_DENYLIST_ARGUMENT,

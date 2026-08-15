@@ -22,7 +22,7 @@ import {
   isOutcomeUncertain,
   SubagentProcessError,
 } from "../run/errors.ts";
-import type { SubagentRuntime } from "../run/model.ts";
+import type { SubagentRuntime } from "../domain/routing.ts";
 import {
   HerdrCli,
   type HerdrAgent,
@@ -61,7 +61,7 @@ export interface HerdrHostShape {
     readonly writeIntent: "read-only" | "writer";
     readonly closeOnReport: boolean;
     readonly model: string;
-    readonly effort: import("../run/model.ts").SubagentEffort;
+    readonly effort: import("../domain/routing.ts").SubagentEffort;
     readonly cwd?: string | undefined;
   }) => Effect.Effect<void, InvalidSubagentRequestError>;
   readonly launch: (

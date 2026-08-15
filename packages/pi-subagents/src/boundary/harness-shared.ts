@@ -9,40 +9,6 @@ import { isAbsolute, join, resolve } from "node:path";
 export const MAX_AUTH_BYTES = 64 * 1024;
 export const MAX_PATH_CHARS = 4_096;
 
-const SUPERVISOR_NATIVE_TOOLS = [
-  "mcp__pi_subagents_supervisor__supervisor_progress",
-  "mcp__pi_subagents_supervisor__supervisor_warning",
-  "mcp__pi_subagents_supervisor__supervisor_question",
-  "mcp__pi_subagents_supervisor__supervisor_submit_report",
-] as const;
-export const CLAUDE_INSPECTION_TOOLS: ReadonlyArray<string> = [
-  "Glob",
-  "Grep",
-  "Read",
-  "WebFetch",
-  "WebSearch",
-  ...SUPERVISOR_NATIVE_TOOLS,
-];
-export const CLAUDE_READ_TOOLS: ReadonlyArray<string> = ["Bash", ...CLAUDE_INSPECTION_TOOLS];
-export const CLAUDE_WRITE_TOOLS: ReadonlyArray<string> = [
-  "Bash",
-  "Edit",
-  ...CLAUDE_INSPECTION_TOOLS,
-];
-export const CLAUDE_DENIED_TOOLS: ReadonlyArray<string> = [
-  "Agent",
-  "Task",
-  "TaskOutput",
-  "TaskStop",
-  "SendMessage",
-  "Skill",
-  "EnterWorktree",
-  "ExitWorktree",
-  "Chrome",
-  "NotebookEdit",
-  "Write",
-];
-
 export const nodeErrorCode = (error: unknown): string | undefined =>
   error && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code

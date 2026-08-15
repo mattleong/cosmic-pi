@@ -5,11 +5,8 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import type {
-  LocalCliHandle,
-  LocalCliProcessShape,
-  LocalCliWireEvent,
-} from "../boundary/local-cli-process.ts";
+import type { LocalCliProcessShape } from "../boundary/local-cli-process.ts";
+import type { LocalCliHandle, LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import type {
   SupervisorChannelHandle,
   SupervisorChannelShape,

@@ -16,7 +16,7 @@ import {
   type SubagentEffort,
   type SubagentHost,
   type SubagentRuntime,
-} from "../run/model.ts";
+} from "../domain/routing.ts";
 import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
 
 export type ProfileSettingsScope = "session" | SubagentConfigScope;

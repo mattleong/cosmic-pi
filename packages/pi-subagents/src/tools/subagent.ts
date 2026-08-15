@@ -13,9 +13,9 @@ import type {
   SubagentEffort,
   SubagentHost,
   SubagentRuntime,
-  SubagentRunView,
   SubagentWriteIntent,
-} from "../run/model.ts";
+} from "../domain/routing.ts";
+import type { SubagentRunView } from "../run/model.ts";
 import { SubagentService } from "../run/service.ts";
 import { decodeStartAwaitCardDetails } from "./details-decode.ts";
 import { executeSubagentAction } from "./execute.ts";

@@ -1,5 +1,5 @@
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
-import type { SubagentRuntime } from "./model.ts";
+import type { SubagentRuntime } from "../domain/routing.ts";
 
 export const SUBAGENT_FAST_SERVICE_TIER = FAST_SERVICE_TIER;
 export const supportsSubagentFastModel = supportsFastModel;

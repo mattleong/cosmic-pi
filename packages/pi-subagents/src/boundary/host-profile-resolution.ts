@@ -2,7 +2,7 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { SubagentBackendRegistry } from "../backend/service.ts";
-import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/coordination.ts";
+import { ORCHESTRATION_TOOL_DENYLIST, piToolsForWriteIntent } from "../run/tool-policy.ts";
 import {
   disallowedLaunchOverrideMessage,
   firstDisallowedLaunchOverride,
@@ -16,11 +16,11 @@ import { supportsSubagentFastMode } from "../run/fast-mode.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
 import {
   decodeSubagentEffort,
-  type StartSubagentRequest,
   type SubagentEffort,
   type SubagentHost,
   type SubagentRuntime,
-} from "../run/model.ts";
+} from "../domain/routing.ts";
+import type { StartSubagentRequest } from "../run/model.ts";
 import {
   PROFILE_IDS,
   type SkippedProfileCandidate,

@@ -6,7 +6,7 @@ import type {
   SubagentHost,
   SubagentRuntime,
   SubagentWriteIntent,
-} from "../run/model.ts";
+} from "../domain/routing.ts";
 import { profileDefinition } from "./definitions.ts";
 import {
   normalizeProfileId,

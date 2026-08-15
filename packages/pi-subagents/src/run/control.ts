@@ -19,7 +19,7 @@ import {
   UnsupportedSubagentCapabilityError,
 } from "./errors.ts";
 import { hasCompletionGenerationCapacity } from "./completion.ts";
-import { validateParentMessage } from "./coordination.ts";
+import { validateParentMessage } from "./tool-policy.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
 import { emptyRunWarningSlots, setRunWarning } from "./warnings.ts";

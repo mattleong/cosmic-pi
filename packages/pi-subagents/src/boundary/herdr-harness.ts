@@ -14,17 +14,20 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import type { BackendLaunchRequest } from "../backend/model.ts";
-import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT } from "../run/coordination.ts";
+import { ORCHESTRATION_TOOL_DENYLIST_ARGUMENT } from "../run/tool-policy.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors.ts";
 import { SUBAGENT_FAST_SERVICE_TIER } from "../run/fast-mode.ts";
-import { subagentRuntimeEfforts, type SubagentRuntime } from "../run/model.ts";
+import { subagentRuntimeEfforts, type SubagentRuntime } from "../domain/routing.ts";
 import { isSafeNativeModelSelector } from "../run/native-model-selector.ts";
-import { claudeWriterCwdPolicy } from "./claude-writer-policy.ts";
 import {
+  claudeAllowedTools,
+  claudeSettings,
   CLAUDE_DENIED_TOOLS,
-  CLAUDE_INSPECTION_TOOLS,
   CLAUDE_READ_TOOLS,
   CLAUDE_WRITE_TOOLS,
+} from "../backend/claude-policy.ts";
+import { claudeWriterCwdPolicy } from "./claude-writer-cwd.ts";
+import {
   ensurePrivateDirectory,
   harnessCleanupUnconfirmed,
   hasControlCharacter,
@@ -34,7 +37,6 @@ import {
   safeAgentDirectory,
   writeExclusive,
 } from "./harness-shared.ts";
-import { claudeSettings } from "./local-cli-process.ts";
 import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
 
 const HARNESS_ROOT = "herdr-host-v1";
@@ -267,10 +269,7 @@ const claudeArgv = (
 ): ReadonlyArray<string> => {
   const tools = request.writeIntent === "writer" ? CLAUDE_WRITE_TOOLS : CLAUDE_READ_TOOLS;
   const writerPolicy = claudeWriterCwdPolicy(request.cwd);
-  const allowed =
-    request.writeIntent === "writer" && writerPolicy
-      ? [...CLAUDE_INSPECTION_TOOLS, writerPolicy.scopedEditRule]
-      : CLAUDE_INSPECTION_TOOLS;
+  const allowed = claudeAllowedTools(request.writeIntent, writerPolicy);
   return [
     "--name",
     request.name,
@@ -453,7 +452,7 @@ const prepareHarness = async (
     if (runtime === "claude") {
       const settingsPath = join(directory, "claude-settings.json");
       const mcpPath = join(directory, "claude-mcp.json");
-      const base = claudeSettings(request);
+      const base = claudeSettings(request, claudeWriterCwdPolicy(request.cwd));
       const settings = {
         ...base,
         // Herdr Claude remains authenticated through the inherited native credential boundary,

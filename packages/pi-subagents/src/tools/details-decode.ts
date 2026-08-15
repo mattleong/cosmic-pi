@@ -1,11 +1,13 @@
 import { freezeSnapshot, isJsonObject } from "pi-cosmic-core";
 import {
   SUBAGENT_EFFORTS,
-  SUBAGENT_RUN_STATES,
-  type SubagentCapability,
   type SubagentEffort,
   type SubagentHost,
   type SubagentRuntime,
+} from "../domain/routing.ts";
+import {
+  SUBAGENT_RUN_STATES,
+  type SubagentCapability,
   type SubagentRunState,
   type SubagentUsage,
 } from "../run/model.ts";

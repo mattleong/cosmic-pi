@@ -9,7 +9,7 @@ import {
   type ProfileId,
 } from "../profiles/model.ts";
 import { supportsSubagentFastMode } from "../run/fast-mode.ts";
-import { subagentRuntimeSupportsEffort } from "../run/model.ts";
+import { subagentRuntimeSupportsEffort } from "../domain/routing.ts";
 import {
   isSafeNativeModelSelector,
   MAX_NATIVE_MODEL_SELECTOR_CHARS,

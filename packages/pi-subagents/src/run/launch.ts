@@ -7,7 +7,8 @@ import type { BackendLaunchRequest, BackendStartupState } from "../backend/model
 import type { SubagentBackendRegistryShape } from "../backend/service.ts";
 import type { WriterLeaseShape } from "../boundary/writer-lease.ts";
 import { processCapacityError, writerConflictError } from "./admission.ts";
-import { childSystemPrompt, peerNoticeText, taskPrompt } from "./coordination.ts";
+import { peerNoticeText } from "./coordination.ts";
+import { childSystemPrompt, taskPrompt } from "./tool-policy.ts";
 import {
   InvalidSubagentRequestError,
   type SubagentError,

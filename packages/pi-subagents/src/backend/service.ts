@@ -1,7 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
-import type { SubagentContextMode, SubagentHost, SubagentRuntime } from "../run/model.ts";
+import type { SubagentContextMode, SubagentHost, SubagentRuntime } from "../domain/routing.ts";
 import type { BackendDriver, BackendPreflightRequest } from "./model.ts";
 
 export interface BackendSelection {

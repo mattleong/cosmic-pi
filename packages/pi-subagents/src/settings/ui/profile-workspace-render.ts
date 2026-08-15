@@ -10,7 +10,7 @@ import { MAX_PROFILE_CANDIDATES } from "../../config/schema.ts";
 
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import { PROFILE_IDS, type ProfileId } from "../../profiles/model.ts";
-import type { SubagentEffort } from "../../run/model.ts";
+import type { SubagentEffort } from "../../domain/routing.ts";
 import type {
   ProfileRouteDraft,
   ProfileSettingsInspection,

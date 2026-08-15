@@ -8,7 +8,7 @@ import type {
   ProfileRouteSource,
 } from "../../profiles/model.ts";
 import { supportsSubagentFastMode } from "../../run/fast-mode.ts";
-import type { SubagentEffort } from "../../run/model.ts";
+import type { SubagentEffort } from "../../domain/routing.ts";
 import {
   runtimeEfforts,
   updateCandidateControls,

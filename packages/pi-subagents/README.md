@@ -2,6 +2,15 @@
 
 Session-scoped, profile-routed background subagents for Pi.
 
+## Architecture documentation
+
+- [Architecture and source map](ARCHITECTURE.md)
+- [Routing, candidate planning, and launch](docs/routing.md)
+- [Local backends and writer ownership](docs/local-backends.md)
+- [Herdr topology and ownership](docs/herdr-ownership.md)
+- [Completion, projection, and delivery](docs/completion-delivery.md)
+- [Settings workspace](docs/settings-workspace.md)
+
 ## Implemented behavior
 
 - Seven built-in profiles: `scout`, `researcher`, `planner`, `worker`, `reviewer`, `oracle`, and `generalist`.

@@ -15,7 +15,7 @@ import {
   makeNativeModelCatalog,
   NativeModelCatalogError,
 } from "../src/boundary/native-model-catalog.ts";
-import { prepareCodexCatalogHarness } from "../src/boundary/local-cli-process.ts";
+import { prepareCodexCatalogHarness } from "../src/boundary/local-cli-harness.ts";
 
 const fixture = fileURLToPath(new URL("./fixtures/local-cli-fixture.mjs", import.meta.url));
 

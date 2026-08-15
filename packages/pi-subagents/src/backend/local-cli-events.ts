@@ -1,7 +1,7 @@
 import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
-import type { LocalCliWireEvent } from "../boundary/local-cli-process.ts";
+import type { LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import type { BackendEvent } from "./model.ts";
 
 /**

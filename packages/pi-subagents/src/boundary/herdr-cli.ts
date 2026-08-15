@@ -13,7 +13,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { HerdrPaneProcessInfo } from "../backend/herdr-shell-readiness.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../run/errors.ts";
-import type { SubagentRuntime } from "../run/model.ts";
+import type { SubagentRuntime } from "../domain/routing.ts";
 
 const HERDR_EXECUTABLE = "herdr";
 const SUPPORTED_PROTOCOL = 19;

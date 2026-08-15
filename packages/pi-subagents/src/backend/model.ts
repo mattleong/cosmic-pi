@@ -4,14 +4,13 @@ import type * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import type { SubagentError, SubagentProcessError } from "../run/errors.ts";
 import type {
-  SubagentCapability,
   SubagentContextMode,
   SubagentEffort,
   SubagentHost,
   SubagentRuntime,
-  SubagentUsage,
   SubagentWriteIntent,
-} from "../run/model.ts";
+} from "../domain/routing.ts";
+import type { SubagentCapability, SubagentUsage } from "../run/model.ts";
 
 /** Backend-owned continuation evidence. Orchestration stores and returns it without inspection. */
 export type BackendResumeToken = object;

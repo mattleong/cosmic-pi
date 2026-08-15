@@ -4,7 +4,7 @@ import type {
   SubagentHost,
   SubagentRuntime,
   SubagentWriteIntent,
-} from "../run/model.ts";
+} from "../domain/routing.ts";
 
 export const PROFILE_IDS = [
   "scout",

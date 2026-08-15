@@ -1,16 +1,18 @@
 import { freezeSnapshot, stripTerminalControls } from "pi-cosmic-core";
 import {
   SUBAGENT_EFFORTS,
-  type PendingParentQuestion,
-  type SubagentCapability,
   type SubagentContextMode,
   type SubagentEffort,
   type SubagentHost,
   type SubagentRuntime,
-  type SubagentRunState,
-  type SubagentRunView,
-  type SubagentUsage,
   type SubagentWriteIntent,
+} from "../domain/routing.ts";
+import type {
+  PendingParentQuestion,
+  SubagentCapability,
+  SubagentRunState,
+  SubagentRunView,
+  SubagentUsage,
 } from "../run/model.ts";
 import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import {

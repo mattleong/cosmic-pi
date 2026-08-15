@@ -13,11 +13,9 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
-import {
-  claudeArgv,
-  claudeSettings,
-  makeLocalCliProcess,
-} from "../src/boundary/local-cli-process.ts";
+import { claudeArgv, claudeSettings } from "../src/backend/claude-policy.ts";
+import { claudeWriterCwdPolicy } from "../src/boundary/claude-writer-cwd.ts";
+import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
 import type {
   SupervisorChannelHandle,
   SupervisorChannelShape,
@@ -276,8 +274,13 @@ describe("local CLI Phase One backends", () => {
       mcpPath: "/private/mcp.json",
       promptPath: "/private/prompt.md",
     };
-    const readArgs = claudeArgv(launch("claude"), paths);
-    const writeArgs = claudeArgv({ ...launch("claude"), writeIntent: "writer" }, paths);
+    const writerPolicy = claudeWriterCwdPolicy(launch("claude").cwd);
+    const readArgs = claudeArgv(launch("claude"), paths, writerPolicy);
+    const writeArgs = claudeArgv(
+      { ...launch("claude"), writeIntent: "writer" },
+      paths,
+      writerPolicy,
+    );
     const readTools = readArgs[readArgs.indexOf("--tools") + 1];
     const writeTools = writeArgs[writeArgs.indexOf("--tools") + 1];
     const readerAllowed = readArgs[readArgs.indexOf("--allowedTools") + 1]?.split(",") ?? [];
@@ -307,7 +310,7 @@ describe("local CLI Phase One backends", () => {
     expect(claudeInterruptFrame("interrupt-1")).toMatchObject({
       request: { subtype: "interrupt", cancel_queued: true },
     });
-    expect(claudeSettings(launch("claude"))).toMatchObject({
+    expect(claudeSettings(launch("claude"), writerPolicy)).toMatchObject({
       permissions: {
         defaultMode: "dontAsk",
         allow: expect.not.arrayContaining(["Bash", "Edit", "Write"]),
@@ -326,7 +329,9 @@ describe("local CLI Phase One backends", () => {
         },
       },
     });
-    expect(claudeSettings({ ...launch("claude"), writeIntent: "writer" })).toMatchObject({
+    expect(
+      claudeSettings({ ...launch("claude"), writeIntent: "writer" }, writerPolicy),
+    ).toMatchObject({
       permissions: {
         defaultMode: "dontAsk",
         allow: expect.arrayContaining([`Edit(/${process.cwd()}/**)`]),

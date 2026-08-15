@@ -4,7 +4,7 @@ import type {
   HerdrPane,
   HerdrSnapshot,
 } from "../boundary/herdr-cli.ts";
-import type { SubagentRuntime } from "../run/model.ts";
+import type { SubagentRuntime } from "../domain/routing.ts";
 
 export interface HerdrAgentOwnershipEvidence {
   readonly workspaceId: string;
