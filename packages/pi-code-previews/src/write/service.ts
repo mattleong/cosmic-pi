@@ -1,6 +1,10 @@
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as RcMap from "effect/RcMap";
+import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import { makeFrozenProjection, type ProjectionError } from "pi-cosmic-core";
 import type { CodePreviewBeforeWrite } from "./preview-execution";
@@ -11,7 +15,6 @@ import {
 } from "./projection";
 
 const MAX_BEFORE_WRITE_CACHE_ENTRIES = 64;
-type PathLock = { readonly semaphore: Semaphore.Semaphore; users: number };
 type WriteState = CodePreviewWriteSnapshot;
 
 export interface CodePreviewWriteServiceContract {
@@ -37,35 +40,16 @@ export class CodePreviewWriteService extends Context.Service<
     this,
     Effect.acquireRelease(
       Effect.gen(function* () {
-        const pathLocks = new Map<string, PathLock>();
-        const coordination = yield* Semaphore.make(1);
+        const pathLocks = yield* RcMap.make({
+          lookup: (_path: string) => Semaphore.make(1),
+          idleTimeToLive: Duration.zero,
+        });
         const projectionOwner = Symbol("code-preview-write-projection");
         const projection = yield* makeFrozenProjection<WriteState, CodePreviewWriteSnapshot>(
           { entries: [] },
           (state) => state,
           (snapshot) => publishWriteProjection(projectionOwner, snapshot),
         );
-
-        const acquire = (path: string) =>
-          coordination.withPermits(1)(
-            Effect.gen(function* () {
-              const existing = pathLocks.get(path);
-              if (existing) {
-                existing.users++;
-                return existing;
-              }
-              const created = { semaphore: yield* Semaphore.make(1), users: 1 };
-              pathLocks.set(path, created);
-              return created;
-            }),
-          );
-        const release = (path: string, lock: PathLock) =>
-          coordination.withPermits(1)(
-            Effect.sync(() => {
-              lock.users--;
-              if (lock.users === 0 && pathLocks.get(path) === lock) pathLocks.delete(path);
-            }),
-          );
 
         const rememberBeforeWrite = (toolCallId: string, before: CodePreviewBeforeWrite) =>
           projection.transition((current) => {
@@ -91,19 +75,19 @@ export class CodePreviewWriteService extends Context.Service<
           acknowledgeBeforeWrite,
           withPathLock: (path, effect) =>
             Effect.acquireUseRelease(
-              acquire(path),
-              (lock) => lock.semaphore.withPermits(1)(effect),
-              (lock) => release(path, lock),
+              Scope.make(),
+              (leaseScope) =>
+                RcMap.get(pathLocks, path).pipe(
+                  Effect.provideService(Scope.Scope, leaseScope),
+                  Effect.flatMap((lock) => lock.withPermit(effect)),
+                ),
+              (leaseScope) => Scope.close(leaseScope, Exit.void),
             ),
           cacheSize: projection.getState.pipe(Effect.map((state) => state.entries.length)),
         });
-        return { service, pathLocks, projectionOwner };
+        return { service, projectionOwner };
       }),
-      ({ pathLocks, projectionOwner }) =>
-        Effect.sync(() => {
-          pathLocks.clear();
-          clearWriteProjection(projectionOwner);
-        }),
+      ({ projectionOwner }) => Effect.sync(() => clearWriteProjection(projectionOwner)),
     ).pipe(Effect.map(({ service }) => service)),
   );
 }

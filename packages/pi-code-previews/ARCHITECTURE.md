@@ -29,7 +29,7 @@ Provides syntax-highlighted previews, structured diffs, safer write/edit present
 
 ## State and resources
 
-Settings, syntax, and before-write correlation are Effect-owned and publish bounded synchronous projections. Shiki is the documented synchronous-capability exception. Pure diff and rendering calculations remain synchronous.
+Settings, syntax, and before-write correlation are Effect-owned and publish bounded synchronous projections. Before-write execution uses a scoped `RcMap` of per-path semaphores: each call owns one reference, unrelated paths remain independent, and zero idle TTL removes a lock after its final active or waiting user exits. Shiki is the documented synchronous-capability exception. Pure diff and rendering calculations remain synchronous.
 
 ## Lifecycle
 

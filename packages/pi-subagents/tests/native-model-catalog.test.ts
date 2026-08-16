@@ -45,7 +45,8 @@ const catalog = () =>
 
 describe("native model catalog boundary", () => {
   it("loads bounded Claude initialize-advertised models without inference", async () => {
-    const models = await Effect.runPromise(catalog().list("claude", process.cwd()));
+    const service = await Effect.runPromise(catalog());
+    const models = await Effect.runPromise(service.list("claude", process.cwd()));
     expect(models).toEqual([
       {
         selector: "default",
@@ -109,15 +110,17 @@ describe("native model catalog boundary", () => {
     await mkdir(sourceHome);
     await writeFile(join(sourceHome, "auth.json"), `${JSON.stringify({ token: "fixture" })}\n`);
     try {
-      const isolated = makeNativeModelCatalog({
-        agentDirectory,
-        executables: { claude: fixture, codex: fixture },
-        environment: {
-          HOME: root,
-          PATH: process.env.PATH,
-          CODEX_HOME: sourceHome,
-        },
-      });
+      const isolated = await Effect.runPromise(
+        makeNativeModelCatalog({
+          agentDirectory,
+          executables: { claude: fixture, codex: fixture },
+          environment: {
+            HOME: root,
+            PATH: process.env.PATH,
+            CODEX_HOME: sourceHome,
+          },
+        }),
+      );
       await expect(Effect.runPromise(isolated.list("codex", process.cwd()))).resolves.toHaveLength(
         2,
       );
@@ -130,7 +133,8 @@ describe("native model catalog boundary", () => {
   });
 
   it("loads bounded Codex model/list results and reasoning efforts", async () => {
-    const models = await Effect.runPromise(catalog().list("codex", process.cwd()));
+    const service = await Effect.runPromise(catalog());
+    const models = await Effect.runPromise(service.list("codex", process.cwd()));
     expect(models.map((model) => model.selector)).toEqual([
       "gpt-fixture-default",
       "gpt-fixture-fast",
@@ -150,10 +154,12 @@ describe("native model catalog boundary", () => {
     const home = await mkdtemp(join(tmpdir(), "deduplicated-catalog-"));
     const countPath = join(home, "catalog-processes.log");
     try {
-      const shared = makeNativeModelCatalog({
-        executables: { claude: fixture, codex: fixture },
-        environment: { HOME: home, PATH: process.env.PATH },
-      });
+      const shared = await Effect.runPromise(
+        makeNativeModelCatalog({
+          executables: { claude: fixture, codex: fixture },
+          environment: { HOME: home, PATH: process.env.PATH },
+        }),
+      );
       const first = Effect.runFork(shared.list("claude", process.cwd()));
       const second = Effect.runFork(shared.list("claude", process.cwd()));
       for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -177,11 +183,13 @@ describe("native model catalog boundary", () => {
   it("cancels and cleans up an in-flight catalog process", async () => {
     const home = await mkdtemp(join(tmpdir(), "hanging-catalog-"));
     try {
-      const hanging = makeNativeModelCatalog({
-        executables: { claude: fixture, codex: fixture },
-        environment: { HOME: home, PATH: process.env.PATH },
-        timeoutMillis: 10_000,
-      });
+      const hanging = await Effect.runPromise(
+        makeNativeModelCatalog({
+          executables: { claude: fixture, codex: fixture },
+          environment: { HOME: home, PATH: process.env.PATH },
+          timeoutMillis: 10_000,
+        }),
+      );
       const fiber = Effect.runFork(hanging.list("claude", process.cwd()));
       let pid: number | undefined;
       for (let attempt = 0; attempt < 50 && pid === undefined; attempt += 1) {
@@ -202,10 +210,12 @@ describe("native model catalog boundary", () => {
   });
 
   it("rejects catalog text containing terminal control sequences", async () => {
-    const unsafe = makeNativeModelCatalog({
-      executables: { claude: fixture, codex: fixture },
-      environment: { HOME: "/tmp/unsafe-catalog", PATH: process.env.PATH },
-    });
+    const unsafe = await Effect.runPromise(
+      makeNativeModelCatalog({
+        executables: { claude: fixture, codex: fixture },
+        environment: { HOME: "/tmp/unsafe-catalog", PATH: process.env.PATH },
+      }),
+    );
     await expect(Effect.runPromise(unsafe.list("claude", process.cwd()))).rejects.toMatchObject({
       code: "catalog_protocol_invalid",
     });
@@ -213,25 +223,51 @@ describe("native model catalog boundary", () => {
 
   it("reports rejected native catalog requests distinctly from malformed protocol", async () => {
     for (const runtime of ["claude", "codex"] as const) {
-      const rejected = makeNativeModelCatalog({
-        executables: { claude: fixture, codex: fixture },
-        environment: {
-          HOME: runtime === "claude" ? "/tmp/rejected-claude-catalog" : "/tmp/rejected-catalog",
-          PATH: process.env.PATH,
-        },
-      });
+      const rejected = await Effect.runPromise(
+        makeNativeModelCatalog({
+          executables: { claude: fixture, codex: fixture },
+          environment: {
+            HOME: runtime === "claude" ? "/tmp/rejected-claude-catalog" : "/tmp/rejected-catalog",
+            PATH: process.env.PATH,
+          },
+        }),
+      );
       await expect(Effect.runPromise(rejected.list(runtime, process.cwd()))).rejects.toMatchObject({
         code: "catalog_request_rejected",
       });
     }
   });
 
+  it("does not cache failed catalog lookups", async () => {
+    const home = await mkdtemp(join(tmpdir(), "deduplicated-catalog-rejected-claude-catalog-"));
+    const countPath = join(home, "catalog-processes.log");
+    try {
+      const rejected = await Effect.runPromise(
+        makeNativeModelCatalog({
+          executables: { claude: fixture, codex: fixture },
+          environment: { HOME: home, PATH: process.env.PATH },
+        }),
+      );
+      for (let attempt = 0; attempt < 2; attempt += 1)
+        await expect(
+          Effect.runPromise(rejected.list("claude", process.cwd())),
+        ).rejects.toMatchObject({ code: "catalog_request_rejected" });
+
+      const processIds = (await readFile(countPath, "utf8")).trim().split("\n");
+      expect(processIds).toHaveLength(2);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("returns a typed error when the native executable is unavailable", async () => {
-    const missing = makeNativeModelCatalog({
-      executables: { claude: "/definitely/missing/claude", codex: fixture },
-      environment: { HOME: process.env.HOME, PATH: process.env.PATH },
-      timeoutMillis: 100,
-    });
+    const missing = await Effect.runPromise(
+      makeNativeModelCatalog({
+        executables: { claude: "/definitely/missing/claude", codex: fixture },
+        environment: { HOME: process.env.HOME, PATH: process.env.PATH },
+        timeoutMillis: 100,
+      }),
+    );
     await expect(Effect.runPromise(missing.list("claude", process.cwd()))).rejects.toBeInstanceOf(
       NativeModelCatalogError,
     );

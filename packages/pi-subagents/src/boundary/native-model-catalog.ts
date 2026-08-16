@@ -5,8 +5,12 @@
 // @effect-diagnostics effect/newPromise:off
 // @effect-diagnostics effect/globalTimers:off
 import { spawn, type ChildProcess as NodeChildProcess } from "node:child_process";
+import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -544,113 +548,71 @@ const discoverCatalog = async (
   return result;
 };
 
-interface InFlightCatalogRequest {
-  readonly controller: AbortController;
-  readonly promise: Promise<unknown>;
-  waiters: number;
-  settled: boolean;
-}
+class CatalogCacheKey extends Data.Class<{
+  readonly runtime: LocalCliRuntime;
+  readonly cwd: string;
+}> {}
+
+const loadNativeModelCatalog =
+  (options: NativeModelCatalogLayerOptions) =>
+  (
+    key: CatalogCacheKey,
+  ): Effect.Effect<ReadonlyArray<NativeRuntimeModel>, NativeModelCatalogError> => {
+    const { runtime, cwd } = key;
+    const executable = options.executables?.[runtime] ?? runtime;
+    const sourceEnvironment = options.environment ?? process.env;
+    return Effect.tryPromise({
+      try: (signal) =>
+        discoverCatalog(
+          runtime,
+          executable,
+          cwd,
+          sourceEnvironment,
+          options.timeoutMillis ?? CATALOG_TIMEOUT_MILLIS,
+          signal,
+          options,
+        ),
+      catch: (error) =>
+        error instanceof NativeModelCatalogError
+          ? error
+          : catalogError(runtime, "catalog_failed", `Unable to load the ${runtime} model catalog.`),
+    }).pipe(
+      Effect.flatMap((value) => {
+        if (
+          (runtime === "codex" && isCodexCatalogErrorResponse(value)) ||
+          (runtime === "claude" && isClaudeCatalogErrorResponse(value))
+        )
+          return Effect.fail(
+            catalogError(
+              runtime,
+              "catalog_request_rejected",
+              `${runtime === "claude" ? "Claude Code" : "Codex"} rejected the bounded model catalog request.`,
+            ),
+          );
+        return (runtime === "claude" ? decodeClaudeModels(value) : decodeCodexModels(value)).pipe(
+          Effect.mapError(() =>
+            catalogError(
+              runtime,
+              "catalog_protocol_invalid",
+              `${runtime} returned an invalid model catalog.`,
+            ),
+          ),
+        );
+      }),
+    );
+  };
 
 export const makeNativeModelCatalog = (
   options: NativeModelCatalogLayerOptions = {},
-): NativeModelCatalogContract => {
-  const cache = new Map<string, ReadonlyArray<NativeRuntimeModel>>();
-  const inFlight = new Map<string, InFlightCatalogRequest>();
-
-  const acquireRequest = (
-    cacheKey: string,
-    runtime: LocalCliRuntime,
-    cwd: string,
-  ): InFlightCatalogRequest => {
-    const existing = inFlight.get(cacheKey);
-    if (existing) {
-      existing.waiters += 1;
-      return existing;
-    }
-    const controller = new AbortController();
-    const executable = options.executables?.[runtime] ?? runtime;
-    const sourceEnvironment = options.environment ?? process.env;
-    const request: InFlightCatalogRequest = {
-      controller,
-      promise: discoverCatalog(
-        runtime,
-        executable,
-        cwd,
-        sourceEnvironment,
-        options.timeoutMillis ?? CATALOG_TIMEOUT_MILLIS,
-        controller.signal,
-        options,
-      ),
-      waiters: 1,
-      settled: false,
-    };
-    inFlight.set(cacheKey, request);
-    void request.promise.then(
-      () => {
-        request.settled = true;
-      },
-      () => {
-        request.settled = true;
-      },
-    );
-    return request;
-  };
-
-  const releaseRequest = (cacheKey: string, request: InFlightCatalogRequest): void => {
-    request.waiters -= 1;
-    if (request.waiters > 0) return;
-    if (inFlight.get(cacheKey) === request) inFlight.delete(cacheKey);
-    if (!request.settled) request.controller.abort();
-  };
-
-  return {
-    list: (runtime, cwd) =>
-      Effect.suspend(() => {
-        const cacheKey = `${runtime}\u0000${cwd}`;
-        const cached = cache.get(cacheKey);
-        if (cached) return Effect.succeed(cached);
-        const request = acquireRequest(cacheKey, runtime, cwd);
-        return Effect.tryPromise({
-          try: () => request.promise,
-          catch: (error) =>
-            error instanceof NativeModelCatalogError
-              ? error
-              : catalogError(
-                  runtime,
-                  "catalog_failed",
-                  `Unable to load the ${runtime} model catalog.`,
-                ),
-        }).pipe(
-          Effect.flatMap((value) => {
-            if (
-              (runtime === "codex" && isCodexCatalogErrorResponse(value)) ||
-              (runtime === "claude" && isClaudeCatalogErrorResponse(value))
-            )
-              return Effect.fail(
-                catalogError(
-                  runtime,
-                  "catalog_request_rejected",
-                  `${runtime === "claude" ? "Claude Code" : "Codex"} rejected the bounded model catalog request.`,
-                ),
-              );
-            return (
-              runtime === "claude" ? decodeClaudeModels(value) : decodeCodexModels(value)
-            ).pipe(
-              Effect.mapError(() =>
-                catalogError(
-                  runtime,
-                  "catalog_protocol_invalid",
-                  `${runtime} returned an invalid model catalog.`,
-                ),
-              ),
-            );
-          }),
-          Effect.tap((models) => Effect.sync(() => void cache.set(cacheKey, models))),
-          Effect.ensuring(Effect.sync(() => releaseRequest(cacheKey, request))),
-        );
-      }),
-  };
-};
+): Effect.Effect<NativeModelCatalogContract> =>
+  Cache.makeWith(loadNativeModelCatalog(options), {
+    capacity: Number.POSITIVE_INFINITY,
+    timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
+  }).pipe(
+    Effect.map((cache) => ({
+      list: (runtime, cwd) => Cache.get(cache, new CatalogCacheKey({ runtime, cwd })),
+    })),
+  );
 
 export class NativeModelCatalog extends Context.Service<
   NativeModelCatalog,
@@ -658,5 +620,5 @@ export class NativeModelCatalog extends Context.Service<
 >()("pi-subagents/boundary/native-model-catalog/NativeModelCatalog") {
   static readonly layer = (
     options: NativeModelCatalogLayerOptions = {},
-  ): Layer.Layer<NativeModelCatalog> => Layer.succeed(this, makeNativeModelCatalog(options));
+  ): Layer.Layer<NativeModelCatalog> => Layer.effect(this, makeNativeModelCatalog(options));
 }
